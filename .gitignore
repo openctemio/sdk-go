@@ -1,0 +1,238 @@
+# =============================================================================
+# OpenCTEM SDK - .gitignore
+# =============================================================================
+
+# =============================================================================
+# Go
+# =============================================================================
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+
+# Test binaries
+*.test
+
+# Output of go coverage
+*.out
+coverage.out
+coverage.html
+coverage.txt
+
+# Go workspace
+# go.work
+# go.work.sum
+
+# Dependency directories (if using vendor)
+vendor/
+
+# Go build cache (local)
+.cache/
+
+# =============================================================================
+# IDE / Editors
+# =============================================================================
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# JetBrains (GoLand, IntelliJ)
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Vim
+*.swp
+*.swo
+*~
+.*.swp
+
+# Emacs
+*~
+\#*\#
+.#*
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# =============================================================================
+# OS Generated Files
+# =============================================================================
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# =============================================================================
+# Environment & Secrets
+# =============================================================================
+
+# Environment files
+.env
+.env.*
+.env.local
+.env.*.local
+*.env
+
+# Local configuration
+*.local
+*.local.yaml
+*.local.json
+config.local.yaml
+config.local.json
+
+# Agent config (may contain API keys)
+# Keep template, ignore actual config
+agent.yaml
+!agent.yaml.template
+
+# API keys and credentials
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+credentials.json
+secrets.yaml
+secrets.json
+.secrets/
+
+# =============================================================================
+# Security Scanner Outputs
+# =============================================================================
+
+# Semgrep
+.semgrep/
+semgrep-results.*
+
+# Gitleaks
+gitleaks-report.*
+
+# Trivy
+trivy-results.*
+.trivy/
+
+# Generic scan outputs
+scan-results/
+results.json
+results.sarif
+*.sarif
+
+# =============================================================================
+# Docker
+# =============================================================================
+
+# Docker ignore already handled by .dockerignore
+# But exclude local Docker artifacts
+.docker/
+
+# =============================================================================
+# Build & Release
+# =============================================================================
+
+# Release artifacts
+release/
+artifacts/
+*.tar.gz
+*.zip
+
+# Build directories
+build/
+out/
+
+# =============================================================================
+# Logs & Temporary Files
+# =============================================================================
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# =============================================================================
+# Testing
+# =============================================================================
+
+# Test fixtures (keep source, ignore generated)
+test/fixtures/generated/
+test/output/
+
+# Benchmark results
+bench.txt
+*.bench
+
+# =============================================================================
+# Documentation (generated)
+# =============================================================================
+
+# Generated docs
+docs/_site/
+docs/.jekyll-cache/
+site/
+
+# API documentation
+godoc/
+
+# =============================================================================
+# CI/CD Local Files
+# =============================================================================
+
+# GitHub Actions local testing
+.act/
+
+# GitLab CI local
+.gitlab-runner/
+
+# =============================================================================
+# Miscellaneous
+# =============================================================================
+
+# Debug files
+debug
+*.debug
+*.# core
+
+# Profiling
+*.prof
+*.pprof
+cpu.out
+mem.out
+trace.out
+
+# Database files (local dev)
+*.db
+*.sqlite
+*.sqlite3
+
+# Downloaded dependencies for scanners
+.cache/
+.trivy-cache/
+agent

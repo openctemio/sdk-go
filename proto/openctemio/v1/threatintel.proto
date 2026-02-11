@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package openctemio.v1;
+
+option go_package = "github.com/openctemio/sdk-go/pkg/proto/openctemio/v1;v1";
+
+// =============================================================================
+// Threat Intel Service - EPSS and KEV queries
+// =============================================================================
+
+service ThreatIntelService {
+  // GetEPSSScores fetches EPSS scores for CVE IDs
+  rpc GetEPSSScores(GetEPSSScoresRequest) returns (GetEPSSScoresResponse);
+
+  // GetKEVEntries fetches CISA KEV entries for CVE IDs
+  rpc GetKEVEntries(GetKEVEntriesRequest) returns (GetKEVEntriesResponse);
+
+  // EnrichFindings enriches findings with EPSS and KEV data
+  rpc EnrichFindings(EnrichFindingsRequest) returns (EnrichFindingsResponse);
+}
+
+// EPSS
+
+message GetEPSSScoresRequest {
+  repeated string cve_ids = 1;
+}
+
+message GetEPSSScoresResponse {
+  repeated EPSSScore scores = 1;
+}
+
+message EPSSScore {
+  string cve_id = 1;
+  double score = 2;             // 0.0 to 1.0
+  double percentile = 3;        // 0.0 to 100.0
+  string date = 4;              // YYYY-MM-DD
+}
+
+// KEV
+
+message GetKEVEntriesRequest {
+  repeated string cve_ids = 1;
+}
+
+message GetKEVEntriesResponse {
+  repeated KEVEntry entries = 1;
+}
+
+message KEVEntry {
+  string cve_id = 1;
+  string vendor_project = 2;
+  string product = 3;
+  string vulnerability_name = 4;
+  string date_added = 5;
+  string short_description = 6;
+  string required_action = 7;
+  string due_date = 8;
+  string known_ransomware_campaign_use = 9;
+}
+
+// Enrich Findings
+
+message EnrichFindingsRequest {
+  repeated string cve_ids = 1;
+}
+
+message EnrichFindingsResponse {
+  map<string, EnrichmentData> enrichments = 1;
+}
+
+message EnrichmentData {
+  EPSSScore epss = 1;
+  KEVEntry kev = 2;
+  bool in_kev = 3;
+}
