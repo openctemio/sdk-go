@@ -5,7 +5,7 @@ go 1.25
 require (
 	github.com/google/go-github/v74 v74.0.0
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.18.3
+	github.com/klauspost/compress v1.18.4
 	github.com/prometheus/client_golang v1.23.2
 	gitlab.com/gitlab-org/api/client-go v1.27.0
 	golang.org/x/oauth2 v0.35.0
