@@ -7,7 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.4
 	github.com/prometheus/client_golang v1.23.2
-	gitlab.com/gitlab-org/api/client-go v1.27.0
+	gitlab.com/gitlab-org/api/client-go v1.30.0
 	golang.org/x/oauth2 v0.35.0
 	golang.org/x/sys v0.41.0
 	golang.org/x/time v0.14.0
