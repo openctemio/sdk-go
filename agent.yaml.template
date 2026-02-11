@@ -1,0 +1,153 @@
+# =============================================================================
+# OpenCTEM Agent Configuration Template
+# =============================================================================
+# Copy this file to agent.yaml and update with your settings:
+#   cp agent.yaml.template agent.yaml
+#
+# Environment variables can be used with ${VAR_NAME} syntax
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Agent Settings
+# -----------------------------------------------------------------------------
+agent:
+  # Display name for this agent (shown in OpenCTEM UI)
+  name: "My Security Scanner"
+
+  # Deployment region (shown in UI for monitoring)
+  # Examples: "us-east-1", "ap-southeast-1", "eu-west-1"
+  # Auto-detection: If not set, agent will detect from environment:
+  #   REGION > AWS_REGION > GOOGLE_CLOUD_REGION > AZURE_REGION
+  region: ""
+
+  # Enable remote command execution from OpenCTEM platform
+  # When true, the agent can receive scan commands from the server
+  enable_commands: true
+
+  # How often to poll for new commands (when enable_commands is true)
+  # Format: 30s, 1m, 5m, etc.
+  command_poll_interval: 30s
+
+  # How often to send heartbeat to the server
+  # Format: 30s, 1m, 5m, etc.
+  heartbeat_interval: 1m
+
+  # Log level: debug, info, warn, error
+  log_level: info
+
+# -----------------------------------------------------------------------------
+# Platform Connection
+# -----------------------------------------------------------------------------
+server:
+  # API URL
+  # Use environment variable: ${API_URL}
+  base_url: "http://localhost:8080"
+
+  # API Key for authentication
+  # Get this from: UI > Settings > API Keys
+  # Use environment variable: ${API_KEY}
+  api_key: "your-api-key-here"
+
+  # Agent ID (auto-generated if not provided)
+  # Use environment variable: ${AGENT_ID}
+  agent_id: ""
+
+  # Request timeout
+  timeout: 30s
+
+  # Retry settings
+  max_retries: 3
+  retry_delay: 2s
+
+# -----------------------------------------------------------------------------
+# Scanners Configuration
+# -----------------------------------------------------------------------------
+scanners:
+  # Semgrep - SAST with dataflow/taint tracking
+  - name: semgrep
+    enabled: true
+    # Optional: custom binary path
+    # binary: /usr/local/bin/semgrep
+    # Optional: custom rules
+    # config:
+    #   rules: ["p/default", "p/security-audit"]
+    #   exclude: ["*_test.go", "vendor/"]
+
+  # Gitleaks - Secret detection
+  - name: gitleaks
+    enabled: true
+    # Optional: custom config file
+    # config:
+    #   config_path: ".gitleaks.toml"
+
+  # Trivy - SCA/Dependency scanning
+  - name: trivy
+    enabled: true
+    # Optional: scan type (fs, config, image)
+    # config:
+    #   scanners: ["vuln", "secret", "misconfig"]
+    #   severity: ["HIGH", "CRITICAL"]
+
+  # Trivy Config - IaC scanning
+  - name: trivy-config
+    enabled: false
+
+  # Trivy Image - Container scanning
+  - name: trivy-image
+    enabled: false
+
+# -----------------------------------------------------------------------------
+# Scan Targets (for standalone/daemon mode)
+# -----------------------------------------------------------------------------
+targets:
+  # List of directories to scan
+  - /path/to/project1
+  # - /path/to/project2
+
+# -----------------------------------------------------------------------------
+# Output Settings
+# -----------------------------------------------------------------------------
+output:
+  # Output format: json, sarif, text
+  format: json
+
+  # Output file (optional, stdout if not set)
+  # file: /var/log/openctem/results.json
+
+  # Generate SARIF report
+  sarif: false
+  # sarif_file: /var/log/openctem/results.sarif
+
+# -----------------------------------------------------------------------------
+# CI/CD Settings (auto-detected when -auto-ci flag is used)
+# -----------------------------------------------------------------------------
+ci:
+  # Create inline comments on PR/MR
+  comments: true
+
+  # Fail on severity level: critical, high, medium, low
+  fail_on: critical
+
+  # Push results to OpenCTEM platform
+  push: true
+
+# -----------------------------------------------------------------------------
+# Advanced Settings
+# -----------------------------------------------------------------------------
+advanced:
+  # Maximum concurrent scanners
+  max_concurrent: 2
+
+  # Scan timeout per target
+  scan_timeout: 30m
+
+  # Cache directory for scanner databases
+  cache_dir: /tmp/openctem-cache
+
+  # Exclude patterns (glob)
+  exclude:
+    - "**/node_modules/**"
+    - "**/vendor/**"
+    - "**/.git/**"
+    - "**/dist/**"
+    - "**/build/**"

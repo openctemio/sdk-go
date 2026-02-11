@@ -1,0 +1,100 @@
+# =============================================================================
+# GitHub Actions: PR Security Review
+# =============================================================================
+# Focused on Pull Request scanning with inline comments
+# Copy to: .github/workflows/pr-security.yml
+# =============================================================================
+
+name: PR Security Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  pr-security-review:
+    name: Security Review
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for diff
+
+      - name: Get changed files
+        id: changed-files
+        run: |
+          echo "files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | tr '\n' ',')" >> $GITHUB_OUTPUT
+
+      - name: Run security scan on changed files
+        uses: docker://openctemio/agent:ci
+        with:
+          args: >-
+            -tools semgrep,gitleaks
+            -target .
+            -auto-ci
+            -comments
+            -verbose
+            -json
+            -output /github/workspace/pr-results.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post summary comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let summary = '## Security Scan Results\n\n';
+
+            try {
+              const results = JSON.parse(fs.readFileSync('pr-results.json', 'utf8'));
+              const findings = results.findings || [];
+
+              const critical = findings.filter(f => f.severity === 'critical').length;
+              const high = findings.filter(f => f.severity === 'high').length;
+              const medium = findings.filter(f => f.severity === 'medium').length;
+              const low = findings.filter(f => f.severity === 'low').length;
+
+              if (findings.length === 0) {
+                summary += '**No security issues found in changed files.**';
+              } else {
+                summary += `| Severity | Count |\n|----------|-------|\n`;
+                summary += `| Critical | ${critical} |\n`;
+                summary += `| High | ${high} |\n`;
+                summary += `| Medium | ${medium} |\n`;
+                summary += `| Low | ${low} |\n\n`;
+
+                if (critical > 0 || high > 0) {
+                  summary += '**Please review and fix critical/high severity findings before merging.**\n\n';
+                }
+
+                summary += `See inline comments for details.`;
+              }
+            } catch (e) {
+              summary += `Scan completed. Check job logs for details.`;
+            }
+
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: summary
+            });
+
+      - name: Fail on critical findings
+        if: always()
+        run: |
+          if [ -f pr-results.json ]; then
+            CRITICAL=$(cat pr-results.json | jq '[.findings[] | select(.severity == "critical")] | length' 2>/dev/null || echo "0")
+            if [ "$CRITICAL" -gt 0 ]; then
+              echo "::error::Found $CRITICAL critical security findings!"
+              exit 1
+            fi
+          fi

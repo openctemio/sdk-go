@@ -1,0 +1,257 @@
+# =============================================================================
+# GitLab CI: Security Scan with OpenCTEM Agent
+# =============================================================================
+# Copy this file to your repository root: .gitlab-ci.yml
+#
+# Features:
+# - SAST scanning with semgrep (with dataflow/taint tracking)
+# - Secret detection with gitleaks
+# - SCA/Dependency scanning with trivy
+# - IaC scanning with trivy
+# - Container scanning with trivy
+# - Auto MR comments for findings in changed files
+# - SARIF report generation for GitLab Security Dashboard
+# =============================================================================
+
+stages:
+  - test
+  - security
+  - container-security
+
+variables:
+  # Agent configuration
+  AGENT_IMAGE: openctemio/agent:ci
+
+  # GitLab features
+  GIT_DEPTH: 0 # Full clone for diff-based scanning
+  GIT_STRATEGY: clone
+
+  # Tool settings
+  SEMGREP_SEND_METRICS: "off"
+  TRIVY_NO_PROGRESS: "true"
+
+# =============================================================================
+# Security Scanning Jobs
+# =============================================================================
+
+# Full security scan - runs on all branches
+security-scan:
+  stage: security
+  image: $AGENT_IMAGE
+  variables:
+    GITLAB_TOKEN: $CI_JOB_TOKEN
+    API_URL: $API_URL
+    API_KEY: $API_KEY
+  script:
+    - |
+      agent \
+        -tools semgrep,gitleaks,trivy \
+        -target . \
+        -auto-ci \
+        -comments \
+        -push \
+        -verbose \
+        -json \
+        -output results.json \
+        -sarif \
+        -sarif-output gl-sast-report.json
+  artifacts:
+    paths:
+      - results.json
+      - gl-sast-report.json
+    reports:
+      sast: gl-sast-report.json
+    expire_in: 30 days
+    when: always
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_BRANCH =~ /^(develop|release\/.*)$/
+
+# MR-specific scan with inline comments
+mr-security-review:
+  stage: security
+  image: $AGENT_IMAGE
+  variables:
+    GITLAB_TOKEN: $CI_JOB_TOKEN
+    API_URL: $API_URL
+    API_KEY: $API_KEY
+  script:
+    - |
+      echo "Scanning MR !${CI_MERGE_REQUEST_IID}"
+      echo "Source: ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+      echo "Target: ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+
+      agent \
+        -tools semgrep,gitleaks \
+        -target . \
+        -auto-ci \
+        -comments \
+        -push \
+        -verbose \
+        -json \
+        -output mr-results.json
+
+      # Check for critical findings
+      CRITICAL=$(cat mr-results.json | jq '[.findings[] | select(.severity == "critical")] | length' 2>/dev/null || echo "0")
+      HIGH=$(cat mr-results.json | jq '[.findings[] | select(.severity == "high")] | length' 2>/dev/null || echo "0")
+
+      echo "Critical findings: $CRITICAL"
+      echo "High findings: $HIGH"
+
+      if [ "$CRITICAL" -gt 0 ]; then
+        echo "ERROR: Found $CRITICAL critical security findings!"
+        exit 1
+      fi
+  artifacts:
+    paths:
+      - mr-results.json
+    expire_in: 7 days
+    when: always
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# Secret scanning only - fast check
+secret-scan:
+  stage: security
+  image: $AGENT_IMAGE
+  script:
+    - |
+      agent \
+        -tool gitleaks \
+        -target . \
+        -verbose \
+        -json \
+        -output secrets.json
+
+      # Fail if any secrets found
+      SECRETS=$(cat secrets.json | jq '.findings | length' 2>/dev/null || echo "0")
+      if [ "$SECRETS" -gt 0 ]; then
+        echo "ERROR: Found $SECRETS exposed secrets!"
+        cat secrets.json | jq '.findings[] | {rule: .rule_id, file: .location.path, line: .location.start_line}'
+        exit 1
+      fi
+  artifacts:
+    paths:
+      - secrets.json
+    when: always
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+# Dependency/SCA scanning
+dependency-scan:
+  stage: security
+  image: $AGENT_IMAGE
+  script:
+    - |
+      agent \
+        -tool trivy \
+        -target . \
+        -verbose \
+        -json \
+        -output dependencies.json
+  artifacts:
+    paths:
+      - dependencies.json
+    reports:
+      dependency_scanning: dependencies.json
+    expire_in: 30 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+# IaC scanning (Terraform, CloudFormation, etc.)
+iac-scan:
+  stage: security
+  image: $AGENT_IMAGE
+  script:
+    - |
+      agent \
+        -tool trivy-config \
+        -target . \
+        -verbose \
+        -json \
+        -output iac-results.json
+  artifacts:
+    paths:
+      - iac-results.json
+    expire_in: 30 days
+  rules:
+    - if: $CI_COMMIT_BRANCH
+      changes:
+        - "**/*.tf"
+        - "**/*.yaml"
+        - "**/*.yml"
+        - "**/Dockerfile*"
+        - "**/*.json"
+
+# =============================================================================
+# Container Security
+# =============================================================================
+
+# Container image scanning
+container-scan:
+  stage: container-security
+  image: $AGENT_IMAGE
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - |
+      # Build the container if Dockerfile exists
+      if [ -f Dockerfile ]; then
+        docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA .
+      fi
+  script:
+    - |
+      if [ -f Dockerfile ]; then
+        agent \
+          -tool trivy-image \
+          -target $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA \
+          -verbose \
+          -json \
+          -output container-results.json
+      else
+        echo "No Dockerfile found, skipping container scan"
+      fi
+  artifacts:
+    paths:
+      - container-results.json
+    reports:
+      container_scanning: container-results.json
+    expire_in: 30 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - Dockerfile
+        - "**/Dockerfile*"
+    - if: $CI_COMMIT_TAG
+
+# =============================================================================
+# Scheduled Security Audit
+# =============================================================================
+
+# Weekly full security audit
+weekly-audit:
+  stage: security
+  image: $AGENT_IMAGE
+  script:
+    - |
+      agent \
+        -tools semgrep,gitleaks,trivy \
+        -target . \
+        -verbose \
+        -json \
+        -output weekly-audit.json \
+        -push
+  artifacts:
+    paths:
+      - weekly-audit.json
+    expire_in: 90 days
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  variables:
+    API_URL: $API_URL
+    API_KEY: $API_KEY

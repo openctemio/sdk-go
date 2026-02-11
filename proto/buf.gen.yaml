@@ -1,0 +1,12 @@
+version: v1
+managed:
+  enabled: true
+  go_package_prefix:
+    default: github.com/openctemio/sdk-go/pkg/proto
+plugins:
+  - plugin: go
+    out: ../pkg/proto
+    opt: paths=source_relative
+  - plugin: go-grpc
+    out: ../pkg/proto
+    opt: paths=source_relative

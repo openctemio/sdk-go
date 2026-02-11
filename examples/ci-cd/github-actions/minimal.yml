@@ -1,0 +1,23 @@
+# =============================================================================
+# GitHub Actions: Minimal Security Scan
+# =============================================================================
+# Simplest setup - just scan on every push/PR
+# Copy to: .github/workflows/security.yml
+# =============================================================================
+
+name: Security
+
+on: [push, pull_request]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Security Scan
+        uses: docker://openctemio/agent:ci
+        with:
+          args: -tools semgrep,gitleaks,trivy -target . -auto-ci -verbose
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,22 @@
+# =============================================================================
+# GitLab CI: Minimal Security Scan
+# =============================================================================
+# Simplest setup - just scan on every push/MR
+# Copy to your repository root as: .gitlab-ci.yml
+# =============================================================================
+
+stages:
+  - security
+
+security-scan:
+  stage: security
+  image: openctemio/agent:ci
+  script:
+    - agent -tools semgrep,gitleaks,trivy -target . -auto-ci -verbose
+  artifacts:
+    paths:
+      - "*.json"
+    when: always
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

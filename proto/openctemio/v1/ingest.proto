@@ -1,0 +1,209 @@
+syntax = "proto3";
+
+package openctemio.v1;
+
+option go_package = "github.com/openctemio/sdk-go/pkg/proto/openctemio/v1;v1";
+
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// Ingest Service - Push findings, assets, and exposures
+// =============================================================================
+
+service IngestService {
+  // PushFindings sends findings to the server
+  rpc PushFindings(PushFindingsRequest) returns (PushFindingsResponse);
+
+  // StreamFindings sends findings via stream (for large batches)
+  rpc StreamFindings(stream Finding) returns (PushFindingsResponse);
+
+  // PushAssets sends assets to the server
+  rpc PushAssets(PushAssetsRequest) returns (PushAssetsResponse);
+
+  // PushExposures sends exposure events to the server
+  rpc PushExposures(PushExposuresRequest) returns (PushExposuresResponse);
+}
+
+// =============================================================================
+// Push Findings
+// =============================================================================
+
+message PushFindingsRequest {
+  reserved 1;                     // Previously worker_id
+  reserved "worker_id";
+  ReportMetadata metadata = 2;
+  repeated Finding findings = 3;
+  string agent_id = 4;            // Agent identification
+}
+
+message ReportMetadata {
+  string tool_name = 1;
+  string tool_version = 2;
+  string scan_id = 3;
+  google.protobuf.Timestamp start_time = 4;
+  google.protobuf.Timestamp end_time = 5;
+  string repository = 6;
+  string branch = 7;
+  string commit_sha = 8;
+}
+
+message Finding {
+  string id = 1;
+  FindingType type = 2;
+  string title = 3;
+  string description = 4;
+  Severity severity = 5;
+  int32 confidence = 6;
+
+  // Location
+  Location location = 7;
+
+  // Rule info
+  string rule_id = 8;
+  string rule_name = 9;
+
+  // Vulnerability details (optional)
+  VulnerabilityDetails vulnerability = 10;
+
+  // Secret details (optional)
+  SecretDetails secret = 11;
+
+  // Fingerprint for deduplication
+  string fingerprint = 12;
+
+  // References
+  repeated string references = 13;
+
+  // Tags
+  repeated string tags = 14;
+}
+
+enum FindingType {
+  FINDING_TYPE_UNSPECIFIED = 0;
+  FINDING_TYPE_VULNERABILITY = 1;
+  FINDING_TYPE_SECRET = 2;
+  FINDING_TYPE_MISCONFIGURATION = 3;
+  FINDING_TYPE_COMPLIANCE = 4;
+  FINDING_TYPE_WEB3 = 5;
+}
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_CRITICAL = 1;
+  SEVERITY_HIGH = 2;
+  SEVERITY_MEDIUM = 3;
+  SEVERITY_LOW = 4;
+  SEVERITY_INFO = 5;
+}
+
+message Location {
+  string path = 1;
+  int32 start_line = 2;
+  int32 end_line = 3;
+  int32 start_column = 4;
+  int32 end_column = 5;
+  string snippet = 6;
+}
+
+message VulnerabilityDetails {
+  string cve_id = 1;
+  repeated string cwe_ids = 2;
+  double cvss_score = 3;
+  string cvss_vector = 4;
+  string package = 5;
+  string affected_version = 6;
+  string fixed_version = 7;
+  string ecosystem = 8;
+  double epss_score = 9;
+  bool in_cisa_kev = 10;
+}
+
+message SecretDetails {
+  string secret_type = 1;
+  string service = 2;
+  string masked_value = 3;
+  int32 length = 4;
+  double entropy = 5;
+}
+
+message PushFindingsResponse {
+  string scan_id = 1;
+  int32 findings_created = 2;
+  int32 findings_updated = 3;
+  int32 findings_skipped = 4;
+  repeated string errors = 5;
+}
+
+// =============================================================================
+// Push Assets
+// =============================================================================
+
+message PushAssetsRequest {
+  reserved 1;                     // Previously worker_id
+  reserved "worker_id";
+  repeated Asset assets = 2;
+  string agent_id = 3;            // Agent identification
+}
+
+message Asset {
+  string id = 1;
+  AssetType type = 2;
+  string value = 3;
+  string name = 4;
+  string description = 5;
+  map<string, string> properties = 6;
+}
+
+enum AssetType {
+  ASSET_TYPE_UNSPECIFIED = 0;
+  ASSET_TYPE_DOMAIN = 1;
+  ASSET_TYPE_IP_ADDRESS = 2;
+  ASSET_TYPE_REPOSITORY = 3;
+  ASSET_TYPE_CERTIFICATE = 4;
+  ASSET_TYPE_CLOUD_ACCOUNT = 5;
+  ASSET_TYPE_COMPUTE = 6;
+  ASSET_TYPE_STORAGE = 7;
+  ASSET_TYPE_DATABASE = 8;
+  ASSET_TYPE_CONTAINER = 9;
+  ASSET_TYPE_SMART_CONTRACT = 10;
+}
+
+message PushAssetsResponse {
+  int32 assets_created = 1;
+  int32 assets_updated = 2;
+  repeated string errors = 3;
+}
+
+// =============================================================================
+// Push Exposures
+// =============================================================================
+
+message PushExposuresRequest {
+  reserved 1;                     // Previously worker_id
+  reserved "worker_id";
+  repeated ExposureEvent events = 2;
+  string agent_id = 3;            // Agent identification
+}
+
+message ExposureEvent {
+  string type = 1;              // new_asset, asset_removed, exposure_detected, etc.
+  string asset_id = 2;
+  string asset_type = 3;
+  string asset_name = 4;
+  string exposure_type = 5;     // port_open, service_exposed, etc.
+  string protocol = 6;
+  int32 port = 7;
+  string service = 8;
+  google.protobuf.Timestamp detected_at = 9;
+  string detected_by = 10;
+  string severity = 11;
+  string description = 12;
+  google.protobuf.Timestamp resolved_at = 13;
+  repeated string tags = 14;
+}
+
+message PushExposuresResponse {
+  int32 events_created = 1;
+  int32 events_updated = 2;
+  int32 events_skipped = 3;
+}

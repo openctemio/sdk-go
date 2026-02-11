@@ -1,0 +1,162 @@
+syntax = "proto3";
+
+package openctemio.v1;
+
+option go_package = "github.com/openctemio/sdk-go/pkg/proto/openctemio/v1;v1";
+
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// Agent Service - Agent registration, heartbeat, and command polling
+// =============================================================================
+
+service AgentService {
+  // Register registers a new agent with the server
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Heartbeat maintains connection and receives server-push commands
+  // Bidirectional streaming for real-time command delivery
+  rpc Heartbeat(stream HeartbeatRequest) returns (stream HeartbeatResponse);
+
+  // PollCommands fetches pending commands for the agent (non-streaming alternative)
+  rpc PollCommands(PollCommandsRequest) returns (PollCommandsResponse);
+
+  // AckCommand acknowledges a command has been processed
+  rpc AckCommand(AckCommandRequest) returns (AckCommandResponse);
+}
+
+// Register
+
+message RegisterRequest {
+  string name = 1;              // Agent name
+  string version = 2;           // Agent version
+  repeated string scanners = 3; // Available scanners
+  repeated string collectors = 4; // Available collectors
+  map<string, string> labels = 5; // Custom labels
+}
+
+message RegisterResponse {
+  reserved 1;                     // Previously worker_id
+  reserved "worker_id";
+  int64 heartbeat_interval_seconds = 2; // Recommended heartbeat interval
+  string agent_id = 3;            // Assigned agent ID
+}
+
+// Heartbeat
+
+message HeartbeatRequest {
+  reserved 1;                     // Previously worker_id
+  reserved "worker_id";
+  AgentStatus status = 2;
+  AgentMetrics metrics = 3;
+  string agent_id = 4;            // Agent identification
+}
+
+// AgentStatus represents the current status of an agent.
+message AgentStatus {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    STATE_IDLE = 1;
+    STATE_SCANNING = 2;
+    STATE_COLLECTING = 3;
+    STATE_UPLOADING = 4;
+    STATE_ERROR = 5;
+  }
+  State state = 1;
+  string current_task = 2;      // Current task description
+  int32 progress_percent = 3;   // 0-100
+}
+
+// AgentMetrics contains runtime metrics for an agent.
+message AgentMetrics {
+  int64 uptime_seconds = 1;
+  int64 total_scans = 2;
+  int64 total_findings = 3;
+  int64 errors = 4;
+  double cpu_percent = 5;
+  int64 memory_mb = 6;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  repeated Command commands = 2; // Server-push commands
+}
+
+// Commands
+
+message Command {
+  string id = 1;
+  CommandType type = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp expires_at = 4;
+
+  // Command payloads (oneof for type safety)
+  oneof payload {
+    ScanCommand scan = 10;
+    CollectCommand collect = 11;
+    ConfigUpdateCommand config_update = 12;
+    StopCommand stop = 13;
+  }
+}
+
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  COMMAND_TYPE_SCAN = 1;
+  COMMAND_TYPE_COLLECT = 2;
+  COMMAND_TYPE_CONFIG_UPDATE = 3;
+  COMMAND_TYPE_STOP = 4;
+}
+
+message ScanCommand {
+  string target = 1;            // Scan target (path, URL, etc.)
+  string scanner = 2;           // Scanner to use
+  map<string, string> options = 3; // Scanner options
+}
+
+message CollectCommand {
+  string collector = 1;         // Collector to use
+  string source = 2;            // Source (e.g., "github", "aws")
+  map<string, string> options = 3; // Collector options
+}
+
+message ConfigUpdateCommand {
+  map<string, string> config = 1; // Configuration updates
+}
+
+message StopCommand {
+  bool graceful = 1;            // Graceful shutdown
+  string reason = 2;            // Stop reason
+}
+
+// Poll Commands (non-streaming)
+
+message PollCommandsRequest {
+  reserved 1;                     // Previously worker_id
+  reserved "worker_id";
+  int32 max_commands = 2;         // Max commands to return
+  string agent_id = 3;            // Agent identification
+}
+
+message PollCommandsResponse {
+  repeated Command commands = 1;
+}
+
+// Ack Command
+
+message AckCommandRequest {
+  reserved 1;                     // Previously worker_id
+  reserved "worker_id";
+  string command_id = 2;
+  CommandResult result = 3;
+  string agent_id = 4;            // Agent identification
+}
+
+message CommandResult {
+  bool success = 1;
+  string error_message = 2;
+  map<string, string> metadata = 3;
+}
+
+message AckCommandResponse {
+  bool acknowledged = 1;
+}

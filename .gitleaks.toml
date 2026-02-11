@@ -1,0 +1,27 @@
+# Gitleaks configuration for sdk
+# https://gitleaks.io/
+
+title = "sdk gitleaks config"
+
+[allowlist]
+description = "Global allowlist"
+
+# Paths to ignore
+paths = [
+    '''_test\.go$''',
+    '''\.md$''',
+    '''go\.sum$''',
+    '''examples/''',
+    '''docs/''',
+]
+
+# Regex patterns to allow (common false positives)
+regexes = [
+    '''example[_-]?token''',
+    '''test[_-]?token''',
+    '''YOUR_[A-Z_]+_HERE''',
+    '''placeholder''',
+    '''xxxx''',
+    # GitHub PAT placeholder pattern
+    '''ghp_x{10,}''',
+]
