@@ -29,7 +29,7 @@ func NewStorage(cfg *Config) (*Storage, error) {
 
 	// Ensure directory exists
 	dir := filepath.Dir(cfg.DatabasePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return nil, fmt.Errorf("create storage directory: %w", err)
 	}
 
