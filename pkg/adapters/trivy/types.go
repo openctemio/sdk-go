@@ -30,32 +30,32 @@ type TrivyImageConfig struct {
 
 // TrivyResult represents a scan result for a target.
 type TrivyResult struct {
-	Target            string                `json:"Target"`
-	Class             string                `json:"Class,omitempty"`
-	Type              string                `json:"Type,omitempty"`
-	Vulnerabilities   []TrivyVulnerability  `json:"Vulnerabilities,omitempty"`
-	Misconfigurations []TrivyMisconfig      `json:"Misconfigurations,omitempty"`
-	Secrets           []TrivySecret         `json:"Secrets,omitempty"`
+	Target            string               `json:"Target"`
+	Class             string               `json:"Class,omitempty"`
+	Type              string               `json:"Type,omitempty"`
+	Vulnerabilities   []TrivyVulnerability `json:"Vulnerabilities,omitempty"`
+	Misconfigurations []TrivyMisconfig     `json:"Misconfigurations,omitempty"`
+	Secrets           []TrivySecret        `json:"Secrets,omitempty"`
 }
 
 // TrivyVulnerability represents a vulnerability finding.
 type TrivyVulnerability struct {
-	VulnerabilityID  string     `json:"VulnerabilityID"`
-	PkgName          string     `json:"PkgName"`
-	PkgPath          string     `json:"PkgPath,omitempty"`
-	InstalledVersion string     `json:"InstalledVersion"`
-	FixedVersion     string     `json:"FixedVersion,omitempty"`
-	Severity         string     `json:"Severity"`
-	Title            string     `json:"Title,omitempty"`
-	Description      string     `json:"Description,omitempty"`
-	PrimaryURL       string     `json:"PrimaryURL,omitempty"`
-	DataSource       *TrivyDS   `json:"DataSource,omitempty"`
-	CVSS             TrivyCVSS  `json:"CVSS,omitempty"`
-	CweIDs           []string   `json:"CweIDs,omitempty"`
-	References       []string   `json:"References,omitempty"`
-	PublishedDate    string     `json:"PublishedDate,omitempty"`
-	LastModifiedDate string     `json:"LastModifiedDate,omitempty"`
-	Status           string     `json:"Status,omitempty"`
+	VulnerabilityID  string    `json:"VulnerabilityID"`
+	PkgName          string    `json:"PkgName"`
+	PkgPath          string    `json:"PkgPath,omitempty"`
+	InstalledVersion string    `json:"InstalledVersion"`
+	FixedVersion     string    `json:"FixedVersion,omitempty"`
+	Severity         string    `json:"Severity"`
+	Title            string    `json:"Title,omitempty"`
+	Description      string    `json:"Description,omitempty"`
+	PrimaryURL       string    `json:"PrimaryURL,omitempty"`
+	DataSource       *TrivyDS  `json:"DataSource,omitempty"`
+	CVSS             TrivyCVSS `json:"CVSS,omitempty"`
+	CweIDs           []string  `json:"CweIDs,omitempty"`
+	References       []string  `json:"References,omitempty"`
+	PublishedDate    string    `json:"PublishedDate,omitempty"`
+	LastModifiedDate string    `json:"LastModifiedDate,omitempty"`
+	Status           string    `json:"Status,omitempty"`
 }
 
 // TrivyDS is a Trivy data source.
@@ -78,29 +78,29 @@ type TrivyCVSSData struct {
 
 // TrivyMisconfig represents a misconfiguration finding.
 type TrivyMisconfig struct {
-	Type        string          `json:"Type,omitempty"`
-	ID          string          `json:"ID,omitempty"`
-	AVDID       string          `json:"AVDID,omitempty"`
-	Title       string          `json:"Title,omitempty"`
-	Description string          `json:"Description,omitempty"`
-	Message     string          `json:"Message,omitempty"`
-	Namespace   string          `json:"Namespace,omitempty"`
-	Query       string          `json:"Query,omitempty"`
-	Resolution  string          `json:"Resolution,omitempty"`
-	Severity    string          `json:"Severity"`
-	PrimaryURL  string          `json:"PrimaryURL,omitempty"`
-	References  []string        `json:"References,omitempty"`
-	Status      string          `json:"Status,omitempty"`
+	Type          string          `json:"Type,omitempty"`
+	ID            string          `json:"ID,omitempty"`
+	AVDID         string          `json:"AVDID,omitempty"`
+	Title         string          `json:"Title,omitempty"`
+	Description   string          `json:"Description,omitempty"`
+	Message       string          `json:"Message,omitempty"`
+	Namespace     string          `json:"Namespace,omitempty"`
+	Query         string          `json:"Query,omitempty"`
+	Resolution    string          `json:"Resolution,omitempty"`
+	Severity      string          `json:"Severity"`
+	PrimaryURL    string          `json:"PrimaryURL,omitempty"`
+	References    []string        `json:"References,omitempty"`
+	Status        string          `json:"Status,omitempty"`
 	CauseMetadata *TrivyCauseMeta `json:"CauseMetadata,omitempty"`
 }
 
 // TrivyCauseMeta contains location details for misconfigurations.
 type TrivyCauseMeta struct {
-	Resource  string `json:"Resource,omitempty"`
-	Provider  string `json:"Provider,omitempty"`
-	Service   string `json:"Service,omitempty"`
-	StartLine int    `json:"StartLine,omitempty"`
-	EndLine   int    `json:"EndLine,omitempty"`
+	Resource  string     `json:"Resource,omitempty"`
+	Provider  string     `json:"Provider,omitempty"`
+	Service   string     `json:"Service,omitempty"`
+	StartLine int        `json:"StartLine,omitempty"`
+	EndLine   int        `json:"EndLine,omitempty"`
 	Code      *TrivyCode `json:"Code,omitempty"`
 }
 

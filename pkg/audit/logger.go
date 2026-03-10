@@ -174,7 +174,7 @@ func NewLogger(config *LoggerConfig) (*Logger, error) {
 
 	// Ensure log directory exists
 	dir := filepath.Dir(config.LogFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return nil, fmt.Errorf("create log directory: %w", err)
 	}
 

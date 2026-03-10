@@ -150,7 +150,7 @@ func (p *BaseProcessor) saveLocal(report *ctis.Report, scannerName, outputDir st
 	}
 
 	// Create output directory if needed
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := os.MkdirAll(outputDir, 0750); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
 	}
 

@@ -83,7 +83,7 @@ func NewFileRetryQueue(cfg *FileQueueConfig) (*FileRetryQueue, error) {
 	}
 
 	// Ensure directory exists
-	if err := os.MkdirAll(cfg.Dir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.Dir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create queue directory: %w", err)
 	}
 
