@@ -22,7 +22,6 @@ linters:
     - govet
     - errcheck
     - ineffassign
-    - typecheck
     # Style
     - gofmt
     - goimports
