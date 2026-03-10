@@ -10,11 +10,11 @@ type SemgrepOutput struct {
 
 // SemgrepResult represents a single Semgrep finding.
 type SemgrepResult struct {
-	CheckID string         `json:"check_id"`
-	Path    string         `json:"path"`
-	Start   SemgrepPos     `json:"start"`
-	End     SemgrepPos     `json:"end"`
-	Extra   SemgrepExtra   `json:"extra"`
+	CheckID string       `json:"check_id"`
+	Path    string       `json:"path"`
+	Start   SemgrepPos   `json:"start"`
+	End     SemgrepPos   `json:"end"`
+	Extra   SemgrepExtra `json:"extra"`
 }
 
 // SemgrepPos represents a position in a file.
@@ -39,17 +39,17 @@ type SemgrepExtra struct {
 
 // SemgrepMetadata contains rule metadata.
 type SemgrepMetadata struct {
-	CWE              interface{} `json:"cwe,omitempty"`
-	OWASP            interface{} `json:"owasp,omitempty"`
-	Confidence       string      `json:"confidence,omitempty"`
-	Impact           string      `json:"impact,omitempty"`
-	Likelihood       string      `json:"likelihood,omitempty"`
-	Category         string      `json:"category,omitempty"`
-	Subcategory      interface{} `json:"subcategory,omitempty"`
-	Technology       interface{} `json:"technology,omitempty"`
-	References       interface{} `json:"references,omitempty"`
-	Source           string      `json:"source,omitempty"`
-	SourceRuleURL    string      `json:"source-rule-url,omitempty"`
+	CWE                interface{} `json:"cwe,omitempty"`
+	OWASP              interface{} `json:"owasp,omitempty"`
+	Confidence         string      `json:"confidence,omitempty"`
+	Impact             string      `json:"impact,omitempty"`
+	Likelihood         string      `json:"likelihood,omitempty"`
+	Category           string      `json:"category,omitempty"`
+	Subcategory        interface{} `json:"subcategory,omitempty"`
+	Technology         interface{} `json:"technology,omitempty"`
+	References         interface{} `json:"references,omitempty"`
+	Source             string      `json:"source,omitempty"`
+	SourceRuleURL      string      `json:"source-rule-url,omitempty"`
 	VulnerabilityClass interface{} `json:"vulnerability_class,omitempty"`
 }
 
@@ -62,14 +62,14 @@ type SemgrepFixRegex struct {
 
 // SemgrepDataflow contains taint tracking data.
 type SemgrepDataflow struct {
-	TaintSource    []SemgrepDataflowLoc `json:"taint_source,omitempty"`
+	TaintSource      []SemgrepDataflowLoc `json:"taint_source,omitempty"`
 	IntermediateVars []SemgrepDataflowLoc `json:"intermediate_vars,omitempty"`
-	TaintSink      []SemgrepDataflowLoc `json:"taint_sink,omitempty"`
+	TaintSink        []SemgrepDataflowLoc `json:"taint_sink,omitempty"`
 }
 
 // SemgrepDataflowLoc represents a location in a dataflow trace.
 type SemgrepDataflowLoc struct {
-	Content string     `json:"content,omitempty"`
+	Content  string     `json:"content,omitempty"`
 	Location SemgrepLoc `json:"location,omitempty"`
 }
 

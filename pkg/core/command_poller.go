@@ -533,7 +533,7 @@ func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templa
 	}
 
 	cleanup := func() {
-		os.RemoveAll(tmpDir)
+		os.RemoveAll(tmpDir) //nolint:errcheck // best-effort cleanup
 	}
 
 	// Track written filenames to detect duplicates

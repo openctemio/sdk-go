@@ -300,7 +300,7 @@ func (s *Scanner) ScanDAST(ctx context.Context, targets []string, opts *core.Sca
 		if err != nil {
 			return nil, fmt.Errorf("failed to write targets file: %w", err)
 		}
-		defer os.Remove(tempFile)
+		defer os.Remove(tempFile) //nolint:errcheck // best-effort cleanup
 		s.Mode = ScanModeList
 		s.TargetFile = tempFile
 		target = ""
