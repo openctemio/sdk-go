@@ -227,9 +227,15 @@ func TestPipeline_SubmitWithOptions(t *testing.T) {
 }
 
 func TestPipeline_QueueFull(t *testing.T) {
+	workerStarted := make(chan struct{})
 	blockCh := make(chan struct{})
 	uploader := &mockUploader{
 		uploadFunc: func(ctx context.Context, report *ctis.Report) (*Result, error) {
+			// Signal that the worker has consumed an item from the queue
+			select {
+			case workerStarted <- struct{}{}:
+			default:
+			}
 			<-blockCh // Block forever until closed
 			return &Result{Status: "completed"}, nil
 		},
@@ -247,13 +253,19 @@ func TestPipeline_QueueFull(t *testing.T) {
 		p.Stop(ctx)
 	}()
 
-	// Submit until queue is full
-	// Queue size = 2, Workers = 1
-	// First submit: goes to worker (processing)
-	// Second submit: goes to queue slot 1
-	// Third submit: goes to queue slot 2
-	// Fourth submit: queue full, should fail
-	for i := 0; i < 5; i++ {
+	// Submit first item and wait for the worker to pick it up.
+	// This ensures the worker has consumed from the channel before we fill the queue.
+	_, err := p.Submit(&ctis.Report{})
+	if err != nil {
+		t.Fatalf("Submit 0 should succeed: %v", err)
+	}
+	<-workerStarted // Wait until worker is processing the first item
+
+	// Now the worker is blocked. Queue has 2 slots:
+	// Submit 1 → queue slot 1
+	// Submit 2 → queue slot 2
+	// Submit 3+ → queue full, should fail
+	for i := 1; i <= 4; i++ {
 		_, err := p.Submit(&ctis.Report{})
 		if i >= 3 && err == nil {
 			t.Errorf("Submit %d should fail when queue is full", i)
