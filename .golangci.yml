@@ -76,5 +76,3 @@ linters:
           - gocyclo
           - funlen
 
-    max-issues-per-linter: 50
-    max-same-issues: 10
