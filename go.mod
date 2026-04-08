@@ -1,6 +1,6 @@
 module github.com/openctemio/sdk-go
 
-go 1.25.8
+go 1.26
 
 require (
 	github.com/google/go-github/v74 v74.0.0
