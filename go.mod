@@ -9,10 +9,10 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	gitlab.com/gitlab-org/api/client-go v1.46.0
 	golang.org/x/oauth2 v0.36.0
-	golang.org/x/sys v0.42.0
+	golang.org/x/sys v0.43.0
 	golang.org/x/time v0.15.0
-	google.golang.org/grpc v1.79.3
-	modernc.org/sqlite v1.47.0
+	google.golang.org/grpc v1.80.0
+	modernc.org/sqlite v1.48.2
 )
 
 require (
