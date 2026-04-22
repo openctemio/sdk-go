@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // RegistrationRequest contains the data for registering a new platform agent.
@@ -98,9 +100,11 @@ func NewBootstrapper(baseURL, bootstrapToken string, config *BootstrapConfig) *B
 		baseURL:        baseURL,
 		bootstrapToken: bootstrapToken,
 		config:         config,
-		httpClient: &http.Client{
-			Timeout: config.Timeout,
-		},
+		// SSRF: bootstrap endpoint URL comes from operator config; the
+		// token is one-shot-high-value so we add dialer-level guarding
+		// to prevent a rebind-style leak of the token into private
+		// space during enrolment.
+		httpClient: httpsec.SafeHTTPClient(config.Timeout),
 	}
 }
 
