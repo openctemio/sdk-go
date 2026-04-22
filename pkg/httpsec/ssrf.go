@@ -52,15 +52,13 @@ const allowLoopbackEnvVar = "OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK"
 // external test harnesses; this variable is for in-process overrides.
 var AllowLoopback = os.Getenv(allowLoopbackEnvVar) == "1"
 
-// blockedIPRanges lists CIDRs the SDK process must never reach via
-// runtime-configured URLs. Keep in sync with
-// api/pkg/httpsec/ssrf.go blockedIPRanges — scripts/security-lint.sh
-// cross-checks.
-var blockedIPRanges = []string{
+// hardBlockedIPRanges lists CIDRs that MUST NEVER be reachable.
+// Mirror of api/pkg/httpsec. See that file for the full rationale.
+// Attacks these ranges are not "aggressive configuration" but
+// immediate security incidents (cloud IMDS leak, loopback self-
+// scan, etc.) — no env var should be able to open them.
+var hardBlockedIPRanges = []string{
 	"127.0.0.0/8",        // Loopback
-	"10.0.0.0/8",         // Private class A
-	"172.16.0.0/12",      // Private class B
-	"192.168.0.0/16",     // Private class C
 	"169.254.0.0/16",     // Link-local (incl. AWS/GCP/Azure IMDS)
 	"100.64.0.0/10",      // Carrier-grade NAT
 	"0.0.0.0/8",          // "This" network
@@ -68,9 +66,32 @@ var blockedIPRanges = []string{
 	"240.0.0.0/4",        // Reserved
 	"255.255.255.255/32", // Broadcast
 	"::1/128",            // IPv6 loopback
-	"fc00::/7",           // IPv6 unique local
 	"fe80::/10",          // IPv6 link-local
 }
+
+// privateIPRanges — blocked by default, opened by setting
+// OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1 (SDK) or
+// OPENCTEM_HTTPSEC_ALLOW_PRIVATE=1 (inherited). An on-prem
+// deployment scanning its own 10.x / 192.168.x services needs this
+// on.
+var privateIPRanges = []string{
+	"10.0.0.0/8",     // RFC1918 class A
+	"172.16.0.0/12",  // RFC1918 class B
+	"192.168.0.0/16", // RFC1918 class C
+	"fc00::/7",       // IPv6 ULA
+}
+
+// allowPrivate is the runtime toggle. The SDK check is an
+// independent switch from the API side so an SDK caller inside a
+// cloud VM doesn't inherit the API's opt-in. Accept either env var
+// name so ops can set them symmetrically across services.
+var allowPrivate = os.Getenv("OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE") == "1" ||
+	os.Getenv("OPENCTEM_HTTPSEC_ALLOW_PRIVATE") == "1"
+
+// AllowPrivate reports the current runtime posture for
+// startup-logging; do not consult it per-call (that happens inside
+// IsIPBlocked).
+func AllowPrivate() bool { return allowPrivate }
 
 // dangerousHosts is a string-level rejection for common aliases that
 // hit metadata/local services before DNS resolves.
@@ -82,27 +103,43 @@ var dangerousHosts = []string{
 	"169.254.169.254",
 }
 
-var blockedCIDRs []*net.IPNet
+var hardBlockedCIDRs []*net.IPNet
+var privateCIDRs []*net.IPNet
 
 func init() {
-	for _, cidr := range blockedIPRanges {
-		_, ipNet, err := net.ParseCIDR(cidr)
-		if err == nil {
-			blockedCIDRs = append(blockedCIDRs, ipNet)
+	for _, cidr := range hardBlockedIPRanges {
+		if _, ipNet, err := net.ParseCIDR(cidr); err == nil {
+			hardBlockedCIDRs = append(hardBlockedCIDRs, ipNet)
+		}
+	}
+	for _, cidr := range privateIPRanges {
+		if _, ipNet, err := net.ParseCIDR(cidr); err == nil {
+			privateCIDRs = append(privateCIDRs, ipNet)
 		}
 	}
 }
 
 // IsIPBlocked reports whether the given IP falls in a blocked CIDR.
-// When AllowLoopback is true, 127.0.0.0/8 and ::1/128 are skipped —
-// used exclusively by unit tests driving httptest.NewServer targets.
+// The hard-blocked set always rejects. The RFC1918 / ULA set is
+// conditional on allowPrivate (set via env).
+//
+// AllowLoopback (test-only) still overrides loopback for httptest
+// servers; it does NOT touch IMDS or RFC1918 — those remain on
+// their own toggle chains.
 func IsIPBlocked(ip net.IP) bool {
 	if AllowLoopback && (ip.IsLoopback() || ip.Equal(net.IPv6loopback)) {
 		return false
 	}
-	for _, cidr := range blockedCIDRs {
+	for _, cidr := range hardBlockedCIDRs {
 		if cidr.Contains(ip) {
 			return true
+		}
+	}
+	if !allowPrivate {
+		for _, cidr := range privateCIDRs {
+			if cidr.Contains(ip) {
+				return true
+			}
 		}
 	}
 	return false
