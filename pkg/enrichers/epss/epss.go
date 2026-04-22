@@ -17,6 +17,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 const (
@@ -66,9 +67,10 @@ func NewEnricher() *Enricher {
 		Timeout:  DefaultTimeout,
 		cache:    make(map[string]*EPSSData),
 		cacheTTL: DefaultCacheTTL,
-		client: &http.Client{
-			Timeout: DefaultTimeout,
-		},
+		// SSRF hygiene: EPSS endpoint can be overridden via
+		// EnricherConfig.Endpoint. Dialer-level blocklist stops a
+		// misconfigured endpoint landing on private ranges.
+		client: httpsec.SafeHTTPClient(DefaultTimeout),
 	}
 }
 
