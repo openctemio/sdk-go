@@ -18,6 +18,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/compress"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/retry"
 )
 
@@ -116,7 +117,11 @@ func New(cfg *Config) *Client {
 		agentID:          cfg.AgentID,
 		maxRetries:       cfg.MaxRetries,
 		retryDelay:       cfg.RetryDelay,
-		httpClient:       &http.Client{Timeout: cfg.Timeout},
+		// SSRF: BaseURL is operator-configured at SDK consumer site.
+		// Using SafeHTTPClient ensures the dialer rejects RFC1918 /
+		// link-local / CGNAT targets even when a custom scanner binds
+		// the SDK to an attacker-influenced API endpoint.
+		httpClient: httpsec.SafeHTTPClient(cfg.Timeout),
 		verbose:          cfg.Verbose,
 		compressor:       compressor,
 		compressionLevel: compressionLevel,
@@ -144,9 +149,8 @@ func NewWithOptions(opts ...Option) *Client {
 	c := &Client{
 		maxRetries: 3,
 		retryDelay: 2 * time.Second,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		// SSRF: see the imperative constructor above for rationale.
+		httpClient: httpsec.SafeHTTPClient(30 * time.Second),
 	}
 	for _, opt := range opts {
 		opt(c)

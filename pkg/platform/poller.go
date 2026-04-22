@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // JobClient defines the interface for job operations.
@@ -733,10 +735,10 @@ func NewHTTPJobClient(baseURL, apiKey, agentID string, pollTimeout time.Duration
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		agentID: agentID,
-		httpClient: &http.Client{
-			// Timeout should be longer than poll timeout to allow for response
-			Timeout: pollTimeout + 10*time.Second,
-		},
+		// SSRF: platform poller talks to the operator-configured API
+		// baseURL; dialer-level blocklist keeps long-poll connections
+		// from opportunistically landing on private space.
+		httpClient: httpsec.SafeHTTPClient(pollTimeout + 10*time.Second),
 	}
 }
 
