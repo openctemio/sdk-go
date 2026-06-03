@@ -361,8 +361,11 @@ func (m *Manager) handleChunkFailure(ctx context.Context, chunk *Chunk, errorMsg
 
 	// Check if can retry
 	if chunk.CanRetry(m.cfg.MaxRetries) {
-		// Reset to pending for retry
-		_ = m.storage.UpdateChunkStatus(ctx, chunk.ID, ChunkStatusPending, errorMsg)
+		// Reset to pending for retry AND increment retry_count. Plain
+		// UpdateChunkStatus(pending) never bumped retry_count (it only counts
+		// the 'failed' status), so CanRetry stayed true forever → a chunk that
+		// kept failing was retried infinitely and ProcessPending never drained.
+		_ = m.storage.RequeueForRetry(ctx, chunk.ID, errorMsg)
 		return
 	}
 

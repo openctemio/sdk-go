@@ -347,7 +347,17 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 		fmt.Printf("[command-poller] Executing command %s (type: %s)\n", cmd.ID, cmd.Type)
 	}
 
-	result, err := p.executor.Execute(ctx, cmd)
+	// Run the executor with panic recovery — a panic in a tool/parser would
+	// otherwise crash the whole agent process and the server would never get a
+	// result. Convert it to a failed result via the normal error path below.
+	result, err := func() (res *CommandExecutionResult, e error) {
+		defer func() {
+			if r := recover(); r != nil {
+				e = fmt.Errorf("executor panicked: %v", r)
+			}
+		}()
+		return p.executor.Execute(ctx, cmd)
+	}()
 
 	reportResult := &CommandResult{
 		CompletedAt: time.Now(),
