@@ -1308,6 +1308,12 @@ func (c *Client) isFiningSuppressed(f ctis.Finding, rules []SuppressionRule) boo
 // Note: ToolName is not checked here because Finding doesn't have Tool info;
 // it should be checked at the Report level before calling this function.
 func (c *Client) matchesSuppressionRule(f ctis.Finding, rule SuppressionRule) bool {
+	// Track whether at least one finding-level matcher actually applied. A rule
+	// with no RuleID and no PathPattern (e.g. an asset-only rule, handled
+	// elsewhere) must NOT match every finding — returning true here would
+	// silently drop the entire result set (fail-open in a security gate).
+	matched := false
+
 	// Check rule ID (supports wildcard suffix)
 	if rule.RuleID != "" {
 		if strings.HasSuffix(rule.RuleID, "*") {
@@ -1318,16 +1324,21 @@ func (c *Client) matchesSuppressionRule(f ctis.Finding, rule SuppressionRule) bo
 		} else if rule.RuleID != f.RuleID {
 			return false
 		}
+		matched = true
 	}
 
-	// Check path pattern
-	if rule.PathPattern != "" && f.Location != nil && f.Location.Path != "" {
+	// Check path pattern. A path rule can only match a finding that has a path.
+	if rule.PathPattern != "" {
+		if f.Location == nil || f.Location.Path == "" {
+			return false
+		}
 		if !matchGlobPattern(rule.PathPattern, f.Location.Path) {
 			return false
 		}
+		matched = true
 	}
 
-	return true
+	return matched
 }
 
 // matchGlobPattern provides simple glob matching with ** support.
