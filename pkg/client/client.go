@@ -112,16 +112,16 @@ func New(cfg *Config) *Client {
 	}
 
 	return &Client{
-		baseURL:          cfg.BaseURL,
-		apiKey:           cfg.APIKey,
-		agentID:          cfg.AgentID,
-		maxRetries:       cfg.MaxRetries,
-		retryDelay:       cfg.RetryDelay,
+		baseURL:    cfg.BaseURL,
+		apiKey:     cfg.APIKey,
+		agentID:    cfg.AgentID,
+		maxRetries: cfg.MaxRetries,
+		retryDelay: cfg.RetryDelay,
 		// SSRF: BaseURL is operator-configured at SDK consumer site.
 		// Using SafeHTTPClient ensures the dialer rejects RFC1918 /
 		// link-local / CGNAT targets even when a custom scanner binds
 		// the SDK to an attacker-influenced API endpoint.
-		httpClient: httpsec.SafeHTTPClient(cfg.Timeout),
+		httpClient:       httpsec.SafeHTTPClient(cfg.Timeout),
 		verbose:          cfg.Verbose,
 		compressor:       compressor,
 		compressionLevel: compressionLevel,
@@ -1406,7 +1406,12 @@ func (c *Client) EnrichFindings(ctx context.Context, findings []ctis.Finding) ([
 	for i, f := range findings {
 		result[i] = f
 		if f.Vulnerability != nil && f.Vulnerability.CVEID != "" {
-			cveID := f.Vulnerability.CVEID
+			// Vulnerability is a pointer, so the struct copy above shares it.
+			// Deep-copy before writing, else we'd mutate the CALLER's original
+			// finding's Vulnerability (EPSS/KEV) in place.
+			v := *f.Vulnerability
+			result[i].Vulnerability = &v
+			cveID := v.CVEID
 			if epss, ok := epssMap[cveID]; ok {
 				result[i].Vulnerability.EPSSScore = epss.Score
 				result[i].Vulnerability.EPSSPercentile = epss.Percentile
