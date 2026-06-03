@@ -105,6 +105,7 @@ type LeaseManager struct {
 	running         bool
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
+	expiredOnce     sync.Once // OnLeaseExpired fires at most once per run
 }
 
 // NewLeaseManager creates a new LeaseManager.
@@ -185,6 +186,13 @@ func (m *LeaseManager) Start(ctx context.Context) error {
 	}
 	m.running = true
 	m.stopCh = make(chan struct{})
+	// Seed the renewal clock to now so a freshly-started agent gets a full
+	// LeaseDuration+GracePeriod window before it can be considered expired.
+	// Without this, lastRenewTime is the zero value and a failed INITIAL
+	// renewal made time.Since(zero) astronomically large → the expiry callback
+	// (which shuts the agent down / cancels jobs) fired on the very first tick.
+	m.lastRenewTime = time.Now()
+	m.expiredOnce = sync.Once{}
 	m.mu.Unlock()
 
 	if m.config.Verbose {
@@ -322,10 +330,14 @@ func (m *LeaseManager) renewLoop(ctx context.Context) {
 				m.mu.RUnlock()
 
 				if expired && m.config.OnLeaseExpired != nil {
-					if m.config.Verbose {
-						fmt.Printf("[lease] Lease expired! Triggering callback\n")
-					}
-					m.config.OnLeaseExpired()
+					// Fire at most once — otherwise the shutdown/cancel-jobs
+					// callback would re-run on every tick while expired.
+					m.expiredOnce.Do(func() {
+						if m.config.Verbose {
+							fmt.Printf("[lease] Lease expired! Triggering callback\n")
+						}
+						m.config.OnLeaseExpired()
+					})
 				}
 			} else {
 				consecutiveFailures = 0
@@ -374,7 +386,10 @@ func (m *LeaseManager) renew(ctx context.Context) error {
 	}
 
 	m.mu.Lock()
-	m.lastRenewTime = resp.RenewTime
+	// Use the agent's local clock for the renewal timestamp: the expiry math
+	// (time.Since(lastRenewTime)) runs against time.Now(), so storing the
+	// server's resp.RenewTime here would fold clock skew into the comparison.
+	m.lastRenewTime = time.Now()
 	m.resourceVersion = resp.ResourceVersion
 	m.lastError = nil
 	m.mu.Unlock()
