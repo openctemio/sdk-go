@@ -4,12 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+)
+
+// Non-retryable registration errors. A bad bootstrap token or a name conflict
+// will never succeed on retry, so the loop stops immediately on these.
+var (
+	ErrBootstrapTokenInvalid = errors.New("invalid or expired bootstrap token")
+	ErrAgentAlreadyExists    = errors.New("agent with this name already exists")
 )
 
 // RegistrationRequest contains the data for registering a new platform agent.
@@ -138,7 +146,13 @@ func (b *Bootstrapper) Register(ctx context.Context, req *RegistrationRequest) (
 				fmt.Printf("[bootstrap] Retry attempt %d/%d after %v\n",
 					attempt, b.config.RetryAttempts, b.config.RetryDelay)
 			}
-			time.Sleep(b.config.RetryDelay)
+			// Honor cancellation while backing off (a draining agent must
+			// not block on a fixed sleep).
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(b.config.RetryDelay):
+			}
 		}
 
 		resp, err := b.doRegister(ctx, req)
@@ -149,6 +163,11 @@ func (b *Bootstrapper) Register(ctx context.Context, req *RegistrationRequest) (
 		lastErr = err
 		if b.config.Verbose {
 			fmt.Printf("[bootstrap] Registration failed: %v\n", err)
+		}
+
+		// Don't waste attempts on errors that can never succeed on retry.
+		if errors.Is(err, ErrBootstrapTokenInvalid) || errors.Is(err, ErrAgentAlreadyExists) {
+			return nil, err
 		}
 	}
 
@@ -182,10 +201,10 @@ func (b *Bootstrapper) doRegister(ctx context.Context, req *RegistrationRequest)
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("invalid or expired bootstrap token")
+		return nil, ErrBootstrapTokenInvalid
 	}
 	if resp.StatusCode == http.StatusConflict {
-		return nil, fmt.Errorf("agent with this name already exists")
+		return nil, ErrAgentAlreadyExists
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
