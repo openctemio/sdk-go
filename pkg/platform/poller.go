@@ -705,8 +705,13 @@ func (p *JobPoller) executeJob(ctx context.Context, job *JobInfo) {
 		p.leaseManager.DecrementJobs(result.Status == "failed")
 	}
 
-	// Report result back to server
-	if reportErr := p.client.ReportJobResult(ctx, result); reportErr != nil {
+	// Report result back to server. Use a FRESH context: on shutdown or lease
+	// expiry the per-job ctx (and often the parent ctx) is cancelled, and
+	// reusing it here makes ReportJobResult fail immediately — so the platform
+	// never learns the (often failed/cancelled) outcome.
+	reportCtx, cancelReport := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelReport()
+	if reportErr := p.client.ReportJobResult(reportCtx, result); reportErr != nil {
 		if p.config.Verbose {
 			fmt.Printf("[poller] Failed to report result for job %s: %v\n", job.ID, reportErr)
 		}

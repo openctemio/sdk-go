@@ -1472,7 +1472,12 @@ func (c *Client) EnrichFindings(ctx context.Context, findings []ctis.Finding) ([
 	for i, f := range findings {
 		result[i] = f
 		if f.Vulnerability != nil && f.Vulnerability.CVEID != "" {
-			cveID := f.Vulnerability.CVEID
+			// Vulnerability is a pointer, so the struct copy above shares it.
+			// Deep-copy before writing, else we'd mutate the CALLER's original
+			// finding's Vulnerability (EPSS/KEV) in place.
+			v := *f.Vulnerability
+			result[i].Vulnerability = &v
+			cveID := v.CVEID
 			if epss, ok := epssMap[cveID]; ok {
 				result[i].Vulnerability.EPSSScore = epss.Score
 				result[i].Vulnerability.EPSSPercentile = epss.Percentile
