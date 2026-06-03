@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -160,7 +161,9 @@ type CommandPoller struct {
 	// unbounded number of goroutines/scans.
 	sem chan struct{}
 
-	verbose bool
+	// verbose is atomic: SetVerbose may be called concurrently with the
+	// poll/execute goroutines that read it.
+	verbose atomic.Bool
 }
 
 // CommandPollerConfig configures a CommandPoller.
@@ -207,7 +210,7 @@ func NewCommandPoller(client CommandClient, executor CommandExecutor, cfg *Comma
 		maxConcurrent = 5
 	}
 
-	return &CommandPoller{
+	p := &CommandPoller{
 		client:        client,
 		executor:      executor,
 		interval:      cfg.PollInterval,
@@ -215,8 +218,9 @@ func NewCommandPoller(client CommandClient, executor CommandExecutor, cfg *Comma
 		allowedTypes:  allowedTypes,
 		stopCh:        make(chan struct{}),
 		sem:           make(chan struct{}, maxConcurrent),
-		verbose:       cfg.Verbose,
 	}
+	p.verbose.Store(cfg.Verbose)
+	return p
 }
 
 // Start starts the command poller.
@@ -238,7 +242,7 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 		p.mu.Unlock()
 	}()
 
-	if p.verbose {
+	if p.verbose.Load() {
 		fmt.Printf("[command-poller] Starting with interval %v\n", p.interval)
 	}
 
@@ -276,7 +280,7 @@ func (p *CommandPoller) Stop() {
 
 // waitForActiveCommands waits for all active commands to complete.
 func (p *CommandPoller) waitForActiveCommands() {
-	if p.verbose {
+	if p.verbose.Load() {
 		fmt.Printf("[command-poller] Waiting for active commands to complete...\n")
 	}
 	p.activeCmds.Wait()
@@ -286,7 +290,7 @@ func (p *CommandPoller) waitForActiveCommands() {
 func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 	resp, err := p.client.GetCommands(ctx)
 	if err != nil {
-		if p.verbose {
+		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Failed to poll commands: %v\n", err)
 		}
 		return
@@ -296,14 +300,14 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		return
 	}
 
-	if p.verbose {
+	if p.verbose.Load() {
 		fmt.Printf("[command-poller] Received %d commands\n", len(resp.Commands))
 	}
 
 	for _, cmd := range resp.Commands {
 		// Validate command type
 		if !p.allowedTypes[cmd.Type] {
-			if p.verbose {
+			if p.verbose.Load() {
 				fmt.Printf("[command-poller] Skipping disallowed command type: %s\n", cmd.Type)
 			}
 			continue
@@ -311,7 +315,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 
 		// Check if command is expired
 		if !cmd.ExpiresAt.IsZero() && time.Now().After(cmd.ExpiresAt) {
-			if p.verbose {
+			if p.verbose.Load() {
 				fmt.Printf("[command-poller] Skipping expired command: %s\n", cmd.ID)
 			}
 			continue
@@ -319,7 +323,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 
 		// Acknowledge receipt
 		if err := p.client.AcknowledgeCommand(ctx, cmd.ID); err != nil {
-			if p.verbose {
+			if p.verbose.Load() {
 				fmt.Printf("[command-poller] Failed to acknowledge command %s: %v\n", cmd.ID, err)
 			}
 			continue
@@ -351,7 +355,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 
 	startTime := time.Now()
 
-	if p.verbose {
+	if p.verbose.Load() {
 		fmt.Printf("[command-poller] Executing command %s (type: %s)\n", cmd.ID, cmd.Type)
 	}
 
@@ -375,7 +379,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 	if err != nil {
 		reportResult.Status = "failed"
 		reportResult.Error = err.Error()
-		if p.verbose {
+		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Command %s failed: %v\n", cmd.ID, err)
 		}
 	} else {
@@ -386,14 +390,14 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 			reportResult.ExitCode = result.ExitCode
 			reportResult.Metadata = result.Metadata
 		}
-		if p.verbose {
+		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Command %s completed (findings: %d)\n", cmd.ID, reportResult.FindingsCount)
 		}
 	}
 
 	// Report result back to server
 	if err := p.client.ReportCommandResult(ctx, cmd.ID, reportResult); err != nil {
-		if p.verbose {
+		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Failed to report result for command %s: %v\n", cmd.ID, err)
 		}
 	}
@@ -401,7 +405,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 
 // SetVerbose sets verbose mode.
 func (p *CommandPoller) SetVerbose(v bool) {
-	p.verbose = v
+	p.verbose.Store(v)
 }
 
 // =============================================================================
@@ -413,7 +417,8 @@ type DefaultCommandExecutor struct {
 	scanners   map[string]Scanner
 	collectors map[string]Collector
 	pusher     Pusher
-	verbose    bool
+	// verbose is atomic: SetVerbose may race with concurrent Execute calls.
+	verbose atomic.Bool
 }
 
 // NewDefaultCommandExecutor creates a new default executor.
@@ -460,14 +465,14 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		return nil, fmt.Errorf("scanner not found: %s", payload.Scanner)
 	}
 
-	if e.verbose {
+	if e.verbose.Load() {
 		fmt.Printf("[executor] Running scanner %s on %s\n", payload.Scanner, payload.Target)
 	}
 
 	// Create scan options
 	opts := &ScanOptions{
 		TargetDir: payload.Target,
-		Verbose:   e.verbose,
+		Verbose:   e.verbose.Load(),
 	}
 
 	// Add config options if provided
@@ -495,7 +500,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		}
 		// Set template dir in options for scanner to use
 		opts.CustomTemplateDir = templateDir
-		if e.verbose {
+		if e.verbose.Load() {
 			fmt.Printf("[executor] Using custom templates from %s\n", templateDir)
 		}
 	}
@@ -632,7 +637,7 @@ func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templa
 			return "", nil, fmt.Errorf("write template %s: %w", tpl.Name, err)
 		}
 
-		if e.verbose {
+		if e.verbose.Load() {
 			fmt.Printf("[executor] Wrote custom template: %s\n", filePath)
 		}
 	}
@@ -671,7 +676,7 @@ func (e *DefaultCommandExecutor) executeCollect(ctx context.Context, cmd *Comman
 		return nil, fmt.Errorf("collector not found: %s", payload.Collector)
 	}
 
-	if e.verbose {
+	if e.verbose.Load() {
 		fmt.Printf("[executor] Running collector %s\n", payload.Collector)
 	}
 
@@ -731,5 +736,5 @@ func (e *DefaultCommandExecutor) executeHealthCheck(ctx context.Context, cmd *Co
 
 // SetVerbose sets verbose mode.
 func (e *DefaultCommandExecutor) SetVerbose(v bool) {
-	e.verbose = v
+	e.verbose.Store(v)
 }
