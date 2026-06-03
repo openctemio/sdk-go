@@ -215,7 +215,7 @@ func ValidateURL(rawURL string) (*ValidationResult, error) {
 func SafeHTTPClient(timeout time.Duration) *http.Client {
 	baseDialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	safeDialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
+		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, err
 		}
@@ -223,12 +223,24 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 		if err != nil {
 			return nil, err
 		}
+		var dialIP string
 		for _, ip := range ips {
 			if IsIPBlocked(ip.IP) {
 				return nil, fmt.Errorf("ssrf guard: blocked IP %s for host %s", ip.IP, host)
 			}
+			if dialIP == "" {
+				dialIP = ip.IP.String()
+			}
 		}
-		return baseDialer.DialContext(ctx, network, addr)
+		if dialIP == "" {
+			return nil, fmt.Errorf("ssrf guard: no resolved IP for host %s", host)
+		}
+		// Dial the IP we just validated rather than the hostname, so a DNS
+		// rebinding resolver can't return a different (blocked) IP between the
+		// check above and the connect. For https the transport still sets SNI
+		// and verifies the cert against the original hostname, so this does not
+		// weaken TLS.
+		return baseDialer.DialContext(ctx, network, net.JoinHostPort(dialIP, port))
 	}
 	tr := &http.Transport{
 		DialContext:           safeDialer,
