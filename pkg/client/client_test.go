@@ -6,13 +6,26 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/retry"
 )
+
+// TestMain permits loopback for the whole package: New() builds an
+// httpsec.SafeHTTPClient whose dialer hard-blocks 127.0.0.0/8, but these tests
+// talk to httptest.NewServer (which binds to loopback). Without this every
+// client test fails with "ssrf guard: blocked IP 127.0.0.1". AllowLoopback is
+// the purpose-built test-only knob; production posture (block loopback) is
+// unchanged.
+func TestMain(m *testing.M) {
+	httpsec.AllowLoopback = true
+	os.Exit(m.Run())
+}
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
