@@ -230,6 +230,14 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 	p.running = true
 	p.stopCh = make(chan struct{})
 	p.mu.Unlock()
+	// Start runs the poll loop synchronously; reset running on EVERY return
+	// (incl. ctx cancellation) so a later Start() isn't rejected with
+	// "poller already running" when nothing is actually polling.
+	defer func() {
+		p.mu.Lock()
+		p.running = false
+		p.mu.Unlock()
+	}()
 
 	if p.verbose {
 		fmt.Printf("[command-poller] Starting with interval %v\n", p.interval)
