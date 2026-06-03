@@ -362,6 +362,26 @@ func (s *Storage) UpdateChunkStatus(ctx context.Context, chunkID string, status 
 	return err
 }
 
+// RequeueForRetry resets a chunk to pending AND increments its retry_count.
+// UpdateChunkStatus only bumps retry_count for the 'failed' status, so
+// re-queuing a retryable failure straight to 'pending' never counted the
+// attempt and CanRetry stayed true forever (infinite retry). Use this for the
+// failure→retry transition instead.
+func (s *Storage) RequeueForRetry(ctx context.Context, chunkID string, lastError string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE chunks SET
+			status = 'pending',
+			last_error = ?,
+			retry_count = retry_count + 1
+		WHERE id = ?
+	`, lastError, chunkID)
+
+	return err
+}
+
 // UpdateReportStatus updates the status of a report.
 func (s *Storage) UpdateReportStatus(ctx context.Context, reportID string, status ReportStatus) error {
 	s.mu.Lock()
