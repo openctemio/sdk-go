@@ -2,8 +2,11 @@ package platform
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestGenerateHolderIdentity(t *testing.T) {
@@ -122,4 +125,65 @@ func (m *mockLeaseClient) RenewLease(ctx context.Context, req *LeaseRenewRequest
 func (m *mockLeaseClient) ReleaseLease(ctx context.Context) error {
 	m.releaseCount++
 	return nil
+}
+
+// failingLeaseClient always fails renewal — used to exercise the expiry path.
+type failingLeaseClient struct{ releaseCount int32 }
+
+func (f *failingLeaseClient) RenewLease(_ context.Context, _ *LeaseRenewRequest) (*LeaseRenewResponse, error) {
+	return nil, fmt.Errorf("renew failed")
+}
+
+func (f *failingLeaseClient) ReleaseLease(_ context.Context) error {
+	atomic.AddInt32(&f.releaseCount, 1)
+	return nil
+}
+
+// TestLeaseManager_NoPrematureExpiryOnFailedInitialRenew verifies that when the
+// initial renewal fails, the agent gets a full LeaseDuration+GracePeriod window
+// before OnLeaseExpired fires. Previously lastRenewTime was the zero value, so
+// time.Since(zero) was astronomically large and the expiry callback (which
+// shuts the agent down) fired on the very first failed tick.
+func TestLeaseManager_NoPrematureExpiryOnFailedInitialRenew(t *testing.T) {
+	var expiredCalls int32
+	config := &LeaseConfig{
+		LeaseDuration:  60 * time.Second,
+		GracePeriod:    60 * time.Second, // window ~120s, far longer than the test
+		RenewInterval:  5 * time.Millisecond,
+		OnLeaseExpired: func() { atomic.AddInt32(&expiredCalls, 1) },
+	}
+	manager := NewLeaseManager(&failingLeaseClient{}, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_ = manager.Start(ctx) // initial renew fails
+	time.Sleep(80 * time.Millisecond)
+	_ = manager.Stop(context.Background())
+
+	if got := atomic.LoadInt32(&expiredCalls); got != 0 {
+		t.Errorf("OnLeaseExpired must NOT fire within the lease window despite failed renews, fired %d times", got)
+	}
+}
+
+// TestLeaseManager_ExpiryFiresExactlyOnce verifies the expiry callback fires a
+// single time once the lease genuinely expires, not on every subsequent tick.
+func TestLeaseManager_ExpiryFiresExactlyOnce(t *testing.T) {
+	var expiredCalls int32
+	config := &LeaseConfig{
+		LeaseDuration:  10 * time.Millisecond,
+		GracePeriod:    1 * time.Millisecond, // tiny window so it expires quickly
+		RenewInterval:  2 * time.Millisecond,
+		OnLeaseExpired: func() { atomic.AddInt32(&expiredCalls, 1) },
+	}
+	manager := NewLeaseManager(&failingLeaseClient{}, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_ = manager.Start(ctx)
+	time.Sleep(150 * time.Millisecond) // ~70 ticks, all past the window
+	_ = manager.Stop(context.Background())
+
+	if got := atomic.LoadInt32(&expiredCalls); got != 1 {
+		t.Errorf("OnLeaseExpired must fire exactly once after expiry, fired %d times", got)
+	}
 }
