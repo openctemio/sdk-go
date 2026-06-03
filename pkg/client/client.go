@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"sync"
@@ -477,14 +478,33 @@ func (c *Client) CheckFingerprints(ctx context.Context, fingerprints []string) (
 	}, nil
 }
 
+const (
+	// maxRetryBackoff caps the per-attempt retry wait.
+	maxRetryBackoff = 30 * time.Second
+	// maxBackoffShift caps the exponent so 1<<shift can't overflow / explode.
+	maxBackoffShift = 16
+)
+
 // doRequest performs an HTTP request with retry logic.
 func (c *Client) doRequest(ctx context.Context, method, url string, body []byte) ([]byte, error) {
 	var lastErr error
 
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff: delay * 2^(attempt-1)
-			backoff := c.retryDelay * time.Duration(1<<(attempt-1))
+			// Exponential backoff with a cap + jitter. Uncapped `1<<(attempt-1)`
+			// grows unbounded (and can overflow), and identical delays across
+			// many agents cause synchronized retry storms. Cap the shift, cap
+			// the ceiling, then apply full jitter in [backoff/2, backoff].
+			shift := attempt - 1
+			if shift > maxBackoffShift {
+				shift = maxBackoffShift
+			}
+			backoff := c.retryDelay * time.Duration(1<<uint(shift))
+			if backoff <= 0 || backoff > maxRetryBackoff {
+				backoff = maxRetryBackoff
+			}
+			half := backoff / 2
+			backoff = half + time.Duration(rand.Int64N(int64(half)+1))
 			if c.verbose {
 				fmt.Printf("[openctem] Retrying request (attempt %d/%d) after %v\n", attempt, c.maxRetries, backoff)
 			}
