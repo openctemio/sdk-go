@@ -1451,7 +1451,7 @@ type VulnerabilityDetails struct {
 
 	// VPR (Tenable Vulnerability Priority Rating), 0.0–10.0. Tenable's own
 	// dynamic priority score, distinct from CVSS/EPSS; carried through so
-	// prioritisation can use the source scanner's rating when present.
+	// prioritization can use the source scanner's rating when present.
 	VPRScore float64 `json:"vpr_score,omitempty"`
 
 	// Affected CPE
