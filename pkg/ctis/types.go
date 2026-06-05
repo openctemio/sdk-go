@@ -959,6 +959,15 @@ type Finding struct {
 	// Location information (for code-based findings)
 	Location *FindingLocation `json:"location,omitempty"`
 
+	// Network location (for network/host findings, e.g. Nessus/Tenable): the
+	// port/protocol/service the finding was observed on. Distinct from the
+	// code-centric Location above.
+	Network *NetworkLocation `json:"network,omitempty"`
+
+	// Evidence is the scanner's raw proof/output for this finding (e.g. a Nessus
+	// plugin_output, a probe response). Free text; redact secrets before display.
+	Evidence string `json:"evidence,omitempty"`
+
 	// Vulnerability-specific details
 	Vulnerability *VulnerabilityDetails `json:"vulnerability,omitempty"`
 
@@ -1332,6 +1341,24 @@ type FindingLocation struct {
 	ContextStartLine int `json:"context_start_line,omitempty"`
 }
 
+// NetworkLocation describes where a network/host finding was observed. Used by
+// network vulnerability scanners (Nessus/Tenable, etc.) where a finding is tied
+// to a port/service rather than a file/line.
+type NetworkLocation struct {
+	// Host the finding was observed on (IP or hostname). Optional when the
+	// finding already references its host asset via AssetRef/AssetValue.
+	Host string `json:"host,omitempty"`
+
+	// Port number (0 = not port-specific / general host finding).
+	Port int `json:"port,omitempty"`
+
+	// Transport protocol: tcp, udp.
+	Protocol string `json:"protocol,omitempty"`
+
+	// Service / application protocol on the port: https, ssh, smb, mysql, etc.
+	Service string `json:"service,omitempty"`
+}
+
 // LogicalLocation represents a logical code location (function, class, method).
 type LogicalLocation struct {
 	// Fully qualified name (e.g., "pkg.MyClass.myMethod")
@@ -1349,8 +1376,12 @@ type LogicalLocation struct {
 
 // VulnerabilityDetails contains vulnerability-specific details.
 type VulnerabilityDetails struct {
-	// CVE ID
+	// CVE ID (primary, for single-CVE findings and backward compatibility)
 	CVEID string `json:"cve_id,omitempty"`
+
+	// CVE IDs (a finding may map to multiple CVEs — common for network
+	// vulnerability scanners like Nessus/Tenable that group CVEs per plugin).
+	CVEIDs []string `json:"cve_ids,omitempty"`
 
 	// CWE IDs (can have multiple)
 	CWEIDs []string `json:"cwe_ids,omitempty"`
@@ -1417,6 +1448,11 @@ type VulnerabilityDetails struct {
 
 	// EPSS percentile
 	EPSSPercentile float64 `json:"epss_percentile,omitempty"`
+
+	// VPR (Tenable Vulnerability Priority Rating), 0.0–10.0. Tenable's own
+	// dynamic priority score, distinct from CVSS/EPSS; carried through so
+	// prioritization can use the source scanner's rating when present.
+	VPRScore float64 `json:"vpr_score,omitempty"`
 
 	// Affected CPE
 	CPE string `json:"cpe,omitempty"`
