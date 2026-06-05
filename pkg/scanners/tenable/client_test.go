@@ -9,7 +9,7 @@ import (
 )
 
 // These tests exercise the request/response wiring against an httptest mock that
-// emulates the documented Nessus REST API. They do NOT verify behaviour against
+// emulates the documented Nessus REST API. They do NOT verify behavior against
 // a real appliance — that requires a live-instance spike (RFC-007 Phase 2).
 
 func TestNessusPro_New_Validation(t *testing.T) {
@@ -99,4 +99,3 @@ func TestNessusPro_LaunchRequiresTemplate(t *testing.T) {
 		t.Fatal("missing template uuid must error")
 	}
 }
-
