@@ -6,13 +6,17 @@
 # module (github.com/openctemio/ctis), kept separate per RFC-002 so the SDK does
 # not pull the whole module graph. The two copies MUST carry the same CTIS schema
 # — when they drift, the api (which consumes the canonical module) and the agent
-# (which uses this copy) silently disagree about the data contract. That actually
-# happened in 2026-06 (this copy was missing FindingStatusSuppressed).
+# (which uses this copy) silently disagree about the data contract. Both have
+# happened: a missing FindingStatusSuppressed enum, and earlier, missing struct
+# fields (cve_ids / vpr_score / network / evidence).
 #
-# This guard compares the typed string-constant ENUM sets of the two copies (the
-# class of declaration that drifts in practice) and fails on any difference.
+# It compares two things and fails on any difference:
+#   1. typed string-constant ENUM sets (e.g. FindingStatus, Severity)
+#   2. struct field json tags (catches added/removed/renamed fields)
 #
-# Override the canonical ref/source with CTIS_REF / CTIS_TYPES_URL if needed.
+# Scope: this is a high-signal text check, not a full AST/type comparison (a
+# field's Go type change with the same json tag would not be caught). Override
+# the canonical ref/source with CTIS_REF / CTIS_TYPES_URL if needed.
 set -euo pipefail
 
 CTIS_REF="${CTIS_REF:-main}"
@@ -25,7 +29,8 @@ if [[ ! -f "$LOCAL_TYPES" ]]; then
 fi
 
 canonical="$(mktemp)"
-trap 'rm -f "$canonical" "$canonical.consts" "$LOCAL_TYPES.consts" 2>/dev/null || true' EXIT
+work="$(mktemp -d)"
+trap 'rm -rf "$canonical" "$work" 2>/dev/null || true' EXIT
 
 # Fail closed if we cannot fetch the canonical source — an unverifiable copy is
 # treated as a failure, not a silent pass.
@@ -42,19 +47,38 @@ extract_consts() {
     | sort -u
 }
 
-extract_consts "$canonical" > "$canonical.consts"
-extract_consts "$LOCAL_TYPES" > "$LOCAL_TYPES.consts"
+# Extract struct field json tag names (the part before any ",omitempty"),
+# dropping the "-" skip tag. A multiset (with counts) so adding a field whose
+# json name is reused elsewhere still changes the tally.
+extract_fields() {
+  grep -oE '`json:"[^"]*"' "$1" \
+    | sed -E 's/`json:"//; s/"$//; s/,.*//' \
+    | grep -vE '^-?$' \
+    | sort | uniq -c | sed -E 's/^[[:space:]]+//'
+}
 
-if diff -u "$canonical.consts" "$LOCAL_TYPES.consts" > /tmp/ctis_parity.diff 2>&1; then
-  count="$(wc -l < "$canonical.consts" | tr -d ' ')"
-  echo "OK: CTIS enum constants in sync with canonical ctis@${CTIS_REF} (${count} constants)."
-  exit 0
+rc=0
+
+compare() { # label, extractor, noun
+  local label="$1" fn="$2" noun="$3"
+  "$fn" "$canonical" > "$work/canon"
+  "$fn" "$LOCAL_TYPES" > "$work/local"
+  if diff -u "$work/canon" "$work/local" > "$work/diff" 2>&1; then
+    echo "  OK: $label in sync ($(wc -l < "$work/canon" | tr -d ' ') $noun)."
+  else
+    echo "  DRIFT: $label differ from canonical ctis@${CTIS_REF}." >&2
+    echo "    '-' = in canonical but MISSING here; '+' = present here but not in canonical." >&2
+    sed 's/^/    /' "$work/diff" >&2
+    rc=1
+  fi
+}
+
+echo "Checking CTIS parity vs canonical ctis@${CTIS_REF} ..."
+compare "enum constants" extract_consts "constants"
+compare "struct json fields" extract_fields "fields"
+
+if [[ $rc -ne 0 ]]; then
+  echo "Fix: sync pkg/ctis/types.go with github.com/openctemio/ctis (see RFC-002)." >&2
+  exit 1
 fi
-
-echo "DRIFT DETECTED: sdk-go/pkg/ctis enum constants differ from canonical ctis@${CTIS_REF}." >&2
-echo "  '-' = in canonical but MISSING here; '+' = present here but not in canonical." >&2
-echo >&2
-cat /tmp/ctis_parity.diff >&2
-echo >&2
-echo "Fix: sync pkg/ctis/types.go with github.com/openctemio/ctis (see RFC-002)." >&2
-exit 1
+echo "OK: pkg/ctis is in sync with the canonical CTIS schema."
