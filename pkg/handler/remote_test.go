@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
@@ -12,8 +13,10 @@ import (
 // finding markers (to exercise idempotency). In an MR context (MergeRequestID
 // non-empty) so createMRComments runs.
 type fakeGitEnv struct {
-	existing map[string]bool
-	posted   []gitenv.MRCommentOption
+	existing     map[string]bool
+	posted       []gitenv.MRCommentOption
+	summaryBody  string
+	summaryCalls int
 }
 
 func (f *fakeGitEnv) Provider() string          { return "fake" }
@@ -44,6 +47,11 @@ func (f *fakeGitEnv) ExistingFindingMarkers() (map[string]bool, error) {
 		return map[string]bool{}, nil
 	}
 	return f.existing, nil
+}
+func (f *fakeGitEnv) UpsertSummaryComment(body string) error {
+	f.summaryBody = body
+	f.summaryCalls++
+	return nil
 }
 
 func findingAt(rule, path string, line int) ctis.Finding {
@@ -119,4 +127,46 @@ func TestCreateMRComments_ChangedFileOnly(t *testing.T) {
 
 func containsMarker(body, key string) bool {
 	return len(gitenv.ExtractMarkers([]string{body})) == 1 && gitenv.ExtractMarkers([]string{body})[key]
+}
+
+func TestSummaryComment_PostedOnCompleted(t *testing.T) {
+	h := newTestRemoteHandler()
+	f := &fakeGitEnv{}
+
+	_ = h.HandleFindings(HandleFindingsParams{
+		Report: &ctis.Report{Findings: []ctis.Finding{
+			{Title: "a", Severity: ctis.SeverityCritical},
+			{Title: "b", Severity: ctis.SeverityHigh},
+			{Title: "c", Severity: ctis.SeverityHigh},
+		}},
+		Strategy: strategy.AllFiles,
+		GitEnv:   f,
+	})
+	// OnStart stores gitEnv (needed for OnCompleted to know the MR context).
+	_, _ = h.OnStart(f, "semgrep", "sast")
+	if err := h.OnCompleted(); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+
+	if f.summaryCalls != 1 {
+		t.Fatalf("expected one sticky summary upsert, got %d", f.summaryCalls)
+	}
+	if !strings.Contains(f.summaryBody, "3 finding(s)") {
+		t.Fatalf("summary should report total; got: %s", f.summaryBody)
+	}
+	if !strings.Contains(f.summaryBody, "| High | 2 |") {
+		t.Fatalf("summary should break down by severity; got: %s", f.summaryBody)
+	}
+}
+
+func TestSummaryComment_CleanWhenNoFindings(t *testing.T) {
+	h := newTestRemoteHandler()
+	f := &fakeGitEnv{}
+	_, _ = h.OnStart(f, "semgrep", "sast")
+	if err := h.OnCompleted(); err != nil {
+		t.Fatal(err)
+	}
+	if f.summaryCalls != 1 || !strings.Contains(f.summaryBody, "No security findings") {
+		t.Fatalf("clean summary expected; calls=%d body=%q", f.summaryCalls, f.summaryBody)
+	}
 }
