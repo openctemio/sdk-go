@@ -25,6 +25,12 @@ type RemoteHandler struct {
 	// Accumulated across HandleFindings calls for the sticky PR/MR summary.
 	sevCounts     map[string]int
 	totalFindings int
+
+	// Baseline (new-vs-base) accounting for the sticky summary. baselineApplied
+	// is set when any HandleFindings call carried a NewFingerprints set, so the
+	// summary can report how many findings the PR introduces vs. pre-existing.
+	baselineApplied bool
+	newFindings     int
 }
 
 // RemoteHandlerConfig configures the remote handler.
@@ -98,9 +104,19 @@ func (h *RemoteHandler) HandleFindings(params HandleFindingsParams) error {
 	}
 
 	// Accumulate counts across scanners for the sticky PR/MR summary (OnCompleted).
+	if params.NewFingerprints != nil {
+		h.baselineApplied = true
+	}
 	for i := range params.Report.Findings {
+		f := &params.Report.Findings[i]
 		h.totalFindings++
-		h.sevCounts[strings.ToLower(string(params.Report.Findings[i].Severity))]++
+		h.sevCounts[strings.ToLower(string(f.Severity))]++
+		// A finding is "new" if there's no baseline, or it's in the new set, or it
+		// has no fingerprint to match (treated as new for visibility) — mirroring
+		// the comment-filter rule in createMRComments.
+		if params.NewFingerprints == nil || f.Fingerprint == "" || params.NewFingerprints[f.Fingerprint] {
+			h.newFindings++
+		}
 	}
 
 	if h.verbose {
@@ -193,6 +209,15 @@ func (h *RemoteHandler) createMRComments(params HandleFindingsParams) {
 			continue
 		}
 
+		// In a PR context with a computed baseline, only comment on findings the
+		// PR introduces (skip pre-existing tech debt already open on the base
+		// branch). A finding with no fingerprint can't be matched to the baseline,
+		// so it is treated as new (commented) for visibility.
+		if params.NewFingerprints != nil && finding.Fingerprint != "" &&
+			!params.NewFingerprints[finding.Fingerprint] {
+			continue
+		}
+
 		key := findingKey(finding)
 		if existing[key] || posted[key] {
 			if h.verbose {
@@ -244,12 +269,22 @@ func (h *RemoteHandler) OnCompleted() error {
 
 // buildSummary renders the sticky PR/MR security summary as markdown.
 func (h *RemoteHandler) buildSummary() string {
+	// With a baseline, "clean" means the PR introduces no new findings even if
+	// pre-existing tech debt remains on the changed files.
+	if h.baselineApplied && h.newFindings == 0 {
+		return "## 🔒 OpenCTEM Security Scan\n\n✅ **No new findings in this PR.**"
+	}
 	if h.totalFindings == 0 {
 		return "## 🔒 OpenCTEM Security Scan\n\n✅ **No security findings.**"
 	}
 	var b strings.Builder
 	b.WriteString("## 🔒 OpenCTEM Security Scan\n\n")
-	fmt.Fprintf(&b, "**%d finding(s)**\n\n", h.totalFindings)
+	if h.baselineApplied {
+		fmt.Fprintf(&b, "**%d new finding(s)** in this PR (of %d on changed files)\n\n",
+			h.newFindings, h.totalFindings)
+	} else {
+		fmt.Fprintf(&b, "**%d finding(s)**\n\n", h.totalFindings)
+	}
 	b.WriteString("| Severity | Count |\n|---|---|\n")
 	for _, sev := range []string{"critical", "high", "medium", "low", "info"} {
 		if n := h.sevCounts[sev]; n > 0 {

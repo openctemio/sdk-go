@@ -125,6 +125,97 @@ func TestCreateMRComments_ChangedFileOnly(t *testing.T) {
 	}
 }
 
+func findingWithFP(rule, path string, line int, fp string) ctis.Finding {
+	f := findingAt(rule, path, line)
+	f.Fingerprint = fp
+	return f
+}
+
+func TestCreateMRComments_FiltersToNewFingerprints(t *testing.T) {
+	h := newTestRemoteHandler()
+	f := &fakeGitEnv{}
+
+	h.createMRComments(HandleFindingsParams{
+		Report: &ctis.Report{Findings: []ctis.Finding{
+			findingWithFP("sqli", "app.go", 5, "fp-new"),         // new -> comment
+			findingWithFP("xss", "view.go", 9, "fp-preexisting"), // on base -> skip
+		}},
+		Strategy:        strategy.AllFiles,
+		GitEnv:          f,
+		NewFingerprints: map[string]bool{"fp-new": true},
+	})
+
+	if len(f.posted) != 1 {
+		t.Fatalf("baseline filter must comment only on new findings, got %d", len(f.posted))
+	}
+	if f.posted[0].Path != "app.go" {
+		t.Fatalf("commented the wrong (pre-existing) finding: %+v", f.posted[0])
+	}
+}
+
+func TestCreateMRComments_NoFingerprintTreatedAsNew(t *testing.T) {
+	h := newTestRemoteHandler()
+	f := &fakeGitEnv{}
+
+	// A finding without a fingerprint can't be matched to the baseline, so it must
+	// still be commented (fail-open for visibility) even when a baseline is set.
+	h.createMRComments(HandleFindingsParams{
+		Report:          &ctis.Report{Findings: []ctis.Finding{findingAt("nofp", "app.go", 1)}},
+		Strategy:        strategy.AllFiles,
+		GitEnv:          f,
+		NewFingerprints: map[string]bool{"something-else": true},
+	})
+
+	if len(f.posted) != 1 {
+		t.Fatalf("finding without fingerprint must be commented under a baseline, got %d", len(f.posted))
+	}
+}
+
+func TestSummary_NewVsBase(t *testing.T) {
+	h := newTestRemoteHandler()
+	f := &fakeGitEnv{}
+
+	_ = h.HandleFindings(HandleFindingsParams{
+		Report: &ctis.Report{Findings: []ctis.Finding{
+			findingWithFP("a", "app.go", 1, "fp-new"),
+			findingWithFP("b", "app.go", 2, "fp-old"),
+		}},
+		Strategy:        strategy.AllFiles,
+		GitEnv:          f,
+		NewFingerprints: map[string]bool{"fp-new": true},
+	})
+	_, _ = h.OnStart(f, "semgrep", "sast")
+	if err := h.OnCompleted(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(f.summaryBody, "1 new finding(s)") ||
+		!strings.Contains(f.summaryBody, "in this PR (of 2 on changed files)") {
+		t.Fatalf("summary should report new vs base; got: %s", f.summaryBody)
+	}
+}
+
+func TestSummary_CleanWhenNoNewFindings(t *testing.T) {
+	h := newTestRemoteHandler()
+	f := &fakeGitEnv{}
+
+	// Pre-existing finding only, none new in this PR.
+	_ = h.HandleFindings(HandleFindingsParams{
+		Report:          &ctis.Report{Findings: []ctis.Finding{findingWithFP("b", "app.go", 2, "fp-old")}},
+		Strategy:        strategy.AllFiles,
+		GitEnv:          f,
+		NewFingerprints: map[string]bool{}, // non-nil, fp-old not in it
+	})
+	_, _ = h.OnStart(f, "semgrep", "sast")
+	if err := h.OnCompleted(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(f.summaryBody, "No new findings in this PR") {
+		t.Fatalf("clean-PR summary expected; got: %s", f.summaryBody)
+	}
+}
+
 func containsMarker(body, key string) bool {
 	return len(gitenv.ExtractMarkers([]string{body})) == 1 && gitenv.ExtractMarkers([]string{body})[key]
 }
