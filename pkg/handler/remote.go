@@ -21,6 +21,10 @@ type RemoteHandler struct {
 	// Comment settings
 	createComments bool
 	maxComments    int
+
+	// Accumulated across HandleFindings calls for the sticky PR/MR summary.
+	sevCounts     map[string]int
+	totalFindings int
 }
 
 // RemoteHandlerConfig configures the remote handler.
@@ -43,6 +47,7 @@ func NewRemoteHandler(cfg *RemoteHandlerConfig) *RemoteHandler {
 		verbose:        cfg.Verbose,
 		createComments: cfg.CreateComments,
 		maxComments:    maxComments,
+		sevCounts:      make(map[string]int),
 	}
 }
 
@@ -90,6 +95,12 @@ func (h *RemoteHandler) OnStart(gitEnv gitenv.GitEnv, scannerName, scannerType s
 func (h *RemoteHandler) HandleFindings(params HandleFindingsParams) error {
 	if params.Report == nil {
 		return nil
+	}
+
+	// Accumulate counts across scanners for the sticky PR/MR summary (OnCompleted).
+	for i := range params.Report.Findings {
+		h.totalFindings++
+		h.sevCounts[strings.ToLower(string(params.Report.Findings[i].Severity))]++
 	}
 
 	if h.verbose {
@@ -220,7 +231,33 @@ func (h *RemoteHandler) OnCompleted() error {
 	if h.verbose {
 		fmt.Println("[handler] Scan completed successfully")
 	}
+
+	// Post/update the single sticky security summary comment on the PR/MR so
+	// reviewers see the current state at a glance (updated in place each run).
+	if h.createComments && h.gitEnv != nil && h.gitEnv.MergeRequestID() != "" {
+		if err := h.gitEnv.UpsertSummaryComment(h.buildSummary()); err != nil && h.verbose {
+			fmt.Printf("[handler] Failed to upsert summary comment: %v\n", err)
+		}
+	}
 	return nil
+}
+
+// buildSummary renders the sticky PR/MR security summary as markdown.
+func (h *RemoteHandler) buildSummary() string {
+	if h.totalFindings == 0 {
+		return "## 🔒 OpenCTEM Security Scan\n\n✅ **No security findings.**"
+	}
+	var b strings.Builder
+	b.WriteString("## 🔒 OpenCTEM Security Scan\n\n")
+	fmt.Fprintf(&b, "**%d finding(s)**\n\n", h.totalFindings)
+	b.WriteString("| Severity | Count |\n|---|---|\n")
+	for _, sev := range []string{"critical", "high", "medium", "low", "info"} {
+		if n := h.sevCounts[sev]; n > 0 {
+			fmt.Fprintf(&b, "| %s | %d |\n", strings.ToUpper(sev[:1])+sev[1:], n)
+		}
+	}
+	b.WriteString("\n*Review the inline comments above for details.*")
+	return b.String()
 }
 
 // OnError is called when an error occurs during the scan.
