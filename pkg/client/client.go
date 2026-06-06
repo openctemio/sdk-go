@@ -473,6 +473,53 @@ func (c *Client) CheckFingerprints(ctx context.Context, fingerprints []string) (
 	}, nil
 }
 
+type baselineDiffRequest struct {
+	Repository   string   `json:"repository"`
+	BaseBranch   string   `json:"base_branch"`
+	Fingerprints []string `json:"fingerprints"`
+}
+
+type baselineDiffResponse struct {
+	New               []string `json:"new_fingerprints"`
+	PreExisting       []string `json:"pre_existing_fingerprints"`
+	BaseBranchScanned bool     `json:"base_branch_scanned"`
+}
+
+// BaselineDiff returns the subset of fingerprints that are NEW relative to a PR's
+// base/target branch (not already open there). Used to focus a PR gate / inline
+// comments on findings the PR introduces, not pre-existing tech debt. On error
+// or no PR context the caller should treat all findings as new (fail-open for
+// visibility). Returns the new fingerprints.
+func (c *Client) BaselineDiff(ctx context.Context, repository, baseBranch string, fingerprints []string) ([]string, error) {
+	if len(fingerprints) == 0 {
+		return []string{}, nil
+	}
+	reqBody, err := json.Marshal(baselineDiffRequest{
+		Repository:   repository,
+		BaseBranch:   baseBranch,
+		Fingerprints: fingerprints,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	url := c.baseURL + "/api/v1/agent/ingest/baseline-diff"
+	respBody, err := c.doRequest(ctx, "POST", url, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("baseline diff: %w", err)
+	}
+
+	var resp baselineDiffResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("unmarshal response: %w", err)
+	}
+	if c.verbose {
+		fmt.Printf("[openctem] Baseline diff: %d new, %d pre-existing (base scanned=%v)\n",
+			len(resp.New), len(resp.PreExisting), resp.BaseBranchScanned)
+	}
+	return resp.New, nil
+}
+
 // doRequest performs an HTTP request with retry logic.
 func (c *Client) doRequest(ctx context.Context, method, url string, body []byte) ([]byte, error) {
 	var lastErr error
