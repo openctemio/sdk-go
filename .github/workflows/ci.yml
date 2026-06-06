@@ -45,6 +45,17 @@ jobs:
         with:
           version: latest
 
+  # Guards against CTIS schema drift: pkg/ctis is a copy of the canonical
+  # github.com/openctemio/ctis module (RFC-002). They must carry the same enum
+  # constants — see scripts/check-ctis-parity.sh.
+  ctis-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check CTIS enum parity with canonical module
+        run: ./scripts/check-ctis-parity.sh
+
   build:
     runs-on: ubuntu-latest
     strategy:
