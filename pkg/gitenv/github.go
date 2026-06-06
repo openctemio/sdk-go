@@ -300,6 +300,47 @@ func (g *GitHubEnv) CreateMRComment(option MRCommentOption) error {
 	return nil
 }
 
+// ExistingFindingMarkers lists the PR's review comments and extracts the finding
+// markers already posted, so a re-run can skip them (idempotency). Best-effort:
+// any error returns an empty set so commenting degrades to "may duplicate"
+// rather than failing the scan.
+func (g *GitHubEnv) ExistingFindingMarkers() (map[string]bool, error) {
+	empty := map[string]bool{}
+	if g.client == nil || g.accessToken == "" {
+		return empty, nil
+	}
+	prNumberStr := g.MergeRequestID()
+	if prNumberStr == "" {
+		return empty, nil
+	}
+	prNumber, err := strconv.Atoi(prNumberStr)
+	if err != nil {
+		return empty, nil
+	}
+	parts := strings.Split(os.Getenv("GITHUB_REPOSITORY"), "/")
+	if len(parts) != 2 {
+		return empty, nil
+	}
+	owner, repo := parts[0], parts[1]
+
+	bodies := make([]string, 0, 64)
+	opts := &github.PullRequestListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	for {
+		comments, resp, err := g.client.PullRequests.ListComments(g.ctx, owner, repo, prNumber, opts)
+		if err != nil {
+			return empty, fmt.Errorf("list PR comments: %w", err)
+		}
+		for _, c := range comments {
+			bodies = append(bodies, c.GetBody())
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return ExtractMarkers(bodies), nil
+}
+
 // GitHub event payload structures
 type githubEventPayload struct {
 	PullRequest *githubPullRequest `json:"pull_request"`

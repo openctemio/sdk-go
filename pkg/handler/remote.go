@@ -124,7 +124,23 @@ func (h *RemoteHandler) HandleFindings(params HandleFindingsParams) error {
 	return nil
 }
 
-// createMRComments creates inline comments on the PR/MR for findings on changed files.
+// findingKey returns a stable identity for a finding used to dedupe PR/MR
+// comments across re-runs. Prefers the fingerprint; falls back to
+// rule:path:line so a comment is still idempotent without a fingerprint.
+func findingKey(f *ctis.Finding) string {
+	if f.Fingerprint != "" {
+		return f.Fingerprint
+	}
+	path, line := "", 0
+	if f.Location != nil {
+		path, line = f.Location.Path, f.Location.StartLine
+	}
+	return fmt.Sprintf("%s:%s:%d", f.RuleID, path, line)
+}
+
+// createMRComments creates inline comments on the PR/MR for findings on changed
+// files. It is idempotent: findings already commented on the PR (detected via a
+// hidden marker) are skipped, so re-running the scan does not duplicate comments.
 func (h *RemoteHandler) createMRComments(params HandleFindingsParams) {
 	// Build map of changed file paths
 	changedPaths := make(map[string]bool)
@@ -135,7 +151,17 @@ func (h *RemoteHandler) createMRComments(params HandleFindingsParams) {
 		}
 	}
 
-	// Find findings on changed files
+	// Idempotency: fetch markers already posted on this PR/MR. Best-effort — on
+	// error we proceed (may duplicate) rather than skip commenting entirely.
+	existing, err := params.GitEnv.ExistingFindingMarkers()
+	if err != nil {
+		if h.verbose {
+			fmt.Printf("[handler] Could not list existing comments (will not dedupe): %v\n", err)
+		}
+		existing = map[string]bool{}
+	}
+	posted := make(map[string]bool) // guard against dupes within this run too
+
 	commentsCreated := 0
 	for i := range params.Report.Findings {
 		finding := &params.Report.Findings[i]
@@ -156,10 +182,18 @@ func (h *RemoteHandler) createMRComments(params HandleFindingsParams) {
 			continue
 		}
 
-		// Create the comment
+		key := findingKey(finding)
+		if existing[key] || posted[key] {
+			if h.verbose {
+				fmt.Printf("[handler] Skipping already-commented finding: %s\n", key)
+			}
+			continue
+		}
+
+		// Create the comment, embedding a hidden marker for idempotency.
 		err := params.GitEnv.CreateMRComment(gitenv.MRCommentOption{
 			Title:     formatCommentTitle(finding),
-			Body:      formatCommentBody(finding),
+			Body:      formatCommentBody(finding) + gitenv.MarkerComment(key),
 			Path:      finding.Location.Path,
 			StartLine: finding.Location.StartLine,
 			EndLine:   finding.Location.EndLine,
@@ -172,6 +206,7 @@ func (h *RemoteHandler) createMRComments(params HandleFindingsParams) {
 			continue
 		}
 
+		posted[key] = true
 		commentsCreated++
 	}
 
