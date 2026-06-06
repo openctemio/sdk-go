@@ -28,6 +28,10 @@ func MarkerComment(key string) string {
 	return fmt.Sprintf("\n\n<!-- %s%s -->", markerPrefix, key)
 }
 
+// SummaryMarker tags the single sticky PR/MR summary comment so it is updated in
+// place each run instead of re-posted.
+const SummaryMarker = "<!-- openctem-summary -->"
+
 // ExtractMarkers returns the set of finding keys already present in the given
 // comment bodies (parsed from the hidden markers).
 func ExtractMarkers(bodies []string) map[string]bool {
@@ -89,6 +93,11 @@ type GitEnv interface {
 	// the current PR/MR (parsed from hidden markers), so a re-run can skip them.
 	// Returns an empty map when not in a PR/MR or when listing is unsupported.
 	ExistingFindingMarkers() (map[string]bool, error)
+
+	// UpsertSummaryComment posts (or updates in place) the single sticky security
+	// summary comment on the current PR/MR. The body should NOT include the
+	// marker — the implementation appends SummaryMarker. No-op outside a PR/MR.
+	UpsertSummaryComment(body string) error
 }
 
 // MRCommentOption configures a merge request / pull request comment.
@@ -143,3 +152,6 @@ func (m *ManualEnv) CreateMRComment(_ MRCommentOption) error { return nil }
 func (m *ManualEnv) ExistingFindingMarkers() (map[string]bool, error) {
 	return map[string]bool{}, nil
 }
+
+// UpsertSummaryComment is a no-op for a manual/local env (no PR/MR).
+func (m *ManualEnv) UpsertSummaryComment(_ string) error { return nil }
