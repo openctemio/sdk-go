@@ -341,6 +341,50 @@ func (g *GitHubEnv) ExistingFindingMarkers() (map[string]bool, error) {
 	return ExtractMarkers(bodies), nil
 }
 
+// UpsertSummaryComment posts or updates the single sticky security summary
+// comment on the PR (a PR-level issue comment, not an inline review comment).
+func (g *GitHubEnv) UpsertSummaryComment(body string) error {
+	if g.client == nil || g.accessToken == "" {
+		return fmt.Errorf("GITHUB_TOKEN not set, cannot post summary comment")
+	}
+	prNumberStr := g.MergeRequestID()
+	if prNumberStr == "" {
+		return nil // not a PR
+	}
+	prNumber, err := strconv.Atoi(prNumberStr)
+	if err != nil {
+		return fmt.Errorf("invalid PR number: %w", err)
+	}
+	parts := strings.Split(os.Getenv("GITHUB_REPOSITORY"), "/")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid GITHUB_REPOSITORY format")
+	}
+	owner, repo := parts[0], parts[1]
+	full := body + "\n\n" + SummaryMarker
+
+	// Find an existing summary comment to update in place.
+	opts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	for {
+		comments, resp, err := g.client.Issues.ListComments(g.ctx, owner, repo, prNumber, opts)
+		if err != nil {
+			return fmt.Errorf("list issue comments: %w", err)
+		}
+		for _, c := range comments {
+			if strings.Contains(c.GetBody(), SummaryMarker) {
+				_, _, err := g.client.Issues.EditComment(g.ctx, owner, repo, c.GetID(), &github.IssueComment{Body: github.Ptr(full)})
+				return err
+			}
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	_, _, err = g.client.Issues.CreateComment(g.ctx, owner, repo, prNumber, &github.IssueComment{Body: github.Ptr(full)})
+	return err
+}
+
 // GitHub event payload structures
 type githubEventPayload struct {
 	PullRequest *githubPullRequest `json:"pull_request"`
