@@ -249,11 +249,11 @@ func (h *RemoteHandler) buildSummary() string {
 	}
 	var b strings.Builder
 	b.WriteString("## 🔒 OpenCTEM Security Scan\n\n")
-	b.WriteString(fmt.Sprintf("**%d finding(s)**\n\n", h.totalFindings))
+	fmt.Fprintf(&b, "**%d finding(s)**\n\n", h.totalFindings)
 	b.WriteString("| Severity | Count |\n|---|---|\n")
 	for _, sev := range []string{"critical", "high", "medium", "low", "info"} {
 		if n := h.sevCounts[sev]; n > 0 {
-			b.WriteString(fmt.Sprintf("| %s | %d |\n", strings.ToUpper(sev[:1])+sev[1:], n))
+			fmt.Fprintf(&b, "| %s | %d |\n", strings.ToUpper(sev[:1])+sev[1:], n)
 		}
 	}
 	b.WriteString("\n*Review the inline comments above for details.*")
