@@ -690,16 +690,6 @@ func (fq *FileRetryQueue) writeFile(item *QueueItem) error {
 	filename := fmt.Sprintf("%d_%s.json", item.CreatedAt.UnixNano(), item.ID)
 	path := filepath.Join(fq.dir, filename)
 
-	// Check if file already exists with different name (ID match)
-	files, _ := fq.listFiles()
-	for _, file := range files {
-		if strings.Contains(filepath.Base(file), item.ID) && file != path {
-			// Remove old file
-			_ = os.Remove(file)
-			break
-		}
-	}
-
 	data, err := json.MarshalIndent(item, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal queue item: %w", err)
@@ -714,6 +704,19 @@ func (fq *FileRetryQueue) writeFile(item *QueueItem) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
+
+	// Only AFTER the new file is durably in place, remove any old file that
+	// carried the same item under a different name (e.g. a legacy naming
+	// scheme). Removing it before the rename — as this used to — left a crash
+	// window between Remove and Rename where the item vanished from disk
+	// entirely (old copy deleted, new copy not yet renamed into place).
+	files, _ := fq.listFiles()
+	for _, file := range files {
+		if strings.Contains(filepath.Base(file), item.ID) && file != path {
+			_ = os.Remove(file)
+			break
+		}
 	}
 
 	return nil
