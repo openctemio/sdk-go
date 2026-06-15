@@ -578,7 +578,7 @@ func (fq *FileRetryQueue) getByIDUnsafe(id string) (*QueueItem, error) {
 	}
 
 	for _, file := range files {
-		if strings.Contains(filepath.Base(file), id) {
+		if strings.HasSuffix(filepath.Base(file), "_"+id+".json") {
 			return fq.readFile(file)
 		}
 	}
@@ -593,7 +593,7 @@ func (fq *FileRetryQueue) deleteUnsafe(id string) error {
 	}
 
 	for _, file := range files {
-		if strings.Contains(filepath.Base(file), id) {
+		if strings.HasSuffix(filepath.Base(file), "_"+id+".json") {
 			item, err := fq.readFile(file)
 			if err == nil && item.Fingerprint != "" {
 				delete(fq.fingerprints, item.Fingerprint)
@@ -713,7 +713,7 @@ func (fq *FileRetryQueue) writeFile(item *QueueItem) error {
 	// entirely (old copy deleted, new copy not yet renamed into place).
 	files, _ := fq.listFiles()
 	for _, file := range files {
-		if strings.Contains(filepath.Base(file), item.ID) && file != path {
+		if strings.HasSuffix(filepath.Base(file), "_"+item.ID+".json") && file != path {
 			_ = os.Remove(file)
 			break
 		}
