@@ -409,7 +409,14 @@ type CacheStats struct {
 
 // maybeCleanup runs cleanup if enough time has passed.
 func (c *TemplateCache) maybeCleanup() {
-	if time.Since(c.lastCleanup) < c.config.CleanupInterval {
+	// Read lastCleanup under the lock: Cleanup() writes it while holding
+	// c.mu.Lock, and Put() calls maybeCleanup AFTER releasing the lock, so an
+	// unguarded read here is a data race (torn read of a multi-word time.Time
+	// and -race failures), and could spawn redundant cleanup goroutines.
+	c.mu.RLock()
+	notDue := time.Since(c.lastCleanup) < c.config.CleanupInterval
+	c.mu.RUnlock()
+	if notDue {
 		return
 	}
 
