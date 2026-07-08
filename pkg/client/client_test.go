@@ -154,6 +154,37 @@ func TestClient_PushFindings(t *testing.T) {
 	}
 }
 
+// SetAPIKey rotates the key used on subsequent requests (agent key auto-renewal).
+func TestClient_SetAPIKey_RotatesBearer(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(IngestResponse{ScanID: "s"})
+	}))
+	defer server.Close()
+
+	c := New(&Config{BaseURL: server.URL, APIKey: "old-key"})
+	report := ctis.NewReport()
+	report.Findings = []ctis.Finding{{ID: "f1", Title: "t", Severity: ctis.SeverityHigh}}
+
+	if _, err := c.PushFindings(context.Background(), report); err != nil {
+		t.Fatalf("push (old key): %v", err)
+	}
+	if gotAuth != "Bearer old-key" {
+		t.Fatalf("expected old key first, got %q", gotAuth)
+	}
+
+	c.SetAPIKey("new-key")
+	if _, err := c.PushFindings(context.Background(), report); err != nil {
+		t.Fatalf("push (new key): %v", err)
+	}
+	if gotAuth != "Bearer new-key" {
+		t.Errorf("expected rotated key on Authorization, got %q", gotAuth)
+	}
+}
+
 func TestClient_PushFindings_Error(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
