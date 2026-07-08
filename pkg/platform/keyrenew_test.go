@@ -221,6 +221,53 @@ func TestPlatformClient_ConcurrentKeyRotation(t *testing.T) {
 	wg.Wait()
 }
 
+// A job result in flight at the rotation instant (401 on the old key) retries
+// once with the freshly-rotated key and succeeds — no dropped result.
+func TestHTTPJobClient_ResultRetriesAfterRotation(t *testing.T) {
+	var attempts int
+	var c *httpJobClient
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if r.Header.Get("Authorization") == "Bearer old" {
+			// The old key was invalidated server-side; simulate the renew loop
+			// having swapped in the fresh key during this failed attempt.
+			c.setAPIKey("new")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c = NewHTTPJobClient(srv.URL, "old", "agent-1", time.Second).(*httpJobClient)
+
+	if err := c.ReportJobResult(context.Background(), &JobResult{JobID: "j1"}); err != nil {
+		t.Fatalf("expected retry to succeed after rotation, got %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("expected exactly one retry (2 attempts), got %d", attempts)
+	}
+}
+
+// A 401 with an unchanged key (genuine revoke) is NOT retried — surfaced as error.
+func TestHTTPJobClient_ResultNoRetryOnGenuine401(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	jc := NewHTTPJobClient(srv.URL, "k", "a", time.Second)
+	err := jc.AcknowledgeJob(context.Background(), "j1")
+	if err == nil {
+		t.Fatal("expected an error on a genuine 401")
+	}
+	if attempts != 1 {
+		t.Errorf("expected no retry (1 attempt) when the key is unchanged, got %d", attempts)
+	}
+}
+
 // A non-200 renew response surfaces an error (e.g. expired/revoked key → 401).
 func TestPlatformClient_RenewKey_Non200(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -757,6 +757,35 @@ func (c *httpJobClient) setAPIKey(key string) {
 	c.mu.Unlock()
 }
 
+// doWithKeyRetry sends a request built by build(key). If the response is 401 and
+// the key was rotated concurrently (auto-renewal swapped it between build and
+// send), it rebuilds with the fresh key and retries once — so a job ack/result
+// in flight at the exact rotation instant is not lost. A 401 with an unchanged
+// key (a genuine revoke) is returned as-is. build sets the Authorization header
+// from the key it is given.
+func (c *httpJobClient) doWithKeyRetry(build func(key string) (*http.Request, error)) (*http.Response, error) {
+	key := c.getAPIKey()
+	req, err := build(key)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		if fresh := c.getAPIKey(); fresh != key {
+			_ = resp.Body.Close()
+			req2, berr := build(fresh)
+			if berr != nil {
+				return nil, berr
+			}
+			return c.httpClient.Do(req2)
+		}
+	}
+	return resp, nil
+}
+
 func (c *httpJobClient) Poll(ctx context.Context, req *PollRequest) (*PollResponse, error) {
 	url := fmt.Sprintf("%s/api/v1/platform/poll", c.baseURL)
 
@@ -795,15 +824,15 @@ func (c *httpJobClient) Poll(ctx context.Context, req *PollRequest) (*PollRespon
 func (c *httpJobClient) AcknowledgeJob(ctx context.Context, jobID string) error {
 	url := fmt.Sprintf("%s/api/v1/platform/jobs/%s/ack", c.baseURL, jobID)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	req.Header.Set("X-Agent-ID", c.agentID)
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doWithKeyRetry(func(key string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("X-Agent-ID", c.agentID)
+		return req, nil
+	})
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -824,16 +853,16 @@ func (c *httpJobClient) ReportJobResult(ctx context.Context, result *JobResult) 
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	req.Header.Set("X-Agent-ID", c.agentID)
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doWithKeyRetry(func(key string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("X-Agent-ID", c.agentID)
+		return req, nil
+	})
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
