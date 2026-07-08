@@ -41,6 +41,10 @@ type Client struct {
 	retryQueue  retry.RetryQueue
 	retryWorker *retry.RetryWorker
 	retryMu     sync.RWMutex
+
+	// keyMu guards apiKey so it can be rotated at runtime (agent key
+	// auto-renewal) while push/heartbeat requests read it concurrently.
+	keyMu sync.RWMutex
 }
 
 // Ensure Client implements core.Pusher
@@ -585,7 +589,7 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
 	req.Header.Set("User-Agent", "sdk/1.0")
 
 	// Add Content-Encoding header if compressed
@@ -711,6 +715,21 @@ func isRateLimitError(err error) bool { return IsRateLimitError(err) }
 // SetVerbose sets verbose mode.
 func (c *Client) SetVerbose(v bool) {
 	c.verbose = v
+}
+
+// SetAPIKey atomically replaces the API key used by subsequent requests.
+// Safe to call concurrently with in-flight pushes (agent key auto-renewal).
+func (c *Client) SetAPIKey(key string) {
+	c.keyMu.Lock()
+	c.apiKey = key
+	c.keyMu.Unlock()
+}
+
+// getAPIKey returns the current API key under a read lock.
+func (c *Client) getAPIKey() string {
+	c.keyMu.RLock()
+	defer c.keyMu.RUnlock()
+	return c.apiKey
 }
 
 // ============================================================================
