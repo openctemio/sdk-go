@@ -2,7 +2,9 @@ package platform
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/audit"
@@ -36,6 +38,15 @@ type PlatformClient struct {
 	leaseClient LeaseClient
 	jobClient   JobClient
 	config      *ClientConfig
+	// Concrete refs to the underlying HTTP clients, kept so the API key can be
+	// rotated at runtime (SetAPIKey) — the interface fields above cannot expose
+	// a key setter. Populated when built via NewPlatformClient; nil if a caller
+	// injects custom LeaseClient/JobClient implementations.
+	httpLease *httpLeaseClient
+	httpJob   *httpJobClient
+	// renewClient issues the self-renew call. Short timeout — renewal is a tiny
+	// request and must not hang the renew loop.
+	renewClient *http.Client
 }
 
 // NewPlatformClient creates a new PlatformClient.
@@ -44,11 +55,86 @@ func NewPlatformClient(config *ClientConfig) *PlatformClient {
 		config.PollTimeout = DefaultPollTimeout
 	}
 
-	return &PlatformClient{
-		leaseClient: NewHTTPLeaseClient(config.BaseURL, config.APIKey, config.AgentID),
-		jobClient:   NewHTTPJobClient(config.BaseURL, config.APIKey, config.AgentID, config.PollTimeout),
+	lease := NewHTTPLeaseClient(config.BaseURL, config.APIKey, config.AgentID)
+	job := NewHTTPJobClient(config.BaseURL, config.APIKey, config.AgentID, config.PollTimeout)
+
+	pc := &PlatformClient{
+		leaseClient: lease,
+		jobClient:   job,
 		config:      config,
+		renewClient: &http.Client{Timeout: 15 * time.Second},
 	}
+	// Keep concrete refs for runtime key rotation.
+	if hl, ok := lease.(*httpLeaseClient); ok {
+		pc.httpLease = hl
+	}
+	if hj, ok := job.(*httpJobClient); ok {
+		pc.httpJob = hj
+	}
+	return pc
+}
+
+// RenewKeyResponse is the result of a self-renew call. ExpiresAt is nil when the
+// server has no key TTL configured (the key never expires).
+type RenewKeyResponse struct {
+	APIKey    string     `json:"api_key"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+// RenewKey rotates this agent's API key by presenting the current one to
+// POST /api/v1/agent/renew. It does NOT swap the key in — the caller decides
+// when to call SetAPIKey (and persist), so a failed persist never leaves the
+// running client on a key the agent can't recover after a restart.
+func (c *PlatformClient) RenewKey(ctx context.Context) (*RenewKeyResponse, error) {
+	url := fmt.Sprintf("%s/api/v1/agent/renew", c.config.BaseURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.currentAPIKey())
+	req.Header.Set("X-Agent-ID", c.config.AgentID)
+
+	resp, err := c.renewClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	}
+
+	var out RenewKeyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	if out.APIKey == "" {
+		return nil, fmt.Errorf("renew returned an empty key")
+	}
+	return &out, nil
+}
+
+// SetAPIKey atomically swaps the API key used by all subsequent lease and job
+// requests. Safe to call concurrently with in-flight requests.
+func (c *PlatformClient) SetAPIKey(key string) {
+	if c.httpLease != nil {
+		c.httpLease.setAPIKey(key)
+	}
+	if c.httpJob != nil {
+		c.httpJob.setAPIKey(key)
+	}
+}
+
+// currentAPIKey returns the key currently in use (from a concrete sub-client
+// when available, else the construction-time config value).
+func (c *PlatformClient) currentAPIKey() string {
+	if c.httpJob != nil {
+		return c.httpJob.getAPIKey()
+	}
+	if c.httpLease != nil {
+		return c.httpLease.getAPIKey()
+	}
+	return c.config.APIKey
 }
 
 // =============================================================================
