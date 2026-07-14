@@ -16,6 +16,7 @@ import (
 type CommandClient interface {
 	GetCommands(ctx context.Context) (*GetCommandsResponse, error)
 	AcknowledgeCommand(ctx context.Context, cmdID string) error
+	StartCommand(ctx context.Context, cmdID string) error
 	ReportCommandResult(ctx context.Context, cmdID string, result *CommandResult) error
 	ReportCommandProgress(ctx context.Context, cmdID string, progress int, message string) error
 }
@@ -321,6 +322,16 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 
 	if p.verbose {
 		fmt.Printf("[command-poller] Executing command %s (type: %s)\n", cmd.ID, cmd.Type)
+	}
+
+	// Transition the command to "running" before executing. The server's state
+	// machine is pending -> acknowledged -> running -> completed, and it rejects
+	// a completion from any state other than running ("command must be running to
+	// complete"). Without this call the command executes but its result is never
+	// recorded. Best-effort: a failed start is logged, not fatal — the executor
+	// still runs and the completion attempt (and its error, if any) is surfaced.
+	if err := p.client.StartCommand(ctx, cmd.ID); err != nil && p.verbose {
+		fmt.Printf("[command-poller] Failed to mark command %s running: %v\n", cmd.ID, err)
 	}
 
 	result, err := p.executor.Execute(ctx, cmd)
