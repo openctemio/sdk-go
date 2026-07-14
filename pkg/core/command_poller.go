@@ -382,6 +382,7 @@ type DefaultCommandExecutor struct {
 	scanners   map[string]Scanner
 	collectors map[string]Collector
 	pusher     Pusher
+	parsers    *ParserRegistry
 	verbose    bool
 }
 
@@ -392,6 +393,15 @@ func NewDefaultCommandExecutor(pusher Pusher) *DefaultCommandExecutor {
 		collectors: make(map[string]Collector),
 		pusher:     pusher,
 	}
+}
+
+// SetParserRegistry supplies the registry used to convert a scanner's raw
+// output into a CTIS report. When set, executeScan auto-detects the correct
+// parser by content — gitleaks and trivy emit their own JSON rather than SARIF,
+// so assuming SARIF for every scanner drops their results ("cannot unmarshal
+// array into ctis.SARIFLog"). Falls back to SARIF when unset or unmatched.
+func (e *DefaultCommandExecutor) SetParserRegistry(r *ParserRegistry) {
+	e.parsers = r
 }
 
 // AddScanner adds a scanner.
@@ -494,8 +504,15 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 
 	// Parse and push results if pusher is configured
 	if e.pusher != nil && len(scanResult.RawOutput) > 0 {
-		// Parse using SARIF parser
-		parser := &SARIFParser{}
+		// Pick a parser by content. Not every scanner emits SARIF (gitleaks and
+		// trivy emit their own JSON), so a hardcoded SARIF parser fails on them.
+		// Fall back to SARIF when no registry is configured or none matches.
+		var parser Parser = &SARIFParser{}
+		if e.parsers != nil {
+			if p := e.parsers.FindParser(scanResult.RawOutput); p != nil {
+				parser = p
+			}
+		}
 		report, err := parser.Parse(ctx, scanResult.RawOutput, &ParseOptions{
 			ToolName: scanner.Name(),
 		})
