@@ -3,11 +3,26 @@ package gitleaks
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 )
+
+// relPath returns a scan-target-relative file path. gitleaks reports paths that
+// include the scan root (e.g. "/scan/README.md" for a mounted repo). Persisting
+// that leaks the runner's mount point and — worse — makes the secret fingerprint
+// depend on where the repo happened to be checked out, so the same secret fails
+// to dedupe across scans from different mounts. Strip the known BasePath so the
+// path is repo-relative and stable.
+func relPath(file string, opts *core.ParseOptions) string {
+	if opts == nil || opts.BasePath == "" {
+		return file
+	}
+	base := strings.TrimSuffix(opts.BasePath, "/") + "/"
+	return strings.TrimPrefix(file, base)
+}
 
 // Parser converts gitleaks output to CTIS format.
 type Parser struct{}
@@ -82,7 +97,8 @@ func (p *Parser) Parse(ctx context.Context, data []byte, opts *core.ParseOptions
 
 // convertFinding converts a gitleaks finding to CTIS finding.
 func (p *Parser) convertFinding(f Finding, index int, opts *core.ParseOptions) ctis.Finding {
-	title := fmt.Sprintf("%s detected in %s:%d", f.Description, f.File, f.StartLine)
+	file := relPath(f.File, opts)
+	title := fmt.Sprintf("%s detected in %s:%d", f.Description, file, f.StartLine)
 	finding := ctis.Finding{
 		ID:         fmt.Sprintf("finding-%d", index+1),
 		Type:       ctis.FindingTypeSecret,
@@ -97,16 +113,16 @@ func (p *Parser) convertFinding(f Finding, index int, opts *core.ParseOptions) c
 		Description: fmt.Sprintf("A %s was detected in the source code. Hardcoded secrets pose a significant security risk as they can be easily extracted from the codebase and used maliciously.", f.Description),
 	}
 
-	// Generate or use fingerprint
+	// Generate or use fingerprint (relative path → stable across checkout dirs)
 	if f.Fingerprint != "" {
 		finding.Fingerprint = f.Fingerprint
 	} else {
-		finding.Fingerprint = core.GenerateSecretFingerprint(f.File, f.RuleID, f.StartLine, f.Secret)
+		finding.Fingerprint = core.GenerateSecretFingerprint(file, f.RuleID, f.StartLine, f.Secret)
 	}
 
 	// Set location
 	finding.Location = &ctis.FindingLocation{
-		Path:        f.File,
+		Path:        file,
 		StartLine:   f.StartLine,
 		EndLine:     f.EndLine,
 		StartColumn: f.StartColumn,
