@@ -113,9 +113,13 @@ func (p *Parser) convertFinding(f Finding, index int, opts *core.ParseOptions) c
 		Description: fmt.Sprintf("A %s was detected in the source code. Hardcoded secrets pose a significant security risk as they can be easily extracted from the codebase and used maliciously.", f.Description),
 	}
 
-	// Generate or use fingerprint (relative path → stable across checkout dirs)
+	// Generate or use fingerprint (relative path → stable across checkout dirs).
+	// gitleaks' own fingerprint embeds the file path it was given ("<commit>:
+	// <file>:<rule>:<line>" or "<file>:<rule>:<line>"), which is the absolute
+	// mount path — so rewrite that path segment to the repo-relative one, else the
+	// fingerprint still varies by mount and defeats cross-scan dedupe/auto-resolve.
 	if f.Fingerprint != "" {
-		finding.Fingerprint = f.Fingerprint
+		finding.Fingerprint = strings.Replace(f.Fingerprint, f.File, file, 1)
 	} else {
 		finding.Fingerprint = core.GenerateSecretFingerprint(file, f.RuleID, f.StartLine, f.Secret)
 	}
