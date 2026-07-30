@@ -219,7 +219,7 @@ func TestIsSubPath(t *testing.T) {
 }
 
 func TestWriteCustomTemplates_Security(t *testing.T) {
-	executor := &DefaultCommandExecutor{verbose: false}
+	executor := &DefaultCommandExecutor{}
 
 	t.Run("rejects path traversal in template name", func(t *testing.T) {
 		templates := []EmbeddedTemplate{

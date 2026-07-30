@@ -249,6 +249,14 @@ func (m *Manager) GetStats(ctx context.Context) (*StorageStats, error) {
 // uploadLoop runs the background upload process.
 func (m *Manager) uploadLoop(ctx context.Context) {
 	defer m.wg.Done()
+	// Reset running on EVERY exit path (incl. ctx cancellation, not just an
+	// explicit Stop()), otherwise IsRunning() lies and Start() silently no-ops
+	// on restart while no upload goroutine is actually running.
+	defer func() {
+		m.mu.Lock()
+		m.running = false
+		m.mu.Unlock()
+	}()
 
 	uploadDelay := time.Duration(m.cfg.UploadDelayMs) * time.Millisecond
 	ticker := time.NewTicker(uploadDelay)
@@ -361,8 +369,11 @@ func (m *Manager) handleChunkFailure(ctx context.Context, chunk *Chunk, errorMsg
 
 	// Check if can retry
 	if chunk.CanRetry(m.cfg.MaxRetries) {
-		// Reset to pending for retry
-		_ = m.storage.UpdateChunkStatus(ctx, chunk.ID, ChunkStatusPending, errorMsg)
+		// Reset to pending for retry AND increment retry_count. Plain
+		// UpdateChunkStatus(pending) never bumped retry_count (it only counts
+		// the 'failed' status), so CanRetry stayed true forever → a chunk that
+		// kept failing was retried infinitely and ProcessPending never drained.
+		_ = m.storage.RequeueForRetry(ctx, chunk.ID, errorMsg)
 		return
 	}
 

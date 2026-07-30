@@ -266,9 +266,38 @@ func (w *RetryWorker) OnExhaust(fn func(item *QueueItem)) {
 	w.onExhaust = fn
 }
 
+// shortID returns up to the first 8 chars of an ID for compact logging,
+// without panicking when the string is shorter (an ID < 8 chars would
+// otherwise crash the worker via a slice-bounds-out-of-range in a log call).
+func shortID(s string) string {
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
+}
+
+// shortHash returns up to the first 16 chars of a fingerprint for logging.
+func shortHash(s string) string {
+	if len(s) > 16 {
+		return s[:16]
+	}
+	return s
+}
+
 // run is the main worker loop.
 func (w *RetryWorker) run(ctx context.Context) {
 	defer w.wg.Done()
+	// Reset the running flags on EVERY exit path (incl. ctx cancellation, not
+	// just an explicit Stop()), otherwise IsRunning() keeps reporting true and a
+	// later Start() refuses to restart while no goroutine is actually running.
+	defer func() {
+		w.mu.Lock()
+		w.running = false
+		w.mu.Unlock()
+		w.statsMu.Lock()
+		w.stats.IsRunning = false
+		w.statsMu.Unlock()
+	}()
 
 	// Create a ticker for periodic processing
 	ticker := time.NewTicker(w.interval)
@@ -358,13 +387,13 @@ func (w *RetryWorker) processBatch(ctx context.Context) error {
 				// Data already exists on server, mark as success without uploading
 				if w.verbose {
 					fmt.Printf("[retry-worker] Item %s already exists on server (fingerprint: %s), skipping upload\n",
-						item.ID[:8], item.Fingerprint[:16])
+						shortID(item.ID), shortHash(item.Fingerprint))
 				}
 
 				// Remove from queue
 				if err := w.queue.Delete(ctx, item.ID); err != nil {
 					if w.verbose {
-						fmt.Printf("[retry-worker] Failed to delete already-uploaded item %s: %v\n", item.ID[:8], err)
+						fmt.Printf("[retry-worker] Failed to delete already-uploaded item %s: %v\n", shortID(item.ID), err)
 					}
 				}
 
@@ -395,7 +424,7 @@ func (w *RetryWorker) processBatch(ctx context.Context) error {
 			// Remove from queue on success
 			if err := w.queue.Delete(ctx, item.ID); err != nil {
 				if w.verbose {
-					fmt.Printf("[retry-worker] Failed to delete successful item %s: %v\n", item.ID[:8], err)
+					fmt.Printf("[retry-worker] Failed to delete successful item %s: %v\n", shortID(item.ID), err)
 				}
 			}
 
@@ -410,7 +439,7 @@ func (w *RetryWorker) processBatch(ctx context.Context) error {
 
 			if w.verbose {
 				fmt.Printf("[retry-worker] Successfully pushed item %s (attempt %d)\n",
-					item.ID[:8], result.Attempt)
+					shortID(item.ID), result.Attempt)
 			}
 		} else {
 			// Update item for next retry
@@ -422,7 +451,7 @@ func (w *RetryWorker) processBatch(ctx context.Context) error {
 				// Mark as permanently failed
 				if err := w.queue.MarkFailed(ctx, item.ID, result.Error); err != nil {
 					if w.verbose {
-						fmt.Printf("[retry-worker] Failed to mark item %s as failed: %v\n", item.ID[:8], err)
+						fmt.Printf("[retry-worker] Failed to mark item %s as failed: %v\n", shortID(item.ID), err)
 					}
 				}
 
@@ -436,20 +465,20 @@ func (w *RetryWorker) processBatch(ctx context.Context) error {
 
 				if w.verbose {
 					fmt.Printf("[retry-worker] Item %s exhausted all retries (%d attempts)\n",
-						item.ID[:8], item.Attempts)
+						shortID(item.ID), item.Attempts)
 				}
 			} else {
 				// Schedule next retry
 				nextRetry := w.backoff.NextRetry(item.Attempts)
 				if err := w.queue.Requeue(ctx, item.ID, nextRetry); err != nil {
 					if w.verbose {
-						fmt.Printf("[retry-worker] Failed to requeue item %s: %v\n", item.ID[:8], err)
+						fmt.Printf("[retry-worker] Failed to requeue item %s: %v\n", shortID(item.ID), err)
 					}
 				}
 
 				if w.verbose {
 					fmt.Printf("[retry-worker] Item %s scheduled for retry at %v (attempt %d/%d)\n",
-						item.ID[:8], nextRetry.Format(time.RFC3339), item.Attempts, w.maxAttempts)
+						shortID(item.ID), nextRetry.Format(time.RFC3339), item.Attempts, w.maxAttempts)
 				}
 			}
 
