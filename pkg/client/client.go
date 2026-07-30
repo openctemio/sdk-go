@@ -116,16 +116,16 @@ func New(cfg *Config) *Client {
 	}
 
 	return &Client{
-		baseURL:          cfg.BaseURL,
-		apiKey:           cfg.APIKey,
-		agentID:          cfg.AgentID,
-		maxRetries:       cfg.MaxRetries,
-		retryDelay:       cfg.RetryDelay,
+		baseURL:    cfg.BaseURL,
+		apiKey:     cfg.APIKey,
+		agentID:    cfg.AgentID,
+		maxRetries: cfg.MaxRetries,
+		retryDelay: cfg.RetryDelay,
 		// SSRF: BaseURL is operator-configured at SDK consumer site.
 		// Using SafeHTTPClient ensures the dialer rejects RFC1918 /
 		// link-local / CGNAT targets even when a custom scanner binds
 		// the SDK to an attacker-influenced API endpoint.
-		httpClient: httpsec.SafeHTTPClient(cfg.Timeout),
+		httpClient:       httpsec.SafeHTTPClient(cfg.Timeout),
 		verbose:          cfg.Verbose,
 		compressor:       compressor,
 		compressionLevel: compressionLevel,
