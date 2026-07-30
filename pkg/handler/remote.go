@@ -21,6 +21,16 @@ type RemoteHandler struct {
 	// Comment settings
 	createComments bool
 	maxComments    int
+
+	// Accumulated across HandleFindings calls for the sticky PR/MR summary.
+	sevCounts     map[string]int
+	totalFindings int
+
+	// Baseline (new-vs-base) accounting for the sticky summary. baselineApplied
+	// is set when any HandleFindings call carried a NewFingerprints set, so the
+	// summary can report how many findings the PR introduces vs. pre-existing.
+	baselineApplied bool
+	newFindings     int
 }
 
 // RemoteHandlerConfig configures the remote handler.
@@ -43,6 +53,7 @@ func NewRemoteHandler(cfg *RemoteHandlerConfig) *RemoteHandler {
 		verbose:        cfg.Verbose,
 		createComments: cfg.CreateComments,
 		maxComments:    maxComments,
+		sevCounts:      make(map[string]int),
 	}
 }
 
@@ -92,6 +103,22 @@ func (h *RemoteHandler) HandleFindings(params HandleFindingsParams) error {
 		return nil
 	}
 
+	// Accumulate counts across scanners for the sticky PR/MR summary (OnCompleted).
+	if params.NewFingerprints != nil {
+		h.baselineApplied = true
+	}
+	for i := range params.Report.Findings {
+		f := &params.Report.Findings[i]
+		h.totalFindings++
+		h.sevCounts[strings.ToLower(string(f.Severity))]++
+		// A finding is "new" if there's no baseline, or it's in the new set, or it
+		// has no fingerprint to match (treated as new for visibility) — mirroring
+		// the comment-filter rule in createMRComments.
+		if params.NewFingerprints == nil || f.Fingerprint == "" || params.NewFingerprints[f.Fingerprint] {
+			h.newFindings++
+		}
+	}
+
 	if h.verbose {
 		fmt.Printf("[handler] Processing %d findings\n", len(params.Report.Findings))
 		fmt.Printf("[handler] Strategy: %s\n", params.Strategy.String())
@@ -124,7 +151,23 @@ func (h *RemoteHandler) HandleFindings(params HandleFindingsParams) error {
 	return nil
 }
 
-// createMRComments creates inline comments on the PR/MR for findings on changed files.
+// findingKey returns a stable identity for a finding used to dedupe PR/MR
+// comments across re-runs. Prefers the fingerprint; falls back to
+// rule:path:line so a comment is still idempotent without a fingerprint.
+func findingKey(f *ctis.Finding) string {
+	if f.Fingerprint != "" {
+		return f.Fingerprint
+	}
+	path, line := "", 0
+	if f.Location != nil {
+		path, line = f.Location.Path, f.Location.StartLine
+	}
+	return fmt.Sprintf("%s:%s:%d", f.RuleID, path, line)
+}
+
+// createMRComments creates inline comments on the PR/MR for findings on changed
+// files. It is idempotent: findings already commented on the PR (detected via a
+// hidden marker) are skipped, so re-running the scan does not duplicate comments.
 func (h *RemoteHandler) createMRComments(params HandleFindingsParams) {
 	// Build map of changed file paths
 	changedPaths := make(map[string]bool)
@@ -135,7 +178,17 @@ func (h *RemoteHandler) createMRComments(params HandleFindingsParams) {
 		}
 	}
 
-	// Find findings on changed files
+	// Idempotency: fetch markers already posted on this PR/MR. Best-effort — on
+	// error we proceed (may duplicate) rather than skip commenting entirely.
+	existing, err := params.GitEnv.ExistingFindingMarkers()
+	if err != nil {
+		if h.verbose {
+			fmt.Printf("[handler] Could not list existing comments (will not dedupe): %v\n", err)
+		}
+		existing = map[string]bool{}
+	}
+	posted := make(map[string]bool) // guard against dupes within this run too
+
 	commentsCreated := 0
 	for i := range params.Report.Findings {
 		finding := &params.Report.Findings[i]
@@ -156,10 +209,27 @@ func (h *RemoteHandler) createMRComments(params HandleFindingsParams) {
 			continue
 		}
 
-		// Create the comment
+		// In a PR context with a computed baseline, only comment on findings the
+		// PR introduces (skip pre-existing tech debt already open on the base
+		// branch). A finding with no fingerprint can't be matched to the baseline,
+		// so it is treated as new (commented) for visibility.
+		if params.NewFingerprints != nil && finding.Fingerprint != "" &&
+			!params.NewFingerprints[finding.Fingerprint] {
+			continue
+		}
+
+		key := findingKey(finding)
+		if existing[key] || posted[key] {
+			if h.verbose {
+				fmt.Printf("[handler] Skipping already-commented finding: %s\n", key)
+			}
+			continue
+		}
+
+		// Create the comment, embedding a hidden marker for idempotency.
 		err := params.GitEnv.CreateMRComment(gitenv.MRCommentOption{
 			Title:     formatCommentTitle(finding),
-			Body:      formatCommentBody(finding),
+			Body:      formatCommentBody(finding) + gitenv.MarkerComment(key),
 			Path:      finding.Location.Path,
 			StartLine: finding.Location.StartLine,
 			EndLine:   finding.Location.EndLine,
@@ -172,6 +242,7 @@ func (h *RemoteHandler) createMRComments(params HandleFindingsParams) {
 			continue
 		}
 
+		posted[key] = true
 		commentsCreated++
 	}
 
@@ -185,7 +256,43 @@ func (h *RemoteHandler) OnCompleted() error {
 	if h.verbose {
 		fmt.Println("[handler] Scan completed successfully")
 	}
+
+	// Post/update the single sticky security summary comment on the PR/MR so
+	// reviewers see the current state at a glance (updated in place each run).
+	if h.createComments && h.gitEnv != nil && h.gitEnv.MergeRequestID() != "" {
+		if err := h.gitEnv.UpsertSummaryComment(h.buildSummary()); err != nil && h.verbose {
+			fmt.Printf("[handler] Failed to upsert summary comment: %v\n", err)
+		}
+	}
 	return nil
+}
+
+// buildSummary renders the sticky PR/MR security summary as markdown.
+func (h *RemoteHandler) buildSummary() string {
+	// With a baseline, "clean" means the PR introduces no new findings even if
+	// pre-existing tech debt remains on the changed files.
+	if h.baselineApplied && h.newFindings == 0 {
+		return "## 🔒 OpenCTEM Security Scan\n\n✅ **No new findings in this PR.**"
+	}
+	if h.totalFindings == 0 {
+		return "## 🔒 OpenCTEM Security Scan\n\n✅ **No security findings.**"
+	}
+	var b strings.Builder
+	b.WriteString("## 🔒 OpenCTEM Security Scan\n\n")
+	if h.baselineApplied {
+		fmt.Fprintf(&b, "**%d new finding(s)** in this PR (of %d on changed files)\n\n",
+			h.newFindings, h.totalFindings)
+	} else {
+		fmt.Fprintf(&b, "**%d finding(s)**\n\n", h.totalFindings)
+	}
+	b.WriteString("| Severity | Count |\n|---|---|\n")
+	for _, sev := range []string{"critical", "high", "medium", "low", "info"} {
+		if n := h.sevCounts[sev]; n > 0 {
+			fmt.Fprintf(&b, "| %s | %d |\n", strings.ToUpper(sev[:1])+sev[1:], n)
+		}
+	}
+	b.WriteString("\n*Review the inline comments above for details.*")
+	return b.String()
 }
 
 // OnError is called when an error occurs during the scan.

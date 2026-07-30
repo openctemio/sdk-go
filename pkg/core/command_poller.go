@@ -16,6 +16,7 @@ import (
 type CommandClient interface {
 	GetCommands(ctx context.Context) (*GetCommandsResponse, error)
 	AcknowledgeCommand(ctx context.Context, cmdID string) error
+	StartCommand(ctx context.Context, cmdID string) error
 	ReportCommandResult(ctx context.Context, cmdID string, result *CommandResult) error
 	ReportCommandProgress(ctx context.Context, cmdID string, progress int, message string) error
 }
@@ -155,6 +156,10 @@ type CommandPoller struct {
 	stopCh     chan struct{}
 	mu         sync.Mutex
 	activeCmds sync.WaitGroup
+	// sem bounds the number of commands executing concurrently to
+	// maxConcurrent. Without it a large command batch spawned an
+	// unbounded number of goroutines/scans.
+	sem chan struct{}
 
 	verbose bool
 }
@@ -198,13 +203,19 @@ func NewCommandPoller(client CommandClient, executor CommandExecutor, cfg *Comma
 		allowedTypes["health_check"] = true
 	}
 
+	maxConcurrent := cfg.MaxConcurrent
+	if maxConcurrent <= 0 {
+		maxConcurrent = 5
+	}
+
 	return &CommandPoller{
 		client:        client,
 		executor:      executor,
 		interval:      cfg.PollInterval,
-		maxConcurrent: cfg.MaxConcurrent,
+		maxConcurrent: maxConcurrent,
 		allowedTypes:  allowedTypes,
 		stopCh:        make(chan struct{}),
+		sem:           make(chan struct{}, maxConcurrent),
 		verbose:       cfg.Verbose,
 	}
 }
@@ -307,6 +318,17 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			continue
 		}
 
+		// Acquire a concurrency slot before spawning so at most
+		// maxConcurrent commands execute (and at most that many
+		// goroutines exist) at once. Respect cancellation/stop while waiting.
+		select {
+		case p.sem <- struct{}{}:
+		case <-ctx.Done():
+			return
+		case <-p.stopCh:
+			return
+		}
+
 		// Execute asynchronously
 		p.activeCmds.Add(1)
 		go p.executeCommand(ctx, cmd)
@@ -315,12 +337,25 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 
 // executeCommand executes a single command.
 func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
-	defer p.activeCmds.Done()
+	defer func() {
+		<-p.sem
+		p.activeCmds.Done()
+	}()
 
 	startTime := time.Now()
 
 	if p.verbose {
 		fmt.Printf("[command-poller] Executing command %s (type: %s)\n", cmd.ID, cmd.Type)
+	}
+
+	// Transition the command to "running" before executing. The server's state
+	// machine is pending -> acknowledged -> running -> completed, and it rejects
+	// a completion from any state other than running ("command must be running to
+	// complete"). Without this call the command executes but its result is never
+	// recorded. Best-effort: a failed start is logged, not fatal — the executor
+	// still runs and the completion attempt (and its error, if any) is surfaced.
+	if err := p.client.StartCommand(ctx, cmd.ID); err != nil && p.verbose {
+		fmt.Printf("[command-poller] Failed to mark command %s running: %v\n", cmd.ID, err)
 	}
 
 	result, err := p.executor.Execute(ctx, cmd)
@@ -371,6 +406,7 @@ type DefaultCommandExecutor struct {
 	scanners   map[string]Scanner
 	collectors map[string]Collector
 	pusher     Pusher
+	parsers    *ParserRegistry
 	verbose    bool
 }
 
@@ -381,6 +417,15 @@ func NewDefaultCommandExecutor(pusher Pusher) *DefaultCommandExecutor {
 		collectors: make(map[string]Collector),
 		pusher:     pusher,
 	}
+}
+
+// SetParserRegistry supplies the registry used to convert a scanner's raw
+// output into a CTIS report. When set, executeScan auto-detects the correct
+// parser by content — gitleaks and trivy emit their own JSON rather than SARIF,
+// so assuming SARIF for every scanner drops their results ("cannot unmarshal
+// array into ctis.SARIFLog"). Falls back to SARIF when unset or unmatched.
+func (e *DefaultCommandExecutor) SetParserRegistry(r *ParserRegistry) {
+	e.parsers = r
 }
 
 // AddScanner adds a scanner.
@@ -483,8 +528,15 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 
 	// Parse and push results if pusher is configured
 	if e.pusher != nil && len(scanResult.RawOutput) > 0 {
-		// Parse using SARIF parser
-		parser := &SARIFParser{}
+		// Pick a parser by content. Not every scanner emits SARIF (gitleaks and
+		// trivy emit their own JSON), so a hardcoded SARIF parser fails on them.
+		// Fall back to SARIF when no registry is configured or none matches.
+		var parser Parser = &SARIFParser{}
+		if e.parsers != nil {
+			if p := e.parsers.FindParser(scanResult.RawOutput); p != nil {
+				parser = p
+			}
+		}
 		report, err := parser.Parse(ctx, scanResult.RawOutput, &ParseOptions{
 			ToolName: scanner.Name(),
 		})

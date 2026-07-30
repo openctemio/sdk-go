@@ -12,6 +12,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // LeaseClient defines the interface for lease operations.
@@ -409,7 +411,10 @@ func (c *SimpleMetricsCollector) Collect() (*SystemMetrics, error) {
 
 // httpLeaseClient implements LeaseClient using HTTP.
 type httpLeaseClient struct {
-	baseURL    string
+	baseURL string
+	// apiKey is guarded by mu so it can be rotated at runtime (key auto-renewal)
+	// while requests read it concurrently.
+	mu         sync.RWMutex
 	apiKey     string
 	agentID    string
 	httpClient *http.Client
@@ -421,10 +426,25 @@ func NewHTTPLeaseClient(baseURL, apiKey, agentID string) LeaseClient {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		agentID: agentID,
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		// SSRF: platform agent's baseURL is operator config; the
+		// dialer-level guard catches a misconfigured or rebind-target
+		// pointing into private space.
+		httpClient: httpsec.SafeHTTPClient(10 * time.Second),
 	}
+}
+
+// getAPIKey returns the current API key under a read lock.
+func (c *httpLeaseClient) getAPIKey() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.apiKey
+}
+
+// setAPIKey atomically replaces the API key used by subsequent requests.
+func (c *httpLeaseClient) setAPIKey(key string) {
+	c.mu.Lock()
+	c.apiKey = key
+	c.mu.Unlock()
 }
 
 func (c *httpLeaseClient) RenewLease(ctx context.Context, req *LeaseRenewRequest) (*LeaseRenewResponse, error) {
@@ -441,7 +461,7 @@ func (c *httpLeaseClient) RenewLease(ctx context.Context, req *LeaseRenewRequest
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	httpReq.Header.Set("Authorization", "Bearer "+c.getAPIKey())
 	httpReq.Header.Set("X-Agent-ID", c.agentID)
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -470,7 +490,7 @@ func (c *httpLeaseClient) ReleaseLease(ctx context.Context) error {
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
 	req.Header.Set("X-Agent-ID", c.agentID)
 
 	resp, err := c.httpClient.Do(req)

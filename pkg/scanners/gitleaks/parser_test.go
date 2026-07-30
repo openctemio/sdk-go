@@ -133,3 +133,51 @@ func TestParser_ParseWithAssetFromBranchInfo(t *testing.T) {
 		t.Errorf("asset commit_sha = %v, want abc123def456", asset.Properties["commit_sha"])
 	}
 }
+
+// TestConvertFinding_RelativePathAndFingerprint locks in that a finding scanned
+// from a mounted checkout is reported with a repo-relative path AND a mount-
+// independent fingerprint — the two must move together, else the same secret
+// dedupes inconsistently across scans from different mount points.
+func TestConvertFinding_RelativePathAndFingerprint(t *testing.T) {
+	parser := &Parser{}
+	opts := &core.ParseOptions{BasePath: "/scan"}
+
+	f := Finding{
+		Description: "Generic API Key",
+		RuleID:      "generic-api-key",
+		File:        "/scan/config/secrets.yaml",
+		StartLine:   57,
+		Secret:      "AKIA_EXAMPLE_SECRET",
+		// gitleaks embeds the path it was given (the absolute mount) in its own
+		// fingerprint — this is the segment that must be rewritten.
+		Fingerprint: "/scan/config/secrets.yaml:generic-api-key:57",
+	}
+
+	got := parser.convertFinding(f, 0, opts)
+
+	if got.Location == nil || got.Location.Path != "config/secrets.yaml" {
+		t.Fatalf("path = %v, want repo-relative config/secrets.yaml", got.Location)
+	}
+	if want := "config/secrets.yaml:generic-api-key:57"; got.Fingerprint != want {
+		t.Errorf("fingerprint = %q, want mount-independent %q", got.Fingerprint, want)
+	}
+}
+
+// TestConvertFinding_NoBasePath leaves paths untouched when no mount root is
+// known (e.g. a direct local scan), so nothing regresses for non-mounted runs.
+func TestConvertFinding_NoBasePath(t *testing.T) {
+	parser := &Parser{}
+	f := Finding{
+		RuleID:      "generic-api-key",
+		File:        "config/secrets.yaml",
+		StartLine:   57,
+		Fingerprint: "config/secrets.yaml:generic-api-key:57",
+	}
+	got := parser.convertFinding(f, 0, &core.ParseOptions{})
+	if got.Location.Path != "config/secrets.yaml" {
+		t.Errorf("path = %q, want unchanged", got.Location.Path)
+	}
+	if got.Fingerprint != "config/secrets.yaml:generic-api-key:57" {
+		t.Errorf("fingerprint = %q, want unchanged", got.Fingerprint)
+	}
+}

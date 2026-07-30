@@ -76,6 +76,20 @@ func NewTemplateCache(cfg *TemplateCacheConfig) (*TemplateCache, error) {
 		cfg = DefaultTemplateCacheConfig()
 	}
 
+	// Apply per-field defaults so a partially-populated config (e.g. only
+	// CacheDir set) doesn't leave zero values that disable cleanup safety:
+	// MaxCacheAge=0 would expire every entry immediately and CleanupInterval=0
+	// would run a cleanup goroutine on every Put.
+	if cfg.MaxCacheAge <= 0 {
+		cfg.MaxCacheAge = 7 * 24 * time.Hour
+	}
+	if cfg.MaxCacheSize <= 0 {
+		cfg.MaxCacheSize = 100 * 1024 * 1024
+	}
+	if cfg.CleanupInterval <= 0 {
+		cfg.CleanupInterval = 1 * time.Hour
+	}
+
 	// Create cache directory if it doesn't exist
 	if err := os.MkdirAll(cfg.CacheDir, 0700); err != nil {
 		return nil, fmt.Errorf("create cache directory: %w", err)
@@ -395,7 +409,14 @@ type CacheStats struct {
 
 // maybeCleanup runs cleanup if enough time has passed.
 func (c *TemplateCache) maybeCleanup() {
-	if time.Since(c.lastCleanup) < c.config.CleanupInterval {
+	// Read lastCleanup under the lock: Cleanup() writes it while holding
+	// c.mu.Lock, and Put() calls maybeCleanup AFTER releasing the lock, so an
+	// unguarded read here is a data race (torn read of a multi-word time.Time
+	// and -race failures), and could spawn redundant cleanup goroutines.
+	c.mu.RLock()
+	notDue := time.Since(c.lastCleanup) < c.config.CleanupInterval
+	c.mu.RUnlock()
+	if notDue {
 		return
 	}
 
