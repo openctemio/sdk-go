@@ -156,6 +156,10 @@ type CommandPoller struct {
 	stopCh     chan struct{}
 	mu         sync.Mutex
 	activeCmds sync.WaitGroup
+	// sem bounds the number of commands executing concurrently to
+	// maxConcurrent. Without it a large command batch spawned an
+	// unbounded number of goroutines/scans.
+	sem chan struct{}
 
 	verbose bool
 }
@@ -199,13 +203,19 @@ func NewCommandPoller(client CommandClient, executor CommandExecutor, cfg *Comma
 		allowedTypes["health_check"] = true
 	}
 
+	maxConcurrent := cfg.MaxConcurrent
+	if maxConcurrent <= 0 {
+		maxConcurrent = 5
+	}
+
 	return &CommandPoller{
 		client:        client,
 		executor:      executor,
 		interval:      cfg.PollInterval,
-		maxConcurrent: cfg.MaxConcurrent,
+		maxConcurrent: maxConcurrent,
 		allowedTypes:  allowedTypes,
 		stopCh:        make(chan struct{}),
+		sem:           make(chan struct{}, maxConcurrent),
 		verbose:       cfg.Verbose,
 	}
 }
@@ -308,6 +318,17 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			continue
 		}
 
+		// Acquire a concurrency slot before spawning so at most
+		// maxConcurrent commands execute (and at most that many
+		// goroutines exist) at once. Respect cancellation/stop while waiting.
+		select {
+		case p.sem <- struct{}{}:
+		case <-ctx.Done():
+			return
+		case <-p.stopCh:
+			return
+		}
+
 		// Execute asynchronously
 		p.activeCmds.Add(1)
 		go p.executeCommand(ctx, cmd)
@@ -316,7 +337,10 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 
 // executeCommand executes a single command.
 func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
-	defer p.activeCmds.Done()
+	defer func() {
+		<-p.sem
+		p.activeCmds.Done()
+	}()
 
 	startTime := time.Now()
 

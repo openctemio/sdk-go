@@ -18,6 +18,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/compress"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/retry"
 )
 
@@ -115,12 +116,16 @@ func New(cfg *Config) *Client {
 	}
 
 	return &Client{
-		baseURL:          cfg.BaseURL,
-		apiKey:           cfg.APIKey,
-		agentID:          cfg.AgentID,
-		maxRetries:       cfg.MaxRetries,
-		retryDelay:       cfg.RetryDelay,
-		httpClient:       &http.Client{Timeout: cfg.Timeout},
+		baseURL:    cfg.BaseURL,
+		apiKey:     cfg.APIKey,
+		agentID:    cfg.AgentID,
+		maxRetries: cfg.MaxRetries,
+		retryDelay: cfg.RetryDelay,
+		// SSRF: BaseURL is operator-configured at SDK consumer site.
+		// Using SafeHTTPClient ensures the dialer rejects RFC1918 /
+		// link-local / CGNAT targets even when a custom scanner binds
+		// the SDK to an attacker-influenced API endpoint.
+		httpClient:       httpsec.SafeHTTPClient(cfg.Timeout),
 		verbose:          cfg.Verbose,
 		compressor:       compressor,
 		compressionLevel: compressionLevel,
@@ -148,9 +153,8 @@ func NewWithOptions(opts ...Option) *Client {
 	c := &Client{
 		maxRetries: 3,
 		retryDelay: 2 * time.Second,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		// SSRF: see the imperative constructor above for rationale.
+		httpClient: httpsec.SafeHTTPClient(30 * time.Second),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -1370,6 +1374,12 @@ func (c *Client) isFiningSuppressed(f ctis.Finding, rules []SuppressionRule) boo
 // Note: ToolName is not checked here because Finding doesn't have Tool info;
 // it should be checked at the Report level before calling this function.
 func (c *Client) matchesSuppressionRule(f ctis.Finding, rule SuppressionRule) bool {
+	// Track whether at least one finding-level matcher actually applied. A rule
+	// with no RuleID and no PathPattern (e.g. an asset-only rule, handled
+	// elsewhere) must NOT match every finding — returning true here would
+	// silently drop the entire result set (fail-open in a security gate).
+	matched := false
+
 	// Check rule ID (supports wildcard suffix)
 	if rule.RuleID != "" {
 		if strings.HasSuffix(rule.RuleID, "*") {
@@ -1380,16 +1390,21 @@ func (c *Client) matchesSuppressionRule(f ctis.Finding, rule SuppressionRule) bo
 		} else if rule.RuleID != f.RuleID {
 			return false
 		}
+		matched = true
 	}
 
-	// Check path pattern
-	if rule.PathPattern != "" && f.Location != nil && f.Location.Path != "" {
+	// Check path pattern. A path rule can only match a finding that has a path.
+	if rule.PathPattern != "" {
+		if f.Location == nil || f.Location.Path == "" {
+			return false
+		}
 		if !matchGlobPattern(rule.PathPattern, f.Location.Path) {
 			return false
 		}
+		matched = true
 	}
 
-	return true
+	return matched
 }
 
 // matchGlobPattern provides simple glob matching with ** support.

@@ -16,11 +16,18 @@ all: lint test
 # Test
 # =============================================================================
 
+# pkg/httpsec.SafeHTTPClient blocks loopback by default, which breaks
+# httptest.NewServer-based unit tests. The env var tells the SDK
+# dialer to allow 127.0.0.0/8 + ::1/128 for the duration of the
+# test run; the httpsec package's own tests reset it via TestMain so
+# the prod posture is still asserted.
+TEST_ENV := OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK=1
+
 test: ## Run tests
-	go test -v -race ./...
+	$(TEST_ENV) go test -v -race ./...
 
 test-coverage: ## Run tests with coverage
-	go test -v -race -coverprofile=coverage.out ./...
+	$(TEST_ENV) go test -v -race -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 

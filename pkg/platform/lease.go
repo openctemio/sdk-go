@@ -12,6 +12,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // LeaseClient defines the interface for lease operations.
@@ -424,9 +426,10 @@ func NewHTTPLeaseClient(baseURL, apiKey, agentID string) LeaseClient {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		agentID: agentID,
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		// SSRF: platform agent's baseURL is operator config; the
+		// dialer-level guard catches a misconfigured or rebind-target
+		// pointing into private space.
+		httpClient: httpsec.SafeHTTPClient(10 * time.Second),
 	}
 }
 
