@@ -13,6 +13,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 const (
@@ -79,9 +80,11 @@ func NewEnricher() *Enricher {
 		Timeout:  DefaultTimeout,
 		cache:    make(map[string]*KEVEntry),
 		cacheTTL: DefaultCacheTTL,
-		client: &http.Client{
-			Timeout: DefaultTimeout,
-		},
+		// SSRF hygiene: KEV feed URL is public (CISA) but may be
+		// overridden by EnricherConfig.Endpoint from operator config.
+		// SafeHTTPClient ensures a misconfigured endpoint pointing at
+		// RFC1918 / IMDS is rejected at dial time.
+		client: httpsec.SafeHTTPClient(DefaultTimeout),
 	}
 }
 

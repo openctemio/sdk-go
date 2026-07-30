@@ -2,8 +2,11 @@
 package connectors
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -194,9 +197,23 @@ func (c *BaseConnector) SetVerbose(v bool) {
 func (c *BaseConnector) NewRequest(ctx context.Context, method, path string, body interface{}) (*http.Request, error) {
 	url := c.baseURL + path
 
-	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+	// Serialize the body — previously this was dropped (always nil), so any
+	// POST/PUT/PATCH built through this base sent an empty request body.
+	var bodyReader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("marshal request body: %w", err)
+		}
+		bodyReader = bytes.NewReader(b)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 
 	// Add authentication headers

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // JobClient defines the interface for job operations.
@@ -721,7 +723,10 @@ func (p *JobPoller) executeJob(ctx context.Context, job *JobInfo) {
 
 // httpJobClient implements JobClient using HTTP.
 type httpJobClient struct {
-	baseURL    string
+	baseURL string
+	// apiKey is guarded by mu so it can be rotated at runtime (key auto-renewal)
+	// while poll/ack/result/progress requests read it concurrently.
+	mu         sync.RWMutex
 	apiKey     string
 	agentID    string
 	httpClient *http.Client
@@ -733,11 +738,25 @@ func NewHTTPJobClient(baseURL, apiKey, agentID string, pollTimeout time.Duration
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		agentID: agentID,
-		httpClient: &http.Client{
-			// Timeout should be longer than poll timeout to allow for response
-			Timeout: pollTimeout + 10*time.Second,
-		},
+		// SSRF: platform poller talks to the operator-configured API
+		// baseURL; dialer-level blocklist keeps long-poll connections
+		// from opportunistically landing on private space.
+		httpClient: httpsec.SafeHTTPClient(pollTimeout + 10*time.Second),
 	}
+}
+
+// getAPIKey returns the current API key under a read lock.
+func (c *httpJobClient) getAPIKey() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.apiKey
+}
+
+// setAPIKey atomically replaces the API key used by subsequent requests.
+func (c *httpJobClient) setAPIKey(key string) {
+	c.mu.Lock()
+	c.apiKey = key
+	c.mu.Unlock()
 }
 
 func (c *httpJobClient) Poll(ctx context.Context, req *PollRequest) (*PollResponse, error) {
@@ -754,7 +773,7 @@ func (c *httpJobClient) Poll(ctx context.Context, req *PollRequest) (*PollRespon
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	httpReq.Header.Set("Authorization", "Bearer "+c.getAPIKey())
 	httpReq.Header.Set("X-Agent-ID", c.agentID)
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -783,7 +802,7 @@ func (c *httpJobClient) AcknowledgeJob(ctx context.Context, jobID string) error 
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
 	req.Header.Set("X-Agent-ID", c.agentID)
 
 	resp, err := c.httpClient.Do(req)
@@ -813,7 +832,7 @@ func (c *httpJobClient) ReportJobResult(ctx context.Context, result *JobResult) 
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
 	req.Header.Set("X-Agent-ID", c.agentID)
 
 	resp, err := c.httpClient.Do(req)
@@ -846,7 +865,7 @@ func (c *httpJobClient) ReportJobProgress(ctx context.Context, jobID string, pro
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
 	req.Header.Set("X-Agent-ID", c.agentID)
 
 	resp, err := c.httpClient.Do(req)

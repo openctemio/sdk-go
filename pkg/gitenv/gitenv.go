@@ -3,12 +3,48 @@
 // and provides a unified interface for accessing repository and commit information.
 package gitenv
 
+import (
+	"fmt"
+	"regexp"
+)
+
 const (
 	ProviderGitHub    = "github"
 	ProviderGitLab    = "gitlab"
 	ProviderBitbucket = "bitbucket"
 	ProviderManual    = "manual"
 )
+
+// markerPrefix tags a PR/MR comment with the finding it belongs to, so a
+// re-run can detect and skip findings already commented (idempotency). It is
+// embedded as an HTML comment, invisible in the rendered PR view.
+const markerPrefix = "openctem-finding:"
+
+var markerRe = regexp.MustCompile(`openctem-finding:([^\s>]+)`)
+
+// MarkerComment returns the hidden marker to append to a comment body for the
+// given finding key.
+func MarkerComment(key string) string {
+	return fmt.Sprintf("\n\n<!-- %s%s -->", markerPrefix, key)
+}
+
+// SummaryMarker tags the single sticky PR/MR summary comment so it is updated in
+// place each run instead of re-posted.
+const SummaryMarker = "<!-- openctem-summary -->"
+
+// ExtractMarkers returns the set of finding keys already present in the given
+// comment bodies (parsed from the hidden markers).
+func ExtractMarkers(bodies []string) map[string]bool {
+	out := make(map[string]bool)
+	for _, b := range bodies {
+		for _, m := range markerRe.FindAllStringSubmatch(b, -1) {
+			if len(m) == 2 {
+				out[m[1]] = true
+			}
+		}
+	}
+	return out
+}
 
 // GitEnv provides a unified interface for CI/CD environment information.
 // Implementations detect and read from CI-specific environment variables.
@@ -52,6 +88,16 @@ type GitEnv interface {
 
 	// Actions
 	CreateMRComment(option MRCommentOption) error
+
+	// ExistingFindingMarkers returns the set of finding keys already commented on
+	// the current PR/MR (parsed from hidden markers), so a re-run can skip them.
+	// Returns an empty map when not in a PR/MR or when listing is unsupported.
+	ExistingFindingMarkers() (map[string]bool, error)
+
+	// UpsertSummaryComment posts (or updates in place) the single sticky security
+	// summary comment on the current PR/MR. The body should NOT include the
+	// marker — the implementation appends SummaryMarker. No-op outside a PR/MR.
+	UpsertSummaryComment(body string) error
 }
 
 // MRCommentOption configures a merge request / pull request comment.
@@ -101,3 +147,11 @@ func (m *ManualEnv) TargetBranch() string                    { return "" }
 func (m *ManualEnv) TargetBranchSha() string                 { return "" }
 func (m *ManualEnv) JobURL() string                          { return "" }
 func (m *ManualEnv) CreateMRComment(_ MRCommentOption) error { return nil }
+
+// ExistingFindingMarkers returns an empty set — a manual/local env has no PR/MR.
+func (m *ManualEnv) ExistingFindingMarkers() (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
+// UpsertSummaryComment is a no-op for a manual/local env (no PR/MR).
+func (m *ManualEnv) UpsertSummaryComment(_ string) error { return nil }

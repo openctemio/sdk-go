@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	gitlab "gitlab.com/gitlab-org/api/client-go"
 )
@@ -234,4 +235,85 @@ func (g *GitLabEnv) CreateMRComment(option MRCommentOption) error {
 		fmt.Printf("[gitenv] Created MR discussion: %s\n", option.Title)
 	}
 	return nil
+}
+
+// UpsertSummaryComment posts or updates the single sticky security summary note
+// on the MR.
+func (g *GitLabEnv) UpsertSummaryComment(body string) error {
+	if g.client == nil {
+		return errors.New("GitLab client not initialized, GITLAB_TOKEN may not be set")
+	}
+	mrIDStr := g.MergeRequestID()
+	projectID := g.ProjectID()
+	if mrIDStr == "" || projectID == "" {
+		return nil // not an MR
+	}
+	mrIDInt, err := strconv.Atoi(mrIDStr)
+	if err != nil {
+		return fmt.Errorf("invalid MR ID: %w", err)
+	}
+	mrID := int64(mrIDInt)
+	full := body + "\n\n" + SummaryMarker
+
+	opts := &gitlab.ListMergeRequestNotesOptions{ListOptions: gitlab.ListOptions{PerPage: 100}}
+	for {
+		notes, resp, err := g.client.Notes.ListMergeRequestNotes(projectID, mrID, opts)
+		if err != nil {
+			return fmt.Errorf("list MR notes: %w", err)
+		}
+		for _, n := range notes {
+			if strings.Contains(n.Body, SummaryMarker) {
+				_, _, err := g.client.Notes.UpdateMergeRequestNote(projectID, mrID, n.ID,
+					&gitlab.UpdateMergeRequestNoteOptions{Body: &full})
+				return err
+			}
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	_, _, err = g.client.Notes.CreateMergeRequestNote(projectID, mrID,
+		&gitlab.CreateMergeRequestNoteOptions{Body: &full})
+	return err
+}
+
+// ExistingFindingMarkers lists the MR's discussion notes and extracts the
+// finding markers already posted, so a re-run can skip them (idempotency).
+// Best-effort: errors return an empty set rather than failing the scan.
+func (g *GitLabEnv) ExistingFindingMarkers() (map[string]bool, error) {
+	empty := map[string]bool{}
+	if g.client == nil {
+		return empty, nil
+	}
+	mrIDStr := g.MergeRequestID()
+	projectID := g.ProjectID()
+	if mrIDStr == "" || projectID == "" {
+		return empty, nil
+	}
+	mrIDInt, err := strconv.Atoi(mrIDStr)
+	if err != nil {
+		return empty, nil
+	}
+	mrID := int64(mrIDInt)
+
+	bodies := make([]string, 0, 64)
+	opts := &gitlab.ListMergeRequestDiscussionsOptions{ListOptions: gitlab.ListOptions{PerPage: 100}}
+	for {
+		discussions, resp, err := g.client.Discussions.ListMergeRequestDiscussions(projectID, mrID, opts)
+		if err != nil {
+			return empty, fmt.Errorf("list MR discussions: %w", err)
+		}
+		for _, d := range discussions {
+			for _, n := range d.Notes {
+				bodies = append(bodies, n.Body)
+			}
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return ExtractMarkers(bodies), nil
 }

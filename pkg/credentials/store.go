@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -436,7 +437,7 @@ func (s *ChainedStore) Get(ctx context.Context, key string) (*Credential, error)
 		if err == nil {
 			return cred, nil
 		}
-		if err != ErrCredentialNotFound {
+		if !errors.Is(err, ErrCredentialNotFound) {
 			return nil, err
 		}
 	}
@@ -450,7 +451,7 @@ func (s *ChainedStore) Set(ctx context.Context, key string, cred *Credential) er
 		if err == nil {
 			return nil
 		}
-		if err != ErrReadOnly {
+		if !errors.Is(err, ErrReadOnly) {
 			return err
 		}
 	}
@@ -472,7 +473,7 @@ func (s *ChainedStore) Delete(ctx context.Context, key string) error {
 		if err == nil {
 			return nil
 		}
-		if err != ErrReadOnly {
+		if !errors.Is(err, ErrReadOnly) {
 			return err
 		}
 	}
