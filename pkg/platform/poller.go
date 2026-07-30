@@ -566,7 +566,11 @@ func (p *JobPoller) pollOnce(ctx context.Context) {
 			p.leaseManager.IncrementJobs()
 		}
 
-		go p.executeJob(ctx, job)
+		// G118: executeJob does derive its work context from ctx. It also builds a
+		// SEPARATE context.Background() context to report the outcome, and that is
+		// the point: on lease expiry or shutdown ctx is canceled, and reporting on
+		// it would drop the result the server is waiting for.
+		go p.executeJob(ctx, job) //nolint:gosec // detached report ctx is deliberate
 	}
 }
 
@@ -706,9 +710,9 @@ func (p *JobPoller) executeJob(ctx context.Context, job *JobInfo) {
 	}
 
 	// Report result back to server. Use a FRESH context: on shutdown or lease
-	// expiry the per-job ctx (and often the parent ctx) is cancelled, and
+	// expiry the per-job ctx (and often the parent ctx) is canceled, and
 	// reusing it here makes ReportJobResult fail immediately — so the platform
-	// never learns the (often failed/cancelled) outcome.
+	// never learns the (often failed/canceled) outcome.
 	reportCtx, cancelReport := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelReport()
 	if reportErr := p.client.ReportJobResult(reportCtx, result); reportErr != nil {

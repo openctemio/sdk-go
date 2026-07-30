@@ -432,7 +432,7 @@ type DefaultCommandExecutor struct {
 	pusher     Pusher
 	parsers    *ParserRegistry
 	// verbose is atomic: SetVerbose may race with concurrent Execute calls.
-	verbose    atomic.Bool
+	verbose atomic.Bool
 }
 
 // NewDefaultCommandExecutor creates a new default executor.

@@ -555,7 +555,10 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 				backoff = maxRetryBackoff
 			}
 			half := backoff / 2
-			backoff = half + time.Duration(rand.Int64N(int64(half)+1))
+			// G404: retry jitter only needs to de-correlate concurrent clients, not
+			// resist prediction. crypto/rand would add a syscall per retry for no
+			// security benefit.
+			backoff = half + time.Duration(rand.Int64N(int64(half)+1)) //nolint:gosec // jitter, not a secret
 			if c.verbose {
 				fmt.Printf("[openctem] Retrying request (attempt %d/%d) after %v\n", attempt, c.maxRetries, backoff)
 			}
