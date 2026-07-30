@@ -248,11 +248,15 @@ func (s *Scanner) createDatabase(ctx context.Context, binary, sourceRoot, dbPath
 		fmt.Printf("[codeql] Creating database for %s (%s)\n", sourceRoot, s.Language)
 	}
 
-	// Remove existing database
-	if _, err := os.Stat(dbPath); err == nil {
-		if err := os.RemoveAll(dbPath); err != nil {
-			return fmt.Errorf("failed to remove existing database: %w", err)
-		}
+	// Remove existing database. os.RemoveAll is idempotent (returns nil
+	// when the path is absent) and atomic at the syscall level, so
+	// calling it directly closes the TOCTOU window an earlier `Stat ->
+	// RemoveAll` pattern opened: an attacker could have symlinked
+	// dbPath between the Stat and the Remove and had the Remove walk
+	// into a directory outside the scanner workspace. Relying on
+	// RemoveAll's built-in "not exist = ok" semantics avoids that gap.
+	if err := os.RemoveAll(dbPath); err != nil {
+		return fmt.Errorf("failed to remove existing database: %w", err)
 	}
 
 	args := []string{

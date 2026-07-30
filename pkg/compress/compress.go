@@ -30,6 +30,24 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
+// maxDecompressedSize caps how many bytes any decompressor will produce, to
+// prevent decompression bombs (a small compressed payload that expands to GBs
+// and exhausts memory). Generous enough for legitimate scan reports.
+const maxDecompressedSize = 256 * 1024 * 1024 // 256 MB
+
+// readAllLimited reads from r up to maxDecompressedSize and errors if the
+// stream would exceed it, instead of an unbounded io.ReadAll.
+func readAllLimited(r io.Reader) ([]byte, error) {
+	result, err := io.ReadAll(io.LimitReader(r, maxDecompressedSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(result)) > maxDecompressedSize {
+		return nil, fmt.Errorf("decompressed size exceeds %d byte limit (possible decompression bomb)", maxDecompressedSize)
+	}
+	return result, nil
+}
+
 // Algorithm represents a compression algorithm.
 type Algorithm string
 
@@ -171,7 +189,7 @@ func (c *Compressor) decompressZSTD(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("zstd reset error: %w", err)
 	}
 
-	result, err := io.ReadAll(dec)
+	result, err := readAllLimited(dec)
 	if err != nil {
 		return nil, fmt.Errorf("zstd decompress error: %w", err)
 	}
@@ -214,7 +232,7 @@ func (c *Compressor) decompressGzip(data []byte) ([]byte, error) {
 	}
 	defer reader.Close()
 
-	result, err := io.ReadAll(reader)
+	result, err := readAllLimited(reader)
 	if err != nil {
 		return nil, fmt.Errorf("gzip decompress error: %w", err)
 	}

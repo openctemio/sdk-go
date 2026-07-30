@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // =============================================================================
@@ -52,7 +53,10 @@ func NewBaseCollector(cfg *BaseCollectorConfig) *BaseCollector {
 		apiKey:     cfg.APIKey,
 		headers:    cfg.Headers,
 		timeout:    cfg.Timeout,
-		httpClient: &http.Client{Timeout: cfg.Timeout},
+		// SSRF: BaseURL is caller-supplied config; SafeHTTPClient
+		// refuses to dial RFC1918/link-local/CGNAT even if the
+		// collector author forgets to validate.
+		httpClient: httpsec.SafeHTTPClient(cfg.Timeout),
 		verbose:    cfg.Verbose,
 	}
 }
