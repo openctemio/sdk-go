@@ -45,6 +45,7 @@ type Scanner struct {
 	ExcludeTags []string // Exclude templates by tags
 	Severity    []string // Filter by severity
 	Author      []string // Filter by template author
+	IDs         []string // Run only these template IDs (nuclei -id); used to run a single template
 	ExcludeIDs  []string // Template IDs to exclude
 
 	// Rate limiting
@@ -398,6 +399,16 @@ func (s *Scanner) buildArgs(target string, opts *core.ScanOptions) []string {
 	// Author filtering
 	if len(s.Author) > 0 {
 		args = append(args, "-author", strings.Join(s.Author, ","))
+	}
+
+	// Run only specific template IDs (nuclei -id). Combined with -etags this is
+	// how a single detection template is re-run non-destructively: -id selects
+	// the template, -etags still hard-excludes any dangerous tag it may carry
+	// (exclude wins over include in nuclei, so an excluded template loads zero).
+	if len(s.IDs) > 0 {
+		for _, id := range s.IDs {
+			args = append(args, "-id", id)
+		}
 	}
 
 	// Exclude templates
