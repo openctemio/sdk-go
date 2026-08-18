@@ -3,14 +3,14 @@
 Go SDK for building integrations with the OpenCTEM security platform.
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.25-blue?logo=go)](https://golang.org/)
+[![Go](https://img.shields.io/badge/Go-1.26-blue?logo=go)](https://golang.org/)
 [![Go Reference](https://pkg.go.dev/badge/github.com/openctemio/sdk-go.svg)](https://pkg.go.dev/github.com/openctemio/sdk-go)
 
 ## Overview
 
 OpenCTEM SDK provides Go packages for:
 - API client for interacting with OpenCTEM API
-- Scanner integrations (Semgrep, Trivy, Nuclei, etc.)
+- Scanner integrations: SAST/SCA/secrets (Semgrep, CodeQL, Trivy, Gitleaks), DAST (Nuclei, including a validation executor), and recon (subfinder, dnsx, naabu, httpx, katana)
 - Output formatters (SARIF, JSON)
 - Common utilities and helpers
 
@@ -91,7 +91,7 @@ func main() {
 | Package | Description |
 |---------|-------------|
 | `pkg/client` | API client for OpenCTEM API |
-| `pkg/scanners` | Scanner integrations (Semgrep, Trivy, Nuclei, Gitleaks) |
+| `pkg/scanners` | Scanner integrations: SAST/SCA/secrets (Semgrep, CodeQL, Trivy, Gitleaks), DAST (Nuclei + validation executor), recon (subfinder, dnsx, naabu, httpx, katana) |
 | `pkg/handler` | Result handlers and output formatters |
 | `pkg/core` | Core types and interfaces |
 | `pkg/errors` | Error types and handling |
@@ -99,9 +99,13 @@ func main() {
 | `pkg/metrics` | Prometheus metrics |
 | `pkg/health` | Health check utilities |
 | `pkg/transport` | HTTP/gRPC transport |
+| `pkg/httpsec` | Hardened HTTP client (SafeHTTPClient) with SSRF protection |
 | `pkg/credentials` | Credential management |
 | `pkg/connectors` | SCM connectors (GitHub, GitLab) |
 | `pkg/enrichers` | Data enrichment (CVE, NVD) |
+| `pkg/audit` | Structured audit logging for agent operations |
+| `pkg/platform` | Components for running agents in platform mode |
+| `pkg/ctis` | Common Threat Intelligence Schema (CTIS) types |
 
 ## Examples
 
