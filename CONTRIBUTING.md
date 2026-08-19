@@ -5,8 +5,8 @@ Thank you for your interest in contributing!
 ## Getting Started
 
 1. Fork the repository
-2. Clone: `git clone https://github.com/YOUR_USERNAME/sdk.git`
-3. Install Go 1.25+
+2. Clone: `git clone https://github.com/YOUR_USERNAME/sdk-go.git`
+3. Install Go 1.26+
 4. Run tests: `go test ./...`
 5. Create branch: `git checkout -b feature/your-feature`
 6. Make changes

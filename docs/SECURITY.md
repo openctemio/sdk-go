@@ -113,9 +113,9 @@ err := grpc.ValidateAddress("unix:///var/run/sock")   // Error: invalid scheme
 err := grpc.ValidateAddress("0.0.0.0:9090")          // Error: binding address
 ```
 
-### 3. Platform Agent Security (NEW in v1.1)
+### 3. Platform Agent Security
 
-Platform agents now include comprehensive security controls.
+Platform agents include comprehensive security controls.
 
 #### Job Validation
 
