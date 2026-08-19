@@ -269,7 +269,7 @@ func (p *MyProvider) ListCollectors() []core.Collector {
    - Configure job validation for platform agents
    - Use secure lease identities (default)
 
-## Security Features (v1.1+)
+## Security Features
 
 The SDK includes comprehensive security controls:
 

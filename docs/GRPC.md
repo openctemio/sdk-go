@@ -185,7 +185,7 @@ go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 
 # Generate Go code
-cd sdk/proto
+cd proto
 buf generate
 ```
 
@@ -244,5 +244,5 @@ transport := grpc.NewTransport(&grpc.Config{
 ## See Also
 
 - [Architecture Guide](./ARCHITECTURE.md)
-- [Proto Definitions](../proto/openctem/v1/)
+- [Proto Definitions](../proto/openctemio/v1/)
 - [gRPC Go Documentation](https://grpc.io/docs/languages/go/)
