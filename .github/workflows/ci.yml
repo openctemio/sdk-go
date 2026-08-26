@@ -50,7 +50,8 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          # pinned (was latest) — avoid CI-breaking tool drift
+          version: v2.13.1
 
   # Guards against CTIS schema drift: pkg/ctis is a copy of the canonical
   # github.com/openctemio/ctis module (RFC-002). They must carry the same enum
