@@ -36,6 +36,14 @@ const (
 	PathCommands           = PathPrefix + "/commands"
 	// PathRenew is the sensor's API-key self-renewal (RFC-014).
 	PathRenew = PathPrefix + "/renew"
+	// PathSuppressions lists the tenant's active suppression rules for the
+	// sensor's security gate. Additive to v1 (2026-10): before it the SDK
+	// called the user route PathSuppressionsUser with the sensor key, which
+	// the API always refused (401), so the gate never applied suppressions.
+	PathSuppressions = PathPrefix + "/suppressions"
+	// PathSuppressionsUser is the user-authenticated route the SDK falls back
+	// to when an API without PathSuppressions answers 404.
+	PathSuppressionsUser = "/api/v1/suppressions/active"
 )
 
 // PathCommand returns the v1 route of an action on one command

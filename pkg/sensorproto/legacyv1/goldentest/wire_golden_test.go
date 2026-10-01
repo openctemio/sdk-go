@@ -107,7 +107,7 @@ func cannedResponse(method, path string) string {
 		return `{"scores":[]}`
 	case path == "/api/v1/threatintel/kev":
 		return `{"entries":[]}`
-	case path == "/api/v1/suppressions/active":
+	case path == "/api/v1/agent/suppressions":
 		return `{"rules":[],"count":0}`
 	default:
 		return `{}`

@@ -34,6 +34,15 @@ All notable changes to `github.com/openctemio/sdk-go`.
   first one).
 - **The plain-http warning is printed once per process per base URL**,
   shared by `pkg/client` and `pkg/platform` (`httpsec.FirstWarning`).
+- **The security gate gets the platform's suppression rules.**
+  `client.GetSuppressions` called the user route `/api/v1/suppressions/active`
+  with the sensor key; the API always refused it (401) and the SDK swallowed
+  the error, so the gate counted findings the platform had suppressed. It now
+  calls the sensor route `GET /api/v1/agent/suppressions` (an additive
+  protocol-v1 route, `legacyv1.PathSuppressions`; needs an API that serves it)
+  and falls back once to the old route on a 404. A failure is now returned
+  instead of an empty rule list, so callers can tell the operator that the
+  gate ran without suppressions.
 
 ### Added
 
@@ -42,7 +51,7 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `CommandPoller.SetAuthGate`, `client.HTTPError.HTTPStatusCode`,
   `client.Client.APIKeyHint`, `httpsec.FirstWarning`.
 
-## Unreleased — release as **v0.7.3**
+## v0.7.3 — 2026-10-01
 
 ### Fixed
 
