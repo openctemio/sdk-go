@@ -1,8 +1,12 @@
 package core
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -141,7 +145,7 @@ func TestValidateTemplate(t *testing.T) {
 				ID:           "test-id",
 				Name:         "test.yaml",
 				TemplateType: "nuclei",
-				Content:      string(make([]byte, MaxTemplateSize+1)),
+				Content:      string(make([]byte, base64.StdEncoding.EncodedLen(MaxTemplateSize)+1)),
 			},
 			wantError: true,
 			errMsg:    "template content too large",
@@ -277,12 +281,15 @@ func TestWriteCustomTemplates_Security(t *testing.T) {
 	})
 
 	t.Run("writes valid templates successfully", func(t *testing.T) {
+		raw := "id: test\ninfo:\n  name: test"
+		sum := sha256.Sum256([]byte(raw))
 		templates := []EmbeddedTemplate{
 			{
 				ID:           "test-id",
 				Name:         "valid-template",
 				TemplateType: "nuclei",
-				Content:      "id: test\ninfo:\n  name: test",
+				Content:      base64.StdEncoding.EncodeToString([]byte(raw)),
+				ContentHash:  hex.EncodeToString(sum[:]),
 			},
 		}
 
@@ -292,10 +299,38 @@ func TestWriteCustomTemplates_Security(t *testing.T) {
 		}
 		defer cleanup()
 
-		// Verify file was written
-		expectedPath := filepath.Join(tmpDir, "valid-template.yaml")
-		if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
-			t.Errorf("Template file not found at %s", expectedPath)
+		// The scanner must get the decoded template, not its base64 text.
+		got, err := os.ReadFile(filepath.Join(tmpDir, "valid-template.yaml"))
+		if err != nil {
+			t.Fatalf("Template file not written: %v", err)
+		}
+		if string(got) != raw {
+			t.Errorf("template written as %q, want the decoded content %q", got, raw)
+		}
+	})
+
+	// The platform's content_hash is SHA-256 over the decoded template; an
+	// SDK that hashed the base64 text rejected every custom template.
+	t.Run("hash is over decoded content, not the base64 text", func(t *testing.T) {
+		raw := "id: canary\ninfo:\n  name: canary\n  severity: info"
+		encoded := base64.StdEncoding.EncodeToString([]byte(raw))
+		overEncoded := sha256.Sum256([]byte(encoded))
+		templates := []EmbeddedTemplate{{
+			ID: "t", Name: "canary.yaml", TemplateType: "nuclei",
+			Content: encoded, ContentHash: hex.EncodeToString(overEncoded[:]),
+		}}
+		if _, _, err := executor.writeCustomTemplates("nuclei", templates); err == nil {
+			t.Fatal("a hash over the base64 text must not verify")
+		}
+	})
+
+	t.Run("rejects content that is not base64", func(t *testing.T) {
+		templates := []EmbeddedTemplate{{
+			ID: "t", Name: "plain.yaml", TemplateType: "nuclei", Content: "id: plain\ninfo: {}",
+		}}
+		_, _, err := executor.writeCustomTemplates("nuclei", templates)
+		if err == nil || !strings.Contains(err.Error(), "base64") {
+			t.Fatalf("want a base64 error, got %v", err)
 		}
 	})
 
@@ -305,7 +340,7 @@ func TestWriteCustomTemplates_Security(t *testing.T) {
 				ID:           "test-id",
 				Name:         "test.yaml",
 				TemplateType: "nuclei",
-				Content:      "test content",
+				Content:      base64.StdEncoding.EncodeToString([]byte("test content")),
 				ContentHash:  "wrong-hash",
 			},
 		}

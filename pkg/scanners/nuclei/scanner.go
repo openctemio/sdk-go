@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/openctemio/sdk-go/pkg/core"
 )
@@ -215,13 +216,66 @@ func (s *Scanner) SetVerbose(v bool) {
 
 // Scan implements core.Scanner interface - returns raw JSON Lines output.
 func (s *Scanner) Scan(ctx context.Context, target string, opts *core.ScanOptions) (*core.ScanResult, error) {
+	return s.run(ctx, s.buildArgs(target, opts), target)
+}
+
+// MaxListTargets bounds how many targets one ScanTargets run takes (the
+// platform's per-run limit).
+const MaxListTargets = 10000
+
+var _ core.MultiTargetScanner = (*Scanner)(nil)
+
+// ScanTargets scans every target in one nuclei run: the list is written to a
+// 0600 temporary file passed with -l and removed afterwards. Targets must
+// already be validated by the caller (the command executor runs each through
+// its scan-target policy); this rejects entries that would break the one-
+// target-per-line file format (newlines, control characters) and bounds the
+// count. It does not change the scanner's Mode or TargetFile, so it is safe
+// to call concurrently.
+func (s *Scanner) ScanTargets(ctx context.Context, targets []string, opts *core.ScanOptions) (*core.ScanResult, error) {
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("no scan targets")
+	}
+	if len(targets) > MaxListTargets {
+		return nil, fmt.Errorf("too many scan targets: %d (max %d)", len(targets), MaxListTargets)
+	}
+	for _, t := range targets {
+		if strings.TrimSpace(t) == "" {
+			return nil, fmt.Errorf("empty scan target in list")
+		}
+		if strings.HasPrefix(t, "-") {
+			return nil, fmt.Errorf("scan target %q looks like a command-line flag", t)
+		}
+		for _, r := range t {
+			if r == '\n' || r == '\r' || unicode.IsControl(r) {
+				return nil, fmt.Errorf("scan target %q contains a newline or control character", t)
+			}
+		}
+	}
+
+	f, err := os.CreateTemp("", "nuclei-targets-*.txt") // created 0600
+	if err != nil {
+		return nil, fmt.Errorf("create target list: %w", err)
+	}
+	listFile := f.Name()
+	defer os.Remove(listFile) //nolint:errcheck // best-effort cleanup
+	if _, err := f.WriteString(strings.Join(targets, "\n") + "\n"); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("write target list: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("write target list: %w", err)
+	}
+
+	return s.run(ctx, s.buildArgsFor("", listFile, opts), fmt.Sprintf("%d targets", len(targets)))
+}
+
+// run executes nuclei with args; label describes the target for logs.
+func (s *Scanner) run(ctx context.Context, args []string, label string) (*core.ScanResult, error) {
 	start := time.Now()
 
-	// Build nuclei arguments
-	args := s.buildArgs(target, opts)
-
 	if s.Verbose {
-		fmt.Printf("[nuclei] Target: %s\n", target)
+		fmt.Printf("[nuclei] Target: %s\n", label)
 		fmt.Printf("[nuclei] Tags: %v\n", s.Tags)
 		fmt.Printf("[nuclei] Severity: %v\n", s.Severity)
 	}
@@ -338,15 +392,23 @@ func (s *Scanner) ScanDAST(ctx context.Context, targets []string, opts *core.Sca
 
 // buildArgs builds the nuclei command arguments.
 func (s *Scanner) buildArgs(target string, opts *core.ScanOptions) []string {
+	return s.buildArgsFor(target, "", opts)
+}
+
+// buildArgsFor builds the arguments for one target, or for the target list
+// file listFile when it is set (overriding the scanner's Mode).
+func (s *Scanner) buildArgsFor(target, listFile string, opts *core.ScanOptions) []string {
 	args := []string{}
 
 	// Target specification
-	switch s.Mode {
-	case ScanModeList:
+	switch {
+	case listFile != "":
+		args = append(args, "-l", listFile)
+	case s.Mode == ScanModeList:
 		if s.TargetFile != "" {
 			args = append(args, "-l", s.TargetFile)
 		}
-	case ScanModeResume:
+	case s.Mode == ScanModeResume:
 		args = append(args, "-resume")
 	default:
 		if target != "" {
