@@ -11,6 +11,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/useragent"
 )
 
 // =============================================================================
@@ -144,7 +145,7 @@ func (c *BaseCollector) FetchJSON(ctx context.Context, path string, query map[st
 // setHeaders sets common headers on the request.
 func (c *BaseCollector) setHeaders(req *http.Request) {
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "sdk/1.0")
+	req.Header.Set("User-Agent", useragent.String())
 
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
