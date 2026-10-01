@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -200,7 +201,7 @@ func (t *Transport) addAuthMetadata(ctx context.Context) context.Context {
 		"authorization": "Bearer " + t.config.APIKey,
 	})
 	if t.config.AgentID != "" {
-		md.Set("x-agent-id", t.config.AgentID)
+		md.Set(legacyv1.GRPCMetadataSensorID, t.config.AgentID)
 	}
 	return metadata.NewOutgoingContext(ctx, md)
 }

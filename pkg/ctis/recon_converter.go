@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
 // ReconConverterOptions configures the conversion from ReconResult to CTIS Report.
@@ -29,7 +31,7 @@ type ReconConverterOptions struct {
 // DefaultReconConverterOptions returns sensible default options.
 func DefaultReconConverterOptions() *ReconConverterOptions {
 	return &ReconConverterOptions{
-		DiscoverySource:    "agent",
+		DiscoverySource:    legacyv1.DiscoverySourceSensor,
 		DefaultCriticality: CriticalityMedium,
 		DefaultConfidence:  80,
 		GroupByDomain:      true,

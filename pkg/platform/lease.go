@@ -12,6 +12,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
 // LeaseClient defines the interface for lease operations.
@@ -478,7 +480,7 @@ func (c *httpLeaseClient) RenewLease(ctx context.Context, req *LeaseRenewRequest
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	httpReq.Header.Set("X-Agent-ID", c.agentID)
+	httpReq.Header.Set(legacyv1.HeaderSensorID, c.agentID)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -510,7 +512,7 @@ func (c *httpLeaseClient) ReleaseLease(ctx context.Context) error {
 	}
 
 	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	req.Header.Set("X-Agent-ID", c.agentID)
+	req.Header.Set(legacyv1.HeaderSensorID, c.agentID)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

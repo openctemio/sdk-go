@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
 // JobClient defines the interface for job operations.
@@ -784,7 +786,7 @@ func (c *httpJobClient) Poll(ctx context.Context, req *PollRequest) (*PollRespon
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	httpReq.Header.Set("X-Agent-ID", c.agentID)
+	httpReq.Header.Set(legacyv1.HeaderSensorID, c.agentID)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -816,7 +818,7 @@ func (c *httpJobClient) AcknowledgeJob(ctx context.Context, jobID string) error 
 	}
 
 	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	req.Header.Set("X-Agent-ID", c.agentID)
+	req.Header.Set(legacyv1.HeaderSensorID, c.agentID)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -849,7 +851,7 @@ func (c *httpJobClient) ReportJobResult(ctx context.Context, result *JobResult) 
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	req.Header.Set("X-Agent-ID", c.agentID)
+	req.Header.Set(legacyv1.HeaderSensorID, c.agentID)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -885,7 +887,7 @@ func (c *httpJobClient) ReportJobProgress(ctx context.Context, jobID string, pro
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	req.Header.Set("X-Agent-ID", c.agentID)
+	req.Header.Set(legacyv1.HeaderSensorID, c.agentID)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

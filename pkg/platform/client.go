@@ -12,6 +12,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/pipeline"
 	"github.com/openctemio/sdk-go/pkg/resource"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
 // ClientConfig configures the PlatformClient.
@@ -86,7 +87,7 @@ type RenewKeyResponse struct {
 // when to call SetAPIKey (and persist), so a failed persist never leaves the
 // running client on a key the agent can't recover after a restart.
 func (c *PlatformClient) RenewKey(ctx context.Context) (*RenewKeyResponse, error) {
-	url, err := apiURL(c.config.BaseURL, "/api/v1/agent/renew")
+	url, err := apiURL(c.config.BaseURL, legacyv1.PathRenew)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +96,7 @@ func (c *PlatformClient) RenewKey(ctx context.Context) (*RenewKeyResponse, error
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.currentAPIKey())
-	req.Header.Set("X-Agent-ID", c.config.AgentID)
+	req.Header.Set(legacyv1.HeaderSensorID, c.config.AgentID)
 
 	resp, err := c.renewClient.Do(req)
 	if err != nil {

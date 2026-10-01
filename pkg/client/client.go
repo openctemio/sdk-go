@@ -23,6 +23,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/retry"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
 // Client is the OpenCTEM API client.
@@ -306,7 +307,7 @@ func (c *Client) PushFindings(ctx context.Context, report *ctis.Report) (*core.P
 
 // pushFindingsInternal performs the actual push without retry queue logic.
 func (c *Client) pushFindingsInternal(ctx context.Context, report *ctis.Report) (*core.PushResult, error) {
-	url := fmt.Sprintf("%s/api/v1/agent/ingest", c.baseURL)
+	url := c.baseURL + legacyv1.PathIngest
 
 	if c.verbose {
 		fmt.Printf("[openctem] Pushing %d findings to %s\n", len(report.Findings), url)
@@ -370,7 +371,7 @@ func (c *Client) PushAssets(ctx context.Context, report *ctis.Report) (*core.Pus
 
 // pushAssetsInternal performs the actual push without retry queue logic.
 func (c *Client) pushAssetsInternal(ctx context.Context, report *ctis.Report) (*core.PushResult, error) {
-	url := fmt.Sprintf("%s/api/v1/agent/ingest", c.baseURL)
+	url := c.baseURL + legacyv1.PathIngest
 
 	if c.verbose {
 		fmt.Printf("[openctem] Pushing %d assets to %s\n", len(report.Assets), url)
@@ -406,7 +407,7 @@ func (c *Client) pushAssetsInternal(ctx context.Context, report *ctis.Report) (*
 
 // SendHeartbeat sends a heartbeat to OpenCTEM.
 func (c *Client) SendHeartbeat(ctx context.Context, status *core.AgentStatus) error {
-	url := fmt.Sprintf("%s/api/v1/agent/heartbeat", c.baseURL)
+	url := c.baseURL + legacyv1.PathHeartbeat
 
 	req := HeartbeatRequest{
 		Name:       status.Name,
@@ -482,7 +483,7 @@ func (c *Client) CheckFingerprints(ctx context.Context, fingerprints []string) (
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := c.baseURL + "/api/v1/agent/ingest/check"
+	url := c.baseURL + legacyv1.PathIngestCheck
 	respBody, err := c.doRequest(ctx, "POST", url, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("check fingerprints: %w", err)
@@ -541,7 +542,7 @@ func (c *Client) BaselineDiff(ctx context.Context, repository, baseBranch string
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := c.baseURL + "/api/v1/agent/ingest/baseline-diff"
+	url := c.baseURL + legacyv1.PathIngestBaselineDiff
 	respBody, err := c.doRequest(ctx, "POST", url, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("baseline diff: %w", err)
@@ -652,7 +653,7 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 
 	// Add agent ID header for audit trail
 	if c.agentID != "" {
-		req.Header.Set("X-Agent-ID", c.agentID)
+		req.Header.Set(legacyv1.HeaderSensorID, c.agentID)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -1308,7 +1309,7 @@ type ChunkUploadResponse struct {
 // UploadChunk uploads a single chunk of a large report.
 // This implements the chunk.Uploader interface.
 func (c *Client) UploadChunk(ctx context.Context, data *chunk.ChunkData) error {
-	url := fmt.Sprintf("%s/api/v1/agent/ingest/chunk", c.baseURL)
+	url := c.baseURL + legacyv1.PathIngestChunk
 
 	if c.verbose {
 		fmt.Printf("[openctem] Uploading chunk %d/%d for report %s\n",
