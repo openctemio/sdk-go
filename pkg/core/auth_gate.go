@@ -2,10 +2,12 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -41,6 +43,29 @@ func AuthFailureStatus(err error) int {
 		}
 	}
 	return 0
+}
+
+// keyNotReceivedMessage is the API's 401 message for a request that carried
+// no API key at all.
+const keyNotReceivedMessage = "API key required"
+
+// AuthFailureAdvice explains a rejected request (AuthFailureStatus(err) != 0)
+// in one actionable sentence: the HTTP status, the key's non-secret prefix
+// (keyHint, see APIKeyHint) and what to do. A 401 saying "API key required"
+// although the sensor sent its key means the key never reached the API:
+// API_URL points at the web UI, or at a proxy that strips the Authorization
+// header, rather than at the API.
+func AuthFailureAdvice(err error, keyHint string) string {
+	status := AuthFailureStatus(err)
+	if status == http.StatusUnauthorized && strings.Contains(err.Error(), keyNotReceivedMessage) {
+		return fmt.Sprintf("the platform answered HTTP 401 %q although the sensor sent its API key (%s): "+
+			"the key never reached the API. API_URL probably points at the OpenCTEM web UI or at a proxy "+
+			"that strips the Authorization header; set API_URL to the API host and restart the sensor",
+			keyNotReceivedMessage, keyHint)
+	}
+	return fmt.Sprintf("the platform rejected the API key (HTTP %d, key %s): the key is wrong, revoked or expired, "+
+		"or the sensor was disabled, deleted or given a new key. Create or regenerate a key under "+
+		"Settings → Sensors, set API_KEY to it and restart the sensor", status, keyHint)
 }
 
 // APIKeyHint returns the non-secret prefix of an API key for log lines: at
@@ -153,10 +178,8 @@ func (g *AuthGate) Observe(err error, keyHint string) time.Duration {
 		g.rejected = true
 		g.step++
 		delay := g.delayFor(g.step)
-		g.logf("platform rejected the API key (HTTP %d, key %s): the key is wrong, revoked or expired, "+
-			"or the sensor was disabled, deleted or given a new key. Create or regenerate a key under "+
-			"Settings → Sensors, set API_KEY to it and restart the sensor. Not polling for jobs; "+
-			"next check in %s (attempt %d)", status, keyHint, delay.Round(time.Second), g.step)
+		g.logf("%s. Not polling for jobs; next check in %s (attempt %d)",
+			AuthFailureAdvice(err, keyHint), delay.Round(time.Second), g.step)
 		return delay
 	}
 
@@ -178,8 +201,7 @@ func (g *AuthGate) Observe(err error, keyHint string) time.Duration {
 // leaves the backoff to the heartbeat loop. It logs only on the change of
 // state.
 func (g *AuthGate) MarkRejected(err error, keyHint string) {
-	status := AuthFailureStatus(err)
-	if status == 0 {
+	if AuthFailureStatus(err) == 0 {
 		return
 	}
 	g.mu.Lock()
@@ -188,7 +210,7 @@ func (g *AuthGate) MarkRejected(err error, keyHint string) {
 		return
 	}
 	g.rejected = true
-	g.logf("platform rejected the API key on a command poll (HTTP %d, key %s): not polling for jobs until a heartbeat is accepted", status, keyHint)
+	g.logf("%s. Not polling for jobs until a heartbeat is accepted", AuthFailureAdvice(err, keyHint))
 }
 
 // delayFor returns the jittered backoff for the n-th consecutive rejection.
