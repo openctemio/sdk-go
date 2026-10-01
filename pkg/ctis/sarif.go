@@ -25,6 +25,29 @@ type SARIFRun struct {
 	Results     []SARIFResult     `json:"results"`
 	Artifacts   []SARIFArtifact   `json:"artifacts,omitempty"`
 	Invocations []SARIFInvocation `json:"invocations,omitempty"`
+
+	// VersionControlProvenance names the repository and revision the run
+	// analyzed (SARIF 2.1.0 §3.14.17). GitHub code scanning and CodeQL
+	// emit it.
+	VersionControlProvenance []SARIFVersionControlDetails `json:"versionControlProvenance,omitempty"`
+}
+
+// SARIFVersionControlDetails is a SARIF versionControlDetails object.
+type SARIFVersionControlDetails struct {
+	RepositoryURI string `json:"repositoryUri"`
+	RevisionID    string `json:"revisionId,omitempty"`
+	Branch        string `json:"branch,omitempty"`
+}
+
+// Repository returns the first repository named in the run's
+// versionControlProvenance, with its revision and branch, or empty strings.
+func (r *SARIFRun) Repository() (uri, revision, branch string) {
+	for _, vc := range r.VersionControlProvenance {
+		if u := strings.TrimSpace(vc.RepositoryURI); u != "" {
+			return u, vc.RevisionID, vc.Branch
+		}
+	}
+	return "", "", ""
 }
 
 // SARIFTool describes the tool.
@@ -179,18 +202,17 @@ func FromSARIF(data []byte, opts *ConvertOptions) (*Report, error) {
 		report.Tool.InfoURL = run.Tool.Driver.InformationURI
 	}
 
-	// Add asset if configured
-	if opts.AssetValue != "" {
-		assetID := opts.AssetID
-		if assetID == "" {
-			assetID = "asset-1"
-		}
-		report.Assets = append(report.Assets, Asset{
-			ID:          assetID,
-			Type:        opts.AssetType,
-			Value:       opts.AssetValue,
-			Criticality: CriticalityHigh,
-		})
+	// The asset every finding belongs to: the configured asset, else the
+	// repository of the branch info, else the repository the SARIF log names
+	// itself. There is no fallback asset: a log with results and no
+	// repository is an error (ErrNoAssetForFindings).
+	asset, hasAsset := sarifAsset(&run, opts)
+	if hasAsset {
+		report.Assets = append(report.Assets, asset)
+	} else if len(run.Results) > 0 {
+		return nil, fmt.Errorf("%w: SARIF log from %q has %d result(s) but names no repository: "+
+			"set the asset (AssetValue or BranchInfo.RepositoryURL) or add versionControlProvenance",
+			ErrNoAssetForFindings, run.Tool.Driver.Name, len(run.Results))
 	}
 
 	// Set branch info for branch-aware finding lifecycle
@@ -224,14 +246,7 @@ func FromSARIF(data []byte, opts *ConvertOptions) (*Report, error) {
 			RuleID:     result.RuleID,
 		}
 
-		// Link to asset
-		if opts.AssetValue != "" {
-			assetID := opts.AssetID
-			if assetID == "" {
-				assetID = "asset-1"
-			}
-			finding.AssetRef = assetID
-		}
+		finding.AssetRef = asset.ID
 
 		// Add rule details
 		if rule, ok := ruleMap[result.RuleID]; ok {
@@ -302,6 +317,39 @@ func FromSARIF(data []byte, opts *ConvertOptions) (*Report, error) {
 	}
 
 	return report, nil
+}
+
+// sarifAsset returns the asset a SARIF run's findings belong to, and false
+// when neither the options nor the log name one.
+func sarifAsset(run *SARIFRun, opts *ConvertOptions) (Asset, bool) {
+	id := opts.AssetID
+	if id == "" {
+		id = "asset-1"
+	}
+	asset := Asset{ID: id, Type: AssetTypeRepository, Criticality: CriticalityHigh}
+	switch {
+	case strings.TrimSpace(opts.AssetValue) != "":
+		asset.Value = opts.AssetValue
+		if opts.AssetType != "" {
+			asset.Type = opts.AssetType
+		}
+	case opts.BranchInfo != nil && strings.TrimSpace(opts.BranchInfo.RepositoryURL) != "":
+		asset.Value = opts.BranchInfo.RepositoryURL
+	default:
+		uri, revision, branch := run.Repository()
+		if uri == "" {
+			return Asset{}, false
+		}
+		asset.Value = uri
+		asset.Properties = Properties{"source": "sarif_version_control_provenance"}
+		if revision != "" {
+			asset.Properties["commit_sha"] = revision
+		}
+		if branch != "" {
+			asset.Properties["branch"] = branch
+		}
+	}
+	return asset, true
 }
 
 // mapSARIFLevel converts SARIF level to CTIS severity.

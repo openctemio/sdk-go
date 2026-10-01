@@ -1,0 +1,118 @@
+{
+  "jsonVersion": 4,
+  "serverName": "web-server-01",
+  "family": "ubuntu",
+  "release": "22.04",
+  "runningKernel": {
+    "version": "6.8.0-85",
+    "release": "generic",
+    "rebootRequired": false
+  },
+  "scannedAt": "",
+  "scannedVia": "",
+  "scannedIpv4Addrs": [
+    "10.10.10.1"
+  ],
+  "scannedIpv6Addrs": null,
+  "packages": {
+    "linux": {
+      "name": "linux",
+      "version": "6.8.0",
+      "release": "85",
+      "arch": "amd64",
+      "repository": "",
+      "newVersion": "",
+      "newRelease": ""
+    },
+    "openssl": {
+      "name": "openssl",
+      "version": "3.0.2",
+      "release": "0ubuntu1.15",
+      "arch": "amd64",
+      "repository": "",
+      "newVersion": "",
+      "newRelease": ""
+    }
+  },
+  "scannedCves": [
+    {
+      "cveID": "CVE-2024-1234",
+      "confidences": [
+        {
+          "score": 100,
+          "detectionMethod": "ChangelogExactMatch"
+        }
+      ],
+      "cveContents": {
+        "nvd": [
+          {
+            "type": "nvd",
+            "cveID": "CVE-2024-1234",
+            "title": "Critical vulnerability in Linux kernel",
+            "summary": "A buffer overflow in the Linux kernel allows privilege escalation.",
+            "cvss3Score": 9.8,
+            "cvss3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            "cvss2Score": 0,
+            "cvss2Vector": "",
+            "cvss40Score": 0,
+            "cvss40Vector": "",
+            "cweIDs": [
+              "CWE-120"
+            ],
+            "references": [
+              {
+                "source": "nvd",
+                "link": "https://nvd.nist.gov/vuln/detail/CVE-2024-1234",
+                "refID": ""
+              }
+            ],
+            "published": "",
+            "lastModified": "",
+            "sourceLink": "https://nvd.nist.gov/vuln/detail/CVE-2024-1234",
+            "optional": null
+          }
+        ]
+      },
+      "affectedPackages": [
+        {
+          "name": "linux",
+          "fixedIn": "6.8.0-90",
+          "notFixedYet": false
+        }
+      ]
+    },
+    {
+      "cveID": "CVE-2024-5678",
+      "confidences": null,
+      "cveContents": {
+        "ubuntu": [
+          {
+            "type": "ubuntu",
+            "cveID": "CVE-2024-5678",
+            "title": "OpenSSL timing side-channel",
+            "summary": "A timing side-channel in OpenSSL RSA implementation.",
+            "cvss3Score": 5.3,
+            "cvss3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            "cvss2Score": 0,
+            "cvss2Vector": "",
+            "cvss40Score": 0,
+            "cvss40Vector": "",
+            "cweIDs": null,
+            "references": null,
+            "published": "",
+            "lastModified": "",
+            "sourceLink": "",
+            "optional": null
+          }
+        ]
+      },
+      "affectedPackages": [
+        {
+          "name": "openssl",
+          "fixedIn": "",
+          "notFixedYet": true
+        }
+      ]
+    }
+  ]
+}

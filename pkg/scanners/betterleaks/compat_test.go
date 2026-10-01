@@ -23,7 +23,8 @@ const (
 // fingerprint, same masked value, same rule (the platform's finding
 // fingerprint is built from path, rule, line and masked value).
 func TestGitleaksAndBetterleaksReportsGiveTheSameFinding(t *testing.T) {
-	opts := &core.ParseOptions{BasePath: "/scan"}
+	// A repository to file the finding on (WP-S2: no asset-less findings).
+	opts := &core.ParseOptions{BasePath: "/scan", AssetValue: "github.com/org/repo"}
 	gl, err := ParseToCTIS([]byte(gitleaksReport), opts)
 	if err != nil {
 		t.Fatalf("gitleaks report: %v", err)

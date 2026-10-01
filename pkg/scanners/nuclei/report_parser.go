@@ -54,7 +54,13 @@ func (p *ReportParser) Parse(_ context.Context, data []byte, opts *core.ParseOpt
 	if rejected > 0 && p.Verbose {
 		fmt.Printf("[nuclei-parser] skipped %d line(s) that are not nuclei JSON results\n", rejected)
 	}
-	return (&Parser{Verbose: p.Verbose}).ParseResultsWithOptions(results, "", opts), nil
+	report := (&Parser{Verbose: p.Verbose}).ParseResultsWithOptions(results, "", opts)
+	// Every finding is filed on the host it matched (or the scan target);
+	// a result naming neither is an error, never a finding without an asset.
+	if err := ctis.CheckFindingAssets(report); err != nil {
+		return nil, fmt.Errorf("nuclei: %w", err)
+	}
+	return report, nil
 }
 
 // splitResults decodes every non-empty line. rejected counts lines that are

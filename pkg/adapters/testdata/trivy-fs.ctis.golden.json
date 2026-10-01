@@ -1,0 +1,80 @@
+{
+  "version": "1.0",
+  "metadata": {
+    "timestamp": "0001-01-01T00:00:00Z",
+    "source_type": "scanner",
+    "scope": {
+      "name": "github.com/example/shop"
+    }
+  },
+  "tool": {
+    "name": "trivy",
+    "vendor": "Aqua Security",
+    "capabilities": [
+      "vulnerability",
+      "misconfiguration",
+      "secret"
+    ]
+  },
+  "assets": [
+    {
+      "id": "asset-1",
+      "type": "repository",
+      "value": "github.com/example/shop",
+      "name": "github.com/example/shop",
+      "criticality": "high",
+      "properties": {
+        "branch": "main",
+        "commit_sha": "3f1c2a9e",
+        "source": "adapter_options"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding-1",
+      "type": "vulnerability",
+      "title": "golang.org/x/crypto/ssh: Misuse of ServerConfig.PublicKeyCallback may cause authorization bypass",
+      "description": "Applications and libraries which misuse the ServerConfig.PublicKeyCallback callback may be susceptible to an authorization bypass.",
+      "severity": "critical",
+      "rule_id": "CVE-2024-45337",
+      "asset_ref": "asset-1",
+      "vulnerability": {
+        "cve_id": "CVE-2024-45337",
+        "package": "golang.org/x/crypto",
+        "affected_version": "v0.30.0",
+        "fixed_version": "0.31.0"
+      },
+      "references": [
+        "https://avd.aquasec.com/nvd/cve-2024-45337"
+      ],
+      "tags": [
+        "trivy",
+        "go.mod"
+      ],
+      "fingerprint": "9e6a6997907f3f9292cad0f4beda5b459f22b5f030f81277a016800d8d1af88a"
+    },
+    {
+      "id": "finding-2",
+      "type": "secret",
+      "title": "AWS Access Key ID",
+      "severity": "critical",
+      "rule_id": "aws-access-key-id",
+      "asset_ref": "asset-1",
+      "location": {
+        "path": "deploy/config.env",
+        "start_line": 3,
+        "end_line": 3
+      },
+      "secret": {
+        "secret_type": "AWS"
+      },
+      "tags": [
+        "trivy",
+        "secret",
+        "deploy/config.env"
+      ],
+      "fingerprint": "0fbcbb2120a0c2a5a550773602c789d9575c4381c7dd9da2a34d43864014eebd"
+    }
+  ]
+}

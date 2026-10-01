@@ -18,6 +18,8 @@ paths = [
     '''go\.sum$''',
     '''examples/''',
     '''docs/''',
+    # Scanner-output fixtures: fake secrets by design.
+    '''(^|/)testdata/''',
 ]
 
 # Regex patterns to allow (common false positives)

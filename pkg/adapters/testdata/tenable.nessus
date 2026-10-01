@@ -1,0 +1,32 @@
+<?xml version="1.0" ?>
+<NessusClientData_v2>
+  <Report name="Rolling batch 1">
+    <ReportHost name="10.0.0.5">
+      <HostProperties>
+        <tag name="host-ip">10.0.0.5</tag>
+        <tag name="host-fqdn">web01.corp.local</tag>
+        <tag name="operating-system">Linux Kernel 5.4</tag>
+      </HostProperties>
+      <ReportItem port="443" svc_name="https" protocol="tcp" severity="4" pluginID="98765" pluginName="OpenSSL Heartbleed" pluginFamily="General">
+        <synopsis>Information disclosure vulnerability.</synopsis>
+        <description>The version of OpenSSL is vulnerable to Heartbleed.</description>
+        <solution>Upgrade OpenSSL to 1.0.1g or later.</solution>
+        <cvss_base_score>5.0</cvss_base_score>
+        <cvss3_base_score>7.5</cvss3_base_score>
+        <vpr_score>8.9</vpr_score>
+        <exploit_available>true</exploit_available>
+        <cpe>cpe:/a:openssl:openssl</cpe>
+        <cve>CVE-2014-0160</cve>
+        <cve>CVE-2014-0346</cve>
+        <see_also>https://heartbleed.com</see_also>
+        <plugin_output>TLSv1.1 heartbeat extension enabled.</plugin_output>
+      </ReportItem>
+      <ReportItem port="0" svc_name="general" protocol="tcp" severity="0" pluginID="19506" pluginName="Nessus Scan Information" pluginFamily="Settings">
+        <synopsis>Scan info.</synopsis>
+      </ReportItem>
+    </ReportHost>
+    <ReportHost name="10.0.0.6">
+      <HostProperties><tag name="host-ip">10.0.0.6</tag></HostProperties>
+    </ReportHost>
+  </Report>
+</NessusClientData_v2>

@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/internal/assetctx"
 )
 
 // Adapter converts Vuls JSON output to CTIS.
@@ -59,13 +62,14 @@ func (a *Adapter) Convert(ctx context.Context, input []byte, opts *core.AdapterO
 		Capabilities: []string{"vulnerability"},
 	}
 
-	// Create host asset
+	// The scanned host is the asset every finding belongs to.
 	asset := a.buildAsset(&vulsReport)
-	report.Assets = append(report.Assets, asset)
 
 	// Create dependencies from packages
-	for _, pkg := range vulsReport.Packages {
-		dep := a.buildDependency(pkg, &vulsReport)
+	// In name order: Packages is a map, and ranging over it made the
+	// report differ from run to run.
+	for _, name := range slices.Sorted(maps.Keys(vulsReport.Packages)) {
+		dep := a.buildDependency(vulsReport.Packages[name], &vulsReport)
 		report.Dependencies = append(report.Dependencies, dep)
 	}
 
@@ -86,6 +90,16 @@ func (a *Adapter) Convert(ctx context.Context, input []byte, opts *core.AdapterO
 		report.Findings = append(report.Findings, *finding)
 	}
 
+	// A report naming neither an IP address nor a server name has no host
+	// to file its findings on.
+	if strings.TrimSpace(asset.Value) == "" {
+		if len(report.Findings) > 0 {
+			return nil, fmt.Errorf("%w: vuls report has %d finding(s) but names no scanned host (no scannedIpv4Addrs, no serverName)",
+				ctis.ErrNoAssetForFindings, len(report.Findings))
+		}
+		return report, nil
+	}
+	assetctx.Bind(report, asset)
 	return report, nil
 }
 

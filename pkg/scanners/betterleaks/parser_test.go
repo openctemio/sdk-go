@@ -6,10 +6,10 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/internal/assetctx"
 )
 
 func TestParser_CreateAssetFromOptions(t *testing.T) {
-	parser := &Parser{}
 
 	tests := []struct {
 		name          string
@@ -69,7 +69,7 @@ func TestParser_CreateAssetFromOptions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			asset := parser.createAssetFromOptions(tt.opts)
+			asset := explicitAsset(tt.opts)
 
 			if tt.wantAsset {
 				if asset == nil {
@@ -180,4 +180,14 @@ func TestConvertFinding_NoBasePath(t *testing.T) {
 	if got.Fingerprint != "config/secrets.yaml:generic-api-key:57" {
 		t.Errorf("fingerprint = %q, want unchanged", got.Fingerprint)
 	}
+}
+
+// explicitAsset is the asset the parser files findings on when opts names
+// one (CI detection aside).
+func explicitAsset(opts *core.ParseOptions) *ctis.Asset {
+	a, ok := assetctx.Explicit(opts)
+	if !ok {
+		return nil
+	}
+	return &a
 }

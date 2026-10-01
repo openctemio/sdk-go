@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/openctemio/sdk-go/pkg/core"
 )
 
 // No plaintext secret may leave the parser: the whole CTIS report (which is
@@ -29,7 +31,7 @@ func TestParser_NeverEmitsPlaintextSecret(t *testing.T) {
 			}}
 			raw, _ := json.Marshal(findings)
 
-			report, err := (&Parser{}).Parse(context.Background(), raw, nil)
+			report, err := (&Parser{}).Parse(context.Background(), raw, &core.ParseOptions{AssetValue: "github.com/example/app"})
 			if err != nil {
 				t.Fatal(err)
 			}

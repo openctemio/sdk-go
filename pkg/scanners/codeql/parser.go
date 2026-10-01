@@ -12,6 +12,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/internal/assetctx"
 )
 
 // =============================================================================
@@ -100,72 +101,40 @@ func (p *Parser) ParseToReportWithOptions(data []byte, opts *core.ParseOptions) 
 		}
 	}
 
-	// Add asset from options or branch info
-	if asset := p.createAssetFromOptions(opts); asset != nil {
-		report.Assets = append(report.Assets, *asset)
-		// Link findings to this asset
-		for i := range report.Findings {
-			report.Findings[i].AssetRef = asset.ID
-		}
+	// File every finding on the analyzed repository: the asset opts names
+	// (AssetValue, else BranchInfo.RepositoryURL), else the repository the
+	// log's versionControlProvenance names, else the CI job's repository.
+	// Findings with none of these are an error, never sent without an asset.
+	asset, ok := assetctx.Explicit(opts)
+	if !ok {
+		asset, ok = provenanceAsset(data)
 	}
-
+	if !ok {
+		id := ""
+		if opts != nil {
+			id = opts.AssetID
+		}
+		asset, ok = assetctx.CI(id)
+	}
+	if err := assetctx.BindOrFail(report, asset, ok, "codeql"); err != nil {
+		return nil, err
+	}
 	return report, nil
 }
 
-// createAssetFromOptions creates an asset from parse options or branch info.
-func (p *Parser) createAssetFromOptions(opts *core.ParseOptions) *ctis.Asset {
-	if opts == nil {
-		return nil
+// provenanceAsset returns the repository the SARIF log's
+// versionControlProvenance names.
+func provenanceAsset(data []byte) (ctis.Asset, bool) {
+	var log ctis.SARIFLog
+	if json.Unmarshal(data, &log) != nil {
+		return ctis.Asset{}, false
 	}
-
-	assetID := opts.AssetID
-	if assetID == "" {
-		assetID = "asset-1"
-	}
-
-	// Priority 1: Explicit AssetValue
-	if opts.AssetValue != "" {
-		assetType := opts.AssetType
-		if assetType == "" {
-			assetType = ctis.AssetTypeRepository
-		}
-		return &ctis.Asset{
-			ID:          assetID,
-			Type:        assetType,
-			Value:       opts.AssetValue,
-			Name:        opts.AssetValue,
-			Criticality: ctis.CriticalityHigh,
-			Properties: ctis.Properties{
-				"source": "parse_options",
-			},
+	for i := range log.Runs {
+		if a, ok := assetctx.SARIFProvenance(log.Runs[i].Repository()); ok {
+			return a, true
 		}
 	}
-
-	// Priority 2: BranchInfo.RepositoryURL
-	if opts.BranchInfo != nil && opts.BranchInfo.RepositoryURL != "" {
-		props := ctis.Properties{
-			"source":       "branch_info",
-			"auto_created": true,
-		}
-		if opts.BranchInfo.CommitSHA != "" {
-			props["commit_sha"] = opts.BranchInfo.CommitSHA
-		}
-		if opts.BranchInfo.Name != "" {
-			props["branch"] = opts.BranchInfo.Name
-		}
-		props["is_default_branch"] = opts.BranchInfo.IsDefaultBranch
-
-		return &ctis.Asset{
-			ID:          assetID,
-			Type:        ctis.AssetTypeRepository,
-			Value:       opts.BranchInfo.RepositoryURL,
-			Name:        opts.BranchInfo.RepositoryURL,
-			Criticality: ctis.CriticalityHigh,
-			Properties:  props,
-		}
-	}
-
-	return nil
+	return ctis.Asset{}, false
 }
 
 // indexRules indexes rules from the SARIF run for metadata lookup.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/internal/assetctx"
 )
 
 // Adapter converts Betterleaks JSON reports to CTIS.
@@ -49,7 +50,17 @@ func (a *Adapter) CanConvert(input []byte) bool {
 }
 
 // Convert transforms a Betterleaks JSON report to a CTIS Report.
+//
+// Every finding is filed on one repository asset: opts.Repository, else the
+// repository of the CI job (GitHub Actions, GitLab CI). Output with findings
+// and neither is an error matching ctis.ErrNoAssetForFindings.
 func (a *Adapter) Convert(ctx context.Context, input []byte, opts *core.AdapterOptions) (*ctis.Report, error) {
+	asset, ok := assetctx.AdapterRepository(opts)
+	return a.convert(input, opts, asset, ok)
+}
+
+// convert converts input, filing its findings on asset when hasAsset.
+func (a *Adapter) convert(input []byte, opts *core.AdapterOptions, asset ctis.Asset, hasAsset bool) (*ctis.Report, error) {
 	var findings []Finding
 	if err := json.Unmarshal(input, &findings); err != nil {
 		return nil, fmt.Errorf("parse betterleaks: %w", err)
@@ -77,6 +88,9 @@ func (a *Adapter) Convert(ctx context.Context, input []byte, opts *core.AdapterO
 		}
 	}
 
+	if err := assetctx.BindOrFail(report, asset, hasAsset, "betterleaks"); err != nil {
+		return nil, err
+	}
 	return report, nil
 }
 
@@ -274,18 +288,9 @@ func meetsMinSeverity(s, min ctis.Severity) bool {
 var _ core.Adapter = (*Adapter)(nil)
 
 // ParseToCTIS is a convenience function to parse a Betterleaks JSON report to CTIS format.
+// The findings are filed on the asset opts names (AssetValue/AssetType, else
+// BranchInfo.RepositoryURL), else on the CI job's repository.
 func ParseToCTIS(data []byte, opts *core.ParseOptions) (*ctis.Report, error) {
-	adapter := NewAdapter()
-
-	var adapterOpts *core.AdapterOptions
-	if opts != nil {
-		adapterOpts = &core.AdapterOptions{
-			Repository: opts.AssetValue,
-		}
-		if opts.BranchInfo != nil {
-			adapterOpts.Repository = opts.BranchInfo.RepositoryURL
-		}
-	}
-
-	return adapter.Convert(context.Background(), data, adapterOpts)
+	asset, ok := assetctx.Repository(opts)
+	return NewAdapter().convert(data, assetctx.ScopeOptions(opts), asset, ok)
 }
