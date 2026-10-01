@@ -1,14 +1,19 @@
-// Package gitleaks provides a scanner implementation for the Gitleaks secret detection tool.
-package gitleaks
+// Package betterleaks provides a scanner implementation for the Betterleaks
+// secret detection tool (https://github.com/betterleaks/betterleaks), the
+// successor to gitleaks. Betterleaks v1 writes the gitleaks JSON report
+// format, so this package also parses reports from gitleaks itself.
+package betterleaks
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 )
 
-// Finding represents a secret finding from gitleaks JSON output.
-// This matches the gitleaks report format.
+// Finding represents a secret finding from a betterleaks (v1) or gitleaks
+// JSON report. Both tools write the same fields; betterleaks adds Attributes.
 type Finding struct {
 	// Rule information
 	RuleID      string `json:"RuleID"`
@@ -37,33 +42,61 @@ type Finding struct {
 
 	// Analysis
 	Entropy float64 `json:"Entropy"`
+
+	// Attributes is betterleaks-only: the source attributes of the fragment
+	// the secret was found in ("path", "resource", "confidence", and git
+	// metadata for git scans). Absent in gitleaks reports.
+	Attributes map[string]any `json:"Attributes,omitempty"`
 }
 
-// Report represents a gitleaks scan report.
+// Confidence returns the rule confidence betterleaks reports ("high",
+// "medium" or "low"), or "" when the report has none (gitleaks).
+func (f Finding) Confidence() string {
+	if c, ok := f.Attributes["confidence"].(string); ok {
+		return c
+	}
+	return ""
+}
+
+// Report represents a betterleaks scan report.
 type Report struct {
 	Findings []Finding
 }
 
-// ParseJSON parses gitleaks JSON output from a reader.
+// ErrV2Report is returned for a betterleaks v2 report. v2 wraps findings in
+// an envelope ({"schema_version", "findings", "scan"}) with a different
+// finding schema; this package reads the v1 (gitleaks-compatible) format.
+var ErrV2Report = errors.New("betterleaks v2 report format is not supported: use betterleaks v1.x")
+
+// ParseJSON parses a betterleaks/gitleaks JSON report from a reader.
 func ParseJSON(r io.Reader) ([]Finding, error) {
-	var findings []Finding
-	if err := json.NewDecoder(r).Decode(&findings); err != nil {
-		return nil, fmt.Errorf("failed to parse gitleaks JSON: %w", err)
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read betterleaks JSON: %w", err)
 	}
-	return findings, nil
+	return ParseJSONBytes(data)
 }
 
-// ParseJSONBytes parses gitleaks JSON output from bytes.
+// ParseJSONBytes parses a betterleaks/gitleaks JSON report from bytes.
 func ParseJSONBytes(data []byte) ([]Finding, error) {
+	if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 && trimmed[0] == '{' {
+		var envelope struct {
+			SchemaVersion *string `json:"schema_version"`
+		}
+		if json.Unmarshal(trimmed, &envelope) == nil && envelope.SchemaVersion != nil {
+			return nil, ErrV2Report
+		}
+	}
 	var findings []Finding
 	if err := json.Unmarshal(data, &findings); err != nil {
-		return nil, fmt.Errorf("failed to parse gitleaks JSON: %w", err)
+		return nil, fmt.Errorf("failed to parse betterleaks JSON: %w", err)
 	}
 	return findings, nil
 }
 
-// SecretType maps gitleaks rule IDs to secret types.
+// SecretType maps rule IDs (shared by betterleaks and gitleaks) to secret types.
 var SecretType = map[string]string{
+	"aws-access-token":          "aws_access_key",
 	"aws-access-key-id":         "aws_access_key",
 	"aws-secret-access-key":     "aws_secret_key",
 	"github-pat":                "github_token",
@@ -101,8 +134,9 @@ var SecretType = map[string]string{
 	"basic-auth-credentials":    "basic_auth",
 }
 
-// ServiceName maps gitleaks rule IDs to service names.
+// ServiceName maps rule IDs to service names.
 var ServiceName = map[string]string{
+	"aws-access-token":          "AWS",
 	"aws-access-key-id":         "AWS",
 	"aws-secret-access-key":     "AWS",
 	"github-pat":                "GitHub",

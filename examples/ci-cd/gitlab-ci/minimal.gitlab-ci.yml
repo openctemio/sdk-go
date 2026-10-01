@@ -12,7 +12,7 @@ security-scan:
   stage: security
   image: openctemio/sensor:ci
   script:
-    - openctemio-sensor -tools semgrep,gitleaks,trivy -target . -auto-ci -verbose
+    - openctemio-sensor -tools semgrep,betterleaks,trivy -target . -auto-ci -verbose
   artifacts:
     paths:
       - "*.json"

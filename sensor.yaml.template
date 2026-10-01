@@ -74,12 +74,12 @@ scanners:
     #   rules: ["p/default", "p/security-audit"]
     #   exclude: ["*_test.go", "vendor/"]
 
-  # Gitleaks - Secret detection
-  - name: gitleaks
+  # Betterleaks - Secret detection (successor to gitleaks; "gitleaks" is still accepted as a name)
+  - name: betterleaks
     enabled: true
     # Optional: custom config file
     # config:
-    #   config_path: ".gitleaks.toml"
+    #   config_path: ".betterleaks.toml"  # .gitleaks.toml files load too
 
   # Trivy - SCA/Dependency scanning
   - name: trivy

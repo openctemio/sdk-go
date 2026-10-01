@@ -41,7 +41,7 @@ OpenCTEM is a security platform that collects, analyzes, and manages security fi
      │  ▼                   ▼     │  │  ▼                 ▼     │
      │ Scanners         Providers │  │ Scanners      Adapters   │
      │ (Semgrep,        (GitHub,  │  │ (Trivy,       (SARIF)    │
-     │  Trivy)          AWS)      │  │  Gitleaks)               │
+     │  Trivy)          AWS)      │  │  Betterleaks)            │
      └────────────────────────────┘  └───────────────────────────┘
 ```
 

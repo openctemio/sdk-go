@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker://openctemio/sensor:ci
         with:
-          args: -tools semgrep,gitleaks,trivy -target . -auto-ci
+          args: -tools semgrep,betterleaks,trivy -target . -auto-ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
@@ -52,14 +52,14 @@ security-scan:
   stage: security
   image: openctemio/sensor:ci
   script:
-    - openctemio-sensor -tools semgrep,gitleaks,trivy -target . -auto-ci
+    - openctemio-sensor -tools semgrep,betterleaks,trivy -target . -auto-ci
 ```
 
 ## Scanner Options
 
 | Option | Description |
 |--------|-------------|
-| `-tools semgrep,gitleaks,trivy` | Scanners to run (comma-separated) |
+| `-tools semgrep,betterleaks,trivy` | Scanners to run (comma-separated) |
 | `-target .` | Directory to scan |
 | `-auto-ci` | Auto-detect CI environment |
 | `-comments` | Post inline comments on MR/PR |
@@ -75,7 +75,7 @@ security-scan:
 | Scanner | Type | Description |
 |---------|------|-------------|
 | `semgrep` | SAST | Static analysis with dataflow/taint tracking |
-| `gitleaks` | Secret | Secret and credential detection |
+| `betterleaks` | Secret | Secret and credential detection |
 | `trivy` | SCA | Dependency vulnerability scanning |
 | `trivy-config` | IaC | Infrastructure as Code scanning |
 | `trivy-image` | Container | Container image scanning |

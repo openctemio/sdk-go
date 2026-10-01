@@ -4,6 +4,42 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Changed (breaking)
+
+- **Betterleaks replaces gitleaks as the secret scanner.**
+  [Betterleaks](https://github.com/betterleaks/betterleaks) is the successor
+  to gitleaks, maintained by gitleaks' original author (MIT). Its v1 line
+  keeps the gitleaks CLI flags, config format (`.gitleaks.toml` still loads)
+  and JSON report, and adds BPE-token filtering, rule filters and
+  validation in Expr, recursive decoding and archive scanning (on by default,
+  depth 8).
+  - `pkg/scanners/gitleaks` is now `pkg/scanners/betterleaks` and
+    `pkg/adapters/gitleaks` is `pkg/adapters/betterleaks`.
+    `scanners.Gitleaks`, `GitleaksWithConfig`, `GitleaksOptions` and
+    `GitleaksScanner` are now `Betterleaks`, `BetterleaksWithConfig`,
+    `BetterleaksOptions` and `BetterleaksScanner`. The scanner runs the
+    `betterleaks` binary and reports `tool.name = "betterleaks"`.
+  - Use betterleaks **v1.x** (tested with 1.9.0). v2 (release candidate)
+    wraps the report in an envelope and drops SARIF and the `GITLEAKS_*`
+    variables; the parser refuses it with `betterleaks.ErrV2Report` instead
+    of reporting zero findings.
+  - Fingerprints do not change: betterleaks v1 builds the native fingerprint
+    (`file:rule:line`) exactly as gitleaks did, and the parser masks the
+    secret the same way, so a secret both tools report is the same finding.
+    Rule sets differ: for example betterleaks reports an AWS access key ID
+    only together with its secret key (`aws-access-token` with an
+    `aws-secret-access-key` component), where gitleaks reported the secret
+    key alone as `generic-api-key`.
+  - `core.CanonicalScannerName` is the SDK's single mapping of retired
+    scanner names (`gitleaks` -> `betterleaks`). The command executor, the
+    custom-template validator and the template cache use it, so a platform
+    that still dispatches `gitleaks` scans or templates runs them on
+    betterleaks.
+  - The `gitleaks` SARIF preset is now `betterleaks` (`dir <target>`; the
+    deprecated `detect --source` form is gone). `BETTERLEAKS_*` is added to
+    the scanner environment allowlist (`GITLEAKS_*` stays: betterleaks v1
+    still reads `GITLEAKS_CONFIG`).
+
 ### Fixed
 
 - **A rejected API key no longer floods the platform or hides in the logs.**
@@ -43,6 +79,23 @@ All notable changes to `github.com/openctemio/sdk-go`.
   and falls back once to the old route on a 404. A failure is now returned
   instead of an empty rule list, so callers can tell the operator that the
   gate ran without suppressions.
+- **Secret values no longer reach the sensor log.** In verbose mode the
+  scanner passed `--verbose` to the tool, which prints every finding with its
+  raw secret to stdout, and a verbose sensor logged it. The tool now always
+  runs without it (`--redact` is not an option: it also redacts the report,
+  which would change fingerprints).
+- **Secret scans with exclusions no longer fail.** The scanner passed
+  `--exclude-path` and `--no-git`, which no `dir` command (gitleaks or
+  betterleaks) accepts, so any scan with `Exclude` set failed with
+  `unknown flag`. Exclusions are now applied to the report (path globs, base
+  names and directory prefixes; an archive member matches its archive).
+- **The repository's own secret scan had no rules.** `.gitleaks.toml` set
+  only an allowlist and no `[extend] useDefault = true`, so it loaded zero
+  rules and always passed. It is now `.betterleaks.toml` with the default
+  rules, and the Security workflow runs betterleaks over the git history on
+  every pull request and push and uploads SARIF to code scanning (the old
+  gitleaks-action job was opt-in behind a licence and never ran).
+
 - **Scanners no longer write their report into the scanned tree.** gitleaks,
   semgrep and CodeQL joined their default (relative) report file, and CodeQL
   its database, onto the target directory. A read-only target (a `:ro`

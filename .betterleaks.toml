@@ -1,7 +1,12 @@
-# Gitleaks configuration for sdk
-# https://gitleaks.io/
+# Betterleaks configuration for sdk (gitleaks-compatible format)
+# https://github.com/betterleaks/betterleaks/blob/main/docs/config.md
 
-title = "sdk gitleaks config"
+title = "sdk betterleaks config"
+
+# Start from the built-in rules. Without this the file defines no rules at
+# all and every scan passes (the old .gitleaks.toml had that bug).
+[extend]
+useDefault = true
 
 [allowlist]
 description = "Global allowlist"

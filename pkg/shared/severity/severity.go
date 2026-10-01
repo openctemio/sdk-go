@@ -73,7 +73,7 @@ func (l Level) IsAtLeast(other Level) bool {
 // Handles common formats from different scanners:
 //   - Semgrep: ERROR, WARNING, INFO
 //   - Trivy: CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN
-//   - Gitleaks: (uses rule-based)
+//   - Betterleaks: (uses rule-based)
 //   - SARIF: error, warning, note
 func FromString(s string) Level {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
