@@ -79,6 +79,11 @@ All notable changes to `github.com/openctemio/sdk-go`.
   and falls back once to the old route on a 404. A failure is now returned
   instead of an empty rule list, so callers can tell the operator that the
   gate ran without suppressions.
+- **Secret values no longer reach the sensor log.** In verbose mode the
+  scanner passed `--verbose` to the tool, which prints every finding with its
+  raw secret to stdout, and a verbose sensor logged it. The tool now always
+  runs without it (`--redact` is not an option: it also redacts the report,
+  which would change fingerprints).
 - **Secret scans with exclusions no longer fail.** The scanner passed
   `--exclude-path` and `--no-git`, which no `dir` command (gitleaks or
   betterleaks) accepts, so any scan with `Exclude` set failed with

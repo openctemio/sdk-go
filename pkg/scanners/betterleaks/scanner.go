@@ -280,10 +280,10 @@ func (s *Scanner) buildArgs(target, outputFile string, opts *core.SecretScanOpti
 	// comments too: suppression is decided by the platform, not the repo.
 	args = append(args, "--ignore-gitleaks-allow")
 
-	// Verbose
-	if s.Verbose {
-		args = append(args, "--verbose")
-	}
+	// Never --verbose: it prints every finding with its raw secret to stdout,
+	// which a verbose sensor copies into its log. (--redact is no fix: it
+	// also rewrites the report's Secret, which changes masked values and
+	// fingerprints.) The scanner's own Verbose output stays.
 
 	return args
 }

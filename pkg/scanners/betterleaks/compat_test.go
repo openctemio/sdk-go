@@ -77,6 +77,15 @@ func TestBuildArgsOnlyPassesSupportedFlags(t *testing.T) {
 	}
 }
 
+// A verbose scanner must not make the tool print raw secrets into the log.
+func TestBuildArgsNeverPassesVerbose(t *testing.T) {
+	s := NewScanner()
+	s.Verbose = true
+	if args := s.buildArgs("/scan", "/tmp/r.json", nil); slices.Contains(args, "--verbose") || slices.Contains(args, "-v") {
+		t.Fatalf("args = %v: --verbose prints raw secrets", args)
+	}
+}
+
 func TestFilterExcluded(t *testing.T) {
 	findings := []Finding{
 		{File: "/scan/src/a.py"},
