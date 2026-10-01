@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/scanners/internal/report"
 )
 
 const (
@@ -26,7 +27,7 @@ type Scanner struct {
 	// Configuration
 	Binary     string        // Path to gitleaks binary (default: "gitleaks")
 	ConfigFile string        // Custom gitleaks config file (.gitleaks.toml)
-	OutputFile string        // Output file path (default: "gitleaks-report.json")
+	OutputFile string        // Report file: an absolute path is used as is; otherwise the base name, in a temporary directory removed after the scan
 	Timeout    time.Duration // Scan timeout (default: 30 minutes)
 	Verbose    bool          // Enable verbose output
 
@@ -104,14 +105,13 @@ func (s *Scanner) GenericScan(ctx context.Context, target string, opts *core.Sca
 		return nil, fmt.Errorf("failed to resolve target path: %w", err)
 	}
 
-	// Determine output file path
-	outputFile := s.OutputFile
-	if outputFile == "" {
-		outputFile = DefaultOutputFile
+	// The report never goes into the scanned tree (it may be read-only):
+	// a relative OutputFile lands in a private temporary directory.
+	outputFile, cleanupReport, err := report.Path(s.OutputFile, DefaultOutputFile, "gitleaks")
+	if err != nil {
+		return nil, err
 	}
-	if !filepath.IsAbs(outputFile) {
-		outputFile = filepath.Join(absTarget, outputFile)
-	}
+	defer cleanupReport()
 
 	// Convert generic options to secret options
 	var secretOpts *core.SecretScanOptions
@@ -216,14 +216,13 @@ func (s *Scanner) Scan(ctx context.Context, target string, opts *core.SecretScan
 		return nil, fmt.Errorf("failed to resolve target path: %w", err)
 	}
 
-	// Determine output file path
-	outputFile := s.OutputFile
-	if outputFile == "" {
-		outputFile = DefaultOutputFile
+	// The report never goes into the scanned tree (it may be read-only):
+	// a relative OutputFile lands in a private temporary directory.
+	outputFile, cleanupReport, err := report.Path(s.OutputFile, DefaultOutputFile, "gitleaks")
+	if err != nil {
+		return nil, err
 	}
-	if !filepath.IsAbs(outputFile) {
-		outputFile = filepath.Join(absTarget, outputFile)
-	}
+	defer cleanupReport()
 
 	// Build gitleaks arguments
 	args := s.buildArgs(absTarget, outputFile, opts)

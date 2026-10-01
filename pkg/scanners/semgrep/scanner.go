@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/scanners/internal/report"
 )
 
 const (
@@ -29,7 +30,7 @@ const (
 type Scanner struct {
 	// Configuration
 	Binary     string        // Path to semgrep binary (default: "semgrep")
-	OutputFile string        // Output file path (default: "semgrep-report.json")
+	OutputFile string        // Report file: an absolute path is used as is; otherwise the base name, in a temporary directory removed after the scan
 	Timeout    time.Duration // Scan timeout (default: 30 minutes)
 	Verbose    bool          // Enable verbose output
 
@@ -138,14 +139,13 @@ func (s *Scanner) Scan(ctx context.Context, target string, opts *core.ScanOption
 		return nil, fmt.Errorf("failed to resolve target path: %w", err)
 	}
 
-	// Determine output file path
-	outputFile := s.OutputFile
-	if outputFile == "" {
-		outputFile = DefaultOutputFile
+	// The report never goes into the scanned tree (it may be read-only):
+	// a relative OutputFile lands in a private temporary directory.
+	outputFile, cleanupReport, err := report.Path(s.OutputFile, DefaultOutputFile, "semgrep")
+	if err != nil {
+		return nil, err
 	}
-	if !filepath.IsAbs(outputFile) {
-		outputFile = filepath.Join(absTarget, outputFile)
-	}
+	defer cleanupReport()
 
 	// Build semgrep arguments
 	args := s.buildArgs(absTarget, outputFile, opts)
