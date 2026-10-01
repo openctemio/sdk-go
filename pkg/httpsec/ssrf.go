@@ -66,7 +66,9 @@ var hardBlockedIPRanges = []string{
 	"240.0.0.0/4",        // Reserved
 	"255.255.255.255/32", // Broadcast
 	"::1/128",            // IPv6 loopback
+	"::/128",             // IPv6 unspecified
 	"fe80::/10",          // IPv6 link-local
+	"ff00::/8",           // IPv6 multicast
 }
 
 // privateIPRanges — blocked by default, opened by setting
@@ -127,15 +129,32 @@ func init() {
 // servers; it does NOT touch IMDS or RFC1918 — those remain on
 // their own toggle chains.
 func IsIPBlocked(ip net.IP) bool {
-	if AllowLoopback && (ip.IsLoopback() || ip.Equal(net.IPv6loopback)) {
+	return IsIPBlockedWith(ip, allowPrivate, AllowLoopback)
+}
+
+// IsIPBlockedWith is IsIPBlocked with the two toggles supplied by the
+// caller instead of read from the process-wide env-derived defaults. It
+// lets a component (e.g. the scan-target policy in pkg/core) carry its
+// own allow-private posture without mutating package globals. The
+// hard-blocked set (IMDS/link-local, CGNAT, multicast, unspecified,
+// reserved) is enforced regardless of either toggle; allowLoopback only
+// relaxes 127.0.0.0/8 and ::1.
+func IsIPBlockedWith(ip net.IP, allowPrivateRanges, allowLoopback bool) bool {
+	if ip == nil {
+		return true
+	}
+	if allowLoopback && (ip.IsLoopback() || ip.Equal(net.IPv6loopback)) {
 		return false
+	}
+	if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
 	}
 	for _, cidr := range hardBlockedCIDRs {
 		if cidr.Contains(ip) {
 			return true
 		}
 	}
-	if !allowPrivate {
+	if !allowPrivateRanges {
 		for _, cidr := range privateCIDRs {
 			if cidr.Contains(ip) {
 				return true
@@ -249,7 +268,134 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 		IdleConnTimeout:       30 * time.Second,
 	}
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: tr,
+		Timeout:       timeout,
+		Transport:     tr,
+		CheckRedirect: SafeCheckRedirect,
 	}
+}
+
+// maxRedirects mirrors net/http's default redirect budget.
+const maxRedirects = 10
+
+// SensitiveHeaders are request headers that carry credentials. They are
+// stripped from a redirected request whenever the redirect changes origin
+// (scheme, host or port). net/http only strips Authorization/Cookie, and
+// only when the host leaves the original domain — it keeps them on an
+// https->http same-host hop and never touches custom API-key headers.
+var SensitiveHeaders = []string{
+	"Authorization",
+	"Proxy-Authorization",
+	"Cookie",
+	"X-API-Key",
+	"X-Api-Token",
+	"X-Auth-Token",
+	"X-Agent-Key",
+	"X-ApiKeys",
+	"X-Bootstrap-Token",
+}
+
+// SafeCheckRedirect is the CheckRedirect policy installed on every
+// SafeHTTPClient:
+//
+//   - at most 10 hops;
+//   - a redirect may never downgrade https to http (the credential and
+//     the response would cross the network in clear text);
+//   - when a hop changes origin relative to the original request, every
+//     header in SensitiveHeaders is removed before the request is sent.
+//
+// The dialer still applies the IP blocklist to the redirect target, so a
+// redirect into IMDS/loopback fails at connect time.
+func SafeCheckRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("httpsec: stopped after %d redirects", maxRedirects)
+	}
+	if len(via) == 0 {
+		return nil
+	}
+	prev := via[len(via)-1]
+	if strings.EqualFold(prev.URL.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
+		return fmt.Errorf("httpsec: refusing redirect that downgrades https to %s (%s)", req.URL.Scheme, req.URL.Redacted())
+	}
+	if !sameOrigin(via[0].URL, req.URL) {
+		for _, h := range SensitiveHeaders {
+			req.Header.Del(h)
+		}
+	}
+	return nil
+}
+
+// RefuseRedirects is a CheckRedirect policy that never follows a redirect.
+// Use it for clients that only ever talk to the OpenCTEM API: the API does
+// not issue redirects, so a 3xx means a misconfigured base URL or a
+// hostile intermediary, and following it would forward the bearer key.
+func RefuseRedirects(req *http.Request, _ []*http.Request) error {
+	return fmt.Errorf("httpsec: refusing to follow redirect to %s; configure the API base URL to the final address", req.URL.Redacted())
+}
+
+// NewAPIClient returns a SafeHTTPClient that refuses all redirects. It is
+// the client to use for requests that carry an OpenCTEM API key.
+func NewAPIClient(timeout time.Duration) *http.Client {
+	c := SafeHTTPClient(timeout)
+	c.CheckRedirect = RefuseRedirects
+	return c
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) &&
+		effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
+}
+
+// CheckAPIBaseURL validates an operator-supplied OpenCTEM API base URL.
+//
+// It returns an error for anything that cannot be a sane API endpoint:
+// a non-http(s) scheme, a missing host, or embedded userinfo (credentials
+// in the URL end up in logs and error strings). For a plain-http URL whose
+// host is not loopback it returns a non-empty warning instead of an error:
+// the API key is sent as a bearer token, so clear-text transport outside a
+// local dev setup exposes it, but rejecting it outright would break
+// existing in-cluster deployments that terminate TLS elsewhere.
+func CheckAPIBaseURL(raw string) (warning string, err error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", fmt.Errorf("API base URL is empty")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid API base URL: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", fmt.Errorf("invalid API base URL %q: scheme must be http or https", u.Redacted())
+	}
+	if u.Hostname() == "" {
+		return "", fmt.Errorf("invalid API base URL %q: missing host", u.Redacted())
+	}
+	if u.User != nil {
+		return "", fmt.Errorf("invalid API base URL %q: credentials must not be embedded in the URL", u.Redacted())
+	}
+	if scheme == "http" && !isLoopbackHost(u.Hostname()) {
+		return fmt.Sprintf("API base URL %s uses plain http: the API key is sent in clear text; use https outside local development", u.Redacted()), nil
+	}
+	return "", nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
