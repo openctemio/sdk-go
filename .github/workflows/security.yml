@@ -103,47 +103,42 @@ jobs:
           sarif_file: 'trivy-results.sarif'
 
   # ============================================
-  # Secret Scanning with Betterleaks
+  # Betterleaks - secrets in the code and git history (OSS CLI, no licence).
+  # Betterleaks is gitleaks' successor (same config format). v1.x is
+  # pinned and checksum-verified: v2 drops SARIF output. It replaces the
+  # opt-in gitleaks-action job, which needed a GITLEAKS_LICENSE and never ran.
   # ============================================
-  # Betterleaks is the successor to gitleaks (same config format: it reads
-  # .betterleaks.toml). It needs no licence, so it always runs, on the
-  # commits a pull request or push adds. The binary is pinned and verified
-  # against the release checksums.
   secret-scan:
     name: Secret Scanning
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'schedule' }}
     env:
-      BETTERLEAKS_VERSION: "1.9.0"
-      BETTERLEAKS_SHA256: "f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7"
+      BETTERLEAKS_VERSION: 1.9.0
+      BETTERLEAKS_SHA256: f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Install Betterleaks
+      - name: Install Betterleaks (pinned, checksum-verified)
         run: |
-          set -euo pipefail
-          archive="betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -fsSL -o "$archive" "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/${archive}"
-          echo "${BETTERLEAKS_SHA256}  ${archive}" | sha256sum -c -
-          tar -xzf "$archive" betterleaks
-          sudo install -m 0755 betterleaks /usr/local/bin/betterleaks
-          betterleaks version
+          curl -sSfL -o betterleaks.tgz \
+            "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${BETTERLEAKS_SHA256}  betterleaks.tgz" | sha256sum -c -
+          tar -xzf betterleaks.tgz betterleaks
 
-      - name: Scan the added commits
-        env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
-            range="$HEAD"' -1'
-          else
-            range="$BASE..$HEAD"
-          fi
-          betterleaks git . --config .betterleaks.toml --log-opts="$range" --redact --no-banner --verbose
+      - name: Run Betterleaks
+        # --redact keeps secret values out of the report and the Security tab.
+        run: >-
+          ./betterleaks git --config .betterleaks.toml --redact --no-banner --exit-code 0
+          --report-format sarif --report-path betterleaks.sarif .
+
+      - name: Upload Betterleaks results
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: betterleaks.sarif
+          category: betterleaks
 
   # ============================================
   # Snyk Security Scan (Optional - requires SNYK_TOKEN)

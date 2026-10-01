@@ -87,8 +87,9 @@ All notable changes to `github.com/openctemio/sdk-go`.
 - **The repository's own secret scan had no rules.** `.gitleaks.toml` set
   only an allowlist and no `[extend] useDefault = true`, so it loaded zero
   rules and always passed. It is now `.betterleaks.toml` with the default
-  rules, and the Security workflow runs it on every pull request and push
-  (it was opt-in behind a gitleaks licence).
+  rules, and the Security workflow runs betterleaks over the git history on
+  every pull request and push and uploads SARIF to code scanning (the old
+  gitleaks-action job was opt-in behind a licence and never ran).
 
 - **Scanners no longer write their report into the scanned tree.** gitleaks,
   semgrep and CodeQL joined their default (relative) report file, and CodeQL
