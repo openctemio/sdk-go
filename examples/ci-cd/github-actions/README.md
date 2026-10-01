@@ -1,6 +1,6 @@
 # GitHub Actions Examples
 
-Examples for integrating OpenCTEM Agent into GitHub Actions workflows.
+Examples for integrating OpenCTEM Sensor into GitHub Actions workflows.
 
 ## Quick Start
 
@@ -22,7 +22,7 @@ cp minimal.yml .github/workflows/security.yml
 ## Features
 
 ### Auto CI Detection
-The agent automatically detects GitHub Actions environment and:
+The sensor automatically detects GitHub Actions environment and:
 - Extracts PR/commit information
 - Determines scan strategy (all files vs changed files only)
 - Posts inline comments on PR diffs
@@ -32,7 +32,7 @@ When running in a PR context, findings are posted as inline comments on the chan
 
 ```yaml
 - name: Run scan
-  uses: docker://openctemio/agent:ci
+  uses: docker://openctemio/sensor:ci
   with:
     args: -tools semgrep -target . -auto-ci -comments
   env:

@@ -113,16 +113,16 @@ err := grpc.ValidateAddress("unix:///var/run/sock")   // Error: invalid scheme
 err := grpc.ValidateAddress("0.0.0.0:9090")          // Error: binding address
 ```
 
-### 3. Platform Agent Security
+### 3. Platform Sensor Security
 
 > `pkg/platform` requires the platform (SaaS) control plane: its
 > `/api/v1/platform/*` routes are not served by the open-source API.
-> Self-hosted agents use `pkg/client` + `core.CommandPoller`, which carry
+> Self-hosted sensors use `pkg/client` + `core.CommandPoller`, which carry
 > their own target validation and command-expiry checks. The job checks
 > below do not validate scan targets — a platform executor must do that
 > itself (e.g. with `core.ScanTargetPolicy`).
 
-Platform agents include comprehensive security controls.
+Platform sensors include comprehensive security controls.
 
 #### Job Validation
 
@@ -243,18 +243,18 @@ with a `core.ScanTargetPolicy` before a scanner runs:
 exec := core.NewDefaultCommandExecutor(pusher)
 exec.SetScanTargetPolicy(&core.ScanTargetPolicy{
     AllowedRoots: []string{"/workspace"},
-    AllowPrivate: true, // on-prem agent scanning its own network
+    AllowPrivate: true, // on-prem sensor scanning its own network
 })
 ```
 
 | Variable | Effect |
 |----------|--------|
 | `OPENCTEM_SDK_SCAN_ROOTS` | Allowed roots (`:`-separated) for the default policy |
-| `OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS=1` | Allow RFC1918/ULA targets (`AGENT_ALLOW_PRIVATE_TARGETS=1` and `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1` are honored too) |
+| `OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS=1` | Allow RFC1918/ULA targets (`SENSOR_ALLOW_PRIVATE_TARGETS=1` — or its pre-rename name `AGENT_ALLOW_PRIVATE_TARGETS=1`, read with a deprecation warning — and `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1` are honored too; setting the sensor and agent names to different values refuses every target) |
 
 ### 6. Scanner Process Environment
 
-Scanner child processes no longer inherit the agent's whole environment
+Scanner child processes no longer inherit the sensor's whole environment
 (which holds the API key). They get an allowlist: `PATH`, `HOME`, temp and
 locale vars, proxy and CA-bundle vars, Docker host vars, `XDG_*`, and the
 `TRIVY_*` / `NUCLEI_*` / `SEMGREP_*` / `GITLEAKS_*` / `CODEQL_*` and ProjectDiscovery (`SUBFINDER_*`, `HTTPX_*`, `DNSX_*`, `NAABU_*`, `KATANA_*`, `PDCP_*`) namespaces, plus any
@@ -313,7 +313,7 @@ transport := grpc.NewTransport(&grpc.Config{
 })
 ```
 
-### 3. Agent Configuration
+### 3. Sensor Configuration
 
 ```go
 // DO: Restrict allowed job types
@@ -325,7 +325,7 @@ config := &platform.PollerConfig{
 
 // DO: Use secure lease identity (default)
 leaseConfig := &platform.LeaseConfig{
-    IdentityPrefix: "scanner",  // Identify agent type
+    IdentityPrefix: "scanner",  // Identify sensor type
 }
 
 // DON'T: Disable security features
@@ -361,7 +361,7 @@ export OPENCTEMIO_ENCRYPTION_KEY="base64-encoded-key"
 - [ ] `InsecureSkipVerify` is `false`
 - [ ] Server addresses validated before use
 
-### Platform Agents
+### Platform Sensors
 - [ ] `AllowedJobTypes` configured (whitelist)
 - [ ] `RequireAuthToken` enabled
 - [ ] `ValidateTokenClaims` enabled
