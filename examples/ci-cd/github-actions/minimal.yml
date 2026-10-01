@@ -18,6 +18,6 @@ jobs:
       - name: Security Scan
         uses: docker://openctemio/sensor:ci
         with:
-          args: -tools semgrep,gitleaks,trivy -target . -auto-ci -verbose
+          args: -tools semgrep,betterleaks,trivy -target . -auto-ci -verbose
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

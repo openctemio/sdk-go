@@ -35,7 +35,7 @@ jobs:
         uses: docker://openctemio/sensor:ci
         with:
           args: >-
-            -tools semgrep,gitleaks
+            -tools semgrep,betterleaks
             -target .
             -auto-ci
             -comments

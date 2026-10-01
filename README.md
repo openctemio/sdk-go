@@ -10,7 +10,7 @@ Go SDK for building integrations with the OpenCTEM security platform.
 
 OpenCTEM SDK provides Go packages for:
 - API client for interacting with OpenCTEM API
-- Scanner integrations: SAST/SCA/secrets (Semgrep, CodeQL, Trivy, Gitleaks), DAST (Nuclei, including a validation executor), and recon (subfinder, dnsx, naabu, httpx, katana)
+- Scanner integrations: SAST/SCA/secrets (Semgrep, CodeQL, Trivy, Betterleaks), DAST (Nuclei, including a validation executor), and recon (subfinder, dnsx, naabu, httpx, katana)
 - Output formatters (SARIF, JSON)
 - Common utilities and helpers
 
@@ -107,7 +107,7 @@ func main() {
 | Package | Description |
 |---------|-------------|
 | `pkg/client` | API client for OpenCTEM API |
-| `pkg/scanners` | Scanner integrations: SAST/SCA/secrets (Semgrep, CodeQL, Trivy, Gitleaks), DAST (Nuclei + validation executor), recon (subfinder, dnsx, naabu, httpx, katana) |
+| `pkg/scanners` | Scanner integrations: SAST/SCA/secrets (Semgrep, CodeQL, Trivy, Betterleaks), DAST (Nuclei + validation executor), recon (subfinder, dnsx, naabu, httpx, katana) |
 | `pkg/handler` | Result handlers and output formatters |
 | `pkg/core` | Core types and interfaces |
 | `pkg/errors` | Error types and handling |

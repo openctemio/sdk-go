@@ -9,7 +9,7 @@
 # - Auto-detects PR context for diff-based scanning
 # - Creates inline PR comments for findings
 # - Uploads SARIF results to GitHub Security tab
-# - Supports all scanners: semgrep, gitleaks, trivy
+# - Supports all scanners: semgrep, betterleaks, trivy
 # =============================================================================
 
 name: Security Scan
@@ -25,7 +25,7 @@ on:
       tools:
         description: "Scanners to run (comma-separated)"
         required: false
-        default: "semgrep,gitleaks,trivy"
+        default: "semgrep,betterleaks,trivy"
       verbose:
         description: "Enable verbose output"
         required: false
@@ -57,7 +57,7 @@ jobs:
         uses: docker://openctemio/sensor:ci
         with:
           args: >-
-            -tools ${{ github.event.inputs.tools || 'semgrep,gitleaks,trivy' }}
+            -tools ${{ github.event.inputs.tools || 'semgrep,betterleaks,trivy' }}
             -target .
             -auto-ci
             -comments

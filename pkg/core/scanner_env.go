@@ -8,14 +8,14 @@ import (
 
 // Scanner child-process environment.
 //
-// Scanner binaries (nuclei, trivy, semgrep, gitleaks, custom tools) used to
+// Scanner binaries (nuclei, trivy, semgrep, betterleaks, custom tools) used to
 // inherit the sensor's whole environment, which includes the OpenCTEM API key,
 // bootstrap tokens and any cloud credentials the sensor runs with. A scanner,
 // a malicious template it loads, or a compromised scanner binary could read
 // and exfiltrate them. Scanners now receive an allowlisted environment: the
 // variables they need to run (PATH, HOME, temp/locale, proxy and CA settings)
 // plus their own tool-prefixed configuration (TRIVY_*, NUCLEI_*, SEMGREP_*,
-// GITLEAKS_*, CODEQL_*, and the ProjectDiscovery recon tools' prefixes).
+// BETTERLEAKS_*, GITLEAKS_*, CODEQL_*, and the ProjectDiscovery recon tools' prefixes).
 //
 // Configuration, in increasing order of scope:
 //   - ExecConfig.Env / BaseScannerConfig.Env / ScanOptions.Env: explicit
@@ -55,6 +55,8 @@ var scannerEnvAllowPrefixes = []string{
 	"TRIVY_",
 	"NUCLEI_",
 	"SEMGREP_",
+	"BETTERLEAKS_",
+	// betterleaks v1 still reads GITLEAKS_CONFIG / GITLEAKS_CONFIG_TOML.
 	"GITLEAKS_",
 	"CODEQL_",
 	// ProjectDiscovery recon tools (subfinder, httpx, dnsx, naabu, katana)

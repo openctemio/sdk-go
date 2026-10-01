@@ -234,10 +234,10 @@ var PresetScanners = map[string]*BaseScannerConfig{
 		OKExitCodes:  []int{0},
 		Capabilities: []string{"iac", "misconfiguration"},
 	},
-	"gitleaks": {
-		Name:         "gitleaks",
-		Binary:       "gitleaks",
-		DefaultArgs:  []string{"detect", "--source", "{target}", "--report-format", "sarif", "--report-path", "/dev/stdout", "--no-banner"},
+	"betterleaks": {
+		Name:         "betterleaks",
+		Binary:       "betterleaks",
+		DefaultArgs:  []string{"dir", "{target}", "--report-format", "sarif", "--report-path", "-", "--exit-code", "0", "--no-banner"},
 		Timeout:      15 * time.Minute,
 		OKExitCodes:  []int{0, 1},
 		Capabilities: []string{"secret"},

@@ -103,26 +103,47 @@ jobs:
           sarif_file: 'trivy-results.sarif'
 
   # ============================================
-  # Secret Scanning with Gitleaks (Optional)
+  # Secret Scanning with Betterleaks
   # ============================================
-  # Requires GITLEAKS_LICENSE secret for organizations
-  # Enable by setting repository variable ENABLE_GITLEAKS=true
-  # Note: Trivy also scans for secrets as a backup
-  gitleaks:
+  # Betterleaks is the successor to gitleaks (same config format: it reads
+  # .betterleaks.toml). It needs no licence, so it always runs, on the
+  # commits a pull request or push adds. The binary is pinned and verified
+  # against the release checksums.
+  secret-scan:
     name: Secret Scanning
     runs-on: ubuntu-latest
-    if: ${{ vars.ENABLE_GITLEAKS == 'true' }}
+    if: ${{ github.event_name != 'schedule' }}
+    env:
+      BETTERLEAKS_VERSION: "1.9.0"
+      BETTERLEAKS_SHA256: "f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v3
+      - name: Install Betterleaks
+        run: |
+          set -euo pipefail
+          archive="betterleaks_${BETTERLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o "$archive" "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/${archive}"
+          echo "${BETTERLEAKS_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "$archive" betterleaks
+          sudo install -m 0755 betterleaks /usr/local/bin/betterleaks
+          betterleaks version
+
+      - name: Scan the added commits
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            range="$HEAD"' -1'
+          else
+            range="$BASE..$HEAD"
+          fi
+          betterleaks git . --config .betterleaks.toml --log-opts="$range" --redact --no-banner --verbose
 
   # ============================================
   # Snyk Security Scan (Optional - requires SNYK_TOKEN)
