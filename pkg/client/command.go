@@ -114,6 +114,10 @@ func (c *Client) StartCommand(ctx context.Context, cmdID string) error {
 
 // CompleteCommand marks a command as completed with optional result.
 func (c *Client) CompleteCommand(ctx context.Context, cmdID string, result json.RawMessage) error {
+	return c.completeCommand(ctx, cmdID, result, c.maxRetries)
+}
+
+func (c *Client) completeCommand(ctx context.Context, cmdID string, result json.RawMessage, retries int) error {
 	reqURL := c.baseURL + legacyv1.PathCommand(url.PathEscape(cmdID), "complete")
 
 	if c.verbose {
@@ -126,12 +130,16 @@ func (c *Client) CompleteCommand(ctx context.Context, cmdID string, result json.
 	}
 	body, _ := json.Marshal(payload)
 
-	_, err := c.doRequest(ctx, "POST", reqURL, body)
+	_, _, err := c.doRequestFull(ctx, "POST", reqURL, body, nil, retries)
 	return err
 }
 
 // FailCommand marks a command as failed with an error message.
 func (c *Client) FailCommand(ctx context.Context, cmdID string, errorMsg string) error {
+	return c.failCommand(ctx, cmdID, errorMsg, c.maxRetries)
+}
+
+func (c *Client) failCommand(ctx context.Context, cmdID string, errorMsg string, retries int) error {
 	reqURL := c.baseURL + legacyv1.PathCommand(url.PathEscape(cmdID), "fail")
 
 	if c.verbose {
@@ -143,17 +151,38 @@ func (c *Client) FailCommand(ctx context.Context, cmdID string, errorMsg string)
 	}
 	body, _ := json.Marshal(payload)
 
-	_, err := c.doRequest(ctx, "POST", reqURL, body)
+	_, _, err := c.doRequestFull(ctx, "POST", reqURL, body, nil, retries)
 	return err
 }
 
-// ReportCommandResult reports the result of command execution (implements core.CommandClient).
+// ReportCommandResult reports the result of command execution (implements
+// core.CommandClient). With the outbox enabled the result is stored and
+// delivered after every report of the same command was accepted (or
+// refused, which turns a "completed" result into "failed"); it returns once
+// the result is on disk.
 func (c *Client) ReportCommandResult(ctx context.Context, cmdID string, result *core.CommandResult) error {
+	if ob := c.Outbox(); ob != nil {
+		if err := c.enqueueCommandResult(ob, cmdID, result); err == nil {
+			return nil
+		} else {
+			c.logOutbox(c.obLogf, "cannot store the result of command %s (%v); reporting it directly", cmdID, err)
+		}
+	}
+	return c.reportCommandResult(ctx, cmdID, result, c.maxRetries)
+}
+
+// reportCommandResultOnce reports a result with a single attempt (the
+// outbox retries).
+func (c *Client) reportCommandResultOnce(ctx context.Context, cmdID string, result *core.CommandResult) error {
+	return c.reportCommandResult(ctx, cmdID, result, 0)
+}
+
+func (c *Client) reportCommandResult(ctx context.Context, cmdID string, result *core.CommandResult, retries int) error {
 	if result.Status == "completed" || result.Error == "" {
 		resultJSON, _ := json.Marshal(result)
-		return c.CompleteCommand(ctx, cmdID, resultJSON)
+		return c.completeCommand(ctx, cmdID, resultJSON, retries)
 	}
-	return c.FailCommand(ctx, cmdID, result.Error)
+	return c.failCommand(ctx, cmdID, result.Error, retries)
 }
 
 // ReportCommandProgress reports progress of command execution.

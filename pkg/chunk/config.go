@@ -1,14 +1,18 @@
 // Package chunk provides chunked upload functionality for large scan reports.
 //
-// The chunk package enables splitting large reports into smaller chunks for
-// gradual upload, with SQLite-based local storage for persistence and
-// resumability.
+// The chunk package splits large reports for upload:
+//
+//   - SplitSegments: protocol v2 segments (RFC-026 §3.5), each a complete
+//     CTIS document with the report's tool, metadata and the assets its
+//     findings reference. The v2 client (pkg/client) uses it.
+//   - Splitter and Manager: protocol v1 chunks (/api/v1/agent/ingest/chunk).
+//     The Manager stores chunks in the durable outbox (pkg/outbox), which
+//     replaced the SQLite storage of SDKs before v0.8.0.
 //
 // Key components:
 //   - Config: Configuration for chunking behavior
-//   - Splitter: Algorithm to split reports into chunks
-//   - Storage: SQLite-based chunk storage
-//   - Manager: Main orchestration of chunking and upload
+//   - Splitter: Algorithm to split reports into v1 chunks
+//   - Manager: Main orchestration of v1 chunking and upload
 //
 // Example usage:
 //
@@ -52,10 +56,14 @@ type Config struct {
 	MaxRetries     int // Max retries per chunk (default: 3)
 	RetryBackoffMs int // Initial backoff between retries (default: 1000)
 
-	// Storage configuration
-	DatabasePath   string // SQLite database path (default: ~/.openctem/chunks.db)
-	RetentionHours int    // How long to keep completed chunks (default: 24)
-	MaxStorageMB   int    // Max storage for chunk DB (default: 500)
+	// Storage configuration. Chunks live in a durable outbox (pkg/outbox).
+	OutboxDir string // Outbox directory (default: "chunk-outbox" next to DatabasePath)
+	// Deprecated: the SQLite chunk database was replaced by the outbox in
+	// v0.8.0. DatabasePath now only locates the default OutboxDir (its
+	// directory) and a leftover database, which is reported, not read.
+	DatabasePath   string
+	RetentionHours int // Deprecated: unused; the outbox caps age itself (7 days).
+	MaxStorageMB   int // Max bytes the chunk outbox may hold, in MiB (default: 500)
 
 	// Compression (chunks are always compressed before storage)
 	CompressionLevel int // gzip/zstd level 1-9 (default: 3)

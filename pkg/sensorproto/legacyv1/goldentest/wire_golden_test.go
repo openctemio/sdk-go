@@ -165,9 +165,14 @@ func TestProtocolV1Golden(t *testing.T) {
 	const sensorID = "11111111-1111-1111-1111-111111111111"
 
 	// ---- pkg/client (tenant sensors: /api/v1/agent/*) ----
+	// Protocol v1 pinned: in v1 mode every byte must be what deployed
+	// servers expect. Auto mode adds only the documented v2 discovery (the
+	// results-v2 feature on the heartbeat, GET /api/v2/sensor/hello); its
+	// fallback to these same v1 bytes is tested in pkg/client
+	// (TestAutoFallsBackToV1OnOldPlatform).
 	c := client.New(&client.Config{
 		BaseURL: srv.URL, APIKey: "rda_test", SensorID: sensorID,
-		MaxRetries: 1, EnableCompression: false,
+		MaxRetries: 1, EnableCompression: false, Protocol: client.ProtocolV1,
 	})
 
 	rec.start("client.SendHeartbeat")

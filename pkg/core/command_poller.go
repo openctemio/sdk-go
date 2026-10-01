@@ -497,6 +497,10 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 	}()
 
 	startTime := time.Now()
+	// Results pushed while executing belong to this command: a Pusher with
+	// an outbox binds them to it and reports the command only after they
+	// were accepted.
+	ctx = WithCommandID(ctx, cmd.ID)
 
 	if p.verbose.Load() {
 		fmt.Printf("[command-poller] Executing command %s (type: %s)\n", cmd.ID, cmd.Type)
@@ -550,7 +554,9 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 		}
 	}
 
-	// Report result back to server
+	// Report result back to server. A client with an outbox queues it behind
+	// the command's results, so the platform sees the command complete only
+	// after it accepted them.
 	if err := p.client.ReportCommandResult(ctx, cmd.ID, reportResult); err != nil {
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Failed to report result for command %s: %v\n", cmd.ID, err)
