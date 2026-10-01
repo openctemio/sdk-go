@@ -57,8 +57,13 @@ type GetCommandsResponse struct {
 
 // ScanCommandPayload is the payload for scan commands.
 type ScanCommandPayload struct {
-	Scanner         string                 `json:"scanner"`
-	Target          string                 `json:"target"`
+	Scanner string `json:"scanner"`
+	// Target is the single scan target. The platform omits it when a job has
+	// several targets for a list-capable scanner (nuclei) and sends only
+	// Targets; when both are set, Target is the job.
+	Target string `json:"target"`
+	// Targets is the full target list (protocol v1, additive).
+	Targets         []string               `json:"targets,omitempty"`
 	Config          map[string]interface{} `json:"config,omitempty"`
 	TimeoutSeconds  int                    `json:"timeout_seconds,omitempty"`
 	ReportProgress  bool                   `json:"report_progress,omitempty"`
@@ -74,6 +79,21 @@ type EmbeddedTemplate struct {
 	Content      string `json:"content"`       // Base64-encoded template content (YAML/TOML)
 	ContentHash  string `json:"content_hash"`  // SHA256 hash of decoded content for verification
 }
+
+// MultiTargetScanner is a Scanner that can scan a list of targets in one run
+// (nuclei with -l). The command executor uses it when a scan command carries
+// several targets.
+type MultiTargetScanner interface {
+	Scanner
+	ScanTargets(ctx context.Context, targets []string, opts *ScanOptions) (*ScanResult, error)
+}
+
+// MaxScanTargets bounds the targets one scan command may carry (the
+// platform's per-run limit).
+const MaxScanTargets = 10000
+
+// maxRefusedListed caps how many refused targets an error message names.
+const maxRefusedListed = 10
 
 // ValidTemplateTypes defines allowed template types for security validation.
 var ValidTemplateTypes = map[string]bool{
@@ -540,16 +560,25 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		return nil, fmt.Errorf("scanner not found: %s", payload.Scanner)
 	}
 
-	// SECURITY: the target is server-supplied. Validate it before any
+	// SECURITY: targets are server-supplied. Validate every one before any
 	// scanner sees it: SSRF blocklist for network targets, confinement for
 	// filesystem targets, and no leading '-' (flag injection).
-	target, err := e.ScanTargetPolicy().Validate(ctx, payload.Target)
+	targets, err := e.validateScanTargets(ctx, &payload)
 	if err != nil {
-		return nil, fmt.Errorf("invalid scan target: %w", err)
+		return nil, err
+	}
+	// target is the single target, or "" for a multi-target run.
+	var target string
+	if len(targets) == 1 {
+		target = targets[0]
+	}
+	multi, isMulti := scanner.(MultiTargetScanner)
+	if len(targets) > 1 && !isMulti {
+		return nil, fmt.Errorf("scanner %s takes one target per job; the command carries %d", payload.Scanner, len(targets))
 	}
 
 	if e.verbose.Load() {
-		fmt.Printf("[executor] Running scanner %s on %s\n", payload.Scanner, target)
+		fmt.Printf("[executor] Running scanner %s on %s\n", payload.Scanner, strings.Join(targets, ", "))
 	}
 
 	// Create scan options
@@ -600,7 +629,12 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 
 	// Run scan
 	startTime := time.Now()
-	scanResult, err := scanner.Scan(ctx, target, opts)
+	var scanResult *ScanResult
+	if len(targets) > 1 {
+		scanResult, err = multi.ScanTargets(ctx, targets, opts)
+	} else {
+		scanResult, err = scanner.Scan(ctx, target, opts)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("scan failed: %w", err)
 	}
@@ -611,6 +645,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		Metadata: map[string]interface{}{
 			"scanner_name":    scanResult.ScannerName,
 			"scanner_version": scanResult.ScannerVersion,
+			"targets_scanned": len(targets),
 		},
 	}
 
@@ -624,12 +659,12 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 			return result, fmt.Errorf("parse failed: %w", err)
 		}
 		parseOpts := &ParseOptions{ToolName: scanner.Name()}
-		if filepath.IsAbs(target) {
+		if target != "" && filepath.IsAbs(target) {
 			// Filesystem scan: report repo-relative paths, so a finding's
 			// fingerprint does not depend on where the code was checked out.
 			parseOpts.BasePath = target
 		}
-		if e.assetResolver != nil {
+		if e.assetResolver != nil && target != "" {
 			parseOpts.AssetType, parseOpts.AssetValue = e.assetResolver(payload.Scanner, target)
 		}
 		report, err := parser.Parse(ctx, scanResult.RawOutput, parseOpts)
@@ -653,6 +688,50 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	}
 
 	return result, nil
+}
+
+// validateScanTargets returns the command's targets, each validated by the
+// scan-target policy. Target is the job when set (single-target and older
+// payloads); otherwise Targets is. A refused target fails the whole command,
+// naming it: scanning the rest would silently drop it from the results.
+func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payload *ScanCommandPayload) ([]string, error) {
+	raw := payload.Targets
+	if payload.Target != "" {
+		raw = []string{payload.Target}
+	}
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("invalid scan target: scan target is required")
+	}
+	if len(raw) > MaxScanTargets {
+		return nil, fmt.Errorf("invalid scan target: %d targets, more than the %d allowed per command", len(raw), MaxScanTargets)
+	}
+
+	policy := e.ScanTargetPolicy()
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	var refused []string
+	for _, t := range raw {
+		v, err := policy.Validate(ctx, t)
+		if err != nil {
+			refused = append(refused, fmt.Sprintf("%q: %v", t, err))
+			continue
+		}
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	if len(refused) > 0 {
+		listed := refused
+		if len(listed) > maxRefusedListed {
+			listed = append(listed[:maxRefusedListed:maxRefusedListed], fmt.Sprintf("and %d more", len(refused)-maxRefusedListed))
+		}
+		if len(raw) == 1 {
+			return nil, fmt.Errorf("invalid scan target: %s", strings.Join(listed, "; "))
+		}
+		return nil, fmt.Errorf("invalid scan target: %d of %d targets refused: %s", len(refused), len(raw), strings.Join(listed, "; "))
+	}
+	return out, nil
 }
 
 // validateScanArgValue rejects server-supplied values that end up as scanner
