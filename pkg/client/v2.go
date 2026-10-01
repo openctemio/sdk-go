@@ -626,6 +626,9 @@ func (c *Client) v2Do(ctx context.Context, method, path string, body []byte, enc
 		return nil, nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
+	if c.verbose {
+		fmt.Printf("[openctem] v2 %s %s (%d bytes) -> %d\n", method, path, len(body), resp.StatusCode)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		ve := &V2Error{

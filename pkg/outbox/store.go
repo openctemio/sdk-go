@@ -121,7 +121,17 @@ func fileHeader(t byte) []byte {
 	return []byte{fileMagic[0], fileMagic[1], fileMagic[2], fileMagic[3], fileVersion, t, 0, 0}
 }
 
+// maxItemBytes bounds one item file: an item can never be larger than the
+// whole outbox, and the bound keeps every size sum below int overflow.
+const maxItemBytes = DefaultMaxBytes
+
+// errItemTooLarge is returned for an item that could never fit the outbox.
+var errItemTooLarge = errors.New("outbox: item larger than the outbox size limit")
+
 func (s *sealer) seal(t byte, id string, plaintext []byte) ([]byte, error) {
+	if len(plaintext) > maxItemBytes || len(id) > maxItemBytes {
+		return nil, errItemTooLarge
+	}
 	hdr := fileHeader(t)
 	nonce := make([]byte, s.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
@@ -156,6 +166,9 @@ func encodeItem(m Meta, payload []byte) ([]byte, error) {
 		return nil, err
 	}
 	comp := encoder().EncodeAll(payload, nil)
+	if len(mj) > maxItemBytes || len(comp) > maxItemBytes {
+		return nil, errItemTooLarge
+	}
 	buf := make([]byte, 4, 4+len(mj)+len(comp))
 	binary.BigEndian.PutUint32(buf, uint32(len(mj))) //nolint:gosec // meta JSON is far below 4 GiB
 	buf = append(buf, mj...)
