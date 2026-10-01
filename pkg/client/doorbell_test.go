@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +19,7 @@ func TestClient_SendHeartbeatWithHints(t *testing.T) {
 		if r.URL.Path != legacyv1.PathHeartbeat {
 			t.Errorf("path %s", r.URL.Path)
 		}
-		gotFeatures = append(gotFeatures, r.Header.Get(legacyv1.HeaderSensorFeatures))
+		gotFeatures = append(gotFeatures, strings.Join(r.Header.Values(legacyv1.HeaderSensorFeatures), ","))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(body))
 	}))
@@ -43,11 +44,12 @@ func TestClient_SendHeartbeatWithHints(t *testing.T) {
 		t.Fatalf("v1 server: hints %+v err %v", h, err)
 	}
 
-	// The plain heartbeat does not announce the doorbell.
+	// The plain heartbeat does not announce the doorbell. Every heartbeat
+	// in auto mode asks whether the platform offers v2 results.
 	if err := c.SendHeartbeat(context.Background(), status); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{legacyv1.FeatureDoorbell, legacyv1.FeatureDoorbell, ""}
+	want := []string{"doorbell,results-v2", "doorbell,results-v2", "results-v2"}
 	for i := range want {
 		if gotFeatures[i] != want[i] {
 			t.Errorf("request %d: %s=%q, want %q", i, legacyv1.HeaderSensorFeatures, gotFeatures[i], want[i])

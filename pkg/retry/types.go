@@ -1,25 +1,3 @@
-// Package retry provides persistent retry queue functionality for failed API operations.
-//
-// The retry package implements a store-and-forward pattern to ensure that scan data
-// is never lost due to temporary network failures or server unavailability.
-//
-// Key components:
-//   - RetryQueue: Interface for queue implementations
-//   - FileRetryQueue: File-based persistent queue (no external dependencies)
-//   - RetryWorker: Background processor that retries queued items
-//
-// Example usage:
-//
-//	queue, _ := retry.NewFileRetryQueue(&retry.FileQueueConfig{
-//	    Dir: "/var/lib/openctem/retry-queue",
-//	})
-//
-//	worker := retry.NewRetryWorker(&retry.RetryWorkerConfig{
-//	    Interval: 5 * time.Minute,
-//	}, queue, pusher)
-//
-//	worker.Start(ctx)
-//	defer worker.Stop(ctx)
 package retry
 
 import (

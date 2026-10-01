@@ -162,7 +162,7 @@ func TestSensorBuilder_WithChunkManager(t *testing.T) {
 	chunkUploader := &mockChunkUploader{}
 
 	chunkConfig := chunk.DefaultConfig()
-	chunkConfig.DatabasePath = filepath.Join(tmpDir, "chunks.db")
+	chunkConfig.OutboxDir = filepath.Join(tmpDir, "chunks")
 
 	sensor, err := NewSensorBuilder().
 		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
@@ -192,7 +192,7 @@ func TestSensorBuilder_FullIntegration(t *testing.T) {
 	chunkUploader := &mockChunkUploader{}
 
 	chunkConfig := chunk.DefaultConfig()
-	chunkConfig.DatabasePath = filepath.Join(tmpDir, "chunks.db")
+	chunkConfig.OutboxDir = filepath.Join(tmpDir, "chunks")
 
 	sensor, err := NewSensorBuilder().
 		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
@@ -300,7 +300,7 @@ func TestPlatformSensor_NeedsChunking(t *testing.T) {
 	chunkUploader := &mockChunkUploader{}
 
 	chunkConfig := chunk.DefaultConfig()
-	chunkConfig.DatabasePath = filepath.Join(tmpDir, "chunks.db")
+	chunkConfig.OutboxDir = filepath.Join(tmpDir, "chunks")
 	chunkConfig.MinFindingsForChunking = 10 // Low threshold for testing
 
 	sensor, err := NewSensorBuilder().
