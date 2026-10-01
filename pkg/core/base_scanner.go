@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -94,6 +93,7 @@ func (s *BaseScanner) Capabilities() []string {
 // IsInstalled checks if the scanner binary is available.
 func (s *BaseScanner) IsInstalled(ctx context.Context) (bool, string, error) {
 	cmd := exec.CommandContext(ctx, s.binary, "--version") //nolint:gosec // Scanner binary is configured, not user input
+	cmd.Env = ScannerEnviron(s.env)
 	output, err := cmd.Output()
 	if err != nil {
 		return false, "", fmt.Errorf("%s not found: %w", s.binary, err)
@@ -135,15 +135,12 @@ func (s *BaseScanner) Scan(ctx context.Context, target string, opts *ScanOptions
 		cmd.Dir = target
 	}
 
-	// Set environment
-	cmd.Env = os.Environ()
-	for k, v := range s.env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-	}
+	// Allowlisted environment (see scanner_env.go) plus the scanner's and
+	// this scan's explicit variables; the agent's credentials are not passed.
 	if opts != nil {
-		for k, v := range opts.Env {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-		}
+		cmd.Env = ScannerEnviron(s.env, opts.Env)
+	} else {
+		cmd.Env = ScannerEnviron(s.env)
 	}
 
 	// Capture output
