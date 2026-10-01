@@ -196,6 +196,15 @@ type CommandPoller struct {
 	// doorbell, when set, drives polling from the heartbeat (SetDoorbell).
 	doorbell   *Doorbell
 	safetyPoll time.Duration
+
+	// authGate is the heartbeat's AuthGate (SetAuthGate, or the one
+	// attached to a shared doorbell): no polling while it says the
+	// platform rejects the key.
+	authGate *AuthGate
+	// ownGate and ownNext back off this poller's own polls after a 401/403
+	// when no heartbeat gate is shared with it.
+	ownGate *AuthGate
+	ownNext time.Time
 }
 
 // CommandPollerConfig configures a CommandPoller.
@@ -254,6 +263,7 @@ func NewCommandPoller(client CommandClient, executor CommandExecutor, cfg *Comma
 		stopCh:        make(chan struct{}),
 		sem:           make(chan struct{}, maxConcurrent),
 		safetyPoll:    cfg.DoorbellSafetyPoll,
+		ownGate:       NewAuthGate(nil),
 	}
 	if p.safetyPoll <= 0 {
 		p.safetyPoll = DefaultDoorbellSafetyPoll
@@ -332,6 +342,33 @@ func (p *CommandPoller) SetDoorbell(d *Doorbell) {
 	p.doorbell = d
 }
 
+// SetAuthGate shares the heartbeat's AuthGate (BaseSensor.AuthGate) with the
+// poller: it does not poll while the platform rejects the key, and resumes
+// with the first accepted heartbeat. A poller sharing the sensor's doorbell
+// already gets it. Call before Start.
+func (p *CommandPoller) SetAuthGate(g *AuthGate) {
+	p.authGate = g
+}
+
+// sharedGate returns the heartbeat's AuthGate, or nil when none is shared.
+func (p *CommandPoller) sharedGate() *AuthGate {
+	if p.authGate != nil {
+		return p.authGate
+	}
+	if p.doorbell != nil {
+		return p.doorbell.getAuthGate()
+	}
+	return nil
+}
+
+// keyHint names the client's API key for log lines without revealing it.
+func (p *CommandPoller) keyHint() string {
+	if h, ok := p.client.(APIKeyHinter); ok {
+		return h.APIKeyHint()
+	}
+	return "(unknown)"
+}
+
 // paused reports whether the platform paused or drained this sensor.
 func (p *CommandPoller) paused() bool {
 	return p.doorbell != nil && p.doorbell.Paused()
@@ -366,10 +403,29 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		}
 		return
 	}
+	// The platform rejects the key: polling would only collect more 401s.
+	// The heartbeat keeps checking (with backoff) and lifts this.
+	gate := p.sharedGate()
+	if gate.Rejected() {
+		if p.verbose.Load() {
+			fmt.Printf("[command-poller] Not polling: the platform rejected the API key\n")
+		}
+		return
+	}
+	if gate == nil && time.Now().Before(p.ownNext) {
+		return
+	}
 	if p.verbose.Load() && p.doorbell != nil {
 		fmt.Printf("[command-poller] %s Polling for commands\n", time.Now().Format("15:04:05.000"))
 	}
 	resp, err := p.client.GetCommands(ctx)
+	if gate != nil {
+		gate.MarkRejected(err, p.keyHint())
+	} else if backoff := p.ownGate.Observe(err, p.keyHint()); backoff > 0 {
+		p.ownNext = time.Now().Add(backoff)
+	} else {
+		p.ownNext = time.Time{}
+	}
 	if err != nil {
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Failed to poll commands: %v\n", err)

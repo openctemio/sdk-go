@@ -2,6 +2,37 @@
 
 All notable changes to `github.com/openctemio/sdk-go`.
 
+## Unreleased
+
+### Fixed
+
+- **A rejected API key no longer floods the platform or hides in the logs.**
+  When a heartbeat gets 401/403 (key wrong, revoked, expired or regenerated,
+  sensor disabled without the doorbell, or deleted), `BaseSensor` now waits a
+  capped exponential backoff (30 s doubling to 10 min, ±20 % jitter) instead
+  of the normal interval, and the `CommandPoller` stops polling until a
+  heartbeat is accepted again (it shares the sensor's new `AuthGate` through
+  the doorbell, or via `CommandPoller.SetAuthGate(sensor.AuthGate())`). A
+  poller without a heartbeat backs off its own polls the same way. Before,
+  a revoked sensor kept sending a heartbeat and a poll every interval.
+- **Connection trouble is logged without `-verbose`.** Heartbeat and poll
+  errors were printed only in verbose mode, so a sensor that lost the
+  platform said nothing. The `AuthGate` now logs once per backoff step or
+  change of state, never per request: the HTTP status, the key's non-secret
+  prefix (`core.APIKeyHint`, at most 8 characters) and what to do (create or
+  regenerate a key under Settings → Sensors, set `API_KEY`, restart). Network
+  failures are logged at 1, 2, 4, 8, ... consecutive attempts, and recovery
+  is logged too.
+- **The plain-http warning is printed once per process per base URL**,
+  shared by `pkg/client` and `pkg/platform` (`httpsec.FirstWarning`).
+
+### Added
+
+- `core.AuthGate`, `core.AuthFailureStatus`, `core.APIKeyHint`,
+  `core.APIKeyHinter`, `BaseSensor.AuthGate`/`SetAuthGate`,
+  `CommandPoller.SetAuthGate`, `client.HTTPError.HTTPStatusCode`,
+  `client.Client.APIKeyHint`, `httpsec.FirstWarning`.
+
 ## Unreleased — release as **v0.7.3**
 
 ### Fixed
