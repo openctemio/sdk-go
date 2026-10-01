@@ -2,7 +2,19 @@
 
 All notable changes to `github.com/openctemio/sdk-go`.
 
-## Unreleased — release as **v0.7.2**
+## Unreleased — release as **v0.7.3**
+
+### Fixed
+
+- **`CheckEnv` rejects allow-private values it would ignore.** Only `1`
+  enables `SENSOR_ALLOW_PRIVATE_TARGETS`, `OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS`
+  and the httpsec switches, so `true`, `yes` or `on` used to be ignored
+  without a word and every private target refused. `core.CheckEnv()` now
+  returns an error naming the variable and the accepted values (`1`, `0` or
+  unset). Per-target behavior is unchanged; a sensor that calls `CheckEnv`
+  at startup refuses to start instead.
+
+## v0.7.2 — 2026-10-01
 
 ### Fixed
 
