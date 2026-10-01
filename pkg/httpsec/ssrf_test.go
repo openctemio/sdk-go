@@ -63,6 +63,9 @@ func TestIsIPBlocked_Ranges(t *testing.T) {
 		"100.64.0.1",
 		"0.0.0.1",
 		"224.1.2.3",
+		"::",      // IPv6 unspecified: reaches the local host, like 0.0.0.0
+		"ff02::1", // IPv6 multicast (all nodes)
+		"ff05::2", // IPv6 multicast (site-local routers)
 	}
 	for _, ip := range blocked {
 		if !IsIPBlocked(net.ParseIP(ip)) {
