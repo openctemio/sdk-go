@@ -1,8 +1,10 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+
+	"github.com/openctemio/sdk-go/pkg/ctis"
 )
 
 // CommandClient interface for command-related API operations.
@@ -53,8 +57,13 @@ type GetCommandsResponse struct {
 
 // ScanCommandPayload is the payload for scan commands.
 type ScanCommandPayload struct {
-	Scanner         string                 `json:"scanner"`
-	Target          string                 `json:"target"`
+	Scanner string `json:"scanner"`
+	// Target is the single scan target. The platform omits it when a job has
+	// several targets for a list-capable scanner (nuclei) and sends only
+	// Targets; when both are set, Target is the job.
+	Target string `json:"target"`
+	// Targets is the full target list (protocol v1, additive).
+	Targets         []string               `json:"targets,omitempty"`
 	Config          map[string]interface{} `json:"config,omitempty"`
 	TimeoutSeconds  int                    `json:"timeout_seconds,omitempty"`
 	ReportProgress  bool                   `json:"report_progress,omitempty"`
@@ -70,6 +79,21 @@ type EmbeddedTemplate struct {
 	Content      string `json:"content"`       // Base64-encoded template content (YAML/TOML)
 	ContentHash  string `json:"content_hash"`  // SHA256 hash of decoded content for verification
 }
+
+// MultiTargetScanner is a Scanner that can scan a list of targets in one run
+// (nuclei with -l). The command executor uses it when a scan command carries
+// several targets.
+type MultiTargetScanner interface {
+	Scanner
+	ScanTargets(ctx context.Context, targets []string, opts *ScanOptions) (*ScanResult, error)
+}
+
+// MaxScanTargets bounds the targets one scan command may carry (the
+// platform's per-run limit).
+const MaxScanTargets = 10000
+
+// maxRefusedListed caps how many refused targets an error message names.
+const maxRefusedListed = 10
 
 // ValidTemplateTypes defines allowed template types for security validation.
 var ValidTemplateTypes = map[string]bool{
@@ -120,8 +144,9 @@ func ValidateTemplate(tpl *EmbeddedTemplate) error {
 		return fmt.Errorf("invalid template type: %s (allowed: nuclei, semgrep, gitleaks)", tpl.TemplateType)
 	}
 
-	// Validate content size
-	if len(tpl.Content) > MaxTemplateSize {
+	// Validate content size. Content is base64, so bound the encoded form of
+	// a MaxTemplateSize template; the decoded size is checked again on write.
+	if len(tpl.Content) > base64.StdEncoding.EncodedLen(MaxTemplateSize) {
 		return fmt.Errorf("template content too large: max %d bytes", MaxTemplateSize)
 	}
 
@@ -433,6 +458,9 @@ type DefaultCommandExecutor struct {
 	collectors map[string]Collector
 	pusher     Pusher
 	parsers    *ParserRegistry
+	// assetResolver names the asset a scan target's findings belong to; nil
+	// leaves it to the parser.
+	assetResolver AssetResolver
 	// targetPolicy validates every scan target before a scanner runs.
 	// nil means DefaultScanTargetPolicy(), captured at construction.
 	targetPolicy atomic.Pointer[ScanTargetPolicy]
@@ -475,12 +503,26 @@ func (e *DefaultCommandExecutor) ScanTargetPolicy() *ScanTargetPolicy {
 }
 
 // SetParserRegistry supplies the registry used to convert a scanner's raw
-// output into a CTIS report. When set, executeScan auto-detects the correct
-// parser by content — gitleaks and trivy emit their own JSON rather than SARIF,
-// so assuming SARIF for every scanner drops their results ("cannot unmarshal
-// array into ctis.SARIFLog"). Falls back to SARIF when unset or unmatched.
+// output into a CTIS report. executeScan uses the parser registered under the
+// scanner's name, else the first parser that recognizes the content (see
+// ParserRegistry.ForScanner). Without a registry only SARIF output is
+// understood. Output no parser recognizes fails the command instead of being
+// reported as 0 findings — register a parser for every scanner that does not
+// emit SARIF (gitleaks, semgrep, trivy, nuclei).
 func (e *DefaultCommandExecutor) SetParserRegistry(r *ParserRegistry) {
 	e.parsers = r
+}
+
+// AssetResolver returns the asset a scan of target (already validated) should
+// report its findings on, or an empty value to let the parser decide.
+type AssetResolver func(scanner, target string) (ctis.AssetType, string)
+
+// SetAssetResolver sets how executeScan names the scanned asset. Without one,
+// parsers that cannot tell the asset from the scanner output (a filesystem scan
+// by gitleaks, for one) send findings without an asset, which the platform
+// files under a placeholder. Set it before the poller starts.
+func (e *DefaultCommandExecutor) SetAssetResolver(r AssetResolver) {
+	e.assetResolver = r
 }
 
 // AddScanner adds a scanner.
@@ -518,16 +560,25 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		return nil, fmt.Errorf("scanner not found: %s", payload.Scanner)
 	}
 
-	// SECURITY: the target is server-supplied. Validate it before any
+	// SECURITY: targets are server-supplied. Validate every one before any
 	// scanner sees it: SSRF blocklist for network targets, confinement for
 	// filesystem targets, and no leading '-' (flag injection).
-	target, err := e.ScanTargetPolicy().Validate(ctx, payload.Target)
+	targets, err := e.validateScanTargets(ctx, &payload)
 	if err != nil {
-		return nil, fmt.Errorf("invalid scan target: %w", err)
+		return nil, err
+	}
+	// target is the single target, or "" for a multi-target run.
+	var target string
+	if len(targets) == 1 {
+		target = targets[0]
+	}
+	multi, isMulti := scanner.(MultiTargetScanner)
+	if len(targets) > 1 && !isMulti {
+		return nil, fmt.Errorf("scanner %s takes one target per job; the command carries %d", payload.Scanner, len(targets))
 	}
 
 	if e.verbose.Load() {
-		fmt.Printf("[executor] Running scanner %s on %s\n", payload.Scanner, target)
+		fmt.Printf("[executor] Running scanner %s on %s\n", payload.Scanner, strings.Join(targets, ", "))
 	}
 
 	// Create scan options
@@ -578,7 +629,12 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 
 	// Run scan
 	startTime := time.Now()
-	scanResult, err := scanner.Scan(ctx, target, opts)
+	var scanResult *ScanResult
+	if len(targets) > 1 {
+		scanResult, err = multi.ScanTargets(ctx, targets, opts)
+	} else {
+		scanResult, err = scanner.Scan(ctx, target, opts)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("scan failed: %w", err)
 	}
@@ -589,25 +645,37 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		Metadata: map[string]interface{}{
 			"scanner_name":    scanResult.ScannerName,
 			"scanner_version": scanResult.ScannerVersion,
+			"targets_scanned": len(targets),
 		},
 	}
 
-	// Parse and push results if pusher is configured
-	if e.pusher != nil && len(scanResult.RawOutput) > 0 {
-		// Pick a parser by content. Not every scanner emits SARIF (gitleaks and
-		// trivy emit their own JSON), so a hardcoded SARIF parser fails on them.
-		// Fall back to SARIF when no registry is configured or none matches.
-		var parser Parser = &SARIFParser{}
-		if e.parsers != nil {
-			if p := e.parsers.FindParser(scanResult.RawOutput); p != nil {
-				parser = p
-			}
-		}
-		report, err := parser.Parse(ctx, scanResult.RawOutput, &ParseOptions{
-			ToolName: scanner.Name(),
-		})
+	// Parse and push results if pusher is configured. Empty (or whitespace-
+	// only) output is a scan that found nothing; anything else must be read by
+	// a parser, or the command fails: reporting it as 0 findings would hide
+	// real results behind a "completed" scan.
+	if e.pusher != nil && len(bytes.TrimSpace(scanResult.RawOutput)) > 0 {
+		parser, err := e.parsers.ForScanner(scanner.Name(), scanResult.RawOutput)
 		if err != nil {
 			return result, fmt.Errorf("parse failed: %w", err)
+		}
+		parseOpts := &ParseOptions{ToolName: scanner.Name()}
+		if target != "" && filepath.IsAbs(target) {
+			// Filesystem scan: report repo-relative paths, so a finding's
+			// fingerprint does not depend on where the code was checked out.
+			parseOpts.BasePath = target
+		}
+		if e.assetResolver != nil && target != "" {
+			parseOpts.AssetType, parseOpts.AssetValue = e.assetResolver(payload.Scanner, target)
+		}
+		report, err := parser.Parse(ctx, scanResult.RawOutput, parseOpts)
+		if err != nil {
+			return result, fmt.Errorf("parse failed (%s parser): %w", parser.Name(), err)
+		}
+		if report.Tool == nil || report.Tool.Name == "" {
+			if report.Tool == nil {
+				report.Tool = &ctis.Tool{}
+			}
+			report.Tool.Name = scanner.Name()
 		}
 
 		result.FindingsCount = len(report.Findings)
@@ -620,6 +688,50 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	}
 
 	return result, nil
+}
+
+// validateScanTargets returns the command's targets, each validated by the
+// scan-target policy. Target is the job when set (single-target and older
+// payloads); otherwise Targets is. A refused target fails the whole command,
+// naming it: scanning the rest would silently drop it from the results.
+func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payload *ScanCommandPayload) ([]string, error) {
+	raw := payload.Targets
+	if payload.Target != "" {
+		raw = []string{payload.Target}
+	}
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("invalid scan target: scan target is required")
+	}
+	if len(raw) > MaxScanTargets {
+		return nil, fmt.Errorf("invalid scan target: %d targets, more than the %d allowed per command", len(raw), MaxScanTargets)
+	}
+
+	policy := e.ScanTargetPolicy()
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	var refused []string
+	for _, t := range raw {
+		v, err := policy.Validate(ctx, t)
+		if err != nil {
+			refused = append(refused, fmt.Sprintf("%q: %v", t, err))
+			continue
+		}
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	if len(refused) > 0 {
+		listed := refused
+		if len(listed) > maxRefusedListed {
+			listed = append(listed[:maxRefusedListed:maxRefusedListed], fmt.Sprintf("and %d more", len(refused)-maxRefusedListed))
+		}
+		if len(raw) == 1 {
+			return nil, fmt.Errorf("invalid scan target: %s", strings.Join(listed, "; "))
+		}
+		return nil, fmt.Errorf("invalid scan target: %d of %d targets refused: %s", len(refused), len(raw), strings.Join(listed, "; "))
+	}
+	return out, nil
 }
 
 // validateScanArgValue rejects server-supplied values that end up as scanner
@@ -676,11 +788,22 @@ func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templa
 
 	// Write each template to the temp directory
 	for _, tpl := range templates {
+		// The platform sends the template base64-encoded for JSON transport,
+		// and content_hash is the SHA-256 of the DECODED template (the API
+		// computes it over the stored bytes). Hashing the base64 text made
+		// every custom-template scan fail with a hash mismatch, and writing it
+		// undecoded would have handed the scanner base64 instead of YAML.
+		content, err := decodeTemplateContent(&tpl)
+		if err != nil {
+			cleanup()
+			return "", nil, err
+		}
+
 		// Verify content hash if provided (mandatory for integrity)
 		if tpl.ContentHash != "" {
-			hash := sha256.Sum256([]byte(tpl.Content))
+			hash := sha256.Sum256(content)
 			computedHash := hex.EncodeToString(hash[:])
-			if computedHash != tpl.ContentHash {
+			if !strings.EqualFold(computedHash, tpl.ContentHash) {
 				cleanup()
 				return "", nil, fmt.Errorf("template %s hash mismatch: expected %s, got %s", tpl.Name, tpl.ContentHash, computedHash)
 			}
@@ -720,7 +843,7 @@ func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templa
 		}
 
 		// Write template content to file with restrictive permissions
-		if err := os.WriteFile(filePath, []byte(tpl.Content), 0600); err != nil {
+		if err := os.WriteFile(filePath, content, 0600); err != nil {
 			cleanup()
 			return "", nil, fmt.Errorf("write template %s: %w", tpl.Name, err)
 		}
@@ -731,6 +854,19 @@ func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templa
 	}
 
 	return tmpDir, cleanup, nil
+}
+
+// decodeTemplateContent returns the template bytes carried base64-encoded in
+// tpl.Content, bounded by MaxTemplateSize.
+func decodeTemplateContent(tpl *EmbeddedTemplate) ([]byte, error) {
+	content, err := base64.StdEncoding.DecodeString(strings.TrimSpace(tpl.Content))
+	if err != nil {
+		return nil, fmt.Errorf("template %s: content is not valid base64: %w", tpl.Name, err)
+	}
+	if len(content) > MaxTemplateSize {
+		return nil, fmt.Errorf("template %s: content too large: max %d bytes", tpl.Name, MaxTemplateSize)
+	}
+	return content, nil
 }
 
 // isSubPath checks if child is under parent directory.
