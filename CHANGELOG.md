@@ -4,6 +4,14 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Fixed
+
+- **Sensors report their version and hostname.** `HeartbeatRequest` declared
+  `version` and `hostname` but the client never set them, so the platform
+  showed "No host info" for every sensor. `core.SensorStatus` now carries
+  `Version` and `Hostname` (filled by `NewBaseSensor` from the config and
+  `os.Hostname()`), and every heartbeat sends them.
+
 ### Added
 
 - `outbox.Inspect(dir, keyFile)` reads an outbox directory without taking its

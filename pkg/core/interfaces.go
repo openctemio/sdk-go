@@ -432,6 +432,11 @@ type SensorStatus struct {
 	MemoryPercent float64 `json:"memory_percent,omitempty"`
 	ActiveJobs    int     `json:"active_jobs,omitempty"`
 	Region        string  `json:"region,omitempty"`
+
+	// Version and Hostname identify the running sensor to the platform (shown
+	// on the Sensors page). Both are sent with every heartbeat.
+	Version  string `json:"version,omitempty"`
+	Hostname string `json:"hostname,omitempty"`
 }
 
 // =============================================================================
