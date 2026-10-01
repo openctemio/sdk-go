@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -57,6 +58,10 @@ type BaseSensor struct {
 	// loop waits it instead of sending at once (guarded by statusMu).
 	firstHeartbeatNext time.Duration
 	firstHeartbeatSent bool
+
+	// assetResolver names the asset a scheduled scan's findings belong to
+	// (see SetAssetResolver).
+	assetResolver AssetResolver
 }
 
 // BaseSensorConfig configures a BaseSensor.
@@ -583,7 +588,7 @@ func (a *BaseSensor) runAllScans(ctx context.Context) {
 			}
 
 			// Parse result
-			report, err := a.parseResult(ctx, scanner, result)
+			report, err := a.parseResult(ctx, scanner, target, result)
 			if err != nil {
 				a.incrementErrors()
 				if a.verbose {
@@ -665,7 +670,7 @@ func (a *BaseSensor) runAllCollections(ctx context.Context) {
 }
 
 // parseResult parses scanner output to CTIS format.
-func (a *BaseSensor) parseResult(ctx context.Context, scanner Scanner, result *ScanResult) (*ctis.Report, error) {
+func (a *BaseSensor) parseResult(ctx context.Context, scanner Scanner, target string, result *ScanResult) (*ctis.Report, error) {
 	// Try to find a parser that can handle this output
 	parser := a.parsers.FindParser(result.RawOutput)
 	if parser == nil {
@@ -677,9 +682,27 @@ func (a *BaseSensor) parseResult(ctx context.Context, scanner Scanner, result *S
 		return nil, fmt.Errorf("no suitable parser found for scanner %s", scanner.Name())
 	}
 
-	return parser.Parse(ctx, result.RawOutput, &ParseOptions{
-		ToolName: scanner.Name(),
-	})
+	opts := &ParseOptions{ToolName: scanner.Name()}
+	if filepath.IsAbs(target) {
+		// Filesystem scan: repo-relative paths, as the command executor does.
+		opts.BasePath = target
+	}
+	a.statusMu.RLock()
+	resolve := a.assetResolver
+	a.statusMu.RUnlock()
+	if resolve != nil && target != "" {
+		opts.AssetType, opts.AssetValue = resolve(scanner.Name(), target)
+	}
+	return parser.Parse(ctx, result.RawOutput, opts)
+}
+
+// SetAssetResolver names the asset a scheduled scan's findings are filed on
+// (for example the repository a directory belongs to). Without it a parser
+// may emit findings without an asset, which protocol v2 rejects (RFC-026).
+func (a *BaseSensor) SetAssetResolver(r AssetResolver) {
+	a.statusMu.Lock()
+	defer a.statusMu.Unlock()
+	a.assetResolver = r
 }
 
 // recordScan updates scan statistics.

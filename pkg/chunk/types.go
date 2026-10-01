@@ -140,6 +140,20 @@ func (r *Report) HasFailed() bool {
 	return r.Status == ReportStatusFailed
 }
 
+// StorageStats contains chunk statistics (Manager.GetStats).
+type StorageStats struct {
+	TotalReports      int   `json:"total_reports"`
+	PendingReports    int   `json:"pending_reports"`
+	UploadingReports  int   `json:"uploading_reports"`
+	CompletedReports  int   `json:"completed_reports"`
+	FailedReports     int   `json:"failed_reports"`
+	TotalChunks       int   `json:"total_chunks"`
+	PendingChunks     int   `json:"pending_chunks"`
+	CompletedChunks   int   `json:"completed_chunks"`
+	FailedChunks      int   `json:"failed_chunks"`
+	TotalStorageBytes int64 `json:"total_storage_bytes"`
+}
+
 // CanRetry checks if there are chunks that can be retried.
 func (c *Chunk) CanRetry(maxRetries int) bool {
 	return c.RetryCount < maxRetries && c.Status != ChunkStatusCompleted

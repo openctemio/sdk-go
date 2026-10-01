@@ -461,6 +461,14 @@ type PushResult struct {
 	FindingsUpdated int    `json:"findings_updated"`
 	AssetsCreated   int    `json:"assets_created"`
 	AssetsUpdated   int    `json:"assets_updated"`
+
+	// Queued: the results are durably stored in the outbox and will be
+	// delivered when the platform is reachable; the counts above are not
+	// known yet.
+	Queued bool `json:"queued,omitempty"`
+	// ReportID is the protocol v2 report id the results travel under ("" on
+	// v1).
+	ReportID string `json:"report_id,omitempty"`
 }
 
 // =============================================================================

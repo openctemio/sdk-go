@@ -144,8 +144,9 @@ func TestClient_PushFindings(t *testing.T) {
 	defer server.Close()
 
 	c := New(&Config{
-		BaseURL: server.URL,
-		APIKey:  "test-key",
+		BaseURL:  server.URL,
+		APIKey:   "test-key",
+		Protocol: ProtocolV1,
 	})
 
 	report := ctis.NewReport()

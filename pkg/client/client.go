@@ -12,6 +12,8 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,8 +24,10 @@ import (
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/outbox"
 	"github.com/openctemio/sdk-go/pkg/retry"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
+	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 	"github.com/openctemio/sdk-go/pkg/useragent"
 )
 
@@ -46,10 +50,18 @@ type Client struct {
 	compressionLevel compress.Level
 	analyzer         *compress.Analyzer
 
-	// Retry queue (optional)
-	retryQueue  retry.RetryQueue
-	retryWorker *retry.RetryWorker
-	retryMu     sync.RWMutex
+	// protocol is the results protocol setting (ProtocolAuto, V1, V2) and
+	// v2 the decision auto mode took.
+	protocol string
+	v2       v2State
+
+	// Durable outbox (optional; EnableOutbox).
+	obMu       sync.Mutex
+	ob         *outbox.Outbox
+	obCancel   context.CancelFunc
+	obDone     chan struct{}
+	obSyncWait time.Duration
+	obLogf     func(format string, args ...any)
 
 	// keyMu guards apiKey so it can be rotated at runtime (sensor key
 	// auto-renewal) while push/heartbeat requests read it concurrently.
@@ -98,12 +110,28 @@ type Config struct {
 	CompressionAlgo   string `yaml:"compression_algo" json:"compression_algo"`     // "zstd" or "gzip" (default: "zstd")
 	CompressionLevel  int    `yaml:"compression_level" json:"compression_level"`   // 1-9 (default: 3)
 
-	// Retry queue configuration (optional)
+	// Protocol selects the results protocol: "auto" (default: v2 when the
+	// platform offers it, else v1), "v1" or "v2".
+	Protocol string `yaml:"protocol" json:"protocol"`
+
+	// OutboxDir enables the durable outbox (see EnableOutbox) in that
+	// directory. New logs, and leaves the outbox off, when it cannot be
+	// opened; call EnableOutbox yourself to handle the error.
+	OutboxDir string `yaml:"outbox_dir" json:"outbox_dir"`
+	// OutboxMaxBytes and OutboxMaxAge override the outbox caps.
+	OutboxMaxBytes int64         `yaml:"outbox_max_bytes" json:"outbox_max_bytes"`
+	OutboxMaxAge   time.Duration `yaml:"outbox_max_age" json:"outbox_max_age"`
+
+	// Deprecated: the retry queue is replaced by the outbox. EnableRetryQueue
+	// enables the outbox (in OutboxDir, else RetryQueueDir/outbox, else
+	// ~/.openctem/outbox) and imports the reports an older SDK left in
+	// RetryQueueDir. RetryInterval and RetryMaxAttempts are ignored: the
+	// outbox retries with back-off until RetryTTL (OutboxMaxAge) evicts.
 	EnableRetryQueue bool          `yaml:"enable_retry_queue" json:"enable_retry_queue"`
-	RetryQueueDir    string        `yaml:"retry_queue_dir" json:"retry_queue_dir"`       // Default: ~/.openctem/retry-queue
-	RetryInterval    time.Duration `yaml:"retry_interval" json:"retry_interval"`         // Default: 5m
-	RetryMaxAttempts int           `yaml:"retry_max_attempts" json:"retry_max_attempts"` // Default: 10
-	RetryTTL         time.Duration `yaml:"retry_ttl" json:"retry_ttl"`                   // Default: 7d (168h)
+	RetryQueueDir    string        `yaml:"retry_queue_dir" json:"retry_queue_dir"`
+	RetryInterval    time.Duration `yaml:"retry_interval" json:"retry_interval"`
+	RetryMaxAttempts int           `yaml:"retry_max_attempts" json:"retry_max_attempts"`
+	RetryTTL         time.Duration `yaml:"retry_ttl" json:"retry_ttl"`
 }
 
 // DefaultConfig returns default client config.
@@ -147,7 +175,12 @@ func New(cfg *Config) *Client {
 		analyzer = compress.NewAnalyzer(nil)
 	}
 
-	return &Client{
+	protocol, err := ParseProtocol(cfg.Protocol)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[openctem] WARNING: %v; using auto\n", err)
+		protocol = ProtocolAuto
+	}
+	c := &Client{
 		baseURL:    cfg.BaseURL,
 		apiKey:     cfg.APIKey,
 		sensorID:   cfg.SensorID,
@@ -163,7 +196,37 @@ func New(cfg *Config) *Client {
 		compressor:       compressor,
 		compressionLevel: compressionLevel,
 		analyzer:         analyzer,
+		protocol:         protocol,
 	}
+	if cfg.OutboxDir != "" || cfg.EnableRetryQueue {
+		ocfg := OutboxConfig{Dir: cfg.OutboxDir, MaxBytes: cfg.OutboxMaxBytes, MaxAge: cfg.OutboxMaxAge}
+		if ocfg.MaxAge == 0 {
+			ocfg.MaxAge = cfg.RetryTTL
+		}
+		if cfg.EnableRetryQueue {
+			ocfg.LegacyRetryQueueDir = cfg.RetryQueueDir
+			if ocfg.Dir == "" {
+				ocfg.Dir = legacyOutboxDir(cfg.RetryQueueDir)
+			}
+		}
+		if err := c.EnableOutbox(ocfg); err != nil {
+			fmt.Fprintf(os.Stderr, "[openctem] WARNING: outbox not enabled: %v\n", err)
+		}
+	}
+	return c
+}
+
+// legacyOutboxDir is where the deprecated EnableRetryQueue puts the outbox:
+// inside the configured retry-queue directory, else ~/.openctem/outbox.
+func legacyOutboxDir(retryDir string) string {
+	if retryDir != "" {
+		return filepath.Join(retryDir, "outbox")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), "openctem-outbox")
+	}
+	return filepath.Join(home, ".openctem", "outbox")
 }
 
 // =============================================================================
@@ -188,11 +251,22 @@ func NewWithOptions(opts ...Option) *Client {
 		retryDelay: 2 * time.Second,
 		// SSRF: see the imperative constructor above for rationale.
 		httpClient: httpsec.NewAPIClient(30 * time.Second),
+		protocol:   ProtocolAuto,
 	}
 	for _, opt := range opts {
 		opt(c)
 	}
 	return c
+}
+
+// WithProtocol sets the results protocol: ProtocolAuto (default),
+// ProtocolV1 or ProtocolV2. An unknown value keeps auto.
+func WithProtocol(p string) Option {
+	return func(c *Client) {
+		if v, err := ParseProtocol(p); err == nil {
+			c.protocol = v
+		}
+	}
 }
 
 // WithBaseURL sets the API base URL.
@@ -309,62 +383,144 @@ type HeartbeatRequest struct {
 	MemoryPercent float64 `json:"memory_percent,omitempty"`
 	ActiveJobs    int     `json:"active_jobs,omitempty"`
 	Region        string  `json:"region,omitempty"`
+
+	// Outbox is the durable outbox's state (absent without an outbox).
+	Outbox *HeartbeatOutbox `json:"outbox,omitempty"`
 }
 
-// PushFindings sends findings to OpenCTEM.
-// If the push fails and a retry queue is configured, the report is queued for later retry.
-func (c *Client) PushFindings(ctx context.Context, report *ctis.Report) (*core.PushResult, error) {
-	result, err := c.pushFindingsInternal(ctx, report)
+// HeartbeatOutbox is the outbox state a heartbeat reports (additive to the
+// v1 heartbeat; servers that do not know it ignore it).
+type HeartbeatOutbox struct {
+	PendingCount     int   `json:"pending_count"`
+	PendingBytes     int64 `json:"pending_bytes"`
+	OldestAgeSeconds int64 `json:"oldest_age_seconds"`
+	DeadLetterCount  int   `json:"dead_letter_count"`
+	EvictedCount     int64 `json:"evicted_count"`
+}
 
-	// If push failed and retry queue is enabled, queue for retry
-	if err != nil && c.hasRetryQueue() {
-		if queueErr := c.queueForRetry(ctx, report, retry.ItemTypeFindings, err); queueErr != nil {
-			if c.verbose {
-				fmt.Printf("[openctem] Failed to queue for retry: %v\n", queueErr)
+// PushFindings sends a report's findings (and assets) to OpenCTEM, over
+// protocol v2 when the platform offers it (Config.Protocol) and v1
+// otherwise.
+//
+// With the outbox enabled (EnableOutbox) the report is first written to disk
+// and this call waits up to OutboxConfig.SyncWait for its delivery: it
+// returns the result when the platform accepted it, a *RefusedError when the
+// platform refused it for good (dead letter), and Queued=true when the
+// platform could not be reached yet; the outbox delivers it later, across
+// restarts. Without the outbox the report is sent once (with the client's
+// own retries) and an error means it was not delivered.
+//
+// A context from core.WithCommandID binds the results to that command.
+func (c *Client) PushFindings(ctx context.Context, report *ctis.Report) (*core.PushResult, error) {
+	if ob := c.Outbox(); ob != nil {
+		return c.enqueueReport(ctx, ob, report, false)
+	}
+	return c.pushReportDirect(ctx, report, false)
+}
+
+// PushAssets sends a report's assets (its findings are dropped). See
+// PushFindings for the outbox behavior.
+func (c *Client) PushAssets(ctx context.Context, report *ctis.Report) (*core.PushResult, error) {
+	if ob := c.Outbox(); ob != nil {
+		return c.enqueueReport(ctx, ob, report, true)
+	}
+	return c.pushReportDirect(ctx, report, true)
+}
+
+// pushReportDirect sends a report without the outbox: v2 or v1 by protocol,
+// with the client's retries (MaxRetries) on transient failures. v2 retries
+// reuse the report id, so they never duplicate.
+func (c *Client) pushReportDirect(ctx context.Context, report *ctis.Report, assetsOnly bool) (*core.PushResult, error) {
+	r := report
+	if assetsOnly {
+		cp := *report
+		cp.Findings = nil
+		r = &cp
+	}
+	useV2, _, err := c.resultsProtocol(ctx)
+	if err != nil && !errors.Is(err, ErrV2Unsupported) && c.protocol == ProtocolAuto {
+		// Discovery failed (network): v1 is what an unknown platform speaks.
+		useV2, err = false, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !useV2 {
+		return c.pushReportV1(ctx, r, assetsOnly, c.maxRetries)
+	}
+	opts := &V2PushOptions{CommandID: core.CommandIDFromContext(ctx)}
+	var prog V2Progress
+	opts.OnProgress = func(p V2Progress) error { prog = p; return nil }
+	var lastErr error
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if attempt > 0 {
+			wait := c.backoffFor(attempt)
+			var ve *V2Error
+			if errors.As(lastErr, &ve) && ve.RetryAfter > wait {
+				wait = min(ve.RetryAfter, 5*time.Minute)
 			}
-		} else if c.verbose {
-			fmt.Printf("[openctem] Queued for retry due to: %v\n", err)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+			p := prog
+			opts.Progress = &p
+		}
+		st, err := c.PushResultsV2(ctx, r, opts)
+		if err == nil {
+			return v2PushResult(st), nil
+		}
+		lastErr = err
+		if opts.ReportID == "" {
+			opts.ReportID = prog.ReportID
+		}
+		var ve *V2Error
+		switch {
+		case errors.As(err, &ve) && c.protocol == ProtocolAuto && (ve.routeMissing() || ve.ProblemName() == protov2.ProblemScopeDenied):
+			c.forceV1(!ve.routeMissing())
+			return c.pushReportV1(ctx, r, assetsOnly, c.maxRetries)
+		case errors.As(err, &ve) && ve.Transient():
+		case errors.As(err, &ve), errors.Is(err, ErrV2NoTool), ctx.Err() != nil:
+			return nil, err
 		}
 	}
-
-	return result, err
+	return nil, fmt.Errorf("request failed after %d retries: %w", c.maxRetries, lastErr)
 }
 
-// pushFindingsInternal performs the actual push without retry queue logic.
-func (c *Client) pushFindingsInternal(ctx context.Context, report *ctis.Report) (*core.PushResult, error) {
+// pushReportV1 posts a report to the v1 ingest route with up to retries
+// retries.
+func (c *Client) pushReportV1(ctx context.Context, report *ctis.Report, assetsOnly bool, retries int) (*core.PushResult, error) {
 	url := c.baseURL + legacyv1.PathIngest
-
-	if c.verbose {
-		fmt.Printf("[openctem] Pushing %d findings to %s\n", len(report.Findings), url)
+	if assetsOnly && len(report.Findings) > 0 {
+		cp := *report
+		cp.Findings = nil
+		report = &cp
 	}
-
-	// Send CTIS Report directly (API expects ctis.Report format)
+	if c.verbose {
+		fmt.Printf("[openctem] Pushing %d findings, %d assets to %s\n", len(report.Findings), len(report.Assets), url)
+	}
 	body, err := json.Marshal(report)
 	if err != nil {
 		return nil, fmt.Errorf("marshal report: %w", err)
 	}
-
-	data, err := c.doRequest(ctx, "POST", url, body)
+	data, _, err := c.doRequestFull(ctx, "POST", url, body, nil, retries)
 	if err != nil {
 		return nil, err
 	}
-
 	var resp IngestResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
-
 	if c.verbose {
 		fmt.Printf("[openctem] Push completed: %d findings created, %d updated\n",
 			resp.FindingsCreated, resp.FindingsUpdated)
 	}
-
 	success := len(resp.Errors) == 0
 	message := ""
 	if !success {
 		message = fmt.Sprintf("%d errors occurred", len(resp.Errors))
 	}
-
 	return &core.PushResult{
 		Success:         success,
 		Message:         message,
@@ -372,61 +528,6 @@ func (c *Client) pushFindingsInternal(ctx context.Context, report *ctis.Report) 
 		FindingsUpdated: resp.FindingsUpdated,
 		AssetsCreated:   resp.AssetsCreated,
 		AssetsUpdated:   resp.AssetsUpdated,
-	}, nil
-}
-
-// PushAssets sends assets to OpenCTEM.
-// If the push fails and a retry queue is configured, the report is queued for later retry.
-func (c *Client) PushAssets(ctx context.Context, report *ctis.Report) (*core.PushResult, error) {
-	result, err := c.pushAssetsInternal(ctx, report)
-
-	// If push failed and retry queue is enabled, queue for retry
-	if err != nil && c.hasRetryQueue() {
-		if queueErr := c.queueForRetry(ctx, report, retry.ItemTypeAssets, err); queueErr != nil {
-			if c.verbose {
-				fmt.Printf("[openctem] Failed to queue assets for retry: %v\n", queueErr)
-			}
-		} else if c.verbose {
-			fmt.Printf("[openctem] Queued assets for retry due to: %v\n", err)
-		}
-	}
-
-	return result, err
-}
-
-// pushAssetsInternal performs the actual push without retry queue logic.
-func (c *Client) pushAssetsInternal(ctx context.Context, report *ctis.Report) (*core.PushResult, error) {
-	url := c.baseURL + legacyv1.PathIngest
-
-	if c.verbose {
-		fmt.Printf("[openctem] Pushing %d assets to %s\n", len(report.Assets), url)
-	}
-
-	// Send CTIS Report directly with findings cleared (API expects ctis.Report format)
-	assetOnlyReport := *report
-	assetOnlyReport.Findings = nil
-
-	body, err := json.Marshal(&assetOnlyReport)
-	if err != nil {
-		return nil, fmt.Errorf("marshal report: %w", err)
-	}
-
-	data, err := c.doRequest(ctx, "POST", url, body)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp IngestResponse
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	success := len(resp.Errors) == 0
-
-	return &core.PushResult{
-		Success:       success,
-		AssetsCreated: resp.AssetsCreated,
-		AssetsUpdated: resp.AssetsUpdated,
 	}, nil
 }
 
@@ -473,15 +574,47 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		ActiveJobs:    status.ActiveJobs,
 		Region:        status.Region,
 	}
+	ob := c.Outbox()
+	if ob != nil {
+		st := ob.Stats()
+		req.Outbox = &HeartbeatOutbox{
+			PendingCount:     st.PendingCount,
+			PendingBytes:     st.PendingBytes,
+			OldestAgeSeconds: int64(st.OldestAge(time.Now()) / time.Second),
+			DeadLetterCount:  st.DeadLetterCount,
+			EvictedCount:     st.Evicted,
+		}
+	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal heartbeat: %w", err)
 	}
 
-	data, err := c.doRequestWithHeaders(ctx, "POST", url, body, extra)
+	// Discovery of protocol v2 results (RFC-026, RFC-023 C3): the answer
+	// carries X-OpenCTEM-Protocol: 2 when the platform offers it.
+	announceV2 := c.protocol != ProtocolV1
+	if announceV2 {
+		h := http.Header{}
+		for k, vs := range extra {
+			for _, v := range vs {
+				h.Add(k, v)
+			}
+		}
+		h.Add(legacyv1.HeaderSensorFeatures, protov2.FeatureResultsV2)
+		extra = h
+	}
+
+	data, hdr, err := c.doRequestFull(ctx, "POST", url, body, extra, c.maxRetries)
 	if err != nil {
 		return nil, err
+	}
+	if announceV2 {
+		c.noteProtocolAdvert(hdr.Get(protov2.HeaderProtocolAdvert) == strconv.Itoa(protov2.ProtocolVersion))
+	}
+	// The platform answered: deliver what waits now (doorbell).
+	if ob != nil {
+		ob.Wake()
 	}
 
 	if c.verbose {
@@ -611,70 +744,89 @@ func (c *Client) BaselineDiff(ctx context.Context, repository, baseBranch string
 
 // doRequest performs an HTTP request with retry logic.
 func (c *Client) doRequest(ctx context.Context, method, url string, body []byte) ([]byte, error) {
-	return c.doRequestWithHeaders(ctx, method, url, body, nil)
+	data, _, err := c.doRequestFull(ctx, method, url, body, nil, c.maxRetries)
+	return data, err
 }
 
 // doRequestWithHeaders is doRequest with extra request headers.
 func (c *Client) doRequestWithHeaders(ctx context.Context, method, url string, body []byte, extra http.Header) ([]byte, error) {
+	data, _, err := c.doRequestFull(ctx, method, url, body, extra, c.maxRetries)
+	return data, err
+}
+
+// backoffFor is the jittered exponential delay before retry attempt n (>=1).
+func (c *Client) backoffFor(attempt int) time.Duration {
+	// Exponential backoff with a cap + jitter. Uncapped `1<<(attempt-1)`
+	// grows unbounded (and can overflow), and identical delays across many
+	// sensors cause synchronized retry storms. Cap the shift, cap the
+	// ceiling, then apply full jitter in [backoff/2, backoff].
+	shift := max(attempt-1, 0)
+	if shift > maxBackoffShift {
+		shift = maxBackoffShift
+	}
+	backoff := c.retryDelay * time.Duration(1<<uint(shift))
+	if backoff <= 0 || backoff > maxRetryBackoff {
+		backoff = maxRetryBackoff
+	}
+	half := backoff / 2
+	// G404: retry jitter only needs to de-correlate concurrent clients, not
+	// resist prediction. crypto/rand would add a syscall per retry for no
+	// security benefit.
+	return half + time.Duration(rand.Int64N(int64(half)+1)) //nolint:gosec // jitter, not a secret
+}
+
+// doRequestFull performs an HTTP request with up to retries retries and
+// returns the body and the response headers.
+func (c *Client) doRequestFull(ctx context.Context, method, url string, body []byte, extra http.Header, retries int) ([]byte, http.Header, error) {
 	if err := c.checkBaseURL(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var lastErr error
 
-	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+	for attempt := 0; attempt <= retries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff with a cap + jitter. Uncapped `1<<(attempt-1)`
-			// grows unbounded (and can overflow), and identical delays across
-			// many sensors cause synchronized retry storms. Cap the shift, cap
-			// the ceiling, then apply full jitter in [backoff/2, backoff].
-			shift := attempt - 1
-			if shift > maxBackoffShift {
-				shift = maxBackoffShift
+			backoff := c.backoffFor(attempt)
+			if he, ok := IsHTTPError(lastErr); ok && he.RetryAfter > backoff {
+				backoff = min(he.RetryAfter, 5*time.Minute)
 			}
-			backoff := c.retryDelay * time.Duration(1<<uint(shift))
-			if backoff <= 0 || backoff > maxRetryBackoff {
-				backoff = maxRetryBackoff
-			}
-			half := backoff / 2
-			// G404: retry jitter only needs to de-correlate concurrent clients, not
-			// resist prediction. crypto/rand would add a syscall per retry for no
-			// security benefit.
-			backoff = half + time.Duration(rand.Int64N(int64(half)+1)) //nolint:gosec // jitter, not a secret
 			if c.verbose {
-				fmt.Printf("[openctem] Retrying request (attempt %d/%d) after %v\n", attempt, c.maxRetries, backoff)
+				fmt.Printf("[openctem] Retrying request (attempt %d/%d) after %v\n", attempt, retries, backoff)
 			}
 
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return nil, nil, ctx.Err()
 			case <-time.After(backoff):
 			}
 		}
 
-		data, err := c.doRequestOnce(ctx, method, url, body, extra)
+		data, hdr, err := c.doRequestOnce(ctx, method, url, body, extra)
 		if err == nil {
-			return data, nil
+			return data, hdr, nil
 		}
 
 		lastErr = err
 
 		// Don't retry on client errors (4xx) except 429 (rate limit)
 		if isClientError(err) && !isRateLimitError(err) {
-			return nil, err
+			return nil, nil, err
 		}
 
 		// Don't retry on context errors
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, nil, ctx.Err()
 		}
 	}
 
-	return nil, fmt.Errorf("request failed after %d retries: %w", c.maxRetries, lastErr)
+	if retries == 0 {
+		return nil, nil, lastErr
+	}
+	return nil, nil, fmt.Errorf("request failed after %d retries: %w", retries, lastErr)
 }
 
 // doRequestOnce performs a single HTTP request.
-func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []byte, extra http.Header) ([]byte, error) {
+func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []byte, extra http.Header) ([]byte, http.Header, error) {
 	// Compress body if compression is enabled and body is large enough
 	requestBody := body
 	var contentEncoding string
@@ -694,7 +846,7 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(requestBody))
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, nil, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -718,17 +870,18 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+		return nil, nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Best effort: a truncated or failed read still yields a useful error.
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
-		return nil, &HTTPError{
+		return nil, resp.Header, &HTTPError{
 			StatusCode: resp.StatusCode,
 			Body:       string(errBody),
 			RequestID:  resp.Header.Get("X-Request-ID"),
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
 		}
 	}
 
@@ -736,13 +889,13 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 	// silently truncated into invalid JSON.
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, nil, fmt.Errorf("read response: %w", err)
 	}
 	if len(data) > maxResponseBodyBytes {
-		return nil, fmt.Errorf("response body exceeds %d bytes", maxResponseBodyBytes)
+		return nil, nil, fmt.Errorf("response body exceeds %d bytes", maxResponseBodyBytes)
 	}
 
-	return data, nil
+	return data, resp.Header, nil
 }
 
 // checkBaseURL validates the configured base URL once per client. A
@@ -768,6 +921,8 @@ type HTTPError struct {
 	StatusCode int    `json:"status_code"`
 	Body       string `json:"body"`
 	RequestID  string `json:"request_id,omitempty"`
+	// RetryAfter is the server's Retry-After (429/503), 0 when absent.
+	RetryAfter time.Duration `json:"retry_after,omitempty"`
 }
 
 func (e *HTTPError) Error() string {
@@ -885,6 +1040,10 @@ func (c *Client) SetAPIKey(key string) {
 	c.keyMu.Lock()
 	c.apiKey = key
 	c.keyMu.Unlock()
+	// Delivery paused on a rejected key tries again with the new one.
+	if ob := c.Outbox(); ob != nil {
+		ob.Resume()
+	}
 }
 
 // APIKeyHint names the client's API key in log lines without revealing it
@@ -901,247 +1060,28 @@ func (c *Client) getAPIKey() string {
 }
 
 // ============================================================================
-// Retry Queue Methods
+// Retry queue (deprecated: wrappers around the outbox)
 // ============================================================================
 
-// hasRetryQueue returns true if a retry queue is configured.
-func (c *Client) hasRetryQueue() bool {
-	c.retryMu.RLock()
-	defer c.retryMu.RUnlock()
-	return c.retryQueue != nil
-}
-
-// queueForRetry adds a report to the retry queue for later retry.
-func (c *Client) queueForRetry(ctx context.Context, report *ctis.Report, itemType retry.ItemType, originalErr error) error {
-	c.retryMu.RLock()
-	queue := c.retryQueue
-	c.retryMu.RUnlock()
-
-	if queue == nil {
-		return errors.New("retry queue not configured")
-	}
-
-	item := &retry.QueueItem{
-		Type:        itemType,
-		Report:      report,
-		LastError:   originalErr.Error(),
-		SensorID:    c.sensorID,
-		ScannerName: "",
-	}
-
-	// Set scanner name from tool info if available
-	if report.Tool != nil {
-		item.ScannerName = report.Tool.Name
-	}
-
-	// Set target path from first asset if available
-	if len(report.Assets) > 0 {
-		item.TargetPath = report.Assets[0].Value
-	}
-
-	_, err := queue.Enqueue(ctx, item)
-	return err
-}
-
-// EnableRetryQueue enables the retry queue with the given configuration.
-// This creates a file-based retry queue and optionally starts the background worker.
-func (c *Client) EnableRetryQueue(ctx context.Context, cfg *RetryQueueConfig) error {
-	c.retryMu.Lock()
-	defer c.retryMu.Unlock()
-
-	if cfg == nil {
-		cfg = DefaultRetryQueueConfig()
-	}
-
-	// Create file-based queue
-	queue, err := retry.NewFileRetryQueue(&retry.FileQueueConfig{
-		Dir:           cfg.Dir,
-		MaxSize:       cfg.MaxSize,
-		Deduplication: true,
-		Verbose:       c.verbose,
-		Backoff:       cfg.Backoff,
-	})
-	if err != nil {
-		return fmt.Errorf("create retry queue: %w", err)
-	}
-
-	c.retryQueue = queue
-
-	// Create worker if auto-start is enabled
-	if cfg.AutoStart {
-		worker := retry.NewRetryWorker(&retry.RetryWorkerConfig{
-			Interval:    cfg.Interval,
-			BatchSize:   cfg.BatchSize,
-			MaxAttempts: cfg.MaxAttempts,
-			TTL:         cfg.TTL,
-			Backoff:     cfg.Backoff,
-			Verbose:     c.verbose,
-		}, queue, c)
-
-		c.retryWorker = worker
-
-		// Start the worker
-		if err := worker.Start(ctx); err != nil {
-			return fmt.Errorf("start retry worker: %w", err)
-		}
-	}
-
-	if c.verbose {
-		fmt.Printf("[openctem] Retry queue enabled (dir: %s)\n", cfg.Dir)
-	}
-
-	return nil
-}
-
-// StartRetryWorker starts the background retry worker.
-// EnableRetryQueue must be called first.
-func (c *Client) StartRetryWorker(ctx context.Context) error {
-	c.retryMu.Lock()
-	defer c.retryMu.Unlock()
-
-	if c.retryQueue == nil {
-		return errors.New("retry queue not enabled")
-	}
-
-	if c.retryWorker != nil && c.retryWorker.IsRunning() {
-		return nil // Already running
-	}
-
-	if c.retryWorker == nil {
-		c.retryWorker = retry.NewRetryWorker(nil, c.retryQueue, c)
-	}
-
-	return c.retryWorker.Start(ctx)
-}
-
-// StopRetryWorker stops the background retry worker gracefully.
-func (c *Client) StopRetryWorker(ctx context.Context) error {
-	c.retryMu.Lock()
-	worker := c.retryWorker
-	c.retryMu.Unlock()
-
-	if worker == nil {
-		return nil
-	}
-
-	return worker.Stop(ctx)
-}
-
-// DisableRetryQueue stops the worker and closes the retry queue.
-func (c *Client) DisableRetryQueue(ctx context.Context) error {
-	c.retryMu.Lock()
-	defer c.retryMu.Unlock()
-
-	// Stop worker if running
-	if c.retryWorker != nil {
-		if err := c.retryWorker.Stop(ctx); err != nil {
-			return fmt.Errorf("stop retry worker: %w", err)
-		}
-		c.retryWorker = nil
-	}
-
-	// Close queue
-	if c.retryQueue != nil {
-		if err := c.retryQueue.Close(); err != nil {
-			return fmt.Errorf("close retry queue: %w", err)
-		}
-		c.retryQueue = nil
-	}
-
-	return nil
-}
-
-// GetRetryQueueStats returns statistics about the retry queue.
-func (c *Client) GetRetryQueueStats(ctx context.Context) (*retry.QueueStats, error) {
-	c.retryMu.RLock()
-	queue := c.retryQueue
-	c.retryMu.RUnlock()
-
-	if queue == nil {
-		return nil, errors.New("retry queue not enabled")
-	}
-
-	return queue.Stats(ctx)
-}
-
-// GetRetryWorkerStats returns statistics about the retry worker.
-func (c *Client) GetRetryWorkerStats() (*retry.WorkerStats, error) {
-	c.retryMu.RLock()
-	worker := c.retryWorker
-	c.retryMu.RUnlock()
-
-	if worker == nil {
-		return nil, errors.New("retry worker not running")
-	}
-
-	stats := worker.Stats()
-	return &stats, nil
-}
-
-// ProcessRetryQueueNow immediately processes pending items in the retry queue.
-// This is useful for testing or manual intervention.
-func (c *Client) ProcessRetryQueueNow(ctx context.Context) error {
-	c.retryMu.RLock()
-	worker := c.retryWorker
-	c.retryMu.RUnlock()
-
-	if worker == nil {
-		return errors.New("retry worker not configured")
-	}
-
-	return worker.ProcessNow(ctx)
-}
-
-// PushReport implements retry.ReportPusher interface.
-// This is used by the retry worker to push items from the queue.
-func (c *Client) PushReport(ctx context.Context, report *ctis.Report) error {
-	// Use internal methods to avoid re-queueing on failure
-	if len(report.Findings) > 0 {
-		_, err := c.pushFindingsInternal(ctx, report)
-		return err
-	}
-	if len(report.Assets) > 0 {
-		_, err := c.pushAssetsInternal(ctx, report)
-		return err
-	}
-	return nil
-}
-
 // RetryQueueConfig configures the retry queue.
+//
+// Deprecated: use EnableOutbox with an OutboxConfig. Dir is where the old
+// queue's files are imported from (the outbox lives in Dir/outbox); TTL
+// becomes the outbox's MaxAge; the other fields are ignored.
 type RetryQueueConfig struct {
-	// Dir is the directory to store queue files.
-	// Default: ~/.openctem/retry-queue
-	Dir string
-
-	// MaxSize is the maximum number of items in the queue.
-	// Default: 1000
-	MaxSize int
-
-	// Interval is how often to check the queue for items to retry.
-	// Default: 5 minutes
-	Interval time.Duration
-
-	// BatchSize is the maximum number of items to process per check.
-	// Default: 10
-	BatchSize int
-
-	// MaxAttempts is the maximum number of retry attempts per item.
-	// Default: 10
+	Dir         string
+	MaxSize     int
+	Interval    time.Duration
+	BatchSize   int
 	MaxAttempts int
-
-	// TTL is how long to keep items in the queue before expiring.
-	// Default: 7 days
-	TTL time.Duration
-
-	// Backoff configures the retry backoff behavior.
-	Backoff *retry.BackoffConfig
-
-	// AutoStart starts the retry worker automatically.
-	// Default: true
-	AutoStart bool
+	TTL         time.Duration
+	Backoff     *retry.BackoffConfig
+	AutoStart   bool
 }
 
 // DefaultRetryQueueConfig returns a configuration with default values.
+//
+// Deprecated: use EnableOutbox.
 func DefaultRetryQueueConfig() *RetryQueueConfig {
 	return &RetryQueueConfig{
 		MaxSize:     retry.DefaultMaxQueueSize,
@@ -1154,29 +1094,105 @@ func DefaultRetryQueueConfig() *RetryQueueConfig {
 	}
 }
 
-// Close gracefully shuts down the client and releases resources.
-// This stops the retry worker and closes the retry queue if enabled.
-func (c *Client) Close() error {
-	c.retryMu.Lock()
-	defer c.retryMu.Unlock()
-
-	// Stop the retry worker if running
-	if c.retryWorker != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = c.retryWorker.Stop(ctx)
-		c.retryWorker = nil
+// EnableRetryQueue enables the durable outbox in cfg.Dir/outbox (default
+// ~/.openctem/outbox) and imports the reports an older SDK queued in
+// cfg.Dir.
+//
+// Deprecated: use EnableOutbox.
+func (c *Client) EnableRetryQueue(_ context.Context, cfg *RetryQueueConfig) error {
+	if cfg == nil {
+		cfg = DefaultRetryQueueConfig()
 	}
-
-	// Close the retry queue
-	if c.retryQueue != nil {
-		if err := c.retryQueue.Close(); err != nil {
-			return fmt.Errorf("close retry queue: %w", err)
-		}
-		c.retryQueue = nil
+	if c.Outbox() != nil {
+		return nil
 	}
+	return c.EnableOutbox(OutboxConfig{
+		Dir:                 legacyOutboxDir(cfg.Dir),
+		MaxAge:              cfg.TTL,
+		LegacyRetryQueueDir: cfg.Dir,
+	})
+}
 
+// StartRetryWorker is a no-op: the outbox delivers in the background from
+// EnableOutbox on. It fails when no outbox is enabled.
+//
+// Deprecated: use EnableOutbox.
+func (c *Client) StartRetryWorker(_ context.Context) error {
+	if c.Outbox() == nil {
+		return errors.New("outbox not enabled")
+	}
 	return nil
+}
+
+// StopRetryWorker is a no-op; Close stops the outbox.
+//
+// Deprecated: use Close.
+func (c *Client) StopRetryWorker(_ context.Context) error { return nil }
+
+// DisableRetryQueue stops and closes the outbox.
+//
+// Deprecated: use Close.
+func (c *Client) DisableRetryQueue(_ context.Context) error { return c.closeOutbox() }
+
+// GetRetryQueueStats returns the outbox's state in the old shape.
+//
+// Deprecated: use OutboxStats.
+func (c *Client) GetRetryQueueStats(_ context.Context) (*retry.QueueStats, error) {
+	st, ok := c.OutboxStats()
+	if !ok {
+		return nil, errors.New("outbox not enabled")
+	}
+	return &retry.QueueStats{
+		TotalItems:     st.PendingCount + st.DeadLetterCount,
+		PendingItems:   st.PendingCount,
+		FailedItems:    st.DeadLetterCount,
+		OldestItem:     st.OldestPending,
+		TotalRetries:   st.Attempts,
+		SuccessfulPush: st.Delivered,
+	}, nil
+}
+
+// GetRetryWorkerStats returns the outbox's delivery counters in the old
+// shape.
+//
+// Deprecated: use OutboxStats.
+func (c *Client) GetRetryWorkerStats() (*retry.WorkerStats, error) {
+	st, ok := c.OutboxStats()
+	if !ok {
+		return nil, errors.New("outbox not enabled")
+	}
+	return &retry.WorkerStats{
+		TotalAttempts:  st.Attempts,
+		SuccessfulPush: st.Delivered,
+		FailedAttempts: st.Attempts - st.Delivered,
+		ExhaustedItems: st.DeadLetters,
+		IsRunning:      true,
+	}, nil
+}
+
+// ProcessRetryQueueNow delivers what the outbox can deliver now.
+//
+// Deprecated: use FlushOutbox.
+func (c *Client) ProcessRetryQueueNow(ctx context.Context) error {
+	if c.Outbox() == nil {
+		return errors.New("outbox not enabled")
+	}
+	return c.FlushOutbox(ctx)
+}
+
+// PushReport pushes a report directly (no outbox), findings and assets
+// alike. It implemented the old retry worker's interface.
+//
+// Deprecated: use PushFindings.
+func (c *Client) PushReport(ctx context.Context, report *ctis.Report) error {
+	_, err := c.pushReportDirect(ctx, report, len(report.Findings) == 0)
+	return err
+}
+
+// Close stops the outbox's delivery and releases its directory. Items not
+// delivered yet stay on disk for the next process.
+func (c *Client) Close() error {
+	return c.closeOutbox()
 }
 
 // =============================================================================

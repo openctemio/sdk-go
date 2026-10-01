@@ -39,8 +39,42 @@ All notable changes to `github.com/openctemio/sdk-go`.
     deprecated `detect --source` form is gone). `BETTERLEAKS_*` is added to
     the scanner environment allowlist (`GITLEAKS_*` stays: betterleaks v1
     still reads `GITLEAKS_CONFIG`).
+- **The durable outbox replaces `pkg/retry` and the SQLite chunk store.**
+  `retry.FileRetryQueue`, `retry.RetryWorker` and the `retry.RetryQueue`
+  interface are removed; `pkg/retry` keeps only the types the deprecated
+  client wrappers return and is deprecated (removal planned for v0.9.0).
+  `chunk.Storage` (SQLite) is removed, and with it the `modernc.org/sqlite`
+  dependency tree: `chunk.Manager` keeps its API but stores chunks in an
+  outbox (`Config.OutboxDir`, default `chunk-outbox` next to the old
+  `DatabasePath`; a leftover `chunks.db` is reported, not read).
+  The client's retry-queue methods (`EnableRetryQueue`, `StartRetryWorker`,
+  `ProcessRetryQueueNow`, `GetRetryQueueStats`, ...) and
+  `Config.EnableRetryQueue` still work as deprecated wrappers around the
+  outbox; reports a pre-outbox SDK left in its retry-queue directory are
+  imported on first start.
+- **Results use protocol v2 when the platform offers it** (`Config.Protocol`,
+  default `auto`). Against a v2 platform `PushFindings`/`PushAssets` send
+  `PUT /api/v2/sensor/results/{report_id}`; v2 requires `report.tool.name`
+  (`client.ErrV2NoTool`) and rejects findings without an asset in the same
+  document. `Protocol: "v1"` keeps every request byte-identical to v0.7.x.
+- `core.PushResult` gains `Queued` and `ReportID`; with an outbox,
+  `PushFindings` returns `Queued: true` instead of an error when the platform
+  cannot be reached, and a `*client.RefusedError` when it refused the report.
 
 ### Fixed
+
+- **The retry queue was never on.** `client.New` ignored
+  `Config.EnableRetryQueue`, so the sensor's `-retry-queue` flag and
+  `RETRY_QUEUE=true` created nothing and `StartRetryWorker` failed with
+  "retry queue not enabled" (logged only as a warning). And when it was on
+  (`EnableRetryQueue` called directly), a report was queued only AFTER a
+  failed push, without fsync, with a count cap: a crash during the push lost
+  it. `Config.EnableRetryQueue` now enables the outbox, which writes every
+  result before the first send.
+- **A command was reported complete before its results arrived.** The
+  executor's push failed or was queued and the command was completed anyway.
+  With the outbox, the command result waits behind its results and becomes
+  "failed" when the platform refused them.
 
 - **A rejected API key no longer floods the platform or hides in the logs.**
   When a heartbeat gets 401/403 (key wrong, revoked, expired or regenerated,
@@ -109,6 +143,42 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **Durable outbox (`pkg/outbox`, `Client.EnableOutbox`).** Every report
+  and command result is written to disk before the first send and deleted
+  only after the platform acknowledged it, so a crash, `kill -9` or restart
+  loses nothing. One file per item, written crash-safely (temporary file,
+  fsync, rename, directory fsync), 0600 in a 0700 directory, an exclusive
+  `flock`, sealed with AES-256-GCM under a 0600 key file created on first
+  use; a torn or corrupted file is quarantined in `corrupt/`. A byte cap
+  (default 1 GiB, at most half of the usable space) and an age cap (default
+  7 days) evict the oldest entries first, with a log line, a metric and the
+  heartbeat's `evicted_count`. Network errors, 5xx and 429/503 back off with
+  jitter behind a circuit breaker (honouring `Retry-After`); 401 pauses
+  delivery until a heartbeat is accepted or `SetAPIKey` is called; 400, 409,
+  413, 415, 422 go to `dead/` with the problem document. Delivery is oldest
+  first, one or two at a time, and drains at once when a heartbeat is
+  accepted. `outbox.NewCollector` exposes the state as Prometheus metrics;
+  the heartbeat carries `outbox: {pending_count, pending_bytes,
+  oldest_age_seconds, dead_letter_count, evicted_count}` (api#651 stores
+  and shows it).
+- **Protocol v2 results client (RFC-026 WP-S1).** `pkg/sensorproto/v2`
+  (wire vocabulary), `Client.PushResultsV2` (stable UUIDv7 `report_id`,
+  zstd, RFC 9530 `Content-Digest`, RFC 9457 problems, the §3.8 retry table,
+  segments sized from `GET /api/v2/sensor/hello` plus a commit, resumable
+  through `V2Progress`), `Client.Hello`, `Client.GetReportStatus`,
+  `Client.AbandonReport`, `Client.ResultsProtocol`, `client.WithProtocol`.
+  `chunk.SplitSegments` makes every segment a complete CTIS document (tool,
+  metadata and the assets its findings reference); `chunk.BindFindingAssets`
+  binds findings to a report's only asset before splitting. Discovery: the
+  heartbeat announces `results-v2` and reads `X-OpenCTEM-Protocol: 2`.
+- **Conformance suite (`pkg/conformance`, RFC-026 WP-S3).** `FakePlatform`
+  implements the v2 contract strictly and records requests; the SDK's tests
+  check headers and digest, that only 429/5xx/network are retried (with the
+  same `report_id`), 413 splits, a partially accepted report is never
+  resent, a lost answer is replayed as a no-op, and the outbox scenarios
+  (platform down, restart, poison item, 401, command ordering). The live
+  half runs the contract against a real API:
+  `OPENCTEM_CONFORMANCE_URL=… OPENCTEM_CONFORMANCE_KEY=… go test ./pkg/conformance -run Live`.
 - `core.AuthGate`, `core.AuthFailureStatus`, `core.APIKeyHint`,
   `core.APIKeyHinter`, `core.AuthFailureAdvice`, `BaseSensor.AuthGate`/`SetAuthGate`/`FirstHeartbeat`,
   `CommandPoller.SetAuthGate`, `client.HTTPError.HTTPStatusCode`,

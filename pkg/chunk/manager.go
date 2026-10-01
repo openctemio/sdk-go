@@ -3,13 +3,18 @@ package chunk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/openctemio/sdk-go/pkg/compress"
+	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/outbox"
 )
 
 // Uploader is the interface for uploading chunks.
@@ -18,18 +23,29 @@ type Uploader interface {
 	UploadChunk(ctx context.Context, data *ChunkData) error
 }
 
-// Manager handles chunking, storage, and upload coordination.
+// Outbox item attributes of a chunk.
+const (
+	attrReportID    = "chunk_report_id"
+	attrChunkIndex  = "chunk_index"
+	attrTotalChunks = "chunk_total"
+)
+
+// Manager splits large reports into protocol v1 chunks and uploads them
+// from the durable outbox (pkg/outbox): every chunk is on disk before the
+// first upload and removed only when the platform accepted it, so a crash
+// or restart resumes where it stopped. (Before sdk-go v0.8.0 the chunks
+// lived in a SQLite database; see Config.DatabasePath.)
 type Manager struct {
-	cfg        *Config
-	storage    *Storage
-	splitter   *Splitter
-	compressor *compress.Compressor
-	uploader   Uploader
+	cfg      *Config
+	ob       *outbox.Outbox
+	splitter *Splitter
+	uploader Uploader
 
 	mu      sync.RWMutex
 	running bool
-	stopCh  chan struct{}
-	wg      sync.WaitGroup
+	cancel  context.CancelFunc
+	done    chan struct{}
+	reports map[string]*Report
 
 	// Callbacks
 	onProgress func(*Progress)
@@ -39,7 +55,7 @@ type Manager struct {
 	verbose bool
 }
 
-// NewManager creates a new chunk manager.
+// NewManager creates a chunk manager and opens its outbox.
 func NewManager(cfg *Config) (*Manager, error) {
 	if cfg == nil {
 		cfg = DefaultConfig()
@@ -47,23 +63,55 @@ func NewManager(cfg *Config) (*Manager, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-
-	// Initialize storage
-	storage, err := NewStorage(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("init storage: %w", err)
+	dir := cfg.outboxDir()
+	if cfg.DatabasePath != "" {
+		if fi, err := os.Stat(cfg.DatabasePath); err == nil && fi.Size() > 0 {
+			fmt.Fprintf(os.Stderr, "[chunk] %s is the chunk database of an SDK before v0.8.0; chunks still pending in it are not uploaded any more (chunks now live in %s). Delete it once it is not needed.\n",
+				cfg.DatabasePath, dir)
+		}
 	}
+	ob, err := outbox.Open(outbox.Config{
+		Dir:      dir,
+		MaxBytes: int64(cfg.MaxStorageMB) << 20,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("init chunk outbox: %w", err)
+	}
+	m := &Manager{
+		cfg:      cfg,
+		ob:       ob,
+		splitter: NewSplitter(cfg),
+		reports:  map[string]*Report{},
+	}
+	m.recoverReports()
+	return m, nil
+}
 
-	// Initialize compressor
-	compressor := compress.NewCompressor(compress.AlgorithmZSTD, compress.Level(cfg.CompressionLevel))
-
-	return &Manager{
-		cfg:        cfg,
-		storage:    storage,
-		splitter:   NewSplitter(cfg),
-		compressor: compressor,
-		stopCh:     make(chan struct{}),
-	}, nil
+// recoverReports rebuilds the progress of reports whose chunks a previous
+// process left in the outbox.
+func (m *Manager) recoverReports() {
+	for _, meta := range m.ob.Pending() {
+		if meta.Kind != outbox.KindChunk {
+			continue
+		}
+		id := meta.Attrs[attrReportID]
+		total, _ := strconv.Atoi(meta.Attrs[attrTotalChunks])
+		r := m.reports[id]
+		if r == nil {
+			r = &Report{ID: id, TotalChunks: total, Status: ReportStatusPending, CreatedAt: meta.CreatedAt, UpdatedAt: meta.CreatedAt}
+			m.reports[id] = r
+		}
+	}
+	for id, r := range m.reports {
+		pending := 0
+		for _, meta := range m.ob.Pending() {
+			if meta.Attrs[attrReportID] == id {
+				pending++
+			}
+		}
+		// Chunks of this report not in the outbox any more were uploaded.
+		r.CompletedChunks = max(0, r.TotalChunks-pending)
+	}
 }
 
 // SetUploader configures the uploader.
@@ -94,97 +142,70 @@ func (m *Manager) NeedsChunking(report *ctis.Report) bool {
 	return m.splitter.NeedsChunking(report)
 }
 
-// SubmitReport queues a report for chunked upload.
-// Returns immediately after storing chunks to SQLite.
-func (m *Manager) SubmitReport(ctx context.Context, report *ctis.Report) (*Report, error) {
-	// Split report into chunks
+// SubmitReport splits a report into chunks and stores them durably in the
+// outbox. It returns once every chunk is on disk.
+func (m *Manager) SubmitReport(_ context.Context, report *ctis.Report) (*Report, error) {
 	chunkDataList, err := m.splitter.Split(report)
 	if err != nil {
 		return nil, fmt.Errorf("split report: %w", err)
 	}
-
 	reportID := chunkDataList[0].ReportID
 	now := time.Now()
-
-	// Calculate original size
 	originalData, err := json.Marshal(report)
 	if err != nil {
 		return nil, fmt.Errorf("marshal report: %w", err)
 	}
-	originalSize := len(originalData)
-
-	// Create report record
 	r := &Report{
 		ID:                    reportID,
 		OriginalFindingsCount: len(report.Findings),
 		OriginalAssetsCount:   len(report.Assets),
-		OriginalSize:          originalSize,
+		OriginalSize:          len(originalData),
 		TotalChunks:           len(chunkDataList),
 		Status:                ReportStatusPending,
-		CompressionAlgo:       string(m.compressor.Algorithm()),
+		CompressionAlgo:       "zstd",
 		CreatedAt:             now,
 		UpdatedAt:             now,
-		Metadata: &Metadata{
-			ScanID: reportID,
-		},
+		Metadata:              &Metadata{ScanID: reportID},
 	}
-
 	if report.Tool != nil {
 		r.Metadata.ToolName = report.Tool.Name
 		r.Metadata.ToolVersion = report.Tool.Version
 	}
+	m.mu.Lock()
+	m.reports[reportID] = r
+	m.mu.Unlock()
 
-	// Store report
-	if err := m.storage.SaveReport(ctx, r); err != nil {
-		return nil, fmt.Errorf("save report: %w", err)
-	}
-
-	// Store chunks
-	totalCompressedSize := 0
-	for i, chunkData := range chunkDataList {
-		// Serialize chunk data
-		data, err := json.Marshal(chunkData)
+	before := m.ob.Stats().PendingBytes
+	for i, cd := range chunkDataList {
+		data, err := json.Marshal(cd)
 		if err != nil {
 			return nil, fmt.Errorf("marshal chunk %d: %w", i, err)
 		}
-
-		// Compress chunk data
-		compressed, err := m.compressor.Compress(data)
-		if err != nil {
-			return nil, fmt.Errorf("compress chunk %d: %w", i, err)
+		if _, err := m.ob.Enqueue(outbox.Meta{
+			Kind: outbox.KindChunk,
+			Attrs: map[string]string{
+				attrReportID:    reportID,
+				attrChunkIndex:  strconv.Itoa(i),
+				attrTotalChunks: strconv.Itoa(len(chunkDataList)),
+			},
+		}, data); err != nil {
+			return nil, fmt.Errorf("store chunk %d: %w", i, err)
 		}
-
-		chunk := &Chunk{
-			ID:               uuid.New().String(),
-			ReportID:         reportID,
-			ChunkIndex:       i,
-			TotalChunks:      len(chunkDataList),
-			Data:             compressed,
-			UncompressedSize: len(data),
-			CompressedSize:   len(compressed),
-			Status:           ChunkStatusPending,
-			CreatedAt:        now,
-		}
-
-		if err := m.storage.SaveChunk(ctx, chunk); err != nil {
-			return nil, fmt.Errorf("save chunk %d: %w", i, err)
-		}
-
-		totalCompressedSize += len(compressed)
 	}
-
-	// Update report with compressed size
-	r.CompressedSize = totalCompressedSize
-	if err := m.storage.SaveReport(ctx, r); err != nil {
-		return nil, fmt.Errorf("update report size: %w", err)
-	}
-
-	if m.verbose {
+	m.mu.Lock()
+	r.CompressedSize = int(max(0, m.ob.Stats().PendingBytes-before))
+	m.mu.Unlock()
+	if m.isVerbose() {
 		fmt.Printf("[chunk] Report %s queued: %d chunks, %d bytes -> %d bytes\n",
-			reportID, len(chunkDataList), originalSize, totalCompressedSize)
+			reportID, len(chunkDataList), r.OriginalSize, r.CompressedSize)
 	}
-
 	return r, nil
+}
+
+func (m *Manager) isVerbose() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.verbose
 }
 
 // Start begins background upload processing.
@@ -198,13 +219,21 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.mu.Unlock()
 		return fmt.Errorf("uploader not configured")
 	}
-	m.running = true
-	m.stopCh = make(chan struct{})
+	rctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	m.running, m.cancel, m.done = true, cancel, done
 	m.mu.Unlock()
-
-	m.wg.Add(1)
-	go m.uploadLoop(ctx)
-
+	go func() {
+		defer close(done)
+		_ = m.ob.Run(rctx, outbox.DelivererFunc(m.deliver))
+		// Reset running on every exit path (ctx cancellation too), so
+		// IsRunning does not lie and Start works again.
+		m.mu.Lock()
+		if m.done == done {
+			m.running = false
+		}
+		m.mu.Unlock()
+	}()
 	return nil
 }
 
@@ -215,11 +244,11 @@ func (m *Manager) Stop() {
 		m.mu.Unlock()
 		return
 	}
+	cancel, done := m.cancel, m.done
 	m.running = false
-	close(m.stopCh)
 	m.mu.Unlock()
-
-	m.wg.Wait()
+	cancel()
+	<-done
 }
 
 // IsRunning returns whether the manager is running.
@@ -230,304 +259,213 @@ func (m *Manager) IsRunning() bool {
 }
 
 // GetProgress returns upload progress for a report.
-func (m *Manager) GetProgress(ctx context.Context, reportID string) (*Progress, error) {
-	report, err := m.storage.GetReport(ctx, reportID)
-	if err != nil {
-		return nil, err
-	}
-	if report == nil {
+func (m *Manager) GetProgress(_ context.Context, reportID string) (*Progress, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	r := m.reports[reportID]
+	if r == nil {
 		return nil, fmt.Errorf("report not found: %s", reportID)
 	}
-	return report.CalculateProgress(), nil
+	return r.CalculateProgress(), nil
 }
 
-// GetStats returns storage statistics.
-func (m *Manager) GetStats(ctx context.Context) (*StorageStats, error) {
-	return m.storage.GetStorageStats(ctx)
+// GetStats returns statistics of the reports this manager knows and the
+// bytes its outbox holds.
+func (m *Manager) GetStats(_ context.Context) (*StorageStats, error) {
+	st := m.ob.Stats()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	s := &StorageStats{TotalStorageBytes: st.PendingBytes + st.DeadLetterBytes}
+	for _, r := range m.reports {
+		s.TotalReports++
+		s.TotalChunks += r.TotalChunks
+		s.CompletedChunks += r.CompletedChunks
+		s.FailedChunks += r.FailedChunks
+		s.PendingChunks += r.TotalChunks - r.CompletedChunks - r.FailedChunks
+		switch r.Status {
+		case ReportStatusPending:
+			s.PendingReports++
+		case ReportStatusUploading:
+			s.UploadingReports++
+		case ReportStatusCompleted:
+			s.CompletedReports++
+		case ReportStatusFailed:
+			s.FailedReports++
+		}
+	}
+	return s, nil
 }
 
-// uploadLoop runs the background upload process.
-func (m *Manager) uploadLoop(ctx context.Context) {
-	defer m.wg.Done()
-	// Reset running on EVERY exit path (incl. ctx cancellation, not just an
-	// explicit Stop()), otherwise IsRunning() lies and Start() silently no-ops
-	// on restart while no upload goroutine is actually running.
-	defer func() {
-		m.mu.Lock()
-		m.running = false
-		m.mu.Unlock()
-	}()
-
-	uploadDelay := time.Duration(m.cfg.UploadDelayMs) * time.Millisecond
-	ticker := time.NewTicker(uploadDelay)
-	defer ticker.Stop()
-
-	cleanupTicker := time.NewTicker(1 * time.Hour)
-	defer cleanupTicker.Stop()
-
-	for {
+// deliver uploads one chunk (outbox.Deliverer).
+func (m *Manager) deliver(ctx context.Context, d *outbox.Delivery) (any, error) {
+	if d.Meta.Kind != outbox.KindChunk {
+		return nil, outbox.Permanent(0, "not a chunk", nil, nil)
+	}
+	reportID := d.Meta.Attrs[attrReportID]
+	var cd ChunkData
+	if err := json.Unmarshal(d.Payload, &cd); err != nil {
+		m.chunkDone(reportID, false)
+		return nil, outbox.Permanent(0, "stored chunk is not valid", nil, err)
+	}
+	m.mu.RLock()
+	up := m.uploader
+	m.mu.RUnlock()
+	if up == nil {
+		return nil, errors.New("uploader not configured")
+	}
+	m.setStatus(reportID, ReportStatusUploading)
+	err := up.UploadChunk(ctx, &cd)
+	if delay := time.Duration(m.cfg.UploadDelayMs) * time.Millisecond; delay > 0 {
 		select {
 		case <-ctx.Done():
-			return
-		case <-m.stopCh:
-			return
-		case <-cleanupTicker.C:
-			m.cleanup(ctx)
-		case <-ticker.C:
-			m.processNextChunk(ctx)
+		case <-time.After(delay):
 		}
+	}
+	if err == nil {
+		if m.isVerbose() {
+			fmt.Printf("[chunk] Chunk %d/%d uploaded for report %s\n", cd.ChunkIndex+1, cd.TotalChunks, reportID)
+		}
+		m.chunkDone(reportID, true)
+		return nil, nil
+	}
+	if ctx.Err() != nil {
+		return nil, err
+	}
+	if m.isVerbose() {
+		fmt.Printf("[chunk] Chunk %d failed for report %s: %v\n", cd.ChunkIndex, reportID, err)
+	}
+	cls := classifyUpload(err)
+	var perm *outbox.PermanentError
+	if !errors.As(cls, &perm) && m.cfg.MaxRetries > 0 && d.State.Attempts+1 > m.cfg.MaxRetries {
+		cls = outbox.Permanent(0, fmt.Sprintf("gave up after %d attempts: %v", d.State.Attempts+1, err), nil, err)
+	}
+	if errors.As(cls, &perm) {
+		m.chunkDone(reportID, false)
+	}
+	return nil, cls
+}
+
+// classifyUpload maps an upload error to the outbox classes: a rejected key
+// pauses, other 4xx (except 429) are permanent, the rest are transient.
+func classifyUpload(err error) error {
+	if core.AuthFailureStatus(err) != 0 {
+		return outbox.Unauthorized(err)
+	}
+	var se interface{ HTTPStatusCode() int }
+	if errors.As(err, &se) {
+		code := se.HTTPStatusCode()
+		if code >= 400 && code < 500 && code != http.StatusTooManyRequests {
+			return outbox.Permanent(code, err.Error(), nil, err)
+		}
+	}
+	return err
+}
+
+func (m *Manager) setStatus(reportID string, s ReportStatus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r := m.reports[reportID]; r != nil && r.Status == ReportStatusPending {
+		r.Status = s
+		r.UpdatedAt = time.Now()
 	}
 }
 
-// processNextChunk uploads the next pending chunk.
-func (m *Manager) processNextChunk(ctx context.Context) {
-	chunk, err := m.storage.GetNextPendingChunk(ctx)
-	if err != nil {
-		if m.verbose {
-			fmt.Printf("[chunk] Error getting next chunk: %v\n", err)
-		}
+// chunkDone records one finished chunk and fires the callbacks.
+func (m *Manager) chunkDone(reportID string, ok bool) {
+	m.mu.Lock()
+	r := m.reports[reportID]
+	if r == nil {
+		m.mu.Unlock()
 		return
 	}
-	if chunk == nil {
-		return // No pending chunks
-	}
-
-	// Update status to uploading
-	if err := m.storage.UpdateChunkStatus(ctx, chunk.ID, ChunkStatusUploading, ""); err != nil {
-		if m.verbose {
-			fmt.Printf("[chunk] Error updating status: %v\n", err)
-		}
-		return
-	}
-
-	// Decompress chunk data
-	decompressed, err := m.compressor.Decompress(chunk.Data)
-	if err != nil {
-		m.handleChunkFailure(ctx, chunk, fmt.Sprintf("decompress error: %v", err))
-		return
-	}
-
-	// Unmarshal chunk data
-	var chunkData ChunkData
-	if err := json.Unmarshal(decompressed, &chunkData); err != nil {
-		m.handleChunkFailure(ctx, chunk, fmt.Sprintf("unmarshal error: %v", err))
-		return
-	}
-
-	// Upload chunk
-	if err := m.uploader.UploadChunk(ctx, &chunkData); err != nil {
-		m.handleChunkFailure(ctx, chunk, fmt.Sprintf("upload error: %v", err))
-		return
-	}
-
-	// Mark as completed
-	if err := m.storage.UpdateChunkStatus(ctx, chunk.ID, ChunkStatusCompleted, ""); err != nil {
-		if m.verbose {
-			fmt.Printf("[chunk] Error marking completed: %v\n", err)
-		}
-		return
-	}
-
-	// Increment completed count
-	if err := m.storage.IncrementCompletedChunks(ctx, chunk.ReportID); err != nil {
-		if m.verbose {
-			fmt.Printf("[chunk] Error incrementing completed: %v\n", err)
-		}
-		return
-	}
-
-	// Auto-cleanup: Delete chunk data immediately after successful upload
-	// This prevents disk bloat on sensor machines
-	if m.cfg.AutoCleanupOnUpload {
-		if err := m.storage.DeleteChunkData(ctx, chunk.ID); err != nil {
-			if m.verbose {
-				fmt.Printf("[chunk] Error deleting chunk data: %v\n", err)
-			}
-		} else if m.verbose {
-			fmt.Printf("[chunk] Cleaned up chunk %s data after upload\n", chunk.ID)
-		}
-	}
-
-	if m.verbose {
-		fmt.Printf("[chunk] Chunk %d/%d uploaded for report %s\n",
-			chunk.ChunkIndex+1, chunk.TotalChunks, chunk.ReportID)
-	}
-
-	// Check if report is complete
-	m.checkReportCompletion(ctx, chunk.ReportID)
-
-	// Notify progress
-	m.notifyProgress(ctx, chunk.ReportID)
-}
-
-// handleChunkFailure handles a failed chunk upload.
-func (m *Manager) handleChunkFailure(ctx context.Context, chunk *Chunk, errorMsg string) {
-	if m.verbose {
-		fmt.Printf("[chunk] Chunk %d failed for report %s: %s\n",
-			chunk.ChunkIndex, chunk.ReportID, errorMsg)
-	}
-
-	// Check if can retry
-	if chunk.CanRetry(m.cfg.MaxRetries) {
-		// Reset to pending for retry AND increment retry_count. Plain
-		// UpdateChunkStatus(pending) never bumped retry_count (it only counts
-		// the 'failed' status), so CanRetry stayed true forever → a chunk that
-		// kept failing was retried infinitely and ProcessPending never drained.
-		_ = m.storage.RequeueForRetry(ctx, chunk.ID, errorMsg)
-		return
-	}
-
-	// Mark as failed
-	_ = m.storage.UpdateChunkStatus(ctx, chunk.ID, ChunkStatusFailed, errorMsg)
-	_ = m.storage.IncrementFailedChunks(ctx, chunk.ReportID)
-
-	// Check if report should be marked as failed
-	m.checkReportCompletion(ctx, chunk.ReportID)
-}
-
-// checkReportCompletion checks if a report is complete or failed.
-func (m *Manager) checkReportCompletion(ctx context.Context, reportID string) {
-	report, err := m.storage.GetReport(ctx, reportID)
-	if err != nil || report == nil {
-		return
-	}
-
-	// Check if all chunks are done (completed or failed)
-	totalDone := report.CompletedChunks + report.FailedChunks
-	if totalDone < report.TotalChunks {
-		return
-	}
-
-	// Determine final status
-	var newStatus ReportStatus
-	if report.FailedChunks > 0 {
-		newStatus = ReportStatusFailed
+	if ok {
+		r.CompletedChunks++
 	} else {
-		newStatus = ReportStatusCompleted
+		r.FailedChunks++
 	}
+	now := time.Now()
+	r.UpdatedAt = now
+	finished := r.CompletedChunks+r.FailedChunks >= r.TotalChunks
+	if finished {
+		if r.FailedChunks > 0 {
+			r.Status = ReportStatusFailed
+		} else {
+			r.Status = ReportStatusCompleted
+		}
+		r.CompletedAt = &now
+	}
+	progress := r.CalculateProgress()
+	failed := r.FailedChunks
+	status := r.Status
+	onProgress, onComplete, onError := m.onProgress, m.onComplete, m.onError
+	verbose := m.verbose
+	m.mu.Unlock()
 
-	if err := m.storage.UpdateReportStatus(ctx, reportID, newStatus); err != nil {
+	if onProgress != nil {
+		onProgress(progress)
+	}
+	if !finished {
 		return
 	}
-
-	// Notify callbacks
-	m.mu.RLock()
-	onComplete := m.onComplete
-	onError := m.onError
-	m.mu.RUnlock()
-
-	if newStatus == ReportStatusCompleted {
-		// Auto-cleanup: Delete all chunks when report completes
-		if m.cfg.CleanupOnReportComplete {
-			if deleted, err := m.storage.DeleteReportChunks(ctx, reportID); err != nil {
-				if m.verbose {
-					fmt.Printf("[chunk] Error cleaning up completed report %s: %v\n", reportID, err)
-				}
-			} else if m.verbose && deleted > 0 {
-				fmt.Printf("[chunk] Cleaned up %d chunks for completed report %s\n", deleted, reportID)
-			}
-		}
-
+	if status == ReportStatusCompleted {
 		if onComplete != nil {
 			onComplete(reportID)
 		}
-		if m.verbose {
+		if verbose {
 			fmt.Printf("[chunk] Report %s completed successfully\n", reportID)
 		}
-	} else {
-		if onError != nil {
-			onError(reportID, fmt.Errorf("report failed: %d chunks failed", report.FailedChunks))
-		}
-		if m.verbose {
-			fmt.Printf("[chunk] Report %s failed: %d/%d chunks failed\n",
-				reportID, report.FailedChunks, report.TotalChunks)
-		}
+		return
+	}
+	if onError != nil {
+		onError(reportID, fmt.Errorf("report failed: %d chunks failed", failed))
+	}
+	if verbose {
+		fmt.Printf("[chunk] Report %s failed: %d/%d chunks failed\n", reportID, failed, progress.TotalChunks)
 	}
 }
 
-// notifyProgress notifies progress callbacks.
-func (m *Manager) notifyProgress(ctx context.Context, reportID string) {
-	m.mu.RLock()
-	onProgress := m.onProgress
-	m.mu.RUnlock()
-
-	if onProgress == nil {
-		return
-	}
-
-	progress, err := m.GetProgress(ctx, reportID)
-	if err != nil {
-		return
-	}
-
-	onProgress(progress)
-}
-
-// cleanup removes old completed reports.
-func (m *Manager) cleanup(ctx context.Context) {
-	maxAge := time.Duration(m.cfg.RetentionHours) * time.Hour
-	count, err := m.storage.Cleanup(ctx, maxAge)
-	if err != nil {
-		if m.verbose {
-			fmt.Printf("[chunk] Cleanup error: %v\n", err)
-		}
-		return
-	}
-
-	if count > 0 && m.verbose {
-		fmt.Printf("[chunk] Cleaned up %d old reports\n", count)
-	}
-
-	// Aggressive cleanup if storage exceeds limit
-	if m.cfg.AggressiveCleanup && m.cfg.MaxStorageMB > 0 {
-		m.aggressiveCleanup(ctx)
-	}
-}
-
-// aggressiveCleanup removes data when storage exceeds limit.
-func (m *Manager) aggressiveCleanup(ctx context.Context) {
-	stats, err := m.storage.GetStorageStats(ctx)
-	if err != nil {
-		return
-	}
-
-	maxBytes := int64(m.cfg.MaxStorageMB) * 1024 * 1024
-	if stats.TotalStorageBytes > maxBytes {
-		// Delete oldest completed reports until under limit
-		deleted, err := m.storage.CleanupToSize(ctx, maxBytes)
-		if err != nil {
-			if m.verbose {
-				fmt.Printf("[chunk] Aggressive cleanup error: %v\n", err)
-			}
-			return
-		}
-		if deleted > 0 && m.verbose {
-			fmt.Printf("[chunk] Aggressive cleanup: removed %d reports (storage was %d MB, limit %d MB)\n",
-				deleted, stats.TotalStorageBytes/1024/1024, m.cfg.MaxStorageMB)
-		}
-	}
-}
-
-// ProcessPending processes all pending chunks immediately (for testing).
+// ProcessPending uploads every pending chunk that can be uploaded now and
+// returns when none is left (or only chunks backing off after a failure).
 func (m *Manager) ProcessPending(ctx context.Context) error {
-	if m.uploader == nil {
+	m.mu.RLock()
+	up, running := m.uploader, m.running
+	m.mu.RUnlock()
+	if up == nil {
 		return fmt.Errorf("uploader not configured")
 	}
-
-	for {
-		chunk, err := m.storage.GetNextPendingChunk(ctx)
-		if err != nil {
-			return err
-		}
-		if chunk == nil {
-			return nil // All done
-		}
-		m.processNextChunk(ctx)
+	m.ob.Wake()
+	if running {
+		return m.ob.Wait(ctx)
 	}
+	rctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = m.ob.Run(rctx, outbox.DelivererFunc(m.deliver))
+	}()
+	err := m.ob.Wait(ctx)
+	cancel()
+	<-done
+	return err
 }
 
-// Close releases resources.
+// Outbox returns the manager's outbox (for its Stats and dead letters).
+func (m *Manager) Outbox() *outbox.Outbox { return m.ob }
+
+// Close stops uploading and releases the outbox. Chunks not uploaded yet stay
+// on disk for the next process.
 func (m *Manager) Close() error {
 	m.Stop()
-	return m.storage.Close()
+	return m.ob.Close()
+}
+
+// outboxDir is where the manager keeps its chunks.
+func (c *Config) outboxDir() string {
+	if c.OutboxDir != "" {
+		return c.OutboxDir
+	}
+	if c.DatabasePath != "" {
+		return filepath.Join(filepath.Dir(c.DatabasePath), "chunk-outbox")
+	}
+	return filepath.Join(filepath.Dir(defaultDatabasePath()), "chunk-outbox")
 }
