@@ -11,9 +11,11 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/openctemio/sdk-go/pkg/chunk"
 	"github.com/openctemio/sdk-go/pkg/compress"
@@ -47,7 +49,25 @@ type Client struct {
 	// keyMu guards apiKey so it can be rotated at runtime (agent key
 	// auto-renewal) while push/heartbeat requests read it concurrently.
 	keyMu sync.RWMutex
+
+	// baseURLOnce/baseURLErr cache the one-time validation of baseURL
+	// (see checkBaseURL). New/NewWithOptions cannot return an error without
+	// breaking the public API, so the check runs on the first request.
+	baseURLOnce sync.Once
+	baseURLErr  error
 }
+
+// Response size limits. The API never legitimately returns more than a few
+// MiB; an unbounded io.ReadAll lets a hostile or broken endpoint exhaust the
+// agent's memory. Error bodies are only used for diagnostics, so they are
+// capped much lower and truncated before they reach an error string.
+const (
+	maxResponseBodyBytes = 10 << 20 // 10 MiB
+	maxErrorBodyBytes    = 64 << 10 // 64 KiB
+	// maxErrorMessageBytes bounds how much of an error body HTTPError.Error
+	// prints, so a large HTML error page does not flood logs.
+	maxErrorMessageBytes = 1 << 10 // 1 KiB
+)
 
 // Ensure Client implements core.Pusher
 var _ core.Pusher = (*Client)(nil)
@@ -126,7 +146,9 @@ func New(cfg *Config) *Client {
 		// Using SafeHTTPClient ensures the dialer rejects RFC1918 /
 		// link-local / CGNAT targets even when a custom scanner binds
 		// the SDK to an attacker-influenced API endpoint.
-		httpClient:       httpsec.SafeHTTPClient(cfg.Timeout),
+		// Redirects are refused: the API never issues them, and following
+		// one would forward the bearer key to wherever it points.
+		httpClient:       httpsec.NewAPIClient(cfg.Timeout),
 		verbose:          cfg.Verbose,
 		compressor:       compressor,
 		compressionLevel: compressionLevel,
@@ -155,7 +177,7 @@ func NewWithOptions(opts ...Option) *Client {
 		maxRetries: 3,
 		retryDelay: 2 * time.Second,
 		// SSRF: see the imperative constructor above for rationale.
-		httpClient: httpsec.SafeHTTPClient(30 * time.Second),
+		httpClient: httpsec.NewAPIClient(30 * time.Second),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -538,6 +560,10 @@ func (c *Client) BaselineDiff(ctx context.Context, repository, baseBranch string
 
 // doRequest performs an HTTP request with retry logic.
 func (c *Client) doRequest(ctx context.Context, method, url string, body []byte) ([]byte, error) {
+	if err := c.checkBaseURL(); err != nil {
+		return nil, err
+	}
+
 	var lastErr error
 
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
@@ -635,16 +661,45 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Best effort: a truncated or failed read still yields a useful error.
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		return nil, &HTTPError{
+			StatusCode: resp.StatusCode,
+			Body:       string(errBody),
+			RequestID:  resp.Header.Get("X-Request-ID"),
+		}
+	}
+
+	// Read one byte past the cap so an oversized body is detected rather than
+	// silently truncated into invalid JSON.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &HTTPError{StatusCode: resp.StatusCode, Body: string(data)}
+	if len(data) > maxResponseBodyBytes {
+		return nil, fmt.Errorf("response body exceeds %d bytes", maxResponseBodyBytes)
 	}
 
 	return data, nil
+}
+
+// checkBaseURL validates the configured base URL once per client. A
+// non-http(s) scheme, missing host or embedded credentials is an error; a
+// plain-http URL to a non-loopback host only prints a warning so existing
+// in-cluster deployments keep working.
+func (c *Client) checkBaseURL() error {
+	c.baseURLOnce.Do(func() {
+		warning, err := httpsec.CheckAPIBaseURL(c.baseURL)
+		if err != nil {
+			c.baseURLErr = err
+			return
+		}
+		if warning != "" {
+			fmt.Fprintf(os.Stderr, "[openctem] WARNING: %s\n", warning)
+		}
+	})
+	return c.baseURLErr
 }
 
 // HTTPError represents an HTTP error response.
@@ -655,10 +710,24 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
+	body := truncateForError(e.Body, maxErrorMessageBytes)
 	if e.RequestID != "" {
-		return fmt.Sprintf("http %d: %s (request_id: %s)", e.StatusCode, e.Body, e.RequestID)
+		return fmt.Sprintf("http %d: %s (request_id: %s)", e.StatusCode, body, e.RequestID)
 	}
-	return fmt.Sprintf("http %d: %s", e.StatusCode, e.Body)
+	return fmt.Sprintf("http %d: %s", e.StatusCode, body)
+}
+
+// truncateForError shortens s to at most limit bytes (on a UTF-8 boundary)
+// and marks the cut.
+func truncateForError(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + fmt.Sprintf("... (truncated, %d bytes total)", len(s))
 }
 
 // =============================================================================

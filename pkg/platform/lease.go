@@ -12,8 +12,6 @@ import (
 	"os"
 	"sync"
 	"time"
-
-	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // LeaseClient defines the interface for lease operations.
@@ -444,7 +442,7 @@ func NewHTTPLeaseClient(baseURL, apiKey, agentID string) LeaseClient {
 		// SSRF: platform agent's baseURL is operator config; the
 		// dialer-level guard catches a misconfigured or rebind-target
 		// pointing into private space.
-		httpClient: httpsec.SafeHTTPClient(10 * time.Second),
+		httpClient: newAPIHTTPClient(10 * time.Second),
 	}
 }
 
@@ -463,7 +461,10 @@ func (c *httpLeaseClient) setAPIKey(key string) {
 }
 
 func (c *httpLeaseClient) RenewLease(ctx context.Context, req *LeaseRenewRequest) (*LeaseRenewResponse, error) {
-	url := fmt.Sprintf("%s/api/v1/platform/lease", c.baseURL)
+	url, err := apiURL(c.baseURL, "/api/v1/platform/lease")
+	if err != nil {
+		return nil, err
+	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -498,7 +499,10 @@ func (c *httpLeaseClient) RenewLease(ctx context.Context, req *LeaseRenewRequest
 }
 
 func (c *httpLeaseClient) ReleaseLease(ctx context.Context) error {
-	url := fmt.Sprintf("%s/api/v1/platform/lease", c.baseURL)
+	url, err := apiURL(c.baseURL, "/api/v1/platform/lease")
+	if err != nil {
+		return err
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {

@@ -8,9 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
-
-	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // Non-retryable registration errors. A bad bootstrap token or a name conflict
@@ -112,7 +111,7 @@ func NewBootstrapper(baseURL, bootstrapToken string, config *BootstrapConfig) *B
 		// token is one-shot-high-value so we add dialer-level guarding
 		// to prevent a rebind-style leak of the token into private
 		// space during enrolment.
-		httpClient: httpsec.SafeHTTPClient(config.Timeout),
+		httpClient: newAPIHTTPClient(config.Timeout),
 	}
 }
 
@@ -175,7 +174,10 @@ func (b *Bootstrapper) Register(ctx context.Context, req *RegistrationRequest) (
 }
 
 func (b *Bootstrapper) doRegister(ctx context.Context, req *RegistrationRequest) (*RegistrationResponse, error) {
-	url := fmt.Sprintf("%s/api/v1/platform/register", b.baseURL)
+	url, err := apiURL(b.baseURL, "/api/v1/platform/register")
+	if err != nil {
+		return nil, err
+	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -264,17 +266,69 @@ func NewFileCredentialStore(path string) *FileCredentialStore {
 }
 
 // Save saves credentials to the file.
+//
+// The write is atomic and owner-only: the JSON goes to a 0600 temp file in
+// the same directory, is fsynced, then renamed over Path. A crash or full
+// disk mid-write therefore never leaves a truncated credentials file (which
+// would lose the only copy of a rotated key), and a pre-existing file with
+// looser permissions is replaced by a 0600 one rather than rewritten in
+// place with its old mode.
 func (s *FileCredentialStore) Save(creds *AgentCredentials) error {
 	data, err := json.MarshalIndent(creds, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
 
-	// Write with restricted permissions (owner read/write only)
-	if err := os.WriteFile(s.Path, data, 0600); err != nil {
+	if err := writeFileAtomic(s.Path, data); err != nil {
 		return fmt.Errorf("write credentials file: %w", err)
 	}
 
+	return nil
+}
+
+// writeFileAtomic writes data to path via temp file + fsync + rename, with
+// mode 0600. The parent directory is created 0700 if missing.
+func writeFileAtomic(path string, data []byte) (err error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	// CreateTemp already uses 0600; Chmod makes it explicit and independent
+	// of platform defaults.
+	if err = tmp.Chmod(0o600); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if _, err = tmp.Write(data); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err = tmp.Sync(); err != nil {
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err = tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err = os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	// Persist the rename itself. Best effort: not supported on every OS.
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 	return nil
 }
 

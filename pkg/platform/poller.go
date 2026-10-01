@@ -11,8 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // JobClient defines the interface for job operations.
@@ -750,7 +748,7 @@ func NewHTTPJobClient(baseURL, apiKey, agentID string, pollTimeout time.Duration
 		// SSRF: platform poller talks to the operator-configured API
 		// baseURL; dialer-level blocklist keeps long-poll connections
 		// from opportunistically landing on private space.
-		httpClient: httpsec.SafeHTTPClient(pollTimeout + 10*time.Second),
+		httpClient: newAPIHTTPClient(pollTimeout + 10*time.Second),
 	}
 }
 
@@ -769,7 +767,10 @@ func (c *httpJobClient) setAPIKey(key string) {
 }
 
 func (c *httpJobClient) Poll(ctx context.Context, req *PollRequest) (*PollResponse, error) {
-	url := fmt.Sprintf("%s/api/v1/platform/poll", c.baseURL)
+	url, err := apiURL(c.baseURL, "/api/v1/platform/poll")
+	if err != nil {
+		return nil, err
+	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -804,7 +805,10 @@ func (c *httpJobClient) Poll(ctx context.Context, req *PollRequest) (*PollRespon
 }
 
 func (c *httpJobClient) AcknowledgeJob(ctx context.Context, jobID string) error {
-	url := fmt.Sprintf("%s/api/v1/platform/jobs/%s/ack", c.baseURL, jobID)
+	url, err := apiURL(c.baseURL, "/api/v1/platform/jobs/%s/ack", jobID)
+	if err != nil {
+		return err
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
 	if err != nil {
@@ -828,7 +832,10 @@ func (c *httpJobClient) AcknowledgeJob(ctx context.Context, jobID string) error 
 }
 
 func (c *httpJobClient) ReportJobResult(ctx context.Context, result *JobResult) error {
-	url := fmt.Sprintf("%s/api/v1/platform/jobs/%s/result", c.baseURL, result.JobID)
+	url, err := apiURL(c.baseURL, "/api/v1/platform/jobs/%s/result", result.JobID)
+	if err != nil {
+		return err
+	}
 
 	body, err := json.Marshal(result)
 	if err != nil {
@@ -858,7 +865,10 @@ func (c *httpJobClient) ReportJobResult(ctx context.Context, result *JobResult) 
 }
 
 func (c *httpJobClient) ReportJobProgress(ctx context.Context, jobID string, progress int, message string) error {
-	url := fmt.Sprintf("%s/api/v1/platform/jobs/%s/progress", c.baseURL, jobID)
+	url, err := apiURL(c.baseURL, "/api/v1/platform/jobs/%s/progress", jobID)
+	if err != nil {
+		return err
+	}
 
 	body, err := json.Marshal(map[string]interface{}{
 		"progress": progress,

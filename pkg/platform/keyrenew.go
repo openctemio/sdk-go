@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 )
@@ -42,10 +43,32 @@ type KeyRenewConfig struct {
 	RetryInterval time.Duration
 
 	// OnRotated is called after a successful key swap so the caller can persist
-	// the new key (e.g. FileCredentialStore.Save) for the next restart. A
-	// non-nil error is logged but does not stop the loop — the running client
-	// already uses the new key.
+	// the new key (e.g. FileCredentialStore.Save) for the next restart.
+	//
+	// A non-nil error is treated as a failure, not a warning: the server has
+	// already invalidated the previous key, so an unpersisted new key means
+	// the next restart comes up with a dead credential. The manager reports
+	// the error (stderr + OnPersistError), keeps the running client on the new
+	// key, and retries the persist every RetryInterval. It does NOT rotate
+	// again until the persist succeeds — rotating on top of an unsaved key
+	// would only widen the gap.
 	OnRotated func(newKey string, expiresAt *time.Time) error
+
+	// OnPersistError, if set, is called each time OnRotated fails. Use it to
+	// surface the condition (metrics, health check, alert).
+	OnPersistError func(err error)
+
+	// CurrentKeyExpiresAt is the expiry of the key the client starts with,
+	// when the caller knows it (e.g. stored next to the key). When set, the
+	// first renewal is scheduled from it instead of rotating immediately.
+	CurrentKeyExpiresAt *time.Time
+
+	// CurrentKeyNeverExpires tells the manager the server issued the current
+	// key without a TTL. The manager then does nothing: there is nothing to
+	// renew, and the discovery rotation would replace a working key for no
+	// benefit. Leave false when unknown — the manager then performs one
+	// discovery renewal to learn the server's TTL posture.
+	CurrentKeyNeverExpires bool
 
 	// Verbose enables debug logging.
 	Verbose bool
@@ -68,6 +91,10 @@ type KeyRenewManager struct {
 	running bool
 	stopCh  chan struct{}
 	wg      sync.WaitGroup
+
+	// unpersisted holds a rotated key whose persist (OnRotated) failed. Only
+	// touched by the loop goroutine.
+	unpersisted *RenewKeyResponse
 }
 
 // NewKeyRenewManager creates a KeyRenewManager. A nil config uses defaults.
@@ -96,6 +123,10 @@ func NewKeyRenewManager(client KeyRenewer, config *KeyRenewConfig) *KeyRenewMana
 // exits and the agent keeps its non-expiring key. Otherwise it schedules the
 // next renewal at RenewFraction of the remaining lifetime and repeats.
 func (m *KeyRenewManager) Start(ctx context.Context) error {
+	if m.config.CurrentKeyNeverExpires {
+		m.logf("[apikey] current key has no expiry — auto-renew idle")
+		return nil
+	}
 	m.mu.Lock()
 	if m.running {
 		m.mu.Unlock()
@@ -126,6 +157,20 @@ func (m *KeyRenewManager) Stop() {
 func (m *KeyRenewManager) loop(ctx context.Context) {
 	defer m.wg.Done()
 
+	// A known expiry for the starting key: wait until it is due instead of
+	// rotating a perfectly good key at startup.
+	if exp := m.config.CurrentKeyExpiresAt; exp != nil {
+		wait := m.scheduleFor(*exp)
+		m.logf("[apikey] current key expires %s, first renewal in %v", exp.Format(time.RFC3339), wait)
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.stopCh:
+			return
+		case <-time.After(wait):
+		}
+	}
+
 	for {
 		next, keepGoing := m.renewOnce(ctx)
 		if !keepGoing {
@@ -145,21 +190,43 @@ func (m *KeyRenewManager) loop(ctx context.Context) {
 // next one plus whether the loop should keep running. On a nil expiry (server
 // TTL disabled) it returns keepGoing=false so the loop exits.
 func (m *KeyRenewManager) renewOnce(ctx context.Context) (next time.Duration, keepGoing bool) {
+	// A previous rotation is still unsaved: retry the persist, never rotate
+	// again on top of it.
+	if m.unpersisted != nil {
+		return m.persist(m.unpersisted)
+	}
+
 	resp, err := m.client.RenewKey(ctx)
 	if err != nil {
 		m.logf("[apikey] renewal failed, retrying in %v: %v", m.config.RetryInterval, err)
 		return m.config.RetryInterval, true
 	}
 
-	// Swap the new key into the live client, then persist it.
+	// Swap the new key into the live client first: the server has already
+	// invalidated the old one, so the running agent must use the new key
+	// whether or not it can be saved.
 	m.client.SetAPIKey(resp.APIKey)
+	return m.persist(resp)
+}
+
+// persist saves a rotated key via OnRotated and computes the next schedule.
+// On failure the key is kept in m.unpersisted and the persist is retried
+// after RetryInterval.
+func (m *KeyRenewManager) persist(resp *RenewKeyResponse) (next time.Duration, keepGoing bool) {
 	if m.config.OnRotated != nil {
 		if perr := m.config.OnRotated(resp.APIKey, resp.ExpiresAt); perr != nil {
-			// The running client already uses the new key; a failed persist only
-			// risks a restart falling back to the old key. Log, don't stop.
-			m.logf("[apikey] rotated key persist failed: %v", perr)
+			m.unpersisted = resp
+			// Always reported, not just in verbose mode: a restart now would
+			// load a revoked key.
+			fmt.Fprintf(os.Stderr, "[apikey] ERROR: rotated key could not be persisted (a restart would use a revoked key); retrying in %v: %v\n",
+				m.config.RetryInterval, perr)
+			if m.config.OnPersistError != nil {
+				m.config.OnPersistError(perr)
+			}
+			return m.config.RetryInterval, true
 		}
 	}
+	m.unpersisted = nil
 
 	if resp.ExpiresAt == nil {
 		// Server has no key TTL — nothing to schedule. The key we just received

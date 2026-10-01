@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,10 +28,19 @@ func NewStorage(cfg *Config) (*Storage, error) {
 		cfg = DefaultConfig()
 	}
 
-	// Ensure directory exists
+	// Ensure directory exists. Created owner-only: the queue holds full scan
+	// reports (findings, asset inventory). An existing directory's mode is
+	// left alone — it may be a shared parent like /tmp.
 	dir := filepath.Dir(cfg.DatabasePath)
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create storage directory: %w", err)
+	}
+
+	// Pre-create the database file 0600 so SQLite never creates it with the
+	// process umask (typically 0644, world-readable), and tighten an
+	// existing file left behind by an older version.
+	if err := ensurePrivateFile(cfg.DatabasePath); err != nil {
+		return nil, fmt.Errorf("secure database file: %w", err)
 	}
 
 	// Open database
@@ -65,7 +75,43 @@ func NewStorage(cfg *Config) (*Storage, error) {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
+	// WAL mode creates -wal and -shm side files that contain database pages;
+	// make sure they are owner-only as well.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := chmodIfExists(cfg.DatabasePath+suffix, 0o600); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("secure database file: %w", err)
+		}
+	}
+
 	return s, nil
+}
+
+// ensurePrivateFile creates path with mode 0600 if it does not exist and
+// forces 0600 on an existing regular file. Special paths SQLite accepts
+// (":memory:", "file:" URIs) are left alone.
+func ensurePrivateFile(path string) error {
+	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file:") {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+func chmodIfExists(path string, mode os.FileMode) error {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return os.Chmod(path, mode)
 }
 
 // initSchema creates the database tables if they don't exist.

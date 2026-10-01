@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -32,13 +33,13 @@ type Command struct {
 
 // PollCommands retrieves pending commands for this agent.
 func (c *Client) PollCommands(ctx context.Context, limit int) ([]Command, error) {
-	url := fmt.Sprintf("%s/api/v1/agent/commands?limit=%d", c.baseURL, limit)
+	reqURL := fmt.Sprintf("%s/api/v1/agent/commands?limit=%d", c.baseURL, limit)
 
 	if c.verbose {
-		fmt.Printf("[openctem] Polling commands from %s\n", url)
+		fmt.Printf("[openctem] Polling commands from %s\n", reqURL)
 	}
 
-	data, err := c.doRequest(ctx, "GET", url, nil)
+	data, err := c.doRequest(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -65,12 +66,20 @@ func (c *Client) GetCommands(ctx context.Context) (*core.GetCommandsResponse, er
 	// Convert to core.Command pointers
 	coreCommands := make([]*core.Command, len(commands))
 	for i, cmd := range commands {
-		coreCommands[i] = &core.Command{
-			ID:       cmd.ID,
-			Type:     cmd.Type,
-			Priority: cmd.Priority,
-			Payload:  cmd.Payload,
+		cc := &core.Command{
+			ID:        cmd.ID,
+			Type:      cmd.Type,
+			Priority:  cmd.Priority,
+			Payload:   cmd.Payload,
+			CreatedAt: cmd.CreatedAt,
 		}
+		// Carry the expiry through: the poller skips commands whose
+		// ExpiresAt has passed, and dropping it here made every stale
+		// command (e.g. one queued while the agent was offline) run.
+		if cmd.ExpiresAt != nil {
+			cc.ExpiresAt = *cmd.ExpiresAt
+		}
+		coreCommands[i] = cc
 	}
 
 	return &core.GetCommandsResponse{
@@ -80,31 +89,31 @@ func (c *Client) GetCommands(ctx context.Context) (*core.GetCommandsResponse, er
 
 // AcknowledgeCommand acknowledges receipt of a command.
 func (c *Client) AcknowledgeCommand(ctx context.Context, cmdID string) error {
-	url := fmt.Sprintf("%s/api/v1/agent/commands/%s/acknowledge", c.baseURL, cmdID)
+	reqURL := fmt.Sprintf("%s/api/v1/agent/commands/%s/acknowledge", c.baseURL, url.PathEscape(cmdID))
 
 	if c.verbose {
 		fmt.Printf("[openctem] Acknowledging command %s\n", cmdID)
 	}
 
-	_, err := c.doRequest(ctx, "POST", url, nil)
+	_, err := c.doRequest(ctx, "POST", reqURL, nil)
 	return err
 }
 
 // StartCommand marks a command as started.
 func (c *Client) StartCommand(ctx context.Context, cmdID string) error {
-	url := fmt.Sprintf("%s/api/v1/agent/commands/%s/start", c.baseURL, cmdID)
+	reqURL := fmt.Sprintf("%s/api/v1/agent/commands/%s/start", c.baseURL, url.PathEscape(cmdID))
 
 	if c.verbose {
 		fmt.Printf("[openctem] Starting command %s\n", cmdID)
 	}
 
-	_, err := c.doRequest(ctx, "POST", url, nil)
+	_, err := c.doRequest(ctx, "POST", reqURL, nil)
 	return err
 }
 
 // CompleteCommand marks a command as completed with optional result.
 func (c *Client) CompleteCommand(ctx context.Context, cmdID string, result json.RawMessage) error {
-	url := fmt.Sprintf("%s/api/v1/agent/commands/%s/complete", c.baseURL, cmdID)
+	reqURL := fmt.Sprintf("%s/api/v1/agent/commands/%s/complete", c.baseURL, url.PathEscape(cmdID))
 
 	if c.verbose {
 		fmt.Printf("[openctem] Completing command %s\n", cmdID)
@@ -116,13 +125,13 @@ func (c *Client) CompleteCommand(ctx context.Context, cmdID string, result json.
 	}
 	body, _ := json.Marshal(payload)
 
-	_, err := c.doRequest(ctx, "POST", url, body)
+	_, err := c.doRequest(ctx, "POST", reqURL, body)
 	return err
 }
 
 // FailCommand marks a command as failed with an error message.
 func (c *Client) FailCommand(ctx context.Context, cmdID string, errorMsg string) error {
-	url := fmt.Sprintf("%s/api/v1/agent/commands/%s/fail", c.baseURL, cmdID)
+	reqURL := fmt.Sprintf("%s/api/v1/agent/commands/%s/fail", c.baseURL, url.PathEscape(cmdID))
 
 	if c.verbose {
 		fmt.Printf("[openctem] Failing command %s: %s\n", cmdID, errorMsg)
@@ -133,7 +142,7 @@ func (c *Client) FailCommand(ctx context.Context, cmdID string, errorMsg string)
 	}
 	body, _ := json.Marshal(payload)
 
-	_, err := c.doRequest(ctx, "POST", url, body)
+	_, err := c.doRequest(ctx, "POST", reqURL, body)
 	return err
 }
 

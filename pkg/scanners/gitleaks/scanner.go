@@ -353,7 +353,8 @@ func (s *Scanner) convertFindings(findings []Finding) *core.SecretResult {
 			EndColumn:   f.EndColumn,
 
 			// Content
-			Match:       f.Match,
+			// SECURITY: never expose the raw secret in Match.
+			Match:       core.MaskSecretInText(f.Match, f.Secret),
 			MaskedValue: core.MaskSecret(f.Secret),
 
 			// Metadata

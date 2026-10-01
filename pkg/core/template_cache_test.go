@@ -51,7 +51,7 @@ requests:
 	}
 
 	// Put template in cache
-	filePath, err := cache.Put("tenant-abc", template)
+	filePath, err := cache.Put(testTenantID, template)
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestTemplateCache_Put_HashMismatch(t *testing.T) {
 	}
 
 	// Put should fail due to hash mismatch
-	_, err = cache.Put("tenant-abc", template)
+	_, err = cache.Put(testTenantID, template)
 	if err == nil {
 		t.Fatal("expected error for hash mismatch, got nil")
 	}
@@ -141,7 +141,7 @@ func TestTemplateCache_Put_InvalidBase64(t *testing.T) {
 	}
 
 	// Put should fail due to invalid base64
-	_, err = cache.Put("tenant-abc", template)
+	_, err = cache.Put(testTenantID, template)
 	if err == nil {
 		t.Fatal("expected error for invalid base64, got nil")
 	}
@@ -181,13 +181,13 @@ func TestTemplateCache_GetOrPut_CacheHit(t *testing.T) {
 	}
 
 	// First call - cache miss
-	filePath1, err := cache.GetOrPut("tenant-abc", template)
+	filePath1, err := cache.GetOrPut(testTenantID, template)
 	if err != nil {
 		t.Fatalf("first GetOrPut failed: %v", err)
 	}
 
 	// Second call - should be cache hit
-	filePath2, err := cache.GetOrPut("tenant-abc", template)
+	filePath2, err := cache.GetOrPut(testTenantID, template)
 	if err != nil {
 		t.Fatalf("second GetOrPut failed: %v", err)
 	}
@@ -228,7 +228,7 @@ regex = '''test'''
 		ContentHash:  "",
 	}
 
-	filePath, err := cache.Put("tenant-abc", template)
+	filePath, err := cache.Put(testTenantID, template)
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
@@ -251,3 +251,5 @@ func containsSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+const testTenantID = "3f2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c"
