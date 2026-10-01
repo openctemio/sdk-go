@@ -8,6 +8,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -604,10 +605,14 @@ var (
 // Secure Memory Operations
 // =============================================================================
 
-// SecureClear overwrites sensitive credential data with zeros.
-// This helps prevent credential leakage through memory dumps.
-// Note: Due to Go's string immutability, this may not fully clear
-// all copies of the string data, but it clears the primary references.
+// SecureClear drops the references a Credential holds to its secret data.
+//
+// BEST EFFORT ONLY. Go strings are immutable and may have been copied by
+// the runtime, JSON decoding, logging or the garbage collector; this
+// function cannot overwrite those copies and does not zero the original
+// backing memory. It only makes the secret unreachable through this
+// Credential so it becomes eligible for collection sooner. Do not rely on
+// it as a guarantee against memory-dump disclosure.
 func SecureClear(cred *Credential) {
 	if cred == nil {
 		return
@@ -627,40 +632,13 @@ func clearString(s *string) {
 	*s = ""
 }
 
-// SecureCompare performs a constant-time comparison of two credential values.
-// This prevents timing attacks when comparing secrets.
+// SecureCompare performs a constant-time comparison of two credential values
+// using crypto/subtle. The comparison time does not depend on where the
+// inputs differ; it does reveal whether their lengths differ, which is
+// inherent to crypto/subtle.ConstantTimeCompare and acceptable for secrets
+// of fixed or public length.
 func SecureCompare(a, b string) bool {
-	// Use constant-time comparison to prevent timing attacks
-	if len(a) != len(b) {
-		// Still do a comparison to maintain constant time
-		_ = subtleConstantTimeCompare([]byte(a), []byte(strings.Repeat("x", len(a))))
-		return false
-	}
-	// Handle empty strings
-	if len(a) == 0 {
-		return true
-	}
-	return subtleConstantTimeCompare([]byte(a), []byte(b)) == 1
-}
-
-// subtleConstantTimeCompare is a constant-time bytes comparison.
-// Returns 1 if equal, 0 otherwise.
-func subtleConstantTimeCompare(x, y []byte) int {
-	if len(x) != len(y) {
-		return 0
-	}
-	if len(x) == 0 {
-		return 1
-	}
-	var v byte
-	for i := 0; i < len(x); i++ {
-		v |= x[i] ^ y[i]
-	}
-	// If v is 0 (all bytes equal), return 1; otherwise return 0
-	if v == 0 {
-		return 1
-	}
-	return 0
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // =============================================================================

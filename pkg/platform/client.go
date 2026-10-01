@@ -62,7 +62,7 @@ func NewPlatformClient(config *ClientConfig) *PlatformClient {
 		leaseClient: lease,
 		jobClient:   job,
 		config:      config,
-		renewClient: &http.Client{Timeout: 15 * time.Second},
+		renewClient: newAPIHTTPClient(15 * time.Second),
 	}
 	// Keep concrete refs for runtime key rotation.
 	if hl, ok := lease.(*httpLeaseClient); ok {
@@ -86,7 +86,10 @@ type RenewKeyResponse struct {
 // when to call SetAPIKey (and persist), so a failed persist never leaves the
 // running client on a key the agent can't recover after a restart.
 func (c *PlatformClient) RenewKey(ctx context.Context) (*RenewKeyResponse, error) {
-	url := fmt.Sprintf("%s/api/v1/agent/renew", c.config.BaseURL)
+	url, err := apiURL(c.config.BaseURL, "/api/v1/agent/renew")
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)

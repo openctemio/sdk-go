@@ -4,6 +4,19 @@
 // of tenants. Unlike tenant agents that run within a tenant's infrastructure,
 // platform agents are deployed and operated by the OpenCTEM platform itself.
 //
+// REQUIRES THE PLATFORM (SaaS) CONTROL PLANE. The lease, poll, job and
+// registration calls in this package target /api/v1/platform/* routes that
+// the open-source OpenCTEM API does not serve; against an OSS API they fail
+// with 404. Self-hosted agents should use pkg/client together with
+// core.CommandPoller (the /api/v1/agent/* routes) instead.
+//
+// Security note: jobs received through JobPoller are handed to the
+// caller-supplied executor as-is. This package does not validate job
+// targets, so the executor MUST apply its own target validation. The OSS
+// command path (core.DefaultCommandExecutor) does this itself via
+// core.ScanTargetPolicy, and pkg/client honors command expiry, so this
+// package is not the only line of defense for either path.
+//
 // Key components:
 //   - LeaseManager: Handles K8s-style lease renewal for health monitoring
 //   - Bootstrapper: Handles agent registration using bootstrap tokens
@@ -62,6 +75,10 @@ type AgentCredentials struct {
 	AgentID   string `json:"agent_id"`
 	APIKey    string `json:"api_key"`
 	APIPrefix string `json:"api_prefix"`
+	// ExpiresAt is the key's expiry when known (from a key renewal). Pass it
+	// to KeyRenewConfig.CurrentKeyExpiresAt on startup so the renewer does
+	// not rotate a still-valid key immediately.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // AgentInfo contains information about a registered platform agent.

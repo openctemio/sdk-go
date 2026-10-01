@@ -115,6 +115,13 @@ err := grpc.ValidateAddress("0.0.0.0:9090")          // Error: binding address
 
 ### 3. Platform Agent Security
 
+> `pkg/platform` requires the platform (SaaS) control plane: its
+> `/api/v1/platform/*` routes are not served by the open-source API.
+> Self-hosted agents use `pkg/client` + `core.CommandPoller`, which carry
+> their own target validation and command-expiry checks. The job checks
+> below do not validate scan targets — a platform executor must do that
+> itself (e.g. with `core.ScanTargetPolicy`).
+
 Platform agents include comprehensive security controls.
 
 #### Job Validation
@@ -209,6 +216,66 @@ err := core.ValidateTemplate(&core.EmbeddedTemplate{
 - Max 1MB per template
 - Content hash verification (if provided)
 - Duplicate filename detection
+
+`core.TemplateCache` additionally requires the tenant ID to be a UUID and the
+template type to be on the allowlist (both become path components), checks
+that every written path stays inside the cache directory, and scopes cache
+hits per tenant and template type.
+
+### 5. Scan Target Validation (command path)
+
+`core.DefaultCommandExecutor` validates every server-supplied scan target
+with a `core.ScanTargetPolicy` before a scanner runs:
+
+- Network targets (URLs, hosts, IPs, CIDRs, image refs): only `http`/`https`
+  URL schemes; loopback, link-local (incl. `169.254.169.254` IMDS), CGNAT,
+  multicast, unspecified and reserved ranges are always blocked; RFC1918/ULA
+  are blocked unless private targets are allowed. Hostnames are resolved and
+  every address is checked (fail closed for dotted names).
+- Filesystem targets: symlinks are resolved first; with allowed roots set the
+  path must be inside one of them, otherwise `/`, system directories
+  (`/etc`, `/proc`, ...) and home credential dirs (`~/.ssh`, `~/.aws`, ...)
+  are refused. The scanner receives the resolved path.
+- Targets starting with `-` (flag injection) or containing control
+  characters are refused; so are flag-like `exclude` entries.
+
+```go
+exec := core.NewDefaultCommandExecutor(pusher)
+exec.SetScanTargetPolicy(&core.ScanTargetPolicy{
+    AllowedRoots: []string{"/workspace"},
+    AllowPrivate: true, // on-prem agent scanning its own network
+})
+```
+
+| Variable | Effect |
+|----------|--------|
+| `OPENCTEM_SDK_SCAN_ROOTS` | Allowed roots (`:`-separated) for the default policy |
+| `OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS=1` | Allow RFC1918/ULA targets (`AGENT_ALLOW_PRIVATE_TARGETS=1` and `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1` are honored too) |
+
+### 6. Scanner Process Environment
+
+Scanner child processes no longer inherit the agent's whole environment
+(which holds the API key). They get an allowlist: `PATH`, `HOME`, temp and
+locale vars, proxy and CA-bundle vars, Docker host vars, `XDG_*`, and the
+`TRIVY_*` / `NUCLEI_*` / `SEMGREP_*` / `GITLEAKS_*` / `CODEQL_*` and ProjectDiscovery (`SUBFINDER_*`, `HTTPX_*`, `DNSX_*`, `NAABU_*`, `KATANA_*`, `PDCP_*`) namespaces, plus any
+variables set explicitly in the scanner config or scan options.
+
+| Variable / API | Effect |
+|----------------|--------|
+| `OPENCTEM_SDK_SCANNER_ENV_ALLOW=AWS_*,GITHUB_TOKEN` | Pass extra names (`*` suffix = prefix) |
+| `core.SetScannerEnvAllowlist([]string{...})` | Same, programmatically |
+| `OPENCTEM_SDK_SCANNER_INHERIT_ENV=1` / `core.SetScannerInheritEnv(true)` | Restore full inheritance (not recommended) |
+
+### 7. API Client Transport
+
+- API clients (`pkg/client`, `pkg/platform`) refuse HTTP redirects; the API
+  never issues them and following one would forward the bearer key.
+- Other `httpsec.SafeHTTPClient` users follow redirects but never downgrade
+  https to http, and strip credential headers on any origin change.
+- The base URL must be `http`/`https` with a host and no embedded
+  credentials; plain `http` to a non-loopback host logs a warning.
+- Response bodies are capped (10 MiB success, 64 KiB error) and error text
+  is truncated.
 
 ---
 

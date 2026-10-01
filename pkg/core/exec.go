@@ -19,7 +19,7 @@ type ExecConfig struct {
 	Binary  string            // Scanner binary path
 	Args    []string          // Command arguments
 	WorkDir string            // Working directory
-	Env     map[string]string // Environment variables
+	Env     map[string]string // Extra environment variables (added to the allowlisted base, see ScannerEnviron)
 	Timeout time.Duration     // Execution timeout
 	Verbose bool              // Stream output to logs
 }
@@ -47,14 +47,9 @@ func ExecuteScanner(ctx context.Context, cfg *ExecConfig) (*ExecResult, error) {
 		cmd.Dir = cfg.WorkDir
 	}
 
-	// Set environment variables
-	if len(cfg.Env) > 0 {
-		env := cmd.Environ()
-		for k, v := range cfg.Env {
-			env = append(env, fmt.Sprintf("%s=%s", k, v))
-		}
-		cmd.Env = env
-	}
+	// Allowlisted environment only (see scanner_env.go): the agent's API key
+	// and other credentials must not leak into scanner processes.
+	cmd.Env = ScannerEnviron(cfg.Env)
 
 	// Create pipes for stdout/stderr
 	stdout, err := cmd.StdoutPipe()
@@ -152,6 +147,8 @@ func StreamScanner(ctx context.Context, cfg *ExecConfig, handler OutputHandler) 
 		cmd.Dir = cfg.WorkDir
 	}
 
+	cmd.Env = ScannerEnviron(cfg.Env)
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
@@ -228,6 +225,7 @@ func CheckBinaryInstalled(ctx context.Context, binary string, versionArgs ...str
 	}
 
 	cmd := exec.CommandContext(ctx, binary, versionArgs...)
+	cmd.Env = ScannerEnviron()
 	output, err := cmd.Output()
 	if err != nil {
 		return false, "", nil // Not installed

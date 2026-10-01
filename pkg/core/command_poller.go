@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 )
 
 // CommandClient interface for command-related API operations.
@@ -431,17 +433,45 @@ type DefaultCommandExecutor struct {
 	collectors map[string]Collector
 	pusher     Pusher
 	parsers    *ParserRegistry
+	// targetPolicy validates every scan target before a scanner runs.
+	// nil means DefaultScanTargetPolicy(), captured at construction.
+	targetPolicy atomic.Pointer[ScanTargetPolicy]
 	// verbose is atomic: SetVerbose may race with concurrent Execute calls.
 	verbose atomic.Bool
 }
 
 // NewDefaultCommandExecutor creates a new default executor.
+//
+// Scan targets are validated with DefaultScanTargetPolicy() (SSRF blocklist,
+// filesystem confinement, flag-injection guard); override with
+// SetScanTargetPolicy.
 func NewDefaultCommandExecutor(pusher Pusher) *DefaultCommandExecutor {
-	return &DefaultCommandExecutor{
+	e := &DefaultCommandExecutor{
 		scanners:   make(map[string]Scanner),
 		collectors: make(map[string]Collector),
 		pusher:     pusher,
 	}
+	e.targetPolicy.Store(DefaultScanTargetPolicy())
+	return e
+}
+
+// SetScanTargetPolicy replaces the policy used to validate server-supplied
+// scan targets (allowed filesystem roots, private-range opt-in). A nil
+// policy restores DefaultScanTargetPolicy(). Safe to call concurrently with
+// Execute.
+func (e *DefaultCommandExecutor) SetScanTargetPolicy(p *ScanTargetPolicy) {
+	if p == nil {
+		p = DefaultScanTargetPolicy()
+	}
+	e.targetPolicy.Store(p)
+}
+
+// ScanTargetPolicy returns the policy currently applied to scan targets.
+func (e *DefaultCommandExecutor) ScanTargetPolicy() *ScanTargetPolicy {
+	if p := e.targetPolicy.Load(); p != nil {
+		return p
+	}
+	return DefaultScanTargetPolicy()
 }
 
 // SetParserRegistry supplies the registry used to convert a scanner's raw
@@ -488,13 +518,21 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		return nil, fmt.Errorf("scanner not found: %s", payload.Scanner)
 	}
 
+	// SECURITY: the target is server-supplied. Validate it before any
+	// scanner sees it: SSRF blocklist for network targets, confinement for
+	// filesystem targets, and no leading '-' (flag injection).
+	target, err := e.ScanTargetPolicy().Validate(ctx, payload.Target)
+	if err != nil {
+		return nil, fmt.Errorf("invalid scan target: %w", err)
+	}
+
 	if e.verbose.Load() {
-		fmt.Printf("[executor] Running scanner %s on %s\n", payload.Scanner, payload.Target)
+		fmt.Printf("[executor] Running scanner %s on %s\n", payload.Scanner, target)
 	}
 
 	// Create scan options
 	opts := &ScanOptions{
-		TargetDir: payload.Target,
+		TargetDir: target,
 		Verbose:   e.verbose.Load(),
 	}
 
@@ -503,6 +541,9 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		if exclude, ok := payload.Config["exclude"].([]interface{}); ok {
 			for _, ex := range exclude {
 				if s, ok := ex.(string); ok {
+					if err := validateScanArgValue(s); err != nil {
+						return nil, fmt.Errorf("invalid exclude pattern: %w", err)
+					}
 					opts.Exclude = append(opts.Exclude, s)
 				}
 			}
@@ -537,7 +578,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 
 	// Run scan
 	startTime := time.Now()
-	scanResult, err := scanner.Scan(ctx, payload.Target, opts)
+	scanResult, err := scanner.Scan(ctx, target, opts)
 	if err != nil {
 		return nil, fmt.Errorf("scan failed: %w", err)
 	}
@@ -579,6 +620,23 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	}
 
 	return result, nil
+}
+
+// validateScanArgValue rejects server-supplied values that end up as scanner
+// argv entries and could be parsed as flags or break argument framing.
+func validateScanArgValue(v string) error {
+	if v == "" {
+		return fmt.Errorf("empty value")
+	}
+	if strings.HasPrefix(v, "-") {
+		return fmt.Errorf("value %q looks like a command-line flag", v)
+	}
+	for _, r := range v {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("value contains control characters")
+		}
+	}
+	return nil
 }
 
 // MaxTemplatesPerCommand is the maximum number of templates allowed per command.

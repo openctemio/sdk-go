@@ -141,6 +141,23 @@ func MaskSecret(secret string) string {
 	return secret[:3] + "****" + secret[len(secret)-3:]
 }
 
+// MaskSecretInText returns text with every occurrence of secret replaced by
+// MaskSecret(secret). It is for context strings such as a scanner's matched
+// line, which embed the raw secret.
+//
+// It fails safe: when secret is empty or does not occur in text (the scanner
+// trimmed or re-encoded it), the whole text is masked, because it cannot be
+// shown that the text is free of the secret.
+func MaskSecretInText(text, secret string) string {
+	if text == "" {
+		return ""
+	}
+	if secret == "" || !strings.Contains(text, secret) {
+		return MaskSecret(text)
+	}
+	return strings.ReplaceAll(text, secret, MaskSecret(secret))
+}
+
 // MaskAPIKey masks an API key.
 func MaskAPIKey(key string) string {
 	if len(key) <= 10 {
