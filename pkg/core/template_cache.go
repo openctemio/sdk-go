@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -52,7 +54,7 @@ func DefaultTemplateCacheConfig() *TemplateCacheConfig {
 type TemplateCache struct {
 	config       *TemplateCacheConfig
 	mu           sync.RWMutex
-	metadata     map[string]*CachedTemplateMetadata // key: hash
+	metadata     map[string]*CachedTemplateMetadata // key: tenant/type/hash (see cacheKey)
 	metadataFile string
 	lastCleanup  time.Time
 }
@@ -110,22 +112,53 @@ func NewTemplateCache(cfg *TemplateCacheConfig) (*TemplateCache, error) {
 	return cache, nil
 }
 
-// Get retrieves a template from cache by content hash.
-// Returns the file path if found and valid, empty string otherwise.
+// Get retrieves a template from cache by content hash, regardless of the
+// tenant or template type it was cached for.
+//
+// Deprecated: Get is not tenant-scoped; a hit may be another tenant's file.
+// Use GetFor.
 func (c *TemplateCache) Get(contentHash string) (string, bool) {
 	c.mu.RLock()
-	meta, ok := c.metadata[contentHash]
+	var key string
+	for k, meta := range c.metadata {
+		if meta.ContentHash == contentHash {
+			key = k
+			break
+		}
+	}
+	c.mu.RUnlock()
+	if key == "" {
+		return "", false
+	}
+	return c.getByKey(key)
+}
+
+// GetFor retrieves a cached template for one tenant and template type.
+// Entries cached for other tenants are never returned.
+func (c *TemplateCache) GetFor(tenantID, templateType, contentHash string) (string, bool) {
+	return c.getByKey(cacheKey(tenantID, templateType, contentHash))
+}
+
+func (c *TemplateCache) getByKey(key string) (string, bool) {
+	c.mu.RLock()
+	meta, ok := c.metadata[key]
 	c.mu.RUnlock()
 
 	if !ok {
 		return "", false
 	}
 
-	// Verify file exists
+	// Verify file exists and is still inside the cache directory.
+	if !c.isInsideCacheDir(meta.FilePath) {
+		c.mu.Lock()
+		delete(c.metadata, key)
+		c.mu.Unlock()
+		return "", false
+	}
 	if _, err := os.Stat(meta.FilePath); err != nil {
 		// File doesn't exist, remove from metadata
 		c.mu.Lock()
-		delete(c.metadata, contentHash)
+		delete(c.metadata, key)
 		c.mu.Unlock()
 		return "", false
 	}
@@ -138,9 +171,58 @@ func (c *TemplateCache) Get(contentHash string) (string, bool) {
 	return meta.FilePath, true
 }
 
+// tenantIDPattern is the canonical UUID form OpenCTEM uses for tenant IDs.
+var tenantIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// validateCacheScope checks the two values that become path components.
+// Both come from the server, so without this a tenant ID or template type
+// of "../../x" writes outside the cache directory.
+func validateCacheScope(tenantID, templateType string) error {
+	if !tenantIDPattern.MatchString(tenantID) {
+		return fmt.Errorf("invalid tenant ID %q: must be a UUID", tenantID)
+	}
+	if !ValidTemplateTypes[templateType] {
+		return fmt.Errorf("invalid template type %q (allowed: nuclei, semgrep, gitleaks)", templateType)
+	}
+	return nil
+}
+
+func cacheKey(tenantID, templateType, contentHash string) string {
+	return strings.ToLower(tenantID) + "/" + templateType + "/" + contentHash
+}
+
+// isInsideCacheDir reports whether path is strictly inside the cache dir.
+func (c *TemplateCache) isInsideCacheDir(path string) bool {
+	base, err := filepath.Abs(c.config.CacheDir)
+	if err != nil {
+		return false
+	}
+	p, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(base, p)
+	if err != nil || rel == "." || filepath.IsAbs(rel) {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // Put stores a template in the cache.
 // Returns the file path where the template was written.
+//
+// tenantID must be a UUID and template.TemplateType one of
+// ValidTemplateTypes; the file is written under
+// {cache_dir}/{tenant_id}/{template_type}/ and the resolved path is checked
+// to stay inside the cache directory.
 func (c *TemplateCache) Put(tenantID string, template *EmbeddedTemplate) (string, error) {
+	if template == nil {
+		return "", fmt.Errorf("template is nil")
+	}
+	if err := validateCacheScope(tenantID, template.TemplateType); err != nil {
+		return "", err
+	}
+
 	// Decode base64 content (API sends templates as base64 for safe JSON transport)
 	decodedContent, err := base64.StdEncoding.DecodeString(template.Content)
 	if err != nil {
@@ -156,8 +238,8 @@ func (c *TemplateCache) Put(tenantID string, template *EmbeddedTemplate) (string
 			template.Name, template.ContentHash, computedHash)
 	}
 
-	// Check if already cached
-	if filePath, ok := c.Get(computedHash); ok {
+	// Check if already cached for this tenant and type
+	if filePath, ok := c.GetFor(tenantID, template.TemplateType, computedHash); ok {
 		return filePath, nil
 	}
 
@@ -168,14 +250,21 @@ func (c *TemplateCache) Put(tenantID string, template *EmbeddedTemplate) (string
 	}
 
 	// Create directory structure: {cache_dir}/{tenant_id}/{template_type}/
-	dir := filepath.Join(c.config.CacheDir, tenantID, template.TemplateType)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", fmt.Errorf("create template directory: %w", err)
-	}
+	dir := filepath.Join(c.config.CacheDir, strings.ToLower(tenantID), template.TemplateType)
 
 	// Use hash prefix + name as filename to avoid collisions
 	filename := fmt.Sprintf("%s_%s%s", computedHash[:8], sanitizeFilename(template.Name), ext)
 	filePath := filepath.Join(dir, filename)
+
+	// Defense in depth: the components are validated above, but check the
+	// final path too so a future change cannot reintroduce traversal.
+	if !c.isInsideCacheDir(filePath) {
+		return "", fmt.Errorf("template path escapes cache directory")
+	}
+
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("create template directory: %w", err)
+	}
 
 	// Write decoded template content (binary YAML/TOML)
 	if err := os.WriteFile(filePath, decodedContent, 0600); err != nil {
@@ -184,12 +273,12 @@ func (c *TemplateCache) Put(tenantID string, template *EmbeddedTemplate) (string
 
 	// Store metadata
 	c.mu.Lock()
-	c.metadata[computedHash] = &CachedTemplateMetadata{
+	c.metadata[cacheKey(tenantID, template.TemplateType, computedHash)] = &CachedTemplateMetadata{
 		ID:           template.ID,
 		Name:         template.Name,
 		TemplateType: template.TemplateType,
 		ContentHash:  computedHash,
-		TenantID:     tenantID,
+		TenantID:     strings.ToLower(tenantID),
 		FilePath:     filePath,
 		Size:         int64(len(decodedContent)), // Use decoded content size
 		CachedAt:     time.Now(),
@@ -212,8 +301,16 @@ func (c *TemplateCache) Put(tenantID string, template *EmbeddedTemplate) (string
 	return filePath, nil
 }
 
-// GetOrPut returns cached template path or caches the template.
+// GetOrPut returns cached template path or caches the template. The lookup
+// is scoped to tenantID and the template's type.
 func (c *TemplateCache) GetOrPut(tenantID string, template *EmbeddedTemplate) (string, error) {
+	if template == nil {
+		return "", fmt.Errorf("template is nil")
+	}
+	if err := validateCacheScope(tenantID, template.TemplateType); err != nil {
+		return "", err
+	}
+
 	// Compute hash if not provided (must decode base64 first)
 	contentHash := template.ContentHash
 	if contentHash == "" {
@@ -226,7 +323,7 @@ func (c *TemplateCache) GetOrPut(tenantID string, template *EmbeddedTemplate) (s
 	}
 
 	// Try to get from cache
-	if filePath, ok := c.Get(contentHash); ok {
+	if filePath, ok := c.GetFor(tenantID, template.TemplateType, contentHash); ok {
 		if c.config.Verbose {
 			fmt.Printf("[template-cache] Cache hit: %s\n", template.Name)
 		}
@@ -237,43 +334,65 @@ func (c *TemplateCache) GetOrPut(tenantID string, template *EmbeddedTemplate) (s
 	return c.Put(tenantID, template)
 }
 
-// GetTemplateDir returns the directory for a specific tenant and template type.
-// Creates the directory if it doesn't exist.
-// Returns empty string if templates slice is empty.
+// GetTemplateDir returns the directory holding templates of templateType for
+// tenantID, caching any that are missing. Every template must be of
+// templateType (an empty TemplateType is treated as templateType), so all
+// files land in the single returned directory:
+// {cache_dir}/{tenant_id}/{template_type}. Returns empty string if
+// templates slice is empty.
 func (c *TemplateCache) GetTemplateDir(tenantID, templateType string, templates []EmbeddedTemplate) (string, error) {
 	if len(templates) == 0 {
 		return "", nil
 	}
+	if err := validateCacheScope(tenantID, templateType); err != nil {
+		return "", err
+	}
+	dir := filepath.Join(c.config.CacheDir, strings.ToLower(tenantID), templateType)
 
-	// Cache all templates and get the directory
-	var dir string
-	for _, tpl := range templates {
+	for i := range templates {
+		tpl := templates[i]
+		if tpl.TemplateType == "" {
+			tpl.TemplateType = templateType
+		}
+		if tpl.TemplateType != templateType {
+			return "", fmt.Errorf("template %s has type %q, expected %q", tpl.Name, tpl.TemplateType, templateType)
+		}
 		filePath, err := c.GetOrPut(tenantID, &tpl)
 		if err != nil {
 			return "", fmt.Errorf("cache template %s: %w", tpl.Name, err)
 		}
-		if dir == "" {
-			dir = filepath.Dir(filePath)
+		if filepath.Dir(filePath) != dir {
+			return "", fmt.Errorf("cache template %s: unexpected location %s", tpl.Name, filePath)
 		}
 	}
 
 	return dir, nil
 }
 
-// Remove removes a template from cache by content hash.
+// Remove removes every cached copy of a template (all tenants) by content
+// hash.
 func (c *TemplateCache) Remove(contentHash string) error {
 	c.mu.Lock()
-	meta, ok := c.metadata[contentHash]
-	if !ok {
-		c.mu.Unlock()
+	var paths []string
+	for key, meta := range c.metadata {
+		if meta.ContentHash == contentHash {
+			paths = append(paths, meta.FilePath)
+			delete(c.metadata, key)
+		}
+	}
+	c.mu.Unlock()
+	if len(paths) == 0 {
 		return nil
 	}
-	delete(c.metadata, contentHash)
-	c.mu.Unlock()
 
-	// Remove file
-	if err := os.Remove(meta.FilePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove template file: %w", err)
+	// Remove files
+	for _, p := range paths {
+		if !c.isInsideCacheDir(p) {
+			continue
+		}
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove template file: %w", err)
+		}
 	}
 
 	// Persist metadata
@@ -282,14 +401,23 @@ func (c *TemplateCache) Remove(contentHash string) error {
 
 // Clear removes all cached templates for a tenant.
 func (c *TemplateCache) Clear(tenantID string) error {
+	// tenantID becomes a path for RemoveAll: validate it first, or "../.."
+	// would delete arbitrary directories.
+	if !tenantIDPattern.MatchString(tenantID) {
+		return fmt.Errorf("invalid tenant ID %q: must be a UUID", tenantID)
+	}
+	tenantID = strings.ToLower(tenantID)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Find and remove all templates for this tenant
-	for hash, meta := range c.metadata {
+	for key, meta := range c.metadata {
 		if meta.TenantID == tenantID {
-			os.Remove(meta.FilePath) //nolint:errcheck
-			delete(c.metadata, hash)
+			if c.isInsideCacheDir(meta.FilePath) {
+				os.Remove(meta.FilePath) //nolint:errcheck
+			}
+			delete(c.metadata, key)
 		}
 	}
 
@@ -362,7 +490,9 @@ func (c *TemplateCache) Cleanup() error {
 		if c.config.Verbose {
 			fmt.Printf("[template-cache] Removing old template: %s\n", meta.Name)
 		}
-		os.Remove(meta.FilePath) //nolint:errcheck
+		if c.isInsideCacheDir(meta.FilePath) {
+			os.Remove(meta.FilePath) //nolint:errcheck
+		}
 		delete(c.metadata, hash)
 	}
 
@@ -445,8 +575,16 @@ func (c *TemplateCache) loadMetadata() error {
 		return err
 	}
 
+	// The metadata file is re-validated on load: an entry whose scope is
+	// invalid or whose path points outside the cache directory (tampered or
+	// written by an older, unvalidated version) is dropped, so Get/Remove/
+	// Cleanup never act on an arbitrary path.
 	for _, meta := range metadataList {
-		c.metadata[meta.ContentHash] = meta
+		if meta == nil || validateCacheScope(meta.TenantID, meta.TemplateType) != nil ||
+			!c.isInsideCacheDir(meta.FilePath) {
+			continue
+		}
+		c.metadata[cacheKey(meta.TenantID, meta.TemplateType, meta.ContentHash)] = meta
 	}
 
 	return nil
