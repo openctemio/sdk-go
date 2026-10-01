@@ -2,12 +2,12 @@
 
 All notable changes to `github.com/openctemio/sdk-go`.
 
-## Unreleased — release as **v0.7.0** (breaking)
+## v0.7.0 — 2026-10-01 (breaking)
 
 The SDK moves from the *agent* to the *sensor* vocabulary
 ([RFC-023 §9.5](https://github.com/openctemio/api/blob/develop/docs/rfcs/RFC-023-scan-zones-and-scanners.md)).
 The module is pre-1.0, so this ships as a minor version with breaking
-changes: **v0.6.x → v0.7.0**. Nothing has been tagged yet.
+changes: **v0.6.x → v0.7.0**.
 
 ### Upgrade in one command
 
