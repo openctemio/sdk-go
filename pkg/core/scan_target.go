@@ -134,11 +134,33 @@ func DefaultScanTargetPolicy() *ScanTargetPolicy {
 }
 
 // CheckEnv reports a configuration error in the environment variables the
-// default scan target policy reads (today: SENSOR_ALLOW_PRIVATE_TARGETS and
-// its pre-rename name set to different values). A sensor calls it at
-// startup to refuse to start instead of refusing every job later.
+// default scan target policy reads: SENSOR_ALLOW_PRIVATE_TARGETS and its
+// pre-rename name set to different values, or an allow-private switch set
+// to anything but "1" (allow) or "0"/empty (refuse). Only "1" enables the
+// switch, so "true" or "yes" would otherwise be silently ignored and every
+// private target refused. A sensor calls it at startup to refuse to start
+// instead of failing jobs later.
 func CheckEnv() error {
-	return DefaultScanTargetPolicy().configErr
+	if err := DefaultScanTargetPolicy().configErr; err != nil {
+		return err
+	}
+	for _, name := range []string{
+		EnvAllowPrivateTargets,
+		EnvSensorAllowPrivateTargets,
+		legacyv1.OldEnvName(EnvSensorAllowPrivateTargets),
+		"OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE",
+		"OPENCTEM_HTTPSEC_ALLOW_PRIVATE",
+	} {
+		if name == "" {
+			continue
+		}
+		switch v := strings.TrimSpace(os.Getenv(name)); v {
+		case "", "0", "1":
+		default:
+			return fmt.Errorf("%s=%q is not recognized: set it to 1 to allow private-network targets, or 0 (or unset) to refuse them", name, v)
+		}
+	}
+	return nil
 }
 
 // Validate checks target and returns the value to hand to the scanner: for
