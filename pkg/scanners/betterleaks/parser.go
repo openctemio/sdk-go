@@ -8,6 +8,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/internal/assetctx"
 )
 
 // relPath returns a scan-target-relative file path. betterleaks reports paths that
@@ -83,17 +84,20 @@ func (p *Parser) Parse(ctx context.Context, data []byte, opts *core.ParseOptions
 		}
 	}
 
-	// Add asset from options or branch info
-	if asset := p.createAssetFromOptions(opts); asset != nil {
-		report.Assets = append(report.Assets, *asset)
-	}
-
 	// Convert findings
 	for i, f := range findings {
 		risFinding := p.convertFinding(f, i, opts)
 		report.Findings = append(report.Findings, risFinding)
 	}
 
+	// File every finding on the scanned repository: the asset opts names
+	// (AssetValue, else BranchInfo.RepositoryURL), else the CI job's
+	// repository. Findings with none of these are an error, never sent
+	// without an asset.
+	asset, ok := assetctx.Repository(opts)
+	if err := assetctx.BindOrFail(report, asset, ok, "betterleaks"); err != nil {
+		return nil, err
+	}
 	return report, nil
 }
 
@@ -195,18 +199,6 @@ func (p *Parser) convertFinding(f Finding, index int, opts *core.ParseOptions) c
 		Entropy:     f.Entropy,
 	}
 
-	// Link to asset (from AssetValue or BranchInfo)
-	if opts != nil {
-		assetID := opts.AssetID
-		if assetID == "" {
-			assetID = "asset-1"
-		}
-		// Link if we have asset info (either explicit or from branch info)
-		if opts.AssetValue != "" || (opts.BranchInfo != nil && opts.BranchInfo.RepositoryURL != "") {
-			finding.AssetRef = assetID
-		}
-	}
-
 	// Confidence: the rule's own confidence when betterleaks reports one,
 	// else the caller's default, else 90.
 	if c, ok := ruleConfidence[f.Confidence()]; ok {
@@ -243,63 +235,6 @@ func (p *Parser) convertFinding(f Finding, index int, opts *core.ParseOptions) c
 	}
 
 	return finding
-}
-
-// createAssetFromOptions creates an asset from parse options or branch info.
-// Priority: opts.AssetValue > opts.BranchInfo.RepositoryURL
-func (p *Parser) createAssetFromOptions(opts *core.ParseOptions) *ctis.Asset {
-	if opts == nil {
-		return nil
-	}
-
-	assetID := opts.AssetID
-	if assetID == "" {
-		assetID = "asset-1"
-	}
-
-	// Priority 1: Explicit AssetValue
-	if opts.AssetValue != "" {
-		assetType := opts.AssetType
-		if assetType == "" {
-			assetType = ctis.AssetTypeRepository
-		}
-		return &ctis.Asset{
-			ID:          assetID,
-			Type:        assetType,
-			Value:       opts.AssetValue,
-			Name:        opts.AssetValue,
-			Criticality: ctis.CriticalityHigh,
-			Properties: ctis.Properties{
-				"source": "parse_options",
-			},
-		}
-	}
-
-	// Priority 2: BranchInfo.RepositoryURL
-	if opts.BranchInfo != nil && opts.BranchInfo.RepositoryURL != "" {
-		props := ctis.Properties{
-			"source":       "branch_info",
-			"auto_created": true,
-		}
-		if opts.BranchInfo.CommitSHA != "" {
-			props["commit_sha"] = opts.BranchInfo.CommitSHA
-		}
-		if opts.BranchInfo.Name != "" {
-			props["branch"] = opts.BranchInfo.Name
-		}
-		props["is_default_branch"] = opts.BranchInfo.IsDefaultBranch
-
-		return &ctis.Asset{
-			ID:          assetID,
-			Type:        ctis.AssetTypeRepository,
-			Value:       opts.BranchInfo.RepositoryURL,
-			Name:        opts.BranchInfo.RepositoryURL,
-			Criticality: ctis.CriticalityHigh,
-			Properties:  props,
-		}
-	}
-
-	return nil
 }
 
 // ruleConfidence maps the confidence betterleaks reports for a rule to a

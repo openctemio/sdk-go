@@ -11,6 +11,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/internal/assetctx"
 )
 
 // Adapter converts Nuclei JSONL output to CTIS.
@@ -68,14 +69,33 @@ func (a *Adapter) Convert(ctx context.Context, input []byte, opts *core.AdapterO
 		}
 	}
 
+	// Each finding is filed on the host it matched: one asset per distinct
+	// host (domain or IP address). A result naming no host cannot be filed.
+	hosts := assetctx.NewHosts(report)
 	for i, result := range results {
 		finding := a.convertResult(result, opts, i)
-		if finding != nil {
-			report.Findings = append(report.Findings, *finding)
+		if finding == nil {
+			continue
 		}
+		finding.AssetRef = hosts.Ref(nucleiTarget(result))
+		if finding.AssetRef == "" {
+			return nil, fmt.Errorf("%w: nuclei result %d (template %q) names no host", ctis.ErrNoAssetForFindings, i, result.TemplateID)
+		}
+		report.Findings = append(report.Findings, *finding)
 	}
 
 	return report, nil
+}
+
+// nucleiTarget returns the host a result matched: host, else matched-at,
+// else ip.
+func nucleiTarget(r NucleiResult) string {
+	for _, t := range []string{r.Host, r.MatchedAt, r.IP} {
+		if strings.TrimSpace(t) != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // convertResult converts a Nuclei result to a CTIS finding.
@@ -97,10 +117,9 @@ func (a *Adapter) convertResult(result NucleiResult, opts *core.AdapterOptions, 
 		finding.Message = result.Info.Name
 	}
 
-	// Asset reference from host
-	if result.Host != "" {
-		finding.AssetValue = result.Host
-	}
+	// The asset (the matched host) is referenced by AssetRef, set by
+	// Convert. AssetValue is left empty: v1 ingest turned it into a
+	// repository-typed asset named after the URL.
 
 	// Classification details
 	if result.Info.Classification != nil {

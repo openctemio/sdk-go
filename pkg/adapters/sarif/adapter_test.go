@@ -2,6 +2,7 @@ package sarif
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -161,7 +162,7 @@ func TestCanConvert_NotSARIF(t *testing.T) {
 
 func TestConvert_Success(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -177,7 +178,7 @@ func TestConvert_Success(t *testing.T) {
 
 func TestConvert_SQLInjectionFinding(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -271,7 +272,7 @@ func TestConvert_SQLInjectionFinding(t *testing.T) {
 
 func TestConvert_ToolMetadata(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -295,7 +296,7 @@ func TestConvert_ToolMetadata(t *testing.T) {
 
 func TestConvert_FindingLocation(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -333,7 +334,7 @@ func TestConvert_FindingLocation(t *testing.T) {
 
 func TestConvert_FindingFingerprint(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -353,7 +354,7 @@ func TestConvert_FindingFingerprint(t *testing.T) {
 
 func TestConvert_DataFlow(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -395,7 +396,7 @@ func TestConvert_DataFlow(t *testing.T) {
 
 func TestConvert_HardcodedSecretFinding(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -443,7 +444,7 @@ func TestConvert_HardcodedSecretFinding(t *testing.T) {
 
 func TestConvert_InfoFinding(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -478,6 +479,7 @@ func TestConvert_InfoFinding(t *testing.T) {
 func TestConvertWithMinSeverity(t *testing.T) {
 	a := NewAdapter()
 	opts := &core.AdapterOptions{
+		Repository:  testRepo.Repository,
 		MinSeverity: "high",
 	}
 	report, err := a.Convert(context.Background(), sampleSARIFJSON, opts)
@@ -498,6 +500,7 @@ func TestConvertWithMinSeverity(t *testing.T) {
 func TestConvertWithMinSeverityMedium(t *testing.T) {
 	a := NewAdapter()
 	opts := &core.AdapterOptions{
+		Repository:  testRepo.Repository,
 		MinSeverity: "medium",
 	}
 	report, err := a.Convert(context.Background(), sampleSARIFJSON, opts)
@@ -522,7 +525,7 @@ func TestConvert_InvalidJSON(t *testing.T) {
 func TestConvert_EmptyRuns(t *testing.T) {
 	a := NewAdapter()
 	input := []byte(`{"version": "2.1.0", "runs": []}`)
-	report, err := a.Convert(context.Background(), input, nil)
+	report, err := a.Convert(context.Background(), input, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -708,16 +711,61 @@ func TestParseToCTIS(t *testing.T) {
 	}
 }
 
+// A SARIF log with results and no repository (no options, no
+// versionControlProvenance, not in CI) has no asset to file its findings on:
+// it is an error, never findings without an asset or on a shared fake one.
 func TestParseToCTIS_NilOptions(t *testing.T) {
 	report, err := ParseToCTIS(sampleSARIFJSON, nil)
+	if !errors.Is(err, ctis.ErrNoAssetForFindings) {
+		t.Fatalf("err = %v, want ctis.ErrNoAssetForFindings", err)
+	}
+	if report != nil {
+		t.Errorf("report = %+v, want nil", report)
+	}
+	if _, err := NewAdapter().Convert(context.Background(), sampleSARIFJSON, nil); !errors.Is(err, ctis.ErrNoAssetForFindings) {
+		t.Fatalf("Convert err = %v, want ctis.ErrNoAssetForFindings", err)
+	}
+}
+
+// Inside CI the repository of the job names the asset.
+func TestConvert_RepositoryFromCI(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GITHUB_REPOSITORY", "org/from-ci")
+	t.Setenv("GITHUB_SERVER_URL", "https://github.com")
+	t.Setenv("GITHUB_SHA", "c0ffee")
+	t.Setenv("GITHUB_EVENT_PATH", "")
+	report, err := NewAdapter().Convert(context.Background(), sampleSARIFJSON, nil)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if report == nil {
-		t.Fatal("expected non-nil report")
+	if len(report.Assets) != 1 || report.Assets[0].Value != "github.com/org/from-ci" {
+		t.Fatalf("assets = %+v, want the CI repository", report.Assets)
 	}
-	if len(report.Findings) != 3 {
-		t.Errorf("expected 3 findings, got %d", len(report.Findings))
+	if report.Assets[0].Properties["commit_sha"] != "c0ffee" {
+		t.Errorf("commit_sha = %v, want c0ffee", report.Assets[0].Properties["commit_sha"])
+	}
+	if err := ctis.CheckFindingAssets(report); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// versionControlProvenance in the log names the repository when the
+// options do not, and wins over CI.
+func TestConvert_RepositoryFromProvenance(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GITHUB_REPOSITORY", "org/from-ci")
+	input := []byte(`{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"CodeQL"}},
+		"versionControlProvenance":[{"repositoryUri":"https://github.com/org/app","revisionId":"abc123","branch":"refs/heads/main"}],
+		"results":[{"ruleId":"r1","message":{"text":"m"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.go"},"region":{"startLine":1}}}]}]}]}`)
+	report, err := NewAdapter().Convert(context.Background(), input, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Assets) != 1 || report.Assets[0].Value != "https://github.com/org/app" {
+		t.Fatalf("assets = %+v, want the provenance repository", report.Assets)
+	}
+	if report.Findings[0].AssetRef != report.Assets[0].ID {
+		t.Errorf("asset_ref = %q, want %q", report.Findings[0].AssetRef, report.Assets[0].ID)
 	}
 }
 
@@ -779,7 +827,7 @@ func TestParseJSONBytes_InvalidJSON(t *testing.T) {
 
 func TestConvert_SourceTypeMetadata(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -824,7 +872,7 @@ func TestConvert_SemanticVersionFallback(t *testing.T) {
 	}`)
 
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), input, nil)
+	report, err := a.Convert(context.Background(), input, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -840,7 +888,7 @@ func TestConvert_SemanticVersionFallback(t *testing.T) {
 
 func TestConvert_TagsFiltering(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -869,7 +917,7 @@ func TestConvert_TagsFiltering(t *testing.T) {
 
 func TestConvert_FindingType(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -883,7 +931,7 @@ func TestConvert_FindingType(t *testing.T) {
 
 func TestConvert_FindingIDs(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -933,7 +981,7 @@ func TestConvert_NoResultLocations(t *testing.T) {
 	}`)
 
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), input, nil)
+	report, err := a.Convert(context.Background(), input, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -979,7 +1027,7 @@ func TestConvert_MultipleRuns(t *testing.T) {
 	}`)
 
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), input, nil)
+	report, err := a.Convert(context.Background(), input, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1008,7 +1056,7 @@ func TestConvert_MultipleRuns(t *testing.T) {
 
 func TestConvert_Confidence(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1022,7 +1070,7 @@ func TestConvert_Confidence(t *testing.T) {
 
 func TestConvert_ReferencesFromHelp(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSARIFJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSARIFJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1049,3 +1097,7 @@ func TestConvert_ReferencesFromHelp(t *testing.T) {
 		t.Errorf("expected markdown URL reference, got %v", f.References)
 	}
 }
+
+// testRepo names the scanned repository: a code scan's findings are filed
+// on it, and converting them with no repository is an error.
+var testRepo = &core.AdapterOptions{Repository: "github.com/example/app"}

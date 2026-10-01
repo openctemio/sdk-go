@@ -118,7 +118,7 @@ func TestCanConvert(t *testing.T) {
 
 func TestConvert(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSemgrepJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSemgrepJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestConvert(t *testing.T) {
 
 func TestConvertSQLInjection(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSemgrepJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSemgrepJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestConvertSQLInjection(t *testing.T) {
 
 func TestConvertWarning(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSemgrepJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSemgrepJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestConvertWarning(t *testing.T) {
 
 func TestConvertInfo(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleSemgrepJSON, nil)
+	report, err := a.Convert(context.Background(), sampleSemgrepJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -245,6 +245,7 @@ func TestConvertInfo(t *testing.T) {
 func TestConvertWithMinSeverity(t *testing.T) {
 	a := NewAdapter()
 	opts := &core.AdapterOptions{
+		Repository:  testRepo.Repository,
 		MinSeverity: "high",
 	}
 	report, err := a.Convert(context.Background(), sampleSemgrepJSON, opts)
@@ -337,3 +338,7 @@ func TestParseToCTIS(t *testing.T) {
 		t.Errorf("expected 3 findings, got %d", len(report.Findings))
 	}
 }
+
+// testRepo names the scanned repository: a code scan's findings are filed
+// on it, and converting them with no repository is an error.
+var testRepo = &core.AdapterOptions{Repository: "github.com/example/app"}

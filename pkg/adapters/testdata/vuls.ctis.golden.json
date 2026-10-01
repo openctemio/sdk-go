@@ -1,0 +1,117 @@
+{
+  "version": "1.0",
+  "metadata": {
+    "timestamp": "0001-01-01T00:00:00Z",
+    "source_type": "scanner",
+    "coverage_type": "full"
+  },
+  "tool": {
+    "name": "vuls",
+    "vendor": "future-architect",
+    "info_url": "https://vuls.io",
+    "capabilities": [
+      "vulnerability"
+    ]
+  },
+  "assets": [
+    {
+      "id": "host-1",
+      "type": "ip_address",
+      "value": "10.10.10.1",
+      "name": "web-server-01",
+      "tags": [
+        "vuls",
+        "ubuntu",
+        "22.04"
+      ],
+      "technical": {
+        "ip_address": {
+          "version": 4,
+          "hostname": "web-server-01"
+        }
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding-1",
+      "type": "vulnerability",
+      "title": "Critical vulnerability in Linux kernel",
+      "description": "A buffer overflow in the Linux kernel allows privilege escalation.",
+      "severity": "critical",
+      "confidence": 100,
+      "rule_id": "CVE-2024-1234",
+      "asset_ref": "host-1",
+      "vulnerability": {
+        "cve_id": "CVE-2024-1234",
+        "cwe_ids": [
+          "CWE-120"
+        ],
+        "cwe_id": "CWE-120",
+        "cvss_version": "3.1",
+        "cvss_score": 9.8,
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        "package": "linux",
+        "purl": "pkg:deb/ubuntu/linux@6.8.0-85?arch=amd64\u0026distro=22.04",
+        "affected_version": "6.8.0-85",
+        "fixed_version": "6.8.0-90",
+        "ecosystem": "deb"
+      },
+      "remediation": {
+        "recommendation": "Update linux to version 6.8.0-90"
+      },
+      "references": [
+        "https://nvd.nist.gov/vuln/detail/CVE-2024-1234",
+        "https://nvd.nist.gov/vuln/detail/CVE-2024-1234"
+      ],
+      "tags": [
+        "vuls",
+        "web-server-01"
+      ],
+      "fingerprint": "252b7bfb1f8e7395e2a0cd9509d45653547a396a2116dcfc0d8db4d211f392c8"
+    },
+    {
+      "id": "finding-2",
+      "type": "vulnerability",
+      "title": "OpenSSL timing side-channel",
+      "description": "A timing side-channel in OpenSSL RSA implementation.",
+      "severity": "medium",
+      "rule_id": "CVE-2024-5678",
+      "asset_ref": "host-1",
+      "vulnerability": {
+        "cve_id": "CVE-2024-5678",
+        "cvss_version": "3.1",
+        "cvss_score": 5.3,
+        "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+        "package": "openssl",
+        "purl": "pkg:deb/ubuntu/openssl@3.0.2-0ubuntu1.15?arch=amd64\u0026distro=22.04",
+        "affected_version": "3.0.2-0ubuntu1.15",
+        "ecosystem": "deb"
+      },
+      "remediation": {
+        "recommendation": "No fix available yet. Consider mitigation or alternative packages."
+      },
+      "tags": [
+        "vuls",
+        "web-server-01"
+      ],
+      "fingerprint": "70379235cd15ea2c16836b59e7a005a72175d30515a38beab269c3569810b09d"
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "linux",
+      "version": "6.8.0-85",
+      "type": "os",
+      "ecosystem": "deb",
+      "purl": "pkg:deb/ubuntu/linux@6.8.0-85?arch=amd64\u0026distro=22.04"
+    },
+    {
+      "name": "openssl",
+      "version": "3.0.2-0ubuntu1.15",
+      "type": "os",
+      "ecosystem": "deb",
+      "purl": "pkg:deb/ubuntu/openssl@3.0.2-0ubuntu1.15?arch=amd64\u0026distro=22.04"
+    }
+  ]
+}

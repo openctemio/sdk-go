@@ -10,6 +10,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/internal/assetctx"
 )
 
 // Parser converts Trivy JSON output to CTIS format.
@@ -80,11 +81,6 @@ func (p *Parser) Parse(ctx context.Context, data []byte, opts *core.ParseOptions
 		Capabilities: p.inferCapabilities(&trivyReport),
 	}
 
-	// Create asset from options, branch info, or artifact
-	if asset := p.createAssetFromContext(&trivyReport, opts); asset != nil {
-		report.Assets = append(report.Assets, *asset)
-	}
-
 	// Parse results
 	for _, result := range trivyReport.Results {
 		// Parse vulnerabilities
@@ -116,111 +112,48 @@ func (p *Parser) Parse(ctx context.Context, data []byte, opts *core.ParseOptions
 		fmt.Printf("[trivy-parser] Parsed %d findings from %s\n", len(report.Findings), trivyReport.ArtifactName)
 	}
 
+	// File every finding on one asset (see createAssetFromContext). Findings
+	// with no asset are an error, never sent without one.
+	asset := p.createAssetFromContext(&trivyReport, opts)
+	if asset == nil {
+		if err := assetctx.BindOrFail(report, ctis.Asset{}, false, "trivy"); err != nil {
+			return nil, err
+		}
+		return report, nil
+	}
+	assetctx.Bind(report, *asset)
 	return report, nil
 }
 
-// createAssetFromContext creates an asset from options, branch info, or Trivy artifact.
-// Priority: opts.AssetValue > opts.BranchInfo.RepositoryURL > ArtifactName
+// createAssetFromContext returns the asset a Trivy report's findings belong
+// to: the asset opts names (AssetValue, else BranchInfo.RepositoryURL), else
+// the artifact when it is an asset by itself (the image of an image scan,
+// the remote repository of a repo scan), else the CI job's repository. It
+// returns nil when none applies: the local path of a filesystem scan is not
+// an asset, and filing findings on it (as this parser once did) mixed every
+// checkout path into fake repositories.
 func (p *Parser) createAssetFromContext(report *Report, opts *core.ParseOptions) *ctis.Asset {
-	assetID := "asset-1"
-	if opts != nil && opts.AssetID != "" {
-		assetID = opts.AssetID
+	asset, ok := assetctx.Explicit(opts)
+	if !ok {
+		asset, ok = assetctx.TrivyArtifact(report.ArtifactType, report.ArtifactName)
+		if ok && opts != nil && opts.AssetID != "" {
+			asset.ID = opts.AssetID
+		}
 	}
-
-	// Priority 1: Explicit AssetValue from options
-	if opts != nil && opts.AssetValue != "" {
-		assetType := opts.AssetType
-		if assetType == "" {
-			assetType = ctis.AssetTypeRepository
+	if !ok {
+		id := ""
+		if opts != nil {
+			id = opts.AssetID
 		}
-		asset := &ctis.Asset{
-			ID:          assetID,
-			Type:        assetType,
-			Value:       opts.AssetValue,
-			Name:        opts.AssetValue,
-			Criticality: ctis.CriticalityHigh,
-			Properties: ctis.Properties{
-				"source": "parse_options",
-			},
-		}
-		// Add OS metadata if available
-		if report.Metadata.OS != nil {
-			asset.Tags = append(asset.Tags, report.Metadata.OS.Family)
-		}
-		return asset
+		asset, ok = assetctx.CI(id)
 	}
-
-	// Priority 2: BranchInfo.RepositoryURL
-	if opts != nil && opts.BranchInfo != nil && opts.BranchInfo.RepositoryURL != "" {
-		props := ctis.Properties{
-			"source":       "branch_info",
-			"auto_created": true,
-		}
-		if opts.BranchInfo.CommitSHA != "" {
-			props["commit_sha"] = opts.BranchInfo.CommitSHA
-		}
-		if opts.BranchInfo.Name != "" {
-			props["branch"] = opts.BranchInfo.Name
-		}
-		props["is_default_branch"] = opts.BranchInfo.IsDefaultBranch
-
-		asset := &ctis.Asset{
-			ID:          assetID,
-			Type:        ctis.AssetTypeRepository,
-			Value:       opts.BranchInfo.RepositoryURL,
-			Name:        opts.BranchInfo.RepositoryURL,
-			Criticality: ctis.CriticalityHigh,
-			Properties:  props,
-		}
-		// Add OS metadata if available
-		if report.Metadata.OS != nil {
-			asset.Tags = append(asset.Tags, report.Metadata.OS.Family)
-		}
-		return asset
-	}
-
-	// Priority 3: Trivy ArtifactName (existing behavior)
-	if report.ArtifactName != "" {
-		return p.parseArtifactAsAsset(report, opts)
-	}
-
-	return nil
-}
-
-// parseArtifactAsAsset converts Trivy artifact to CTIS asset.
-func (p *Parser) parseArtifactAsAsset(report *Report, opts *core.ParseOptions) *ctis.Asset {
-	if report.ArtifactName == "" {
+	if !ok {
 		return nil
 	}
-
-	assetType := ctis.AssetTypeRepository
-	switch report.ArtifactType {
-	case "container_image":
-		assetType = ctis.AssetTypeContainer
-	case "filesystem":
-		assetType = ctis.AssetTypeRepository
-	case "repository":
-		assetType = ctis.AssetTypeRepository
-	}
-
-	// Override with options if provided
-	if opts != nil && opts.AssetType != "" {
-		assetType = opts.AssetType
-	}
-
-	asset := &ctis.Asset{
-		ID:    fmt.Sprintf("asset-%x", sha256.Sum256([]byte(report.ArtifactName)))[:16],
-		Type:  assetType,
-		Value: report.ArtifactName,
-		Name:  report.ArtifactName,
-	}
-
-	// Add metadata
-	if report.Metadata.OS != nil {
+	if report.Metadata.OS != nil && report.Metadata.OS.Family != "" {
 		asset.Tags = append(asset.Tags, report.Metadata.OS.Family)
 	}
-
-	return asset
+	return &asset
 }
 
 // parseVulnerability converts Trivy vulnerability to CTIS finding.
@@ -324,11 +257,6 @@ func (p *Parser) parseVulnerability(result *Result, vuln *Vulnerability, opts *c
 		finding.Tags = append(finding.Tags, vuln.Status)
 	}
 
-	// Link to asset
-	if p.hasAssetInfo(opts) {
-		finding.AssetRef = p.getAssetID(opts)
-	}
-
 	return finding
 }
 
@@ -423,11 +351,6 @@ func (p *Parser) parseMisconfiguration(result *Result, misconfig *Misconfigurati
 		finding.Tags = append(finding.Tags, misconfig.CauseMetadata.Provider)
 	}
 
-	// Link to asset
-	if p.hasAssetInfo(opts) {
-		finding.AssetRef = p.getAssetID(opts)
-	}
-
 	return finding
 }
 
@@ -475,11 +398,6 @@ func (p *Parser) parseSecret(result *Result, secret *Secret, opts *core.ParseOpt
 
 	// Set tags
 	finding.Tags = []string{"secret", secret.Category}
-
-	// Link to asset
-	if p.hasAssetInfo(opts) {
-		finding.AssetRef = p.getAssetID(opts)
-	}
 
 	return finding
 }
@@ -572,28 +490,6 @@ func (p *Parser) getCVSSVersion(vector string) string {
 		return "2.0"
 	}
 	return ""
-}
-
-// getAssetID returns the asset ID from options or a default.
-func (p *Parser) getAssetID(opts *core.ParseOptions) string {
-	if opts != nil && opts.AssetID != "" {
-		return opts.AssetID
-	}
-	return "asset-1"
-}
-
-// hasAssetInfo checks if we have any asset information in options.
-func (p *Parser) hasAssetInfo(opts *core.ParseOptions) bool {
-	if opts == nil {
-		return false
-	}
-	if opts.AssetValue != "" {
-		return true
-	}
-	if opts.BranchInfo != nil && opts.BranchInfo.RepositoryURL != "" {
-		return true
-	}
-	return false
 }
 
 // inferCapabilities infers tool capabilities from report.
