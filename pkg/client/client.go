@@ -1447,22 +1447,31 @@ type SuppressionRule struct {
 	ExpiresAt   *string `json:"expires_at,omitempty"`
 }
 
-// GetSuppressions fetches active suppression rules from the platform.
-// These rules are used to filter out false positives from scan results.
+// GetSuppressions fetches the tenant's active suppression rules from the
+// platform, for the security gate to leave out findings the platform has
+// suppressed.
+//
+// It calls the sensor route (legacyv1.PathSuppressions). An API that predates
+// that route answers 404; the client then tries the user route
+// (legacyv1.PathSuppressionsUser) once, which only accepts a user token.
+//
+// A failure is returned, never swallowed: the caller decides whether a gate
+// may run without suppressions, and should say so where the operator sees it.
 func (c *Client) GetSuppressions(ctx context.Context) ([]SuppressionRule, error) {
-	url := fmt.Sprintf("%s/api/v1/suppressions/active", c.baseURL)
-
 	if c.verbose {
 		fmt.Println("[openctem] Fetching suppression rules")
 	}
 
-	data, err := c.doRequest(ctx, "GET", url, nil)
+	data, err := c.doRequest(ctx, http.MethodGet, c.baseURL+legacyv1.PathSuppressions, nil)
+	if err != nil && IsNotFoundError(err) {
+		data, err = c.doRequest(ctx, http.MethodGet, c.baseURL+legacyv1.PathSuppressionsUser, nil)
+	}
 	if err != nil {
-		// Non-fatal: suppressions are optional
-		if c.verbose {
-			fmt.Printf("[openctem] Warning: could not fetch suppressions: %v\n", err)
+		if IsAuthenticationError(err) || IsAuthorizationError(err) {
+			return nil, fmt.Errorf("fetch suppression rules: the platform refused this key (%w); "+
+				"the platform needs %s (OpenCTEM API with sensor suppressions)", err, legacyv1.PathSuppressions)
 		}
-		return nil, nil
+		return nil, fmt.Errorf("fetch suppression rules: %w", err)
 	}
 
 	var resp struct {
