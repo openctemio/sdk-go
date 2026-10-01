@@ -1,8 +1,10 @@
 package codeql
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 )
 
@@ -580,7 +582,13 @@ func TestParser_Parse_Sanitizer(t *testing.T) {
 
 func TestParser_ParseToReport(t *testing.T) {
 	p := NewParser()
-	report, err := p.ParseToReport(sarifWithFinding)
+	// No repository (no options, no versionControlProvenance, not in CI):
+	// the findings have no asset, which is an error.
+	if _, err := p.ParseToReport(sarifWithFinding); !errors.Is(err, ctis.ErrNoAssetForFindings) {
+		t.Fatalf("ParseToReport() without a repository: err = %v, want ctis.ErrNoAssetForFindings", err)
+	}
+
+	report, err := p.ParseToReportWithOptions(sarifWithFinding, &core.ParseOptions{AssetValue: "github.com/example/app"})
 	if err != nil {
 		t.Fatalf("ParseToReport() error = %v", err)
 	}

@@ -106,6 +106,9 @@ All notable changes to `github.com/openctemio/sdk-go`.
   default) is now written, under its base name, into a private temporary
   directory that is removed after the scan; so is a CodeQL database built
   for the run. An absolute `OutputFile` or `DatabasePath` is used as before.
+- **The vuls adapter's output is deterministic.** It ranged over the
+  packages map, so the same input produced its dependencies in a different
+  order on every run; they are now in package-name order.
 
 ### Added
 
@@ -124,6 +127,48 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `openctemio-sensor/0.3.1 openctem-sdk-go/0.7.4`. Product tokens are
   sanitized (HTTP token characters only, bounded length). Operators can now
   tell old agents from new sensors in proxy and API logs.
+- **`ctis.CheckFindingAssets(r *ctis.Report) error`**, the protocol v2
+  ingest rule as a client-side check (RFC-026 WP-S2): a finding resolves when
+  its `asset_ref` names an asset `id` of the same report, or when it has no
+  `asset_ref` and the report has exactly one asset; the asset must have a
+  value. It returns a `*ctis.FindingAssetError` (count, total and the first
+  five finding indices, never finding content) that matches
+  `ctis.ErrNoAssetForFindings` with `errors.Is`. `ctis.SARIFRun` reads
+  `versionControlProvenance`.
+
+### Changed
+
+- **Every converter files every finding on an asset of its own report**
+  (RFC-026 WP-S2; protocol v2 rejects any other finding as
+  `asset_unresolved`, with no fallback asset). Each finding now carries an
+  explicit `asset_ref`:
+  - SARIF (`adapters/sarif`, `ctis.FromSARIF`, `core.SARIFParser`,
+    `scanners/codeql`), semgrep, betterleaks (adapters and scanner parsers):
+    the repository from the options (`AssetValue`/`AssetType`,
+    `BranchInfo.RepositoryURL`, `AdapterOptions.Repository`), else the
+    SARIF log's `versionControlProvenance`, else the repository of the CI
+    job (`pkg/gitenv`: GitHub Actions, GitLab CI). With none of these, a
+    report with findings is an error matching `ctis.ErrNoAssetForFindings`.
+    The adapters used to emit findings with no asset at all, and the scanner
+    parsers did so whenever the caller passed no repository.
+  - trivy: the options, else the image of an image scan or the remote
+    repository of a repository scan, else CI, else the same error. The local
+    path of a filesystem scan (`.`, `/scan`) is no longer turned into a
+    repository asset, and the scanner parser's findings now reference the
+    artifact asset it emits (they pointed at `asset-1`, which did not exist).
+  - nuclei: one domain/IP asset per matched host (the adapter set only
+    `asset_value`, which v1 ingest turned into a repository named after the
+    URL); the scanner parser no longer emits a value-less asset for a result
+    without a host, uses the scan target the caller passed, and
+    `ReportParser.Parse` / `ParseToCTIS` fail when a finding still has no
+    asset.
+  - vuls and tenable: a scanned host with findings but no name or address
+    is an error instead of a value-less asset.
+  - `core.JSONParser` links findings to the asset it creates from
+    `AssetValue` even when `AssetID` is empty.
+
+  Callers that converted code-scan output without naming the repository
+  (outside CI) now get the error: pass the scanned repository.
 
 ## v0.7.3 — 2026-10-01
 

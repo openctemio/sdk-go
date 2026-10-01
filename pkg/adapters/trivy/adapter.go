@@ -9,6 +9,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/internal/assetctx"
 )
 
 // Adapter converts Trivy JSON output to CTIS.
@@ -44,7 +45,20 @@ func (a *Adapter) CanConvert(input []byte) bool {
 }
 
 // Convert transforms Trivy JSON input to CTIS Report.
+//
+// Every finding is filed on one asset: opts.Repository, else the artifact
+// Trivy scanned when it is an asset by itself (the image of an image scan,
+// the remote repository of a repo scan), else the repository of the CI job
+// (GitHub Actions, GitLab CI). A filesystem scan with findings and neither
+// options nor CI is an error matching ctis.ErrNoAssetForFindings: the local
+// path Trivy reports is not an asset.
 func (a *Adapter) Convert(ctx context.Context, input []byte, opts *core.AdapterOptions) (*ctis.Report, error) {
+	asset, ok := assetctx.AdapterExplicit(opts)
+	return a.convert(input, opts, asset, ok)
+}
+
+// convert converts input, filing its findings on asset when hasAsset.
+func (a *Adapter) convert(input []byte, opts *core.AdapterOptions, asset ctis.Asset, hasAsset bool) (*ctis.Report, error) {
 	var trivyReport TrivyReport
 	if err := json.Unmarshal(input, &trivyReport); err != nil {
 		return nil, fmt.Errorf("parse trivy: %w", err)
@@ -97,6 +111,15 @@ func (a *Adapter) Convert(ctx context.Context, input []byte, opts *core.AdapterO
 		}
 	}
 
+	if !hasAsset {
+		asset, hasAsset = assetctx.TrivyArtifact(trivyReport.ArtifactType, trivyReport.ArtifactName)
+	}
+	if !hasAsset {
+		asset, hasAsset = assetctx.CI(assetctx.DefaultID)
+	}
+	if err := assetctx.BindOrFail(report, asset, hasAsset, "trivy"); err != nil {
+		return nil, err
+	}
 	return report, nil
 }
 
@@ -333,18 +356,10 @@ func meetsMinSeverity(s, min ctis.Severity) bool {
 var _ core.Adapter = (*Adapter)(nil)
 
 // ParseToCTIS is a convenience function to parse Trivy JSON to CTIS format.
+//
+// The findings are filed on the asset opts names (AssetValue/AssetType, else
+// BranchInfo.RepositoryURL), else as Adapter.Convert does.
 func ParseToCTIS(data []byte, opts *core.ParseOptions) (*ctis.Report, error) {
-	adapter := NewAdapter()
-
-	var adapterOpts *core.AdapterOptions
-	if opts != nil {
-		adapterOpts = &core.AdapterOptions{
-			Repository: opts.AssetValue,
-		}
-		if opts.BranchInfo != nil {
-			adapterOpts.Repository = opts.BranchInfo.RepositoryURL
-		}
-	}
-
-	return adapter.Convert(context.Background(), data, adapterOpts)
+	asset, ok := assetctx.Explicit(opts)
+	return NewAdapter().convert(data, assetctx.ScopeOptions(opts), asset, ok)
 }

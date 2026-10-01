@@ -12,6 +12,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/internal/assetctx"
 )
 
 // Parser converts Nuclei output to CTIS format.
@@ -111,8 +112,14 @@ func (p *Parser) toCTISReportWithOptions(results []Result, _ string, opts *core.
 	assetMap := make(map[string]string) // host -> asset ID
 
 	for i, result := range results {
-		// Create or get asset for this result
+		// Create or get asset for this result. A result naming no host,
+		// URL or IP falls back to the scan target the caller named; with
+		// neither it has no asset, and ReportParser.Parse / ParseToCTIS
+		// reject the report (ctis.CheckFindingAssets).
 		assetID := p.getOrCreateAsset(report, result, assetMap)
+		if assetID == "" && opts != nil && strings.TrimSpace(opts.AssetValue) != "" {
+			assetID = p.getOrCreateTargetAsset(report, opts, assetMap)
+		}
 
 		// Create finding
 		finding := p.toCTISFinding(result, assetID, i)
@@ -135,10 +142,6 @@ func (p *Parser) getOrCreateAsset(report *ctis.Report, result Result, assetMap m
 		return assetID
 	}
 
-	// Create new asset
-	assetID := fmt.Sprintf("asset-%d", len(report.Assets))
-	assetMap[key] = assetID
-
 	assetType := ctis.AssetTypeDomain
 	assetValue := result.Host
 
@@ -150,6 +153,16 @@ func (p *Parser) getOrCreateAsset(report *ctis.Report, result Result, assetMap m
 		assetType = ctis.AssetTypeService
 		assetValue = result.URL
 	}
+
+	// An asset with no value is not stored by ingest; a finding on it
+	// would be rejected. Leave such a result without an asset.
+	if strings.TrimSpace(assetValue) == "" {
+		return ""
+	}
+
+	// Create new asset
+	assetID := fmt.Sprintf("asset-%d", len(report.Assets))
+	assetMap[key] = assetID
 
 	asset := ctis.Asset{
 		ID:         assetID,
@@ -169,6 +182,32 @@ func (p *Parser) getOrCreateAsset(report *ctis.Report, result Result, assetMap m
 	}
 
 	report.Assets = append(report.Assets, asset)
+	return assetID
+}
+
+// getOrCreateTargetAsset returns the asset for the scan target opts names
+// (AssetValue/AssetType), adding it on first use.
+func (p *Parser) getOrCreateTargetAsset(report *ctis.Report, opts *core.ParseOptions, assetMap map[string]string) string {
+	key := "\x00target"
+	if assetID, exists := assetMap[key]; exists {
+		return assetID
+	}
+	assetType := opts.AssetType
+	if assetType == "" {
+		assetType, _ = assetctx.HostAsset(opts.AssetValue)
+	}
+	if assetType == "" {
+		assetType = ctis.AssetTypeDomain
+	}
+	assetID := fmt.Sprintf("asset-%d", len(report.Assets))
+	assetMap[key] = assetID
+	report.Assets = append(report.Assets, ctis.Asset{
+		ID:         assetID,
+		Type:       assetType,
+		Value:      opts.AssetValue,
+		Name:       opts.AssetValue,
+		Properties: ctis.Properties{"source": "parse_options"},
+	})
 	return assetID
 }
 
@@ -354,5 +393,12 @@ func ParseToCTIS(data []byte, opts *core.ParseOptions) (*ctis.Report, error) {
 	if opts != nil && opts.AssetValue != "" {
 		target = opts.AssetValue
 	}
-	return parser.ParseWithOptions(data, target, opts)
+	report, err := parser.ParseWithOptions(data, target, opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctis.CheckFindingAssets(report); err != nil {
+		return nil, err
+	}
+	return report, nil
 }

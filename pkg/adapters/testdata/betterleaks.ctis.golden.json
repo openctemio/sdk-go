@@ -1,0 +1,159 @@
+{
+  "version": "1.0",
+  "metadata": {
+    "timestamp": "0001-01-01T00:00:00Z",
+    "source_type": "scanner",
+    "scope": {
+      "name": "github.com/example/shop"
+    }
+  },
+  "tool": {
+    "name": "betterleaks",
+    "vendor": "Betterleaks",
+    "info_url": "https://github.com/betterleaks/betterleaks",
+    "capabilities": [
+      "secret"
+    ]
+  },
+  "assets": [
+    {
+      "id": "asset-1",
+      "type": "repository",
+      "value": "github.com/example/shop",
+      "name": "github.com/example/shop",
+      "criticality": "high",
+      "properties": {
+        "branch": "main",
+        "commit_sha": "3f1c2a9e",
+        "source": "adapter_options"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding-1",
+      "type": "secret",
+      "title": "AWS Access Key",
+      "message": "Secret detected: AWS Access Key in config.yml",
+      "severity": "critical",
+      "confidence": 85,
+      "rule_id": "aws-access-key-id",
+      "asset_ref": "asset-1",
+      "location": {
+        "path": "config.yml",
+        "start_line": 10,
+        "end_line": 10,
+        "start_column": 1,
+        "end_column": 20,
+        "commit_sha": "abc123def456"
+      },
+      "secret": {
+        "secret_type": "credential",
+        "service": "aws",
+        "masked_value": "AKIA************MPLE",
+        "length": 20,
+        "entropy": 3.6
+      },
+      "tags": [
+        "betterleaks",
+        "secret"
+      ],
+      "fingerprint": "config.yml:aws-access-key-id:10",
+      "author": "dev@example.com",
+      "author_email": "dev@example.com"
+    },
+    {
+      "id": "finding-2",
+      "type": "secret",
+      "title": "Generic API Key",
+      "message": "Secret detected: Generic API Key in src/config.py",
+      "severity": "high",
+      "confidence": 85,
+      "rule_id": "generic-api-key",
+      "asset_ref": "asset-1",
+      "location": {
+        "path": "src/config.py",
+        "start_line": 25,
+        "end_line": 25,
+        "start_column": 10,
+        "end_column": 50,
+        "commit_sha": "def789abc012"
+      },
+      "secret": {
+        "secret_type": "api_key",
+        "masked_value": "sk_l****************7890",
+        "length": 24,
+        "entropy": 4.2
+      },
+      "tags": [
+        "betterleaks",
+        "secret"
+      ],
+      "fingerprint": "src/config.py:generic-api-key:25",
+      "author": "admin@example.com",
+      "author_email": "admin@example.com"
+    },
+    {
+      "id": "finding-3",
+      "type": "secret",
+      "title": "GitHub Personal Access Token",
+      "message": "Secret detected: GitHub Personal Access Token in .env",
+      "severity": "critical",
+      "confidence": 85,
+      "rule_id": "github-pat",
+      "asset_ref": "asset-1",
+      "location": {
+        "path": ".env",
+        "start_line": 5,
+        "end_line": 5,
+        "start_column": 1,
+        "end_column": 40,
+        "commit_sha": "111222333444"
+      },
+      "secret": {
+        "secret_type": "credential",
+        "service": "github",
+        "masked_value": "ghp_********************************xxxx",
+        "length": 40
+      },
+      "tags": [
+        "betterleaks",
+        "secret",
+        "github",
+        "pat"
+      ],
+      "fingerprint": ".env:github-pat:5",
+      "author": "dev2@example.com",
+      "author_email": "dev2@example.com"
+    },
+    {
+      "id": "finding-4",
+      "type": "secret",
+      "title": "Stripe Secret Key",
+      "message": "Secret detected: Stripe Secret Key in payment.js",
+      "severity": "high",
+      "confidence": 85,
+      "rule_id": "stripe-api-key",
+      "asset_ref": "asset-1",
+      "location": {
+        "path": "payment.js",
+        "start_line": 3,
+        "end_line": 3,
+        "start_column": 1,
+        "end_column": 30,
+        "commit_sha": "aaa111bbb222"
+      },
+      "secret": {
+        "secret_type": "api_key",
+        "service": "stripe",
+        "masked_value": "sk_t******c123",
+        "length": 14
+      },
+      "tags": [
+        "betterleaks",
+        "secret"
+      ],
+      "fingerprint": "payment.js:stripe-api-key:3"
+    }
+  ]
+}

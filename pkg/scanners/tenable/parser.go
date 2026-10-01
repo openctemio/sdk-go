@@ -102,6 +102,17 @@ func Convert(r io.Reader, opts ConvertOptions) (*ctis.Report, error) {
 	for hostIdx := range doc.Hosts {
 		host := &doc.Hosts[hostIdx]
 		asset, assetID := buildAsset(host, defaultCrit)
+		if strings.TrimSpace(asset.Value) == "" {
+			// A ReportHost with no fqdn, ip or name has nothing to file its
+			// findings on; the asset would not be stored either.
+			for itemIdx := range host.Items {
+				if host.Items[itemIdx].Severity >= opts.MinSeverity {
+					return nil, fmt.Errorf("%w: nessus ReportHost %d has findings but no host-fqdn, host-ip or name",
+						ctis.ErrNoAssetForFindings, hostIdx)
+				}
+			}
+			continue
+		}
 		report.Assets = append(report.Assets, asset)
 
 		for itemIdx := range host.Items {

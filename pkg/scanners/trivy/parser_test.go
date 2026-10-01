@@ -68,15 +68,26 @@ func TestParser_CreateAssetFromContext(t *testing.T) {
 			wantAssetType: ctis.AssetTypeContainer,
 		},
 		{
-			name: "falls back to artifact when options are empty",
+			name: "falls back to a remote repository artifact",
+			report: &Report{
+				ArtifactName: "https://github.com/org/repo",
+				ArtifactType: "repository",
+			},
+			opts:          &core.ParseOptions{},
+			wantAsset:     true,
+			wantAssetName: "https://github.com/org/repo",
+			wantAssetType: ctis.AssetTypeRepository,
+		},
+		{
+			// The local path of a filesystem scan is not an asset: it used
+			// to become a fake repository named "." (or the mount path).
+			name: "filesystem artifact is not an asset",
 			report: &Report{
 				ArtifactName: ".",
 				ArtifactType: "filesystem",
 			},
-			opts:          &core.ParseOptions{},
-			wantAsset:     true,
-			wantAssetName: ".",
-			wantAssetType: ctis.AssetTypeRepository,
+			opts:      &core.ParseOptions{},
+			wantAsset: false,
 		},
 	}
 
@@ -138,58 +149,5 @@ func TestParser_ParseWithAssetFromBranchInfo(t *testing.T) {
 	// Verify properties
 	if asset.Properties["source"] != "branch_info" {
 		t.Errorf("asset source = %v, want branch_info", asset.Properties["source"])
-	}
-}
-
-func TestParser_HasAssetInfo(t *testing.T) {
-	parser := NewParser()
-
-	tests := []struct {
-		name string
-		opts *core.ParseOptions
-		want bool
-	}{
-		{
-			name: "nil options",
-			opts: nil,
-			want: false,
-		},
-		{
-			name: "empty options",
-			opts: &core.ParseOptions{},
-			want: false,
-		},
-		{
-			name: "with AssetValue",
-			opts: &core.ParseOptions{
-				AssetValue: "github.com/org/repo",
-			},
-			want: true,
-		},
-		{
-			name: "with BranchInfo.RepositoryURL",
-			opts: &core.ParseOptions{
-				BranchInfo: &ctis.BranchInfo{
-					RepositoryURL: "github.com/org/repo",
-				},
-			},
-			want: true,
-		},
-		{
-			name: "with empty BranchInfo",
-			opts: &core.ParseOptions{
-				BranchInfo: &ctis.BranchInfo{},
-			},
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parser.hasAssetInfo(tt.opts)
-			if got != tt.want {
-				t.Errorf("hasAssetInfo() = %v, want %v", got, tt.want)
-			}
-		})
 	}
 }

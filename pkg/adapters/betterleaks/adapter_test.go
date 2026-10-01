@@ -117,7 +117,7 @@ func TestCanConvert(t *testing.T) {
 
 func TestConvert(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleReportJSON, nil)
+	report, err := a.Convert(context.Background(), sampleReportJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestConvert(t *testing.T) {
 
 func TestConvertAWSKey(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleReportJSON, nil)
+	report, err := a.Convert(context.Background(), sampleReportJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestConvertAWSKey(t *testing.T) {
 
 func TestConvertGitHubPAT(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleReportJSON, nil)
+	report, err := a.Convert(context.Background(), sampleReportJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestConvertGitHubPAT(t *testing.T) {
 
 func TestConvertStripeKey(t *testing.T) {
 	a := NewAdapter()
-	report, err := a.Convert(context.Background(), sampleReportJSON, nil)
+	report, err := a.Convert(context.Background(), sampleReportJSON, testRepo)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -249,6 +249,7 @@ func TestConvertStripeKey(t *testing.T) {
 func TestConvertWithMinSeverity(t *testing.T) {
 	a := NewAdapter()
 	opts := &core.AdapterOptions{
+		Repository:  testRepo.Repository,
 		MinSeverity: "critical",
 	}
 	report, err := a.Convert(context.Background(), sampleReportJSON, opts)
@@ -361,3 +362,7 @@ func TestParseToCTIS(t *testing.T) {
 		t.Errorf("expected 4 findings, got %d", len(report.Findings))
 	}
 }
+
+// testRepo names the scanned repository: a code scan's findings are filed
+// on it, and converting them with no repository is an error.
+var testRepo = &core.AdapterOptions{Repository: "github.com/example/app"}

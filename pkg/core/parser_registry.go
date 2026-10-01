@@ -3,11 +3,13 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/internal/cirepo"
 )
 
 // =============================================================================
@@ -170,6 +172,24 @@ func (p *SARIFParser) Parse(ctx context.Context, data []byte, opts *ParseOptions
 		ToolType:          opts.ToolType,
 	}
 
+	report, err := ctis.FromSARIF(data, convertOpts)
+	if !errors.Is(err, ctis.ErrNoAssetForFindings) {
+		return report, err
+	}
+	// Neither the options nor the log name the repository: use the one the
+	// CI job is building, or fail. Never a shared placeholder asset.
+	repo, ok := cirepo.Detect()
+	if !ok {
+		return nil, err
+	}
+	convertOpts.AssetType = ctis.AssetTypeRepository
+	convertOpts.AssetValue = repo.URL
+	if convertOpts.Branch == "" {
+		convertOpts.Branch = repo.Branch
+	}
+	if convertOpts.CommitSHA == "" {
+		convertOpts.CommitSHA = repo.Commit
+	}
 	return ctis.FromSARIF(data, convertOpts)
 }
 
@@ -219,6 +239,7 @@ func (p *JSONParser) Parse(ctx context.Context, data []byte, opts *ParseOptions)
 
 	// Apply options
 	if opts != nil {
+		linkTo := opts.AssetID
 		if opts.AssetValue != "" && len(report.Assets) == 0 {
 			assetID := opts.AssetID
 			if assetID == "" {
@@ -229,13 +250,16 @@ func (p *JSONParser) Parse(ctx context.Context, data []byte, opts *ParseOptions)
 				Type:  opts.AssetType,
 				Value: opts.AssetValue,
 			})
+			linkTo = assetID
 		}
 
-		// Link findings to asset
-		if opts.AssetID != "" {
+		// Link findings without an asset reference to the asset. The
+		// asset-1 created above used to be left unreferenced when AssetID
+		// was empty.
+		if linkTo != "" {
 			for i := range report.Findings {
 				if report.Findings[i].AssetRef == "" {
-					report.Findings[i].AssetRef = opts.AssetID
+					report.Findings[i].AssetRef = linkTo
 				}
 			}
 		}

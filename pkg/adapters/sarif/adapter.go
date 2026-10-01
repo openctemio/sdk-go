@@ -10,6 +10,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/internal/assetctx"
 )
 
 // Adapter converts SARIF (Static Analysis Results Interchange Format) to CTIS.
@@ -46,7 +47,18 @@ func (a *Adapter) CanConvert(input []byte) bool {
 }
 
 // Convert transforms SARIF input to CTIS Report.
+//
+// Every finding is filed on one repository asset: opts.Repository, else the
+// repository the log's versionControlProvenance names, else the repository
+// of the CI job (GitHub Actions, GitLab CI). A log with results and none of
+// these is an error matching ctis.ErrNoAssetForFindings.
 func (a *Adapter) Convert(ctx context.Context, input []byte, opts *core.AdapterOptions) (*ctis.Report, error) {
+	asset, ok := assetctx.AdapterExplicit(opts)
+	return a.convert(input, opts, asset, ok)
+}
+
+// convert converts input, filing its findings on asset when hasAsset.
+func (a *Adapter) convert(input []byte, opts *core.AdapterOptions, asset ctis.Asset, hasAsset bool) (*ctis.Report, error) {
 	var sarif SARIFReport
 	if err := json.Unmarshal(input, &sarif); err != nil {
 		return nil, fmt.Errorf("parse SARIF: %w", err)
@@ -92,6 +104,23 @@ func (a *Adapter) Convert(ctx context.Context, input []byte, opts *core.AdapterO
 		}
 	}
 
+	if !hasAsset {
+		for i := range sarif.Runs {
+			if asset, hasAsset = assetctx.SARIFProvenance(sarif.Runs[i].Repository()); hasAsset {
+				break
+			}
+		}
+	}
+	if !hasAsset {
+		asset, hasAsset = assetctx.CI(assetctx.DefaultID)
+	}
+	tool := "SARIF"
+	if report.Tool != nil {
+		tool = report.Tool.Name
+	}
+	if err := assetctx.BindOrFail(report, asset, hasAsset, tool); err != nil {
+		return nil, err
+	}
 	return report, nil
 }
 
@@ -481,6 +510,28 @@ type SARIFRun struct {
 	Tool        SARIFTool         `json:"tool"`
 	Invocations []SARIFInvocation `json:"invocations,omitempty"`
 	Results     []SARIFResult     `json:"results"`
+
+	// VersionControlProvenance names the repository and revision the run
+	// analyzed.
+	VersionControlProvenance []SARIFVersionControlDetails `json:"versionControlProvenance,omitempty"`
+}
+
+// SARIFVersionControlDetails is a SARIF versionControlDetails object.
+type SARIFVersionControlDetails struct {
+	RepositoryURI string `json:"repositoryUri"`
+	RevisionID    string `json:"revisionId,omitempty"`
+	Branch        string `json:"branch,omitempty"`
+}
+
+// Repository returns the first repository named in the run's
+// versionControlProvenance, with its revision and branch, or empty strings.
+func (r *SARIFRun) Repository() (uri, revision, branch string) {
+	for _, vc := range r.VersionControlProvenance {
+		if u := strings.TrimSpace(vc.RepositoryURI); u != "" {
+			return u, vc.RevisionID, vc.Branch
+		}
+	}
+	return "", "", ""
 }
 
 // SARIFInvocation describes a tool invocation.
@@ -634,21 +685,12 @@ type SARIFAttachment struct {
 
 // ParseToCTIS is a convenience function to parse SARIF JSON to CTIS format.
 // This provides a consistent API with other scanner parsers (e.g., semgrep.ParseToCTIS).
+//
+// The findings are filed on the asset opts names (AssetValue/AssetType, else
+// BranchInfo.RepositoryURL), else as Adapter.Convert does.
 func ParseToCTIS(data []byte, opts *core.ParseOptions) (*ctis.Report, error) {
-	adapter := NewAdapter()
-
-	// Convert ParseOptions to AdapterOptions
-	var adapterOpts *core.AdapterOptions
-	if opts != nil {
-		adapterOpts = &core.AdapterOptions{
-			Repository: opts.AssetValue,
-		}
-		if opts.BranchInfo != nil {
-			adapterOpts.Repository = opts.BranchInfo.RepositoryURL
-		}
-	}
-
-	return adapter.Convert(context.Background(), data, adapterOpts)
+	asset, ok := assetctx.Explicit(opts)
+	return NewAdapter().convert(data, assetctx.ScopeOptions(opts), asset, ok)
 }
 
 // ParseJSONBytes parses SARIF JSON from bytes.
