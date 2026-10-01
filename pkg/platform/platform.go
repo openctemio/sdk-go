@@ -71,8 +71,12 @@ const (
 )
 
 // SensorCredentials contains the credentials returned after sensor registration.
+//
+// This is also the format of the credentials file (FileCredentialStore). The
+// sensor id is written as "sensor_id"; files written before the agent ->
+// sensor rename carry "agent_id" and are still read (see UnmarshalJSON).
 type SensorCredentials struct {
-	SensorID  string `json:"agent_id"`
+	SensorID  string `json:"sensor_id"`
 	APIKey    string `json:"api_key"`
 	APIPrefix string `json:"api_prefix"`
 	// ExpiresAt is the key's expiry when known (from a key renewal). Pass it

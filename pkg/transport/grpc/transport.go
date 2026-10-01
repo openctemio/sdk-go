@@ -34,7 +34,7 @@ type Config struct {
 
 	// Authentication
 	APIKey   string `yaml:"api_key" json:"api_key"`
-	SensorID string `yaml:"agent_id" json:"agent_id"`
+	SensorID string `yaml:"sensor_id" json:"sensor_id"` // the pre-rename key agent_id is still read (config_compat.go)
 
 	// TLS configuration
 	UseTLS             bool   `yaml:"use_tls" json:"use_tls"`

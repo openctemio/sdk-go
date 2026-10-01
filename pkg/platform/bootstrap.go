@@ -16,7 +16,7 @@ import (
 // will never succeed on retry, so the loop stops immediately on these.
 var (
 	ErrBootstrapTokenInvalid = errors.New("invalid or expired bootstrap token")
-	ErrSensorAlreadyExists   = errors.New("agent with this name already exists")
+	ErrSensorAlreadyExists   = errors.New("sensor with this name already exists")
 )
 
 // RegistrationRequest contains the data for registering a new platform sensor.
@@ -42,6 +42,7 @@ type RegistrationRequest struct {
 
 // RegistrationResponse contains the response from sensor registration.
 type RegistrationResponse struct {
+	// SensorID is protocol v1's "agent_id" (legacyv1.FieldSensorID).
 	SensorID  string `json:"agent_id"`
 	APIKey    string `json:"api_key"`    // Only returned once - store securely!
 	APIPrefix string `json:"api_prefix"` // Prefix for display/logging (safe to log)
@@ -122,7 +123,7 @@ func NewBootstrapper(baseURL, bootstrapToken string, config *BootstrapConfig) *B
 // be deleted and re-registered with a new bootstrap token.
 func (b *Bootstrapper) Register(ctx context.Context, req *RegistrationRequest) (*RegistrationResponse, error) {
 	if req.Name == "" {
-		return nil, fmt.Errorf("agent name is required")
+		return nil, fmt.Errorf("sensor name is required")
 	}
 	if len(req.Capabilities) == 0 {
 		return nil, fmt.Errorf("at least one capability is required")
@@ -193,7 +194,7 @@ func (b *Bootstrapper) doRegister(ctx context.Context, req *RegistrationRequest)
 	httpReq.Header.Set("Authorization", "Bearer "+b.bootstrapToken)
 
 	if b.config.Verbose {
-		fmt.Printf("[bootstrap] Registering agent %q with capabilities %v\n", req.Name, req.Capabilities)
+		fmt.Printf("[bootstrap] Registering sensor %q with capabilities %v\n", req.Name, req.Capabilities)
 	}
 
 	resp, err := b.httpClient.Do(httpReq)
@@ -218,7 +219,7 @@ func (b *Bootstrapper) doRegister(ctx context.Context, req *RegistrationRequest)
 	}
 
 	if b.config.Verbose {
-		fmt.Printf("[bootstrap] Registration successful! Agent ID: %s, API Key Prefix: %s\n",
+		fmt.Printf("[bootstrap] Registration successful! Sensor ID: %s, API Key Prefix: %s\n",
 			result.SensorID, result.APIPrefix)
 	}
 
@@ -371,10 +372,18 @@ func (s *FileCredentialStore) Exists() bool {
 //	        Capabilities: []string{"sast", "sca"},
 //	    },
 //	})
+//
+// With an empty CredentialsFile the default ~/.openctem/sensor-credentials.json
+// is used, and a credentials file left by a sensor from before the agent ->
+// sensor rename (~/.openctem/agent-credentials.json) is moved there first, so
+// the sensor keeps its identity and key and does not register again (see
+// ResolveCredentialsFile). An explicit path is used as is.
 func EnsureRegistered(ctx context.Context, config *EnsureRegisteredConfig) (*SensorCredentials, error) {
-	if config.CredentialsFile == "" {
-		return nil, fmt.Errorf("credentials file path is required")
+	path, err := ResolveCredentialsFile(config.CredentialsFile)
+	if err != nil {
+		return nil, err
 	}
+	config.CredentialsFile = path
 
 	store := NewFileCredentialStore(config.CredentialsFile)
 
@@ -385,7 +394,7 @@ func EnsureRegistered(ctx context.Context, config *EnsureRegisteredConfig) (*Sen
 			return nil, fmt.Errorf("failed to load credentials: %w", err)
 		}
 		if config.Verbose {
-			fmt.Printf("[bootstrap] Loaded existing credentials for agent %s\n", creds.SensorID)
+			fmt.Printf("[bootstrap] Loaded existing credentials for sensor %s\n", creds.SensorID)
 		}
 		return creds, nil
 	}
@@ -435,7 +444,9 @@ type EnsureRegisteredConfig struct {
 	// Only needed if credentials don't exist.
 	BootstrapToken string
 
-	// CredentialsFile is the path to store/load credentials.
+	// CredentialsFile is the path to store/load credentials. Empty means
+	// DefaultCredentialsFile (with the pre-rename file migrated); on return
+	// EnsureRegistered has set it to the path actually used.
 	CredentialsFile string
 
 	// Registration is the registration request.

@@ -77,7 +77,7 @@ var _ core.Pusher = (*Client)(nil)
 type Config struct {
 	BaseURL    string        `yaml:"base_url" json:"base_url"`
 	APIKey     string        `yaml:"api_key" json:"api_key"`
-	SensorID   string        `yaml:"agent_id" json:"agent_id"` // Registered sensor ID for audit trail
+	SensorID   string        `yaml:"sensor_id" json:"sensor_id"` // Registered sensor ID for audit trail; the pre-rename key agent_id is still read (config_compat.go)
 	Timeout    time.Duration `yaml:"timeout" json:"timeout"`
 	MaxRetries int           `yaml:"max_retries" json:"max_retries"`
 	RetryDelay time.Duration `yaml:"retry_delay" json:"retry_delay"`
