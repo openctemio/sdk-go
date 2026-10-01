@@ -573,6 +573,10 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		MemoryPercent: status.MemoryPercent,
 		ActiveJobs:    status.ActiveJobs,
 		Region:        status.Region,
+		// Version and Hostname were declared on the request but never set, so
+		// every sensor showed "No host info" on the platform.
+		Version:  status.Version,
+		Hostname: status.Hostname,
 	}
 	ob := c.Outbox()
 	if ob != nil {
