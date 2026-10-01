@@ -1,0 +1,4 @@
+A stub of the pre-sensor SDK API (sdk-go v0.6): the identifiers and package
+paths the codemod resolves, with the same names and shapes as the real
+release. The codemod test migrates ../fixture against it, then builds the
+result against the real, renamed SDK at the repository root.

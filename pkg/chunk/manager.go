@@ -337,7 +337,7 @@ func (m *Manager) processNextChunk(ctx context.Context) {
 	}
 
 	// Auto-cleanup: Delete chunk data immediately after successful upload
-	// This prevents disk bloat on agent machines
+	// This prevents disk bloat on sensor machines
 	if m.cfg.AutoCleanupOnUpload {
 		if err := m.storage.DeleteChunkData(ctx, chunk.ID); err != nil {
 			if m.verbose {

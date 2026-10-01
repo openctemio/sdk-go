@@ -226,8 +226,8 @@ func ValidateBaseScannerConfig(cfg *BaseScannerConfig) error {
 	return v.Validate()
 }
 
-// ValidateBaseAgentConfig validates a BaseAgentConfig.
-func ValidateBaseAgentConfig(cfg *BaseAgentConfig) error {
+// ValidateBaseSensorConfig validates a BaseSensorConfig.
+func ValidateBaseSensorConfig(cfg *BaseSensorConfig) error {
 	v := NewValidator()
 	v.Required("name", cfg.Name)
 	if cfg.ScanInterval != 0 {

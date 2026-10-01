@@ -4,7 +4,7 @@ This document explains the core architecture of the OpenCTEM platform and how th
 
 ## Overview
 
-OpenCTEM is a security platform that collects, analyzes, and manages security findings from various sources. The architecture follows an **Agent-Component** model.
+OpenCTEM is a security platform that collects, analyzes, and manages security findings from various sources. The architecture follows an **Sensor-Component** model.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -14,7 +14,7 @@ OpenCTEM is a security platform that collects, analyzes, and manages security fi
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                         BACKEND API                                  │   │
 │  │   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐            │   │
-│  │   │   Agents    │    │  Findings   │    │   Assets    │            │   │
+│  │   │   Sensors   │    │  Findings   │    │   Assets    │            │   │
 │  │   │  Registry   │    │   Storage   │    │  Inventory  │            │   │
 │  │   └─────────────┘    └─────────────┘    └─────────────┘            │   │
 │  │         ▲                   ▲                  ▲                    │   │
@@ -29,11 +29,11 @@ OpenCTEM is a security platform that collects, analyzes, and manages security fi
                     ┌────────────┴────────────┐
                     │                         │
      ┌──────────────▼──────────────┐  ┌──────▼───────────────────┐
-     │        AGENT (Local)        │  │      CI/CD Pipeline      │
+     │       SENSOR (Local)        │  │      CI/CD Pipeline      │
      │                             │  │                          │
      │  ┌────────────────────────┐ │  │  ┌────────────────────┐  │
      │  │    SDK CLIENT          │ │  │  │    SDK CLIENT      │  │
-     │  │  (agent_id: xxx)      │ │  │  │  (agent_id: yyy)  │  │
+     │  │  (sensor_id: xxx)     │ │  │  │  (sensor_id: yyy) │  │
      │  └────────────────────────┘ │  │  └────────────────────┘  │
      │            │                │  │           │              │
      │  ┌─────────┴─────────┐     │  │  ┌────────┴────────┐     │
@@ -47,53 +47,53 @@ OpenCTEM is a security platform that collects, analyzes, and manages security fi
 
 ## Key Concepts
 
-### 1. Agent
+### 1. Sensor
 
-An **Agent** is the identity registered on the server. Every component that pushes data to OpenCTEM does so through an Agent.
+An **Sensor** is the identity registered on the server. Every component that pushes data to OpenCTEM does so through a Sensor.
 
 ```go
-// Agent is identified by agent_id
+// Sensor is identified by its sensor id
 client := client.New(&client.Config{
     BaseURL:  "https://api.openctem.io",
     APIKey:   "your-api-key",
-    AgentID: "agent-123",  // ← This is the Agent identity
+    SensorID: "sensor-123",  // ← This is the Sensor identity
 })
 ```
 
-**Agent responsibilities:**
+**Sensor responsibilities:**
 - Registered in the backend database
 - Receives commands from the server
 - Sends heartbeats to report status
-- All pushed data is tagged with `agent_id` for audit trail
+- All pushed data is tagged with the sensor id for audit trail (sent as the protocol v1 `X-Agent-ID` header)
 
-**Agent types:**
+**Sensor types:**
 
 | Type | Description | Execution Mode |
 |------|-------------|----------------|
 | `runner` | CI/CD one-shot scans | One-shot |
 | `worker` | Server-controlled daemon | Daemon |
-| `collector` | Data collection agent | Daemon |
+| `collector` | Data collection sensor | Daemon |
 | `sensor` | EASM sensor | Daemon |
 
-### 2. Agent Process
+### 2. Sensor Process
 
-An **Agent Process** orchestrates Scanners, Collectors, and Providers. It uses the SDK Client to communicate with the server.
+An **Sensor Process** orchestrates Scanners, Collectors, and Providers. It uses the SDK Client to communicate with the server.
 
 ```go
-// Agent process uses SDK Client
-agent := core.NewBaseAgent(&core.BaseAgentConfig{
-    Name:    "my-agent",
+// Sensor process uses SDK Client
+sensor := core.NewBaseSensor(&core.BaseSensorConfig{
+    Name:    "my-sensor",
     Version: "1.0.0",
 }, client)
 
-agent.AddScanner(scanners.Semgrep())
-agent.AddScanner(scanners.Trivy())
-agent.AddProvider(providers.GitHub())
+sensor.AddScanner(scanners.Semgrep())
+sensor.AddScanner(scanners.Trivy())
+sensor.AddProvider(providers.GitHub())
 
-agent.Start(ctx)
+sensor.Start(ctx)
 ```
 
-**Agent execution modes:**
+**Sensor execution modes:**
 - **One-shot**: Single scan and exit (CI/CD) - for `runner` type
 - **Daemon**: Long-running, polls for commands - for `worker`, `collector`, `sensor` types
 - **Server-controlled**: Receives commands via heartbeat stream
@@ -133,7 +133,7 @@ Components are the building blocks that perform actual work:
                                                   ▼
                                           ┌──────────────┐
                                           │  SDK Client  │
-                                          │ (agent_id)  │
+                                          │ (sensor_id) │
                                           └──────┬───────┘
                                                   │
                                       PushFindings() / PushAssets()
@@ -246,7 +246,7 @@ func (p *MyProvider) ListCollectors() []core.Collector {
 
 ## Best Practices
 
-1. **Always use Agent ID**: Ensure every SDK client has a unique `agent_id` for traceability.
+1. **Always use Sensor ID**: Ensure every SDK client has a unique sensor id for traceability.
 
 2. **Rate limiting**: Use `BaseConnector` for external APIs to avoid rate limit errors.
 
@@ -266,7 +266,7 @@ func (p *MyProvider) ListCollectors() []core.Collector {
 7. **Security best practices**: Follow the SDK security guide for production deployments:
    - Use `EncryptedFileStore` for credentials
    - Enable TLS for gRPC transport
-   - Configure job validation for platform agents
+   - Configure job validation for platform sensors
    - Use secure lease identities (default)
 
 ## Security Features
@@ -282,7 +282,7 @@ The SDK includes comprehensive security controls:
 - **TLS enforcement**: Minimum TLS 1.2, proper ServerName validation
 - **Address validation**: SSRF prevention for server addresses
 
-### Platform Agent Security
+### Platform Sensor Security
 - **Job validation**: Type whitelist, payload limits, auth token verification
 - **Lease security**: Cryptographic identity prevents hijacking
 - **Lease expiry**: Automatic job cancellation on expiry

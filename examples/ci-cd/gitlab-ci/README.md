@@ -1,6 +1,6 @@
 # GitLab CI Examples
 
-Examples for integrating OpenCTEM Agent into GitLab CI/CD pipelines.
+Examples for integrating OpenCTEM Sensor into GitLab CI/CD pipelines.
 
 ## Quick Start
 
@@ -20,7 +20,7 @@ cp minimal.gitlab-ci.yml /path/to/your/repo/.gitlab-ci.yml
 ## Features
 
 ### Auto CI Detection
-The agent automatically detects GitLab CI environment and:
+The sensor automatically detects GitLab CI environment and:
 - Extracts MR/commit information from environment variables
 - Determines scan strategy (all files vs changed files only)
 - Posts inline comments on MR diffs
@@ -30,11 +30,11 @@ When running in a MR context, findings are posted as inline comments on changed 
 
 ```yaml
 mr-security-review:
-  image: openctemio/agent:ci
+  image: openctemio/sensor:ci
   variables:
     GITLAB_TOKEN: $CI_JOB_TOKEN
   script:
-    - agent -tools semgrep -target . -auto-ci -comments -verbose
+    - openctemio-sensor -tools semgrep -target . -auto-ci -comments -verbose
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 ```
@@ -58,12 +58,12 @@ variables:
   API_URL: $API_URL
   API_KEY: $API_KEY
 script:
-  - agent -tools semgrep,gitleaks,trivy -target . -push
+  - openctemio-sensor -tools semgrep,gitleaks,trivy -target . -push
 ```
 
 ## Environment Variables
 
-### Auto-detected by Agent
+### Auto-detected by Sensor
 
 | Variable | Description |
 |----------|-------------|
@@ -90,9 +90,9 @@ script:
 ```yaml
 sast:
   stage: security
-  image: openctemio/agent:ci
+  image: openctemio/sensor:ci
   script:
-    - agent -tool semgrep -target . -verbose -sarif -sarif-output gl-sast-report.json
+    - openctemio-sensor -tool semgrep -target . -verbose -sarif -sarif-output gl-sast-report.json
   artifacts:
     reports:
       sast: gl-sast-report.json
@@ -103,10 +103,10 @@ sast:
 ```yaml
 secret-detection:
   stage: security
-  image: openctemio/agent:ci
+  image: openctemio/sensor:ci
   script:
     - |
-      agent -tool gitleaks -target . -verbose -json -output secrets.json
+      openctemio-sensor -tool gitleaks -target . -verbose -json -output secrets.json
       SECRETS=$(cat secrets.json | jq '.findings | length')
       if [ "$SECRETS" -gt 0 ]; then
         exit 1
@@ -118,9 +118,9 @@ secret-detection:
 ```yaml
 dependency-scan:
   stage: security
-  image: openctemio/agent:ci
+  image: openctemio/sensor:ci
   script:
-    - agent -tool trivy -target . -verbose -json -output dependencies.json
+    - openctemio-sensor -tool trivy -target . -verbose -json -output dependencies.json
   artifacts:
     reports:
       dependency_scanning: dependencies.json
@@ -131,14 +131,14 @@ dependency-scan:
 ```yaml
 container-scan:
   stage: security
-  image: openctemio/agent:ci
+  image: openctemio/sensor:ci
   services:
     - docker:dind
   variables:
     DOCKER_HOST: tcp://docker:2375
   script:
     - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA .
-    - agent -tool trivy-image -target $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA -verbose
+    - openctemio-sensor -tool trivy-image -target $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA -verbose
 ```
 
 ### IaC Scanning
@@ -146,9 +146,9 @@ container-scan:
 ```yaml
 iac-scan:
   stage: security
-  image: openctemio/agent:ci
+  image: openctemio/sensor:ci
   script:
-    - agent -tool trivy-config -target . -verbose
+    - openctemio-sensor -tool trivy-config -target . -verbose
   rules:
     - changes:
         - "**/*.tf"
@@ -168,7 +168,7 @@ For weekly security audits, create a scheduled pipeline:
 ```yaml
 script:
   - |
-    agent -tools semgrep -target . -json -output results.json
+    openctemio-sensor -tools semgrep -target . -json -output results.json
     CRITICAL=$(cat results.json | jq '[.findings[] | select(.severity == "critical")] | length')
     if [ "$CRITICAL" -gt 0 ]; then
       echo "Found $CRITICAL critical findings!"

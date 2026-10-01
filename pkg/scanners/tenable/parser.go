@@ -1,8 +1,8 @@
 // Package tenable converts Tenable Nessus / Tenable.sc ".nessus" XML exports
 // into a CTIS report and provides a REST client for launching/exporting scans.
 //
-// It is the agent-side counterpart of the api's converter: an OpenCTEM runner
-// (an agent with the `infra` capability + `tenable` tool) runs a scan against a
+// It is the sensor-side counterpart of the api's converter: an OpenCTEM runner
+// (a sensor with the `infra` capability + `tenable` tool) runs a scan against a
 // local Nessus/Tenable appliance, parses the export here, and pushes the CTIS
 // report back. Both Nessus Pro and Tenable.sc emit the same NessusClientData_v2
 // format, so one parser serves both.

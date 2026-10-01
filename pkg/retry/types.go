@@ -77,7 +77,7 @@ type QueueItem struct {
 	// Metadata
 	CreatedAt   time.Time `json:"created_at"`   // When item was first queued
 	UpdatedAt   time.Time `json:"updated_at"`   // Last update timestamp
-	AgentID     string    `json:"agent_id"`     // Source agent ID
+	SensorID    string    `json:"sensor_id"`    // Source sensor ID
 	ScannerName string    `json:"scanner_name"` // Source scanner name
 	TargetPath  string    `json:"target_path"`  // Scan target path
 }

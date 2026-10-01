@@ -1,11 +1,11 @@
 # =============================================================================
-# GitHub Actions: Security Scan with OpenCTEM Agent
+# GitHub Actions: Security Scan with OpenCTEM Sensor
 # =============================================================================
 # Copy this file to your repository: .github/workflows/security-scan.yml
 #
 # Features:
 # - Runs on push and pull requests
-# - Uses agent:ci Docker image
+# - Uses sensor:ci Docker image
 # - Auto-detects PR context for diff-based scanning
 # - Creates inline PR comments for findings
 # - Uploads SARIF results to GitHub Security tab
@@ -54,7 +54,7 @@ jobs:
           fetch-depth: 0 # Full history for diff-based scanning
 
       - name: Run OpenCTEM Security Scan
-        uses: docker://openctemio/agent:ci
+        uses: docker://openctemio/sensor:ci
         with:
           args: >-
             -tools ${{ github.event.inputs.tools || 'semgrep,gitleaks,trivy' }}
@@ -129,7 +129,7 @@ jobs:
           fi
 
       - name: Scan container with Trivy
-        uses: docker://openctemio/agent:ci
+        uses: docker://openctemio/sensor:ci
         with:
           args: >-
             -tool trivy-image

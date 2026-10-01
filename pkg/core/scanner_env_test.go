@@ -70,7 +70,7 @@ func TestScannerEnviron_Configurable(t *testing.T) {
 }
 
 // End to end: a real child process started by ExecuteScanner must not see
-// the agent's API key.
+// the sensor's API key.
 func TestExecuteScanner_DoesNotLeakCredentials(t *testing.T) {
 	if _, err := exec.LookPath("env"); err != nil {
 		t.Skip("env binary not available")

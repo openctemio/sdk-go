@@ -102,10 +102,11 @@ Desktop.ini
 config.local.yaml
 config.local.json
 
-# Agent config (may contain API keys)
+# Sensor config (may contain API keys); agent.yaml is the pre-rename name
 # Keep template, ignore actual config
+sensor.yaml
+!sensor.yaml.template
 agent.yaml
-!agent.yaml.template
 
 # API keys and credentials
 *.pem
@@ -235,4 +236,5 @@ trace.out
 # Downloaded dependencies for scanners
 .cache/
 .trivy-cache/
+openctemio-sensor
 agent

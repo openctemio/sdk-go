@@ -74,7 +74,7 @@ type KeyRenewConfig struct {
 	Verbose bool
 }
 
-// KeyRenewManager auto-renews the agent's API key before it expires, then swaps
+// KeyRenewManager auto-renews the sensor's API key before it expires, then swaps
 // it into the live client and persists it. It is a no-op when the server has no
 // key TTL (renewal returns a nil expiry) — after the discovery renewal it stops.
 //
@@ -120,7 +120,7 @@ func NewKeyRenewManager(client KeyRenewer, config *KeyRenewConfig) *KeyRenewMana
 
 // Start launches the renewal loop in the background. It performs one discovery
 // renewal immediately: if the server returns no expiry (TTL disabled), the loop
-// exits and the agent keeps its non-expiring key. Otherwise it schedules the
+// exits and the sensor keeps its non-expiring key. Otherwise it schedules the
 // next renewal at RenewFraction of the remaining lifetime and repeats.
 func (m *KeyRenewManager) Start(ctx context.Context) error {
 	if m.config.CurrentKeyNeverExpires {
@@ -203,7 +203,7 @@ func (m *KeyRenewManager) renewOnce(ctx context.Context) (next time.Duration, ke
 	}
 
 	// Swap the new key into the live client first: the server has already
-	// invalidated the old one, so the running agent must use the new key
+	// invalidated the old one, so the running sensor must use the new key
 	// whether or not it can be saved.
 	m.client.SetAPIKey(resp.APIKey)
 	return m.persist(resp)

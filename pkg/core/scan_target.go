@@ -11,13 +11,14 @@ import (
 	"unicode"
 
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
 // Scan target validation for server-dispatched commands.
 //
 // A scan command's target comes from the server. A compromised server, a
 // malicious tenant admin, or anyone who can inject a command must not be able
-// to turn the agent into an SSRF proxy (e.g. nuclei against
+// to turn the sensor into an SSRF proxy (e.g. nuclei against
 // http://169.254.169.254 returns cloud IAM credentials inside a finding), a
 // local file reader (semgrep/gitleaks over /etc or ~/.ssh ships their content
 // back as findings), or a flag injector (a target of "-config=/tmp/x" is
@@ -31,13 +32,16 @@ const (
 	EnvScanRoots = "OPENCTEM_SDK_SCAN_ROOTS"
 	// EnvAllowPrivateTargets=1 permits RFC1918 / IPv6 ULA network targets.
 	EnvAllowPrivateTargets = "OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS"
-	// envAgentAllowPrivateTargets is the OpenCTEM agent's existing switch for
-	// the same posture; honored so an on-prem agent keeps one knob.
-	envAgentAllowPrivateTargets = "AGENT_ALLOW_PRIVATE_TARGETS"
+	// EnvSensorAllowPrivateTargets is the OpenCTEM sensor's switch for the
+	// same posture; honored so an on-prem sensor keeps one knob. Its
+	// pre-rename name AGENT_ALLOW_PRIVATE_TARGETS still works (with a
+	// deprecation warning); setting both to different values refuses every
+	// target (see DefaultScanTargetPolicy).
+	EnvSensorAllowPrivateTargets = "SENSOR_ALLOW_PRIVATE_TARGETS"
 )
 
 // sensitiveScanRoots are refused as filesystem targets when no AllowedRoots
-// are configured. Mirrors the OpenCTEM agent's confineScanPath.
+// are configured. Mirrors the OpenCTEM sensor's confineScanPath.
 var sensitiveScanRoots = []string{
 	"/etc", "/root", "/proc", "/sys", "/boot", "/dev", "/run",
 	"/usr", "/bin", "/sbin", "/lib", "/lib64", "/var/lib", "/var/run",
@@ -74,7 +78,7 @@ type ScanTargetPolicy struct {
 	AllowedRoots []string
 
 	// AllowPrivate permits network targets in RFC1918 (10/8, 172.16/12,
-	// 192.168/16) and IPv6 ULA (fc00::/7) space, for agents that scan an
+	// 192.168/16) and IPv6 ULA (fc00::/7) space, for sensors that scan an
 	// internal network. Loopback, link-local (incl. 169.254.169.254 IMDS),
 	// CGNAT, multicast, unspecified and reserved ranges stay blocked
 	// regardless.
@@ -88,6 +92,10 @@ type ScanTargetPolicy struct {
 	// targets themselves before the executor sees the command.
 	Disabled bool
 
+	// configErr, when set, is a configuration error found while building the
+	// default policy; Validate refuses every target with it.
+	configErr error
+
 	// LookupIP resolves a hostname; nil uses net.DefaultResolver. Exposed
 	// for tests.
 	LookupIP func(ctx context.Context, host string) ([]net.IP, error)
@@ -98,10 +106,15 @@ type ScanTargetPolicy struct {
 //
 //   - AllowedRoots from OPENCTEM_SDK_SCAN_ROOTS (unset = sensitive-path
 //     denylist only);
-//   - AllowPrivate when OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS=1, the agent's
-//     AGENT_ALLOW_PRIVATE_TARGETS=1, or httpsec's allow-private switch
+//   - AllowPrivate when OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS=1, the sensor's
+//     SENSOR_ALLOW_PRIVATE_TARGETS=1 (or its pre-rename name
+//     AGENT_ALLOW_PRIVATE_TARGETS=1), or httpsec's allow-private switch
 //     (OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1) is set;
 //   - AllowLoopback follows httpsec.AllowLoopback (test harnesses only).
+//
+// When SENSOR_ALLOW_PRIVATE_TARGETS and AGENT_ALLOW_PRIVATE_TARGETS are both
+// set to different values the intended posture is unknown, so the policy
+// fails closed: Validate refuses every target with an error naming both.
 func DefaultScanTargetPolicy() *ScanTargetPolicy {
 	var roots []string
 	for _, r := range filepath.SplitList(os.Getenv(EnvScanRoots)) {
@@ -109,13 +122,23 @@ func DefaultScanTargetPolicy() *ScanTargetPolicy {
 			roots = append(roots, r)
 		}
 	}
+	sensorPrivate, _, err := legacyv1.LookupEnv(EnvSensorAllowPrivateTargets, legacyv1.OldEnvName(EnvSensorAllowPrivateTargets))
 	return &ScanTargetPolicy{
 		AllowedRoots: roots,
-		AllowPrivate: os.Getenv(EnvAllowPrivateTargets) == "1" ||
-			os.Getenv(envAgentAllowPrivateTargets) == "1" ||
-			httpsec.AllowPrivate(),
+		AllowPrivate: err == nil && (os.Getenv(EnvAllowPrivateTargets) == "1" ||
+			sensorPrivate == "1" ||
+			httpsec.AllowPrivate()),
 		AllowLoopback: httpsec.AllowLoopback,
+		configErr:     err,
 	}
+}
+
+// CheckEnv reports a configuration error in the environment variables the
+// default scan target policy reads (today: SENSOR_ALLOW_PRIVATE_TARGETS and
+// its pre-rename name set to different values). A sensor calls it at
+// startup to refuse to start instead of refusing every job later.
+func CheckEnv() error {
+	return DefaultScanTargetPolicy().configErr
 }
 
 // Validate checks target and returns the value to hand to the scanner: for
@@ -127,6 +150,9 @@ func (p *ScanTargetPolicy) Validate(ctx context.Context, target string) (string,
 	}
 	if p.Disabled {
 		return target, nil
+	}
+	if p.configErr != nil {
+		return "", p.configErr
 	}
 
 	if strings.TrimSpace(target) == "" {

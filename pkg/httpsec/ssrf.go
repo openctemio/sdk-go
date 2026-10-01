@@ -290,6 +290,8 @@ var SensitiveHeaders = []string{
 	"X-Api-Token",
 	"X-Auth-Token",
 	"X-Agent-Key",
+	"X-Agent-API-Key",
+	"X-Sensor-API-Key",
 	"X-ApiKeys",
 	"X-Bootstrap-Token",
 }

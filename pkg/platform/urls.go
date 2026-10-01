@@ -45,7 +45,7 @@ func apiURL(baseURL, pathFormat string, ids ...string) (string, error) {
 }
 
 // newAPIHTTPClient returns the HTTP client used for every request that
-// carries the agent's API key or bootstrap token: SSRF-guarded dialer and
+// carries the sensor's API key or bootstrap token: SSRF-guarded dialer and
 // no redirect following (the API never redirects; following one would
 // forward the credential).
 func newAPIHTTPClient(timeout time.Duration) *http.Client {

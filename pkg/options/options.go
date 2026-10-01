@@ -14,7 +14,7 @@ import (
 type ClientConfig struct {
 	BaseURL          string
 	APIKey           string
-	AgentID          string // Agent ID for tracking which agent is pushing
+	SensorID         string // Sensor ID for tracking which sensor is pushing
 	Timeout          time.Duration
 	MaxRetries       int
 	RetryDelay       time.Duration
@@ -56,10 +56,10 @@ func WithAPIKey(key string) ClientOption {
 	}
 }
 
-// WithAgentID sets the agent ID for tracking which agent is pushing data.
-func WithAgentID(id string) ClientOption {
+// WithSensorID sets the sensor ID for tracking which sensor is pushing data.
+func WithSensorID(id string) ClientOption {
 	return func(c *ClientConfig) {
-		c.AgentID = id
+		c.SensorID = id
 	}
 }
 
@@ -176,7 +176,7 @@ func WithConnectorRateLimit(rps int, burst int) ConnectorOption {
 type GRPCConfig struct {
 	Address            string
 	APIKey             string
-	AgentID            string // Agent ID for tracking
+	SensorID           string // Sensor ID for tracking
 	UseTLS             bool
 	InsecureSkipVerify bool
 	CertFile           string
@@ -225,10 +225,10 @@ func WithGRPCAPIKey(key string) GRPCOption {
 	}
 }
 
-// WithGRPCAgentID sets the agent ID.
-func WithGRPCAgentID(id string) GRPCOption {
+// WithGRPCSensorID sets the sensor ID.
+func WithGRPCSensorID(id string) GRPCOption {
 	return func(c *GRPCConfig) {
-		c.AgentID = id
+		c.SensorID = id
 	}
 }
 

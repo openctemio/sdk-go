@@ -47,7 +47,7 @@ func ExecuteScanner(ctx context.Context, cfg *ExecConfig) (*ExecResult, error) {
 		cmd.Dir = cfg.WorkDir
 	}
 
-	// Allowlisted environment only (see scanner_env.go): the agent's API key
+	// Allowlisted environment only (see scanner_env.go): the sensor's API key
 	// and other credentials must not leak into scanner processes.
 	cmd.Env = ScannerEnviron(cfg.Env)
 

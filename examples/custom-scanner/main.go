@@ -171,7 +171,7 @@ func main() {
 	}()
 
 	if *daemon {
-		// Run in daemon mode using BaseAgent
+		// Run in daemon mode using BaseSensor
 		runDaemon(ctx, scanner, pusher, *target, *interval, *verbose)
 	} else {
 		// Run single scan
@@ -235,9 +235,9 @@ func runOnce(ctx context.Context, scanner *MyCustomScanner, pusher core.Pusher, 
 }
 
 func runDaemon(ctx context.Context, scanner *MyCustomScanner, pusher core.Pusher, target string, interval time.Duration, verbose bool) {
-	// Create agent with the custom scanner
-	agent := core.NewBaseAgent(&core.BaseAgentConfig{
-		Name:              "custom-scanner-agent",
+	// Create sensor with the custom scanner
+	sensor := core.NewBaseSensor(&core.BaseSensorConfig{
+		Name:              "custom-scanner-sensor",
 		Version:           "1.0.0",
 		ScanInterval:      interval,
 		HeartbeatInterval: 1 * time.Minute,
@@ -246,18 +246,18 @@ func runDaemon(ctx context.Context, scanner *MyCustomScanner, pusher core.Pusher
 	}, pusher)
 
 	// Add our custom scanner
-	if err := agent.AddScanner(scanner); err != nil {
+	if err := sensor.AddScanner(scanner); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to add scanner: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Start agent
-	if err := agent.Start(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start agent: %v\n", err)
+	// Start sensor
+	if err := sensor.Start(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start sensor: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("Agent started. Press Ctrl+C to stop.")
+	fmt.Println("Sensor started. Press Ctrl+C to stop.")
 
 	// Wait for context cancellation
 	<-ctx.Done()
@@ -266,9 +266,9 @@ func runDaemon(ctx context.Context, scanner *MyCustomScanner, pusher core.Pusher
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := agent.Stop(shutdownCtx); err != nil {
+	if err := sensor.Stop(shutdownCtx); err != nil {
 		fmt.Fprintf(os.Stderr, "Shutdown error: %v\n", err)
 	}
 
-	fmt.Println("Agent stopped.")
+	fmt.Println("Sensor stopped.")
 }

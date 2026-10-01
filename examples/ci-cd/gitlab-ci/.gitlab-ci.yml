@@ -1,5 +1,5 @@
 # =============================================================================
-# GitLab CI: Security Scan with OpenCTEM Agent
+# GitLab CI: Security Scan with OpenCTEM Sensor
 # =============================================================================
 # Copy this file to your repository root: .gitlab-ci.yml
 #
@@ -19,8 +19,8 @@ stages:
   - container-security
 
 variables:
-  # Agent configuration
-  AGENT_IMAGE: openctemio/agent:ci
+  # Sensor configuration
+  SENSOR_IMAGE: openctemio/sensor:ci
 
   # GitLab features
   GIT_DEPTH: 0 # Full clone for diff-based scanning
@@ -37,14 +37,14 @@ variables:
 # Full security scan - runs on all branches
 security-scan:
   stage: security
-  image: $AGENT_IMAGE
+  image: $SENSOR_IMAGE
   variables:
     GITLAB_TOKEN: $CI_JOB_TOKEN
     API_URL: $API_URL
     API_KEY: $API_KEY
   script:
     - |
-      agent \
+      openctemio-sensor \
         -tools semgrep,gitleaks,trivy \
         -target . \
         -auto-ci \
@@ -71,7 +71,7 @@ security-scan:
 # MR-specific scan with inline comments
 mr-security-review:
   stage: security
-  image: $AGENT_IMAGE
+  image: $SENSOR_IMAGE
   variables:
     GITLAB_TOKEN: $CI_JOB_TOKEN
     API_URL: $API_URL
@@ -82,7 +82,7 @@ mr-security-review:
       echo "Source: ${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
       echo "Target: ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
 
-      agent \
+      openctemio-sensor \
         -tools semgrep,gitleaks \
         -target . \
         -auto-ci \
@@ -114,10 +114,10 @@ mr-security-review:
 # Secret scanning only - fast check
 secret-scan:
   stage: security
-  image: $AGENT_IMAGE
+  image: $SENSOR_IMAGE
   script:
     - |
-      agent \
+      openctemio-sensor \
         -tool gitleaks \
         -target . \
         -verbose \
@@ -141,10 +141,10 @@ secret-scan:
 # Dependency/SCA scanning
 dependency-scan:
   stage: security
-  image: $AGENT_IMAGE
+  image: $SENSOR_IMAGE
   script:
     - |
-      agent \
+      openctemio-sensor \
         -tool trivy \
         -target . \
         -verbose \
@@ -163,10 +163,10 @@ dependency-scan:
 # IaC scanning (Terraform, CloudFormation, etc.)
 iac-scan:
   stage: security
-  image: $AGENT_IMAGE
+  image: $SENSOR_IMAGE
   script:
     - |
-      agent \
+      openctemio-sensor \
         -tool trivy-config \
         -target . \
         -verbose \
@@ -192,7 +192,7 @@ iac-scan:
 # Container image scanning
 container-scan:
   stage: container-security
-  image: $AGENT_IMAGE
+  image: $SENSOR_IMAGE
   services:
     - docker:dind
   variables:
@@ -207,7 +207,7 @@ container-scan:
   script:
     - |
       if [ -f Dockerfile ]; then
-        agent \
+        openctemio-sensor \
           -tool trivy-image \
           -target $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA \
           -verbose \
@@ -236,10 +236,10 @@ container-scan:
 # Weekly full security audit
 weekly-audit:
   stage: security
-  image: $AGENT_IMAGE
+  image: $SENSOR_IMAGE
   script:
     - |
-      agent \
+      openctemio-sensor \
         -tools semgrep,gitleaks,trivy \
         -target . \
         -verbose \

@@ -27,7 +27,7 @@ var credHeaders = map[string]string{
 	"X-Agent-Key":   "k",
 	"X-ApiKeys":     "accessKey=a;secretKey=b",
 	"Cookie":        "s=1",
-	"X-Agent-ID":    "agent-1",
+	"X-Agent-ID":    "sensor-1",
 }
 
 func TestSafeCheckRedirect(t *testing.T) {

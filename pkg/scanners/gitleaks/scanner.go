@@ -93,7 +93,7 @@ func (s *Scanner) SetVerbose(v bool) {
 	s.Verbose = v
 }
 
-// GenericScan implements core.Scanner interface for use with the agent.
+// GenericScan implements core.Scanner interface for use with the sensor.
 // Returns raw JSON output that can be parsed by the gitleaks parser.
 func (s *Scanner) GenericScan(ctx context.Context, target string, opts *core.ScanOptions) (*core.ScanResult, error) {
 	start := time.Now()

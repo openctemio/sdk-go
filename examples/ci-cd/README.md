@@ -1,6 +1,6 @@
 # CI/CD Integration Examples
 
-Ready-to-use examples for integrating OpenCTEM Agent into your CI/CD pipelines.
+Ready-to-use examples for integrating OpenCTEM Sensor into your CI/CD pipelines.
 
 ## Supported Platforms
 
@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: docker://openctemio/agent:ci
+      - uses: docker://openctemio/sensor:ci
         with:
           args: -tools semgrep,gitleaks,trivy -target . -auto-ci
         env:
@@ -50,9 +50,9 @@ stages:
 
 security-scan:
   stage: security
-  image: openctemio/agent:ci
+  image: openctemio/sensor:ci
   script:
-    - agent -tools semgrep,gitleaks,trivy -target . -auto-ci
+    - openctemio-sensor -tools semgrep,gitleaks,trivy -target . -auto-ci
 ```
 
 ## Scanner Options

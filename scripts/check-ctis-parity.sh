@@ -5,7 +5,7 @@
 # sdk-go/pkg/ctis is a hand-maintained copy of the canonical standalone CTIS
 # module (github.com/openctemio/ctis), kept separate per RFC-002 so the SDK does
 # not pull the whole module graph. The two copies MUST carry the same CTIS schema
-# — when they drift, the api (which consumes the canonical module) and the agent
+# — when they drift, the api (which consumes the canonical module) and the sensor
 # (which uses this copy) silently disagree about the data contract. Both have
 # happened: a missing FindingStatusSuppressed enum, and earlier, missing struct
 # fields (cve_ids / vpr_score / network / evidence).

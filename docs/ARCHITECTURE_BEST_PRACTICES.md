@@ -14,7 +14,7 @@ Tài liệu này tổng hợp các best practices từ việc nghiên cứu:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         OpenCTEM Agent                            │
+│                         OpenCTEM Sensor                           │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐        │
@@ -638,13 +638,13 @@ FROM golang:1.23-alpine AS build
 ENV CGO_ENABLED=0 GOOS=linux
 WORKDIR /go/src/app
 COPY . .
-RUN go build -o /agent ./cmd/agent
+RUN go build -o /sensor ./cmd/sensor
 
 # Stage 2: Runtime with scanner
 FROM returntocorp/semgrep  # Or aquasec/trivy, zricethezav/gitleaks
-COPY --from=build /agent /agent
+COPY --from=build /sensor /sensor
 ENTRYPOINT []
-CMD ["/agent", "run"]
+CMD ["/sensor", "run"]
 ```
 
 ### 9.2 Scanner Images
@@ -726,8 +726,8 @@ OUTPUT_FILE=results.json
 ### 11.2 Config File (YAML)
 
 ```yaml
-agent:
-  name: my-agent
+sensor:
+  name: my-sensor
   verbose: true
   scan_interval: 1h
 
