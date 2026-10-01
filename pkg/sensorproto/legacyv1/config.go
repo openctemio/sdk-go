@@ -10,7 +10,7 @@ const ConfigKeySensorID = "agent_id"
 // MergeSensorID resolves a sensor id read from a configuration file that may
 // carry the current key ("sensor_id", current) and the pre-rename one
 // ("agent_id", legacy). The current key wins; the legacy one is used, with a
-// one-time warning, only when the current one is empty; both set to
+// warning, only when the current one is empty; both set to
 // different values is an error naming both keys.
 func MergeSensorID(current, legacy string) (string, error) {
 	switch {
@@ -20,6 +20,6 @@ func MergeSensorID(current, legacy string) (string, error) {
 		return "", fmt.Errorf("deprecated configuration: %q and %q are both set to different values; keep only %q",
 			"sensor_id", ConfigKeySensorID, "sensor_id")
 	}
-	WarnOnce(ConfigKeySensorID, "sensor_id", "configuration key")
+	Deprecated(ConfigKeySensorID, "sensor_id", "configuration key")
 	return legacy, nil
 }

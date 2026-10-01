@@ -39,23 +39,25 @@ func (e *ConflictError) Error() string {
 		e.Old, e.New, e.Old, e.New)
 }
 
-// Warn reports the use of a deprecated name. It defaults to the process's
-// slog logger and can be replaced (tests, or a sensor with its own logger).
+// Warn is called every time a deprecated name is used. The default logs a
+// "deprecated configuration" warning through the process's slog logger, once
+// per name per process. Replace it to route the warning elsewhere (a sensor
+// with its own logger, or a test).
 var Warn = func(old, replacement, kind string) {
+	if _, loaded := warned.LoadOrStore(kind+"\x00"+old, true); loaded {
+		return
+	}
 	slog.Warn("deprecated configuration", "deprecated", old, "use", replacement, "kind", kind)
 }
 
 var warned sync.Map
 
-// WarnOnce calls Warn the first time old is reported in this process.
-func WarnOnce(old, replacement, kind string) {
-	if _, loaded := warned.LoadOrStore(kind+"\x00"+old, true); !loaded {
-		Warn(old, replacement, kind)
-	}
-}
+// Deprecated reports that the setting old was used in place of replacement.
+// kind names where it came from ("environment", "flag", "configuration key").
+func Deprecated(old, replacement, kind string) { Warn(old, replacement, kind) }
 
 // LookupEnv resolves a renamed environment variable: the new name wins; the
-// old one is used, with a one-time warning naming both, only when the new one
+// old one is used, with a warning naming both, only when the new one
 // is unset; when both are set to different values it returns a
 // *ConflictError rather than silently picking one (a private-targets switch
 // that is suddenly on, or off, is a security change). An empty value counts
@@ -74,11 +76,11 @@ func Resolve(newName, oldName, kind string, lookup func(string) (string, bool)) 
 		return "", false, &ConflictError{Old: oldName, New: newName}
 	case nok:
 		if ook {
-			WarnOnce(oldName, newName, kind)
+			Deprecated(oldName, newName, kind)
 		}
 		return nv, true, nil
 	case ook:
-		WarnOnce(oldName, newName, kind)
+		Deprecated(oldName, newName, kind)
 		return ov, true, nil
 	}
 	return "", false, nil

@@ -1,20 +1,21 @@
 package legacyv1
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 )
 
-// captureWarn records Warn calls and resets the once-per-process memory.
+// captureWarn records every Warn call.
 func captureWarn(t *testing.T) *[]string {
 	t.Helper()
 	var got []string
 	prev := Warn
 	Warn = func(old, replacement, kind string) { got = append(got, kind+":"+old+"->"+replacement) }
-	warned = sync.Map{}
-	t.Cleanup(func() { Warn = prev; warned = sync.Map{} })
+	t.Cleanup(func() { Warn = prev })
 	return &got
 }
 
@@ -72,16 +73,27 @@ func TestLookupEnv(t *testing.T) {
 	}
 }
 
-func TestWarnOnce(t *testing.T) {
-	warns := captureWarn(t)
+// The default Warn logs each deprecated name once per process.
+func TestDefaultWarnLogsOncePerName(t *testing.T) {
+	warned = sync.Map{}
+	t.Cleanup(func() { warned = sync.Map{} })
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	t.Setenv("AGENT_TEST_Y", "a")
 	for range 3 {
 		if _, _, err := LookupEnv("SENSOR_TEST_Y", "AGENT_TEST_Y"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if len(*warns) != 1 {
-		t.Fatalf("warned %d times, want once", len(*warns))
+	out := buf.String()
+	if n := strings.Count(out, "deprecated configuration"); n != 1 {
+		t.Fatalf("logged %d times, want once:\n%s", n, out)
+	}
+	if !strings.Contains(out, "deprecated=AGENT_TEST_Y") || !strings.Contains(out, "use=SENSOR_TEST_Y") {
+		t.Fatalf("warning must name both variables: %s", out)
 	}
 }
 
