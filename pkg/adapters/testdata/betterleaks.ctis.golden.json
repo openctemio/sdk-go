@@ -81,8 +81,8 @@
       },
       "secret": {
         "secret_type": "api_key",
-        "masked_value": "sk_l****************7890",
-        "length": 24,
+        "masked_value": "sk_l*******************TURE",
+        "length": 27,
         "entropy": 4.2
       },
       "tags": [
@@ -146,8 +146,8 @@
       "secret": {
         "secret_type": "api_key",
         "service": "stripe",
-        "masked_value": "sk_t******c123",
-        "length": 14
+        "masked_value": "sk_t************xxxx",
+        "length": 20
       },
       "tags": [
         "betterleaks",
