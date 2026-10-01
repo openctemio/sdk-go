@@ -142,16 +142,16 @@ func TestKeyRenewManager_StartStop(t *testing.T) {
 // PlatformClient.RenewKey parses the API response and sends the current key.
 func TestPlatformClient_RenewKey(t *testing.T) {
 	exp := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
-	var gotAuth, gotAgent string
+	var gotAuth, gotSensor string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		gotAgent = r.Header.Get("X-Agent-ID")
+		gotSensor = r.Header.Get("X-Agent-ID")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"api_key":"rda_fresh","expires_at":"` + exp.Format(time.RFC3339) + `"}`))
 	}))
 	defer srv.Close()
 
-	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "rda_old", AgentID: "agent-1"})
+	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "rda_old", SensorID: "agent-1"})
 	out, err := c.RenewKey(context.Background())
 	if err != nil {
 		t.Fatalf("RenewKey: %v", err)
@@ -165,14 +165,14 @@ func TestPlatformClient_RenewKey(t *testing.T) {
 	if gotAuth != "Bearer rda_old" {
 		t.Errorf("expected the current key in Authorization, got %q", gotAuth)
 	}
-	if gotAgent != "agent-1" {
-		t.Errorf("expected X-Agent-ID agent-1, got %q", gotAgent)
+	if gotSensor != "agent-1" {
+		t.Errorf("expected X-Agent-ID agent-1, got %q", gotSensor)
 	}
 }
 
 // SetAPIKey swaps the key used by both the lease and job sub-clients.
 func TestPlatformClient_SetAPIKey_FansOut(t *testing.T) {
-	c := NewPlatformClient(&ClientConfig{BaseURL: "http://x", APIKey: "old", AgentID: "a"})
+	c := NewPlatformClient(&ClientConfig{BaseURL: "http://x", APIKey: "old", SensorID: "a"})
 	if c.httpLease == nil || c.httpJob == nil {
 		t.Fatal("expected concrete sub-client refs to be captured")
 	}
@@ -191,7 +191,7 @@ func TestPlatformClient_SetAPIKey_FansOut(t *testing.T) {
 // Concurrent readers and a rotator must not race (run with -race). Mirrors the
 // live pattern: poll/lease goroutines read the key while the renew loop swaps it.
 func TestPlatformClient_ConcurrentKeyRotation(t *testing.T) {
-	c := NewPlatformClient(&ClientConfig{BaseURL: "http://x", APIKey: "k0", AgentID: "a"})
+	c := NewPlatformClient(&ClientConfig{BaseURL: "http://x", APIKey: "k0", SensorID: "a"})
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 
@@ -228,7 +228,7 @@ func TestPlatformClient_RenewKey_Non200(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "old", AgentID: "a"})
+	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "old", SensorID: "a"})
 	if _, err := c.RenewKey(context.Background()); err == nil {
 		t.Error("expected an error on non-200 renew response")
 	}

@@ -45,7 +45,7 @@ func TestNew(t *testing.T) {
 	cfg := &Config{
 		BaseURL:    "https://localhost:8080",
 		APIKey:     "test-key",
-		AgentID:    "agent-123",
+		SensorID:   "agent-123",
 		Timeout:    10 * time.Second,
 		MaxRetries: 5,
 		RetryDelay: 1 * time.Second,
@@ -59,8 +59,8 @@ func TestNew(t *testing.T) {
 	if c.apiKey != cfg.APIKey {
 		t.Errorf("apiKey = %q, want %q", c.apiKey, cfg.APIKey)
 	}
-	if c.agentID != cfg.AgentID {
-		t.Errorf("agentID = %q, want %q", c.agentID, cfg.AgentID)
+	if c.sensorID != cfg.SensorID {
+		t.Errorf("agentID = %q, want %q", c.sensorID, cfg.SensorID)
 	}
 	if c.maxRetries != cfg.MaxRetries {
 		t.Errorf("maxRetries = %d, want %d", c.maxRetries, cfg.MaxRetries)
@@ -88,7 +88,7 @@ func TestNewWithOptions(t *testing.T) {
 	c := NewWithOptions(
 		WithBaseURL("https://custom.api.com"),
 		WithAPIKey("custom-key"),
-		WithAgentID("agent-456"),
+		WithSensorID("agent-456"),
 		WithTimeout(15*time.Second),
 		WithRetry(5, 3*time.Second),
 		WithVerbose(true),
@@ -100,8 +100,8 @@ func TestNewWithOptions(t *testing.T) {
 	if c.apiKey != "custom-key" {
 		t.Errorf("apiKey = %q, want 'custom-key'", c.apiKey)
 	}
-	if c.agentID != "agent-456" {
-		t.Errorf("agentID = %q, want 'agent-456'", c.agentID)
+	if c.sensorID != "agent-456" {
+		t.Errorf("agentID = %q, want 'agent-456'", c.sensorID)
 	}
 	if c.maxRetries != 5 {
 		t.Errorf("maxRetries = %d, want 5", c.maxRetries)
@@ -167,7 +167,7 @@ func TestClient_PushFindings(t *testing.T) {
 	}
 }
 
-// SetAPIKey rotates the key used on subsequent requests (agent key auto-renewal).
+// SetAPIKey rotates the key used on subsequent requests (sensor key auto-renewal).
 func TestClient_SetAPIKey_RotatesBearer(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -271,14 +271,14 @@ func TestClient_SendHeartbeat(t *testing.T) {
 	defer server.Close()
 
 	c := New(&Config{
-		BaseURL: server.URL,
-		APIKey:  "test-key",
-		AgentID: "agent-123",
+		BaseURL:  server.URL,
+		APIKey:   "test-key",
+		SensorID: "agent-123",
 	})
 
-	status := &core.AgentStatus{
+	status := &core.SensorStatus{
 		Name:     "test-agent",
-		Status:   core.AgentStateRunning,
+		Status:   core.SensorStateRunning,
 		Scanners: []string{"semgrep", "trivy"},
 	}
 
@@ -376,9 +376,9 @@ func TestClient_Headers(t *testing.T) {
 	defer server.Close()
 
 	c := New(&Config{
-		BaseURL: server.URL,
-		APIKey:  "my-api-key",
-		AgentID: "agent-xyz",
+		BaseURL:  server.URL,
+		APIKey:   "my-api-key",
+		SensorID: "agent-xyz",
 	})
 
 	c.TestConnection(context.Background())
@@ -387,8 +387,8 @@ func TestClient_Headers(t *testing.T) {
 	if auth := capturedHeaders.Get("Authorization"); auth != "Bearer my-api-key" {
 		t.Errorf("Authorization = %q, want 'Bearer my-api-key'", auth)
 	}
-	if agentID := capturedHeaders.Get("X-Agent-ID"); agentID != "agent-xyz" {
-		t.Errorf("X-Agent-ID = %q, want 'agent-xyz'", agentID)
+	if sensorID := capturedHeaders.Get("X-Agent-ID"); sensorID != "agent-xyz" {
+		t.Errorf("X-Agent-ID = %q, want 'agent-xyz'", sensorID)
 	}
 	if contentType := capturedHeaders.Get("Content-Type"); contentType != "application/json" {
 		t.Errorf("Content-Type = %q, want 'application/json'", contentType)

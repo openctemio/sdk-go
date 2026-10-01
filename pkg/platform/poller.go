@@ -542,7 +542,7 @@ func (p *JobPoller) pollOnce(ctx context.Context) {
 						"job_type": job.Type,
 					})
 				}
-				// Don't acknowledge - let the job be picked up later or by another agent
+				// Don't acknowledge - let the job be picked up later or by another sensor
 				continue
 			}
 		}
@@ -737,16 +737,16 @@ type httpJobClient struct {
 	// while poll/ack/result/progress requests read it concurrently.
 	mu         sync.RWMutex
 	apiKey     string
-	agentID    string
+	sensorID   string
 	httpClient *http.Client
 }
 
 // NewHTTPJobClient creates a new HTTP-based job client.
-func NewHTTPJobClient(baseURL, apiKey, agentID string, pollTimeout time.Duration) JobClient {
+func NewHTTPJobClient(baseURL, apiKey, sensorID string, pollTimeout time.Duration) JobClient {
 	return &httpJobClient{
-		baseURL: baseURL,
-		apiKey:  apiKey,
-		agentID: agentID,
+		baseURL:  baseURL,
+		apiKey:   apiKey,
+		sensorID: sensorID,
 		// SSRF: platform poller talks to the operator-configured API
 		// baseURL; dialer-level blocklist keeps long-poll connections
 		// from opportunistically landing on private space.
@@ -786,7 +786,7 @@ func (c *httpJobClient) Poll(ctx context.Context, req *PollRequest) (*PollRespon
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	httpReq.Header.Set(legacyv1.HeaderSensorID, c.agentID)
+	httpReq.Header.Set(legacyv1.HeaderSensorID, c.sensorID)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -818,7 +818,7 @@ func (c *httpJobClient) AcknowledgeJob(ctx context.Context, jobID string) error 
 	}
 
 	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	req.Header.Set(legacyv1.HeaderSensorID, c.agentID)
+	req.Header.Set(legacyv1.HeaderSensorID, c.sensorID)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -851,7 +851,7 @@ func (c *httpJobClient) ReportJobResult(ctx context.Context, result *JobResult) 
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	req.Header.Set(legacyv1.HeaderSensorID, c.agentID)
+	req.Header.Set(legacyv1.HeaderSensorID, c.sensorID)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -887,7 +887,7 @@ func (c *httpJobClient) ReportJobProgress(ctx context.Context, jobID string, pro
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	req.Header.Set(legacyv1.HeaderSensorID, c.agentID)
+	req.Header.Set(legacyv1.HeaderSensorID, c.sensorID)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

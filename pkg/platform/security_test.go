@@ -51,7 +51,7 @@ func TestJobClient_EscapesJobID(t *testing.T) {
 	}
 }
 
-// Platform clients carry the agent key and must not follow redirects.
+// Platform clients carry the sensor key and must not follow redirects.
 func TestPlatformClient_RefusesRedirect(t *testing.T) {
 	var leaked atomic.Bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +66,7 @@ func TestPlatformClient_RefusesRedirect(t *testing.T) {
 	}))
 	defer api.Close()
 
-	c := NewPlatformClient(&ClientConfig{BaseURL: api.URL, APIKey: "rda_secret", AgentID: "a"})
+	c := NewPlatformClient(&ClientConfig{BaseURL: api.URL, APIKey: "rda_secret", SensorID: "a"})
 	if _, err := c.RenewKey(context.Background()); err == nil {
 		t.Fatal("redirect followed")
 	}
@@ -84,7 +84,7 @@ func TestFileCredentialStore_SaveAtomicAndPrivate(t *testing.T) {
 	}
 	store := NewFileCredentialStore(path)
 	exp := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
-	if err := store.Save(&AgentCredentials{AgentID: "a", APIKey: "new", ExpiresAt: &exp}); err != nil {
+	if err := store.Save(&SensorCredentials{SensorID: "a", APIKey: "new", ExpiresAt: &exp}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,7 +114,7 @@ func TestFileCredentialStore_SaveAtomicAndPrivate(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Chmod(dir, 0o700) //nolint:errcheck
-		if err := store.Save(&AgentCredentials{APIKey: "newer"}); err == nil {
+		if err := store.Save(&SensorCredentials{APIKey: "newer"}); err == nil {
 			t.Fatal("save into read-only dir succeeded")
 		}
 		got, err := store.Load()

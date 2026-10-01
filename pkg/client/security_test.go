@@ -68,7 +68,7 @@ func TestDoRequest_ResponseSizeLimits(t *testing.T) {
 func TestClient_BaseURLValidation(t *testing.T) {
 	for _, bad := range []string{"", "ftp://api.example.com", "file:///etc/passwd", "https://user:pw@api.example.com", "api.example.com"} {
 		c := New(&Config{BaseURL: bad, MaxRetries: 1})
-		if err := c.SendHeartbeat(context.Background(), &core.AgentStatus{}); err == nil {
+		if err := c.SendHeartbeat(context.Background(), &core.SensorStatus{}); err == nil {
 			t.Errorf("base URL %q accepted", bad)
 		}
 	}
@@ -91,7 +91,7 @@ func TestClient_RefusesRedirects(t *testing.T) {
 	defer api.Close()
 
 	c := New(&Config{BaseURL: api.URL, APIKey: "oct_secret", MaxRetries: 1, RetryDelay: time.Millisecond})
-	if err := c.SendHeartbeat(context.Background(), &core.AgentStatus{}); err == nil {
+	if err := c.SendHeartbeat(context.Background(), &core.SensorStatus{}); err == nil {
 		t.Fatal("redirect was followed")
 	}
 	if v, ok := leaked.Load("auth"); ok {

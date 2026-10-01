@@ -11,12 +11,12 @@ import (
 )
 
 // =============================================================================
-// BaseAgent - Base implementation for agents
+// BaseSensor - Base implementation for sensors
 // =============================================================================
 
-// BaseAgent provides a base implementation for agents.
-// Embed this in your custom agent to get common functionality.
-type BaseAgent struct {
+// BaseSensor provides a base implementation for sensors.
+// Embed this in your custom sensor to get common functionality.
+type BaseSensor struct {
 	name     string
 	version  string
 	hostname string
@@ -35,7 +35,7 @@ type BaseAgent struct {
 	targets           []string
 
 	// State
-	status   *AgentStatus
+	status   *SensorStatus
 	statusMu sync.RWMutex
 	running  bool
 	stopCh   chan struct{}
@@ -45,8 +45,8 @@ type BaseAgent struct {
 	verbose bool
 }
 
-// BaseAgentConfig configures a BaseAgent.
-type BaseAgentConfig struct {
+// BaseSensorConfig configures a BaseSensor.
+type BaseSensorConfig struct {
 	Name              string        `yaml:"name" json:"name"`
 	Version           string        `yaml:"version" json:"version"`
 	Region            string        `yaml:"region" json:"region"` // Deployment region (e.g., "us-east-1", "ap-southeast-1")
@@ -84,8 +84,8 @@ func detectRegion(configRegion string) string {
 	return ""
 }
 
-// NewBaseAgent creates a new base agent.
-func NewBaseAgent(cfg *BaseAgentConfig, pusher Pusher) *BaseAgent {
+// NewBaseSensor creates a new base sensor.
+func NewBaseSensor(cfg *BaseSensorConfig, pusher Pusher) *BaseSensor {
 	hostname, _ := os.Hostname()
 	region := detectRegion(cfg.Region)
 
@@ -100,7 +100,7 @@ func NewBaseAgent(cfg *BaseAgentConfig, pusher Pusher) *BaseAgent {
 		cfg.HeartbeatInterval = 1 * time.Minute
 	}
 
-	return &BaseAgent{
+	return &BaseSensor{
 		name:              cfg.Name,
 		version:           cfg.Version,
 		hostname:          hostname,
@@ -113,9 +113,9 @@ func NewBaseAgent(cfg *BaseAgentConfig, pusher Pusher) *BaseAgent {
 		collectInterval:   cfg.CollectInterval,
 		heartbeatInterval: cfg.HeartbeatInterval,
 		targets:           cfg.Targets,
-		status: &AgentStatus{
+		status: &SensorStatus{
 			Name:       cfg.Name,
-			Status:     AgentStateStopped,
+			Status:     SensorStateStopped,
 			Scanners:   []string{},
 			Collectors: []string{},
 			Region:     region,
@@ -125,13 +125,13 @@ func NewBaseAgent(cfg *BaseAgentConfig, pusher Pusher) *BaseAgent {
 	}
 }
 
-// Name returns the agent name.
-func (a *BaseAgent) Name() string {
+// Name returns the sensor name.
+func (a *BaseSensor) Name() string {
 	return a.name
 }
 
-// AddScanner adds a scanner to the agent.
-func (a *BaseAgent) AddScanner(scanner Scanner) error {
+// AddScanner adds a scanner to the sensor.
+func (a *BaseSensor) AddScanner(scanner Scanner) error {
 	a.statusMu.Lock()
 	defer a.statusMu.Unlock()
 
@@ -150,8 +150,8 @@ func (a *BaseAgent) AddScanner(scanner Scanner) error {
 	return nil
 }
 
-// AddCollector adds a collector to the agent.
-func (a *BaseAgent) AddCollector(collector Collector) error {
+// AddCollector adds a collector to the sensor.
+func (a *BaseSensor) AddCollector(collector Collector) error {
 	a.statusMu.Lock()
 	defer a.statusMu.Unlock()
 
@@ -170,8 +170,8 @@ func (a *BaseAgent) AddCollector(collector Collector) error {
 	return nil
 }
 
-// RemoveScanner removes a scanner from the agent.
-func (a *BaseAgent) RemoveScanner(name string) error {
+// RemoveScanner removes a scanner from the sensor.
+func (a *BaseSensor) RemoveScanner(name string) error {
 	a.statusMu.Lock()
 	defer a.statusMu.Unlock()
 
@@ -193,8 +193,8 @@ func (a *BaseAgent) RemoveScanner(name string) error {
 	return nil
 }
 
-// RemoveCollector removes a collector from the agent.
-func (a *BaseAgent) RemoveCollector(name string) error {
+// RemoveCollector removes a collector from the sensor.
+func (a *BaseSensor) RemoveCollector(name string) error {
 	a.statusMu.Lock()
 	defer a.statusMu.Unlock()
 
@@ -216,8 +216,8 @@ func (a *BaseAgent) RemoveCollector(name string) error {
 	return nil
 }
 
-// Status returns the current agent status.
-func (a *BaseAgent) Status() *AgentStatus {
+// Status returns the current sensor status.
+func (a *BaseSensor) Status() *SensorStatus {
 	a.statusMu.RLock()
 	defer a.statusMu.RUnlock()
 
@@ -229,8 +229,8 @@ func (a *BaseAgent) Status() *AgentStatus {
 	return &status
 }
 
-// Start starts the agent.
-func (a *BaseAgent) Start(ctx context.Context) error {
+// Start starts the sensor.
+func (a *BaseSensor) Start(ctx context.Context) error {
 	a.statusMu.Lock()
 	if a.running {
 		a.statusMu.Unlock()
@@ -239,8 +239,8 @@ func (a *BaseAgent) Start(ctx context.Context) error {
 	a.running = true
 	// The provided edit contained HTTP-related code that is syntactically incorrect
 	// in this context and appears to be a copy-paste error.
-	// Reverting to original logic for agent status and start time.
-	a.status.Status = AgentStateRunning
+	// Reverting to original logic for sensor status and start time.
+	a.status.Status = SensorStateRunning
 	a.status.StartedAt = time.Now().Unix()
 	a.stopCh = make(chan struct{})
 	a.statusMu.Unlock()
@@ -271,15 +271,15 @@ func (a *BaseAgent) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the agent gracefully.
-func (a *BaseAgent) Stop(ctx context.Context) error {
+// Stop stops the sensor gracefully.
+func (a *BaseSensor) Stop(ctx context.Context) error {
 	a.statusMu.Lock()
 	if !a.running {
 		a.statusMu.Unlock()
 		return nil
 	}
 	a.running = false
-	a.status.Status = AgentStateStopping
+	a.status.Status = SensorStateStopping
 	close(a.stopCh)
 	a.statusMu.Unlock()
 
@@ -303,7 +303,7 @@ func (a *BaseAgent) Stop(ctx context.Context) error {
 
 	// Send final heartbeat
 	a.statusMu.Lock()
-	a.status.Status = AgentStateStopped
+	a.status.Status = SensorStateStopped
 	a.statusMu.Unlock()
 
 	if a.pusher != nil {
@@ -324,7 +324,7 @@ func (a *BaseAgent) Stop(ctx context.Context) error {
 }
 
 // heartbeatLoop sends periodic heartbeats.
-func (a *BaseAgent) heartbeatLoop(ctx context.Context) {
+func (a *BaseSensor) heartbeatLoop(ctx context.Context) {
 	defer a.wg.Done()
 
 	// Send initial heartbeat
@@ -360,7 +360,7 @@ func (a *BaseAgent) heartbeatLoop(ctx context.Context) {
 }
 
 // scanLoop performs periodic scans.
-func (a *BaseAgent) scanLoop(ctx context.Context) {
+func (a *BaseSensor) scanLoop(ctx context.Context) {
 	defer a.wg.Done()
 
 	// Run initial scan
@@ -382,7 +382,7 @@ func (a *BaseAgent) scanLoop(ctx context.Context) {
 }
 
 // collectLoop performs periodic collections.
-func (a *BaseAgent) collectLoop(ctx context.Context) {
+func (a *BaseSensor) collectLoop(ctx context.Context) {
 	defer a.wg.Done()
 
 	// Run initial collection
@@ -404,7 +404,7 @@ func (a *BaseAgent) collectLoop(ctx context.Context) {
 }
 
 // runAllScans runs all scanners on all targets.
-func (a *BaseAgent) runAllScans(ctx context.Context) {
+func (a *BaseSensor) runAllScans(ctx context.Context) {
 	a.statusMu.RLock()
 	scanners := make(map[string]Scanner)
 	for k, v := range a.scanners {
@@ -466,7 +466,7 @@ func (a *BaseAgent) runAllScans(ctx context.Context) {
 }
 
 // runAllCollections runs all collectors.
-func (a *BaseAgent) runAllCollections(ctx context.Context) {
+func (a *BaseSensor) runAllCollections(ctx context.Context) {
 	a.statusMu.RLock()
 	collectors := make(map[string]Collector)
 	for k, v := range a.collectors {
@@ -511,7 +511,7 @@ func (a *BaseAgent) runAllCollections(ctx context.Context) {
 }
 
 // parseResult parses scanner output to CTIS format.
-func (a *BaseAgent) parseResult(ctx context.Context, scanner Scanner, result *ScanResult) (*ctis.Report, error) {
+func (a *BaseSensor) parseResult(ctx context.Context, scanner Scanner, result *ScanResult) (*ctis.Report, error) {
 	// Try to find a parser that can handle this output
 	parser := a.parsers.FindParser(result.RawOutput)
 	if parser == nil {
@@ -529,7 +529,7 @@ func (a *BaseAgent) parseResult(ctx context.Context, scanner Scanner, result *Sc
 }
 
 // recordScan updates scan statistics.
-func (a *BaseAgent) recordScan(findings int64) {
+func (a *BaseSensor) recordScan(findings int64) {
 	a.statusMu.Lock()
 	defer a.statusMu.Unlock()
 	a.status.TotalScans++
@@ -538,7 +538,7 @@ func (a *BaseAgent) recordScan(findings int64) {
 }
 
 // recordCollect updates collect statistics.
-func (a *BaseAgent) recordCollect(findings int64) {
+func (a *BaseSensor) recordCollect(findings int64) {
 	a.statusMu.Lock()
 	defer a.statusMu.Unlock()
 	a.status.TotalFindings += findings
@@ -546,18 +546,18 @@ func (a *BaseAgent) recordCollect(findings int64) {
 }
 
 // incrementErrors increments the error counter.
-func (a *BaseAgent) incrementErrors() {
+func (a *BaseSensor) incrementErrors() {
 	a.statusMu.Lock()
 	defer a.statusMu.Unlock()
 	a.status.Errors++
 }
 
 // SetVerbose sets verbose mode.
-func (a *BaseAgent) SetVerbose(v bool) {
+func (a *BaseSensor) SetVerbose(v bool) {
 	a.verbose = v
 }
 
-// AddParser adds a custom parser to the agent.
-func (a *BaseAgent) AddParser(parser Parser) {
+// AddParser adds a custom parser to the sensor.
+func (a *BaseSensor) AddParser(parser Parser) {
 	a.parsers.Register(parser)
 }

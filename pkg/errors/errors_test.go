@@ -440,7 +440,7 @@ func TestCommonErrors(t *testing.T) {
 		{"ErrRateLimited", ErrRateLimited, KindRateLimit},
 		{"ErrInvalidConfig", ErrInvalidConfig, KindInvalidInput},
 		{"ErrMissingAPIKey", ErrMissingAPIKey, KindAuthentication},
-		{"ErrMissingAgentID", ErrMissingAgentID, KindInvalidInput},
+		{"ErrMissingAgentID", ErrMissingSensorID, KindInvalidInput},
 	}
 
 	for _, tt := range tests {

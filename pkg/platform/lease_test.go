@@ -14,7 +14,7 @@ func TestGenerateHolderIdentity(t *testing.T) {
 		config := &LeaseConfig{}
 		identity := generateHolderIdentity(config)
 
-		// Should have format: agent-hostname-pid-nonce
+		// Should have format: sensor-hostname-pid-nonce
 		parts := strings.Split(identity, "-")
 		if len(parts) < 4 {
 			t.Errorf("generateHolderIdentity() with secure=true should have at least 4 parts, got %d: %s", len(parts), identity)
@@ -37,7 +37,7 @@ func TestGenerateHolderIdentity(t *testing.T) {
 		config := &LeaseConfig{UseSecureIdentity: &useSecure}
 		identity := generateHolderIdentity(config)
 
-		// Should have format: agent-hostname-pid (no nonce)
+		// Should have format: sensor-hostname-pid (no nonce)
 		parts := strings.Split(identity, "-")
 		if len(parts) != 3 {
 			t.Errorf("generateHolderIdentity() with secure=false should have 3 parts, got %d: %s", len(parts), identity)
@@ -140,10 +140,10 @@ func (f *failingLeaseClient) ReleaseLease(_ context.Context) error {
 }
 
 // TestLeaseManager_NoPrematureExpiryOnFailedInitialRenew verifies that when the
-// initial renewal fails, the agent gets a full LeaseDuration+GracePeriod window
+// initial renewal fails, the sensor gets a full LeaseDuration+GracePeriod window
 // before OnLeaseExpired fires. Previously lastRenewTime was the zero value, so
 // time.Since(zero) was astronomically large and the expiry callback (which
-// shuts the agent down) fired on the very first failed tick.
+// shuts the sensor down) fired on the very first failed tick.
 func TestLeaseManager_NoPrematureExpiryOnFailedInitialRenew(t *testing.T) {
 	var expiredCalls int32
 	config := &LeaseConfig{

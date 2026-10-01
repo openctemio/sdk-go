@@ -373,7 +373,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 	}
 
 	// Run the executor with panic recovery — a panic in a tool or parser would
-	// otherwise take down the whole agent process, and the server would wait for
+	// otherwise take down the whole sensor process, and the server would wait for
 	// a result that can never arrive. Converting it to an error here routes it
 	// through the normal failure path below, so the command is reported failed
 	// with the panic message instead of vanishing.

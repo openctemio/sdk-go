@@ -9,8 +9,8 @@ import (
 // Scanner child-process environment.
 //
 // Scanner binaries (nuclei, trivy, semgrep, gitleaks, custom tools) used to
-// inherit the agent's whole environment, which includes the OpenCTEM API key,
-// bootstrap tokens and any cloud credentials the agent runs with. A scanner,
+// inherit the sensor's whole environment, which includes the OpenCTEM API key,
+// bootstrap tokens and any cloud credentials the sensor runs with. A scanner,
 // a malicious template it loads, or a compromised scanner binary could read
 // and exfiltrate them. Scanners now receive an allowlisted environment: the
 // variables they need to run (PATH, HOME, temp/locale, proxy and CA settings)
@@ -83,7 +83,7 @@ func SetScannerEnvAllowlist(names []string) {
 }
 
 // SetScannerInheritEnv makes scanner processes inherit the full
-// agent environment when inherit is true (the pre-hardening behavior). Only for setups
+// sensor environment when inherit is true (the pre-hardening behavior). Only for setups
 // where a scanner needs variables that cannot be enumerated.
 func SetScannerInheritEnv(inherit bool) {
 	scannerEnvMu.Lock()

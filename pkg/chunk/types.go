@@ -63,7 +63,7 @@ type Metadata struct {
 	ToolName    string    `json:"tool_name,omitempty"`
 	ToolVersion string    `json:"tool_version,omitempty"`
 	ScanID      string    `json:"scan_id,omitempty"`
-	AgentID     string    `json:"agent_id,omitempty"`
+	SensorID    string    `json:"agent_id,omitempty"`
 	StartedAt   time.Time `json:"started_at,omitempty"`
 	FinishedAt  time.Time `json:"finished_at,omitempty"`
 }

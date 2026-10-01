@@ -17,7 +17,7 @@ import (
 //
 // A scan command's target comes from the server. A compromised server, a
 // malicious tenant admin, or anyone who can inject a command must not be able
-// to turn the agent into an SSRF proxy (e.g. nuclei against
+// to turn the sensor into an SSRF proxy (e.g. nuclei against
 // http://169.254.169.254 returns cloud IAM credentials inside a finding), a
 // local file reader (semgrep/gitleaks over /etc or ~/.ssh ships their content
 // back as findings), or a flag injector (a target of "-config=/tmp/x" is
@@ -31,13 +31,13 @@ const (
 	EnvScanRoots = "OPENCTEM_SDK_SCAN_ROOTS"
 	// EnvAllowPrivateTargets=1 permits RFC1918 / IPv6 ULA network targets.
 	EnvAllowPrivateTargets = "OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS"
-	// envAgentAllowPrivateTargets is the OpenCTEM agent's existing switch for
-	// the same posture; honored so an on-prem agent keeps one knob.
-	envAgentAllowPrivateTargets = "AGENT_ALLOW_PRIVATE_TARGETS"
+	// envSensorAllowPrivateTargets is the OpenCTEM sensor's existing switch for
+	// the same posture; honored so an on-prem sensor keeps one knob.
+	envSensorAllowPrivateTargets = "AGENT_ALLOW_PRIVATE_TARGETS"
 )
 
 // sensitiveScanRoots are refused as filesystem targets when no AllowedRoots
-// are configured. Mirrors the OpenCTEM agent's confineScanPath.
+// are configured. Mirrors the OpenCTEM sensor's confineScanPath.
 var sensitiveScanRoots = []string{
 	"/etc", "/root", "/proc", "/sys", "/boot", "/dev", "/run",
 	"/usr", "/bin", "/sbin", "/lib", "/lib64", "/var/lib", "/var/run",
@@ -74,7 +74,7 @@ type ScanTargetPolicy struct {
 	AllowedRoots []string
 
 	// AllowPrivate permits network targets in RFC1918 (10/8, 172.16/12,
-	// 192.168/16) and IPv6 ULA (fc00::/7) space, for agents that scan an
+	// 192.168/16) and IPv6 ULA (fc00::/7) space, for sensors that scan an
 	// internal network. Loopback, link-local (incl. 169.254.169.254 IMDS),
 	// CGNAT, multicast, unspecified and reserved ranges stay blocked
 	// regardless.
@@ -98,7 +98,7 @@ type ScanTargetPolicy struct {
 //
 //   - AllowedRoots from OPENCTEM_SDK_SCAN_ROOTS (unset = sensitive-path
 //     denylist only);
-//   - AllowPrivate when OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS=1, the agent's
+//   - AllowPrivate when OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS=1, the sensor's
 //     AGENT_ALLOW_PRIVATE_TARGETS=1, or httpsec's allow-private switch
 //     (OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1) is set;
 //   - AllowLoopback follows httpsec.AllowLoopback (test harnesses only).
@@ -112,7 +112,7 @@ func DefaultScanTargetPolicy() *ScanTargetPolicy {
 	return &ScanTargetPolicy{
 		AllowedRoots: roots,
 		AllowPrivate: os.Getenv(EnvAllowPrivateTargets) == "1" ||
-			os.Getenv(envAgentAllowPrivateTargets) == "1" ||
+			os.Getenv(envSensorAllowPrivateTargets) == "1" ||
 			httpsec.AllowPrivate(),
 		AllowLoopback: httpsec.AllowLoopback,
 	}

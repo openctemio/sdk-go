@@ -32,7 +32,7 @@ type Command struct {
 	Result         json.RawMessage `json:"result,omitempty"`
 }
 
-// PollCommands retrieves pending commands for this agent.
+// PollCommands retrieves pending commands for this sensor.
 func (c *Client) PollCommands(ctx context.Context, limit int) ([]Command, error) {
 	reqURL := fmt.Sprintf("%s%s?limit=%d", c.baseURL, legacyv1.PathCommands, limit)
 
@@ -76,7 +76,7 @@ func (c *Client) GetCommands(ctx context.Context) (*core.GetCommandsResponse, er
 		}
 		// Carry the expiry through: the poller skips commands whose
 		// ExpiresAt has passed, and dropping it here made every stale
-		// command (e.g. one queued while the agent was offline) run.
+		// command (e.g. one queued while the sensor was offline) run.
 		if cmd.ExpiresAt != nil {
 			cc.ExpiresAt = *cmd.ExpiresAt
 		}

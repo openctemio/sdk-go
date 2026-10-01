@@ -33,8 +33,8 @@ type Config struct {
 	Address string `yaml:"address" json:"address"`
 
 	// Authentication
-	APIKey  string `yaml:"api_key" json:"api_key"`
-	AgentID string `yaml:"agent_id" json:"agent_id"`
+	APIKey   string `yaml:"api_key" json:"api_key"`
+	SensorID string `yaml:"agent_id" json:"agent_id"`
 
 	// TLS configuration
 	UseTLS             bool   `yaml:"use_tls" json:"use_tls"`
@@ -200,8 +200,8 @@ func (t *Transport) addAuthMetadata(ctx context.Context) context.Context {
 	md := metadata.New(map[string]string{
 		"authorization": "Bearer " + t.config.APIKey,
 	})
-	if t.config.AgentID != "" {
-		md.Set(legacyv1.GRPCMetadataSensorID, t.config.AgentID)
+	if t.config.SensorID != "" {
+		md.Set(legacyv1.GRPCMetadataSensorID, t.config.SensorID)
 	}
 	return metadata.NewOutgoingContext(ctx, md)
 }

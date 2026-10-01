@@ -46,7 +46,7 @@ func TestNewLogger(t *testing.T) {
 	logFile := filepath.Join(tmpDir, "test.log")
 
 	logger, err := NewLogger(&LoggerConfig{
-		AgentID:  "test-agent",
+		SensorID: "test-agent",
 		TenantID: "test-tenant",
 		LogFile:  logFile,
 	})
@@ -57,8 +57,8 @@ func TestNewLogger(t *testing.T) {
 
 	defer logger.Stop()
 
-	if logger.config.AgentID != "test-agent" {
-		t.Errorf("AgentID = %s, want test-agent", logger.config.AgentID)
+	if logger.config.SensorID != "test-agent" {
+		t.Errorf("AgentID = %s, want test-agent", logger.config.SensorID)
 	}
 
 	// Log file should be created
@@ -123,7 +123,7 @@ func TestLogger_Log(t *testing.T) {
 	logFile := filepath.Join(tmpDir, "test.log")
 
 	logger, _ := NewLogger(&LoggerConfig{
-		AgentID:       "test-agent",
+		SensorID:      "test-agent",
 		TenantID:      "test-tenant",
 		LogFile:       logFile,
 		BufferSize:    1, // Small buffer to trigger immediate flush
@@ -164,8 +164,8 @@ func TestLogger_Log(t *testing.T) {
 		t.Errorf("Type = %s, want %s", event.Type, EventJobStarted)
 	}
 
-	if event.AgentID != "test-agent" {
-		t.Errorf("AgentID = %s, want test-agent", event.AgentID)
+	if event.SensorID != "test-agent" {
+		t.Errorf("AgentID = %s, want test-agent", event.SensorID)
 	}
 
 	if event.TenantID != "test-tenant" {
@@ -617,7 +617,7 @@ func TestContextLogger_Error(t *testing.T) {
 func TestEventTypes(t *testing.T) {
 	// Verify event type constants are unique
 	types := []EventType{
-		EventAgentStart, EventAgentStop, EventAgentError,
+		EventSensorStart, EventSensorStop, EventSensorError,
 		EventJobReceived, EventJobStarted, EventJobCompleted, EventJobFailed, EventJobTimeout,
 		EventScanStarted, EventScanCompleted, EventScanFailed,
 		EventUploadStarted, EventUploadCompleted, EventUploadFailed, EventUploadRetry,

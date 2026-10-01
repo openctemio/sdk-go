@@ -54,18 +54,18 @@ type LeaseConfig struct {
 	// Default: 20 seconds.
 	RenewInterval time.Duration
 
-	// GracePeriod is how long to wait after lease expiry before considering agent dead.
+	// GracePeriod is how long to wait after lease expiry before considering sensor dead.
 	// Default: 15 seconds.
 	GracePeriod time.Duration
 
-	// MaxJobs is the maximum concurrent jobs this agent can handle.
+	// MaxJobs is the maximum concurrent jobs this sensor can handle.
 	MaxJobs int
 
 	// MetricsCollector provides system metrics for lease renewal.
 	// If nil, metrics are not reported.
 	MetricsCollector MetricsCollector
 
-	// OnLeaseExpired is called when the lease expires (agent should shutdown).
+	// OnLeaseExpired is called when the lease expires (sensor should shutdown).
 	OnLeaseExpired func()
 
 	// Verbose enables debug logging.
@@ -77,7 +77,7 @@ type LeaseConfig struct {
 	UseSecureIdentity *bool
 
 	// IdentityPrefix is an optional prefix for the holder identity.
-	// Useful for identifying agent type (e.g., "scanner", "collector").
+	// Useful for identifying sensor type (e.g., "scanner", "collector").
 	IdentityPrefix string
 }
 
@@ -89,8 +89,8 @@ type MetricsCollector interface {
 	Collect() (*SystemMetrics, error)
 }
 
-// LeaseManager manages the agent's lease with the control plane.
-// It periodically renews the lease to indicate the agent is healthy.
+// LeaseManager manages the sensor's lease with the control plane.
+// It periodically renews the lease to indicate the sensor is healthy.
 type LeaseManager struct {
 	client          LeaseClient
 	config          *LeaseConfig
@@ -186,11 +186,11 @@ func (m *LeaseManager) Start(ctx context.Context) error {
 	}
 	m.running = true
 	m.stopCh = make(chan struct{})
-	// Seed the renewal clock to now so a freshly-started agent gets a full
+	// Seed the renewal clock to now so a freshly-started sensor gets a full
 	// LeaseDuration+GracePeriod window before it can be considered expired.
 	// Without this, lastRenewTime is the zero value and a failed INITIAL
 	// renewal made time.Since(zero) astronomically large → the expiry callback
-	// (which shuts the agent down / cancels jobs) fired on the very first tick.
+	// (which shuts the sensor down / cancels jobs) fired on the very first tick.
 	m.lastRenewTime = time.Now()
 	m.expiredOnce = sync.Once{}
 	m.mu.Unlock()
@@ -386,7 +386,7 @@ func (m *LeaseManager) renew(ctx context.Context) error {
 	}
 
 	m.mu.Lock()
-	// Use the agent's local clock for the renewal timestamp: the expiry math
+	// Use the sensor's local clock for the renewal timestamp: the expiry math
 	// (time.Since(lastRenewTime)) runs against time.Now(), so storing the
 	// server's resp.RenewTime here would fold clock skew into the comparison.
 	m.lastRenewTime = time.Now()
@@ -431,17 +431,17 @@ type httpLeaseClient struct {
 	// while requests read it concurrently.
 	mu         sync.RWMutex
 	apiKey     string
-	agentID    string
+	sensorID   string
 	httpClient *http.Client
 }
 
 // NewHTTPLeaseClient creates a new HTTP-based lease client.
-func NewHTTPLeaseClient(baseURL, apiKey, agentID string) LeaseClient {
+func NewHTTPLeaseClient(baseURL, apiKey, sensorID string) LeaseClient {
 	return &httpLeaseClient{
-		baseURL: baseURL,
-		apiKey:  apiKey,
-		agentID: agentID,
-		// SSRF: platform agent's baseURL is operator config; the
+		baseURL:  baseURL,
+		apiKey:   apiKey,
+		sensorID: sensorID,
+		// SSRF: platform sensor's baseURL is operator config; the
 		// dialer-level guard catches a misconfigured or rebind-target
 		// pointing into private space.
 		httpClient: newAPIHTTPClient(10 * time.Second),
@@ -480,7 +480,7 @@ func (c *httpLeaseClient) RenewLease(ctx context.Context, req *LeaseRenewRequest
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	httpReq.Header.Set(legacyv1.HeaderSensorID, c.agentID)
+	httpReq.Header.Set(legacyv1.HeaderSensorID, c.sensorID)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -512,7 +512,7 @@ func (c *httpLeaseClient) ReleaseLease(ctx context.Context) error {
 	}
 
 	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	req.Header.Set(legacyv1.HeaderSensorID, c.agentID)
+	req.Header.Set(legacyv1.HeaderSensorID, c.sensorID)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

@@ -1,6 +1,6 @@
-// Package audit provides structured audit logging for agent operations.
+// Package audit provides structured audit logging for sensor operations.
 //
-// All critical agent operations should be logged via this package to enable:
+// All critical sensor operations should be logged via this package to enable:
 // - Security monitoring and incident response
 // - Debugging and troubleshooting
 // - Compliance and audit trails
@@ -22,9 +22,9 @@ type EventType string
 
 const (
 	// Lifecycle events
-	EventAgentStart EventType = "agent_start"
-	EventAgentStop  EventType = "agent_stop"
-	EventAgentError EventType = "agent_error"
+	EventSensorStart EventType = "agent_start"
+	EventSensorStop  EventType = "agent_stop"
+	EventSensorError EventType = "agent_error"
 
 	// Job events
 	EventJobReceived  EventType = "job_received"
@@ -77,7 +77,7 @@ type Event struct {
 	Timestamp time.Time              `json:"timestamp"`
 	Type      EventType              `json:"type"`
 	Severity  Severity               `json:"severity"`
-	AgentID   string                 `json:"agent_id,omitempty"`
+	SensorID  string                 `json:"agent_id,omitempty"`
 	TenantID  string                 `json:"tenant_id,omitempty"`
 	JobID     string                 `json:"job_id,omitempty"`
 	ReportID  string                 `json:"report_id,omitempty"`
@@ -89,8 +89,8 @@ type Event struct {
 
 // LoggerConfig configures the audit logger.
 type LoggerConfig struct {
-	// AgentID is the agent identifier included in all events.
-	AgentID string
+	// SensorID is the sensor identifier included in all events.
+	SensorID string
 
 	// TenantID is the tenant identifier (if known).
 	TenantID string
@@ -232,8 +232,8 @@ func (l *Logger) Stop() error {
 // Log records an audit event.
 func (l *Logger) Log(event Event) {
 	event.Timestamp = time.Now()
-	if event.AgentID == "" {
-		event.AgentID = l.config.AgentID
+	if event.SensorID == "" {
+		event.SensorID = l.config.SensorID
 	}
 	if event.TenantID == "" {
 		event.TenantID = l.config.TenantID

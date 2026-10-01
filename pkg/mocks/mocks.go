@@ -23,7 +23,7 @@ type MockPusher struct {
 	PushAssetsFn func(ctx context.Context, report *ctis.Report) (*core.PushResult, error)
 
 	// SendHeartbeatFn is called when SendHeartbeat is invoked
-	SendHeartbeatFn func(ctx context.Context, status *core.AgentStatus) error
+	SendHeartbeatFn func(ctx context.Context, status *core.SensorStatus) error
 
 	// TestConnectionFn is called when TestConnection is invoked
 	TestConnectionFn func(ctx context.Context) error
@@ -44,7 +44,7 @@ type PushAssetsCall struct {
 }
 
 type SendHeartbeatCall struct {
-	Status *core.AgentStatus
+	Status *core.SensorStatus
 }
 
 func (m *MockPusher) PushFindings(ctx context.Context, report *ctis.Report) (*core.PushResult, error) {
@@ -63,7 +63,7 @@ func (m *MockPusher) PushAssets(ctx context.Context, report *ctis.Report) (*core
 	return &core.PushResult{Success: true}, nil
 }
 
-func (m *MockPusher) SendHeartbeat(ctx context.Context, status *core.AgentStatus) error {
+func (m *MockPusher) SendHeartbeat(ctx context.Context, status *core.SensorStatus) error {
 	m.SendHeartbeatCalls = append(m.SendHeartbeatCalls, SendHeartbeatCall{Status: status})
 	if m.SendHeartbeatFn != nil {
 		return m.SendHeartbeatFn(ctx, status)

@@ -41,7 +41,7 @@ type HandleFindingsParams struct {
 
 	// NewFingerprints, when non-nil, restricts PR/MR inline comments to findings
 	// the PR introduces relative to its base branch (keyed by fingerprint). It is
-	// computed by the agent via Client.BaselineDiff in a PR context. When nil
+	// computed by the sensor via Client.BaselineDiff in a PR context. When nil
 	// (no PR context, baseline unavailable, or non-PR scan) all findings on
 	// changed files are eligible — the prior behavior, preserved for back-compat.
 	NewFingerprints map[string]bool

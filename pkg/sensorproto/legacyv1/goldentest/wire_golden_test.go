@@ -156,13 +156,13 @@ func TestProtocolV1Golden(t *testing.T) {
 
 	// ---- pkg/client (tenant sensors: /api/v1/agent/*) ----
 	c := client.New(&client.Config{
-		BaseURL: srv.URL, APIKey: "rda_test", AgentID: sensorID,
+		BaseURL: srv.URL, APIKey: "rda_test", SensorID: sensorID,
 		MaxRetries: 1, EnableCompression: false,
 	})
 
 	rec.start("client.SendHeartbeat")
-	must("SendHeartbeat", c.SendHeartbeat(ctx, &core.AgentStatus{
-		Name: "s1", Status: core.AgentStateRunning, Scanners: []string{"nuclei"},
+	must("SendHeartbeat", c.SendHeartbeat(ctx, &core.SensorStatus{
+		Name: "s1", Status: core.SensorStateRunning, Scanners: []string{"nuclei"},
 		Uptime: 10, TotalScans: 2, Message: "ok", Region: "r1",
 	}))
 
@@ -234,7 +234,7 @@ func TestProtocolV1Golden(t *testing.T) {
 	keep("platform.Register", reg)
 
 	pc := platform.NewPlatformClient(&platform.ClientConfig{
-		BaseURL: srv.URL, APIKey: "rda_test", AgentID: sensorID, PollTimeout: time.Second,
+		BaseURL: srv.URL, APIKey: "rda_test", SensorID: sensorID, PollTimeout: time.Second,
 	})
 	rec.start("platform.RenewKey")
 	rk, err := pc.RenewKey(ctx)
@@ -266,8 +266,8 @@ func TestProtocolV1Golden(t *testing.T) {
 
 	values := map[string]string{
 		"ctis.DefaultReconConverterOptions.DiscoverySource": ctis.DefaultReconConverterOptions().DiscoverySource,
-		"core.AgentStateRunning":                            string(core.AgentStateRunning),
-		"core.AgentStateStopped":                            string(core.AgentStateStopped),
+		"core.AgentStateRunning":                            string(core.SensorStateRunning),
+		"core.AgentStateStopped":                            string(core.SensorStateStopped),
 	}
 
 	got := golden{Requests: rec.got, Decoded: decoded, Values: values}

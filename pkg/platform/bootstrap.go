@@ -16,12 +16,12 @@ import (
 // will never succeed on retry, so the loop stops immediately on these.
 var (
 	ErrBootstrapTokenInvalid = errors.New("invalid or expired bootstrap token")
-	ErrAgentAlreadyExists    = errors.New("agent with this name already exists")
+	ErrSensorAlreadyExists   = errors.New("agent with this name already exists")
 )
 
-// RegistrationRequest contains the data for registering a new platform agent.
+// RegistrationRequest contains the data for registering a new platform sensor.
 type RegistrationRequest struct {
-	// Name is the agent's display name.
+	// Name is the sensor's display name.
 	Name string `json:"name"`
 
 	// Capabilities are the scanner/collector capabilities (e.g., "sast", "sca", "dast").
@@ -40,9 +40,9 @@ type RegistrationRequest struct {
 	MaxConcurrentJobs int `json:"max_concurrent_jobs,omitempty"`
 }
 
-// RegistrationResponse contains the response from agent registration.
+// RegistrationResponse contains the response from sensor registration.
 type RegistrationResponse struct {
-	AgentID   string `json:"agent_id"`
+	SensorID  string `json:"agent_id"`
 	APIKey    string `json:"api_key"`    // Only returned once - store securely!
 	APIPrefix string `json:"api_prefix"` // Prefix for display/logging (safe to log)
 	Message   string `json:"message,omitempty"`
@@ -63,15 +63,15 @@ type BootstrapConfig struct {
 	Verbose bool
 }
 
-// Bootstrapper handles platform agent registration using bootstrap tokens.
+// Bootstrapper handles platform sensor registration using bootstrap tokens.
 //
-// Bootstrap tokens are short-lived tokens that allow new agents to register
+// Bootstrap tokens are short-lived tokens that allow new sensors to register
 // themselves with the platform. The flow is:
 //
 //  1. Admin creates a bootstrap token via CLI or API
-//  2. Token is provided to the agent deployment (e.g., via environment variable)
-//  3. Agent uses Bootstrapper to register and receive permanent API credentials
-//  4. Agent stores credentials securely and uses them for all future API calls
+//  2. Token is provided to the sensor deployment (e.g., via environment variable)
+//  3. Sensor uses Bootstrapper to register and receive permanent API credentials
+//  4. Sensor stores credentials securely and uses them for all future API calls
 //
 // Example:
 //
@@ -115,10 +115,10 @@ func NewBootstrapper(baseURL, bootstrapToken string, config *BootstrapConfig) *B
 	}
 }
 
-// Register registers a new platform agent and returns the API credentials.
+// Register registers a new platform sensor and returns the API credentials.
 //
 // IMPORTANT: The returned API key is only provided once. Store it securely
-// (e.g., in a secrets manager or encrypted file). If lost, the agent must
+// (e.g., in a secrets manager or encrypted file). If lost, the sensor must
 // be deleted and re-registered with a new bootstrap token.
 func (b *Bootstrapper) Register(ctx context.Context, req *RegistrationRequest) (*RegistrationResponse, error) {
 	if req.Name == "" {
@@ -145,7 +145,7 @@ func (b *Bootstrapper) Register(ctx context.Context, req *RegistrationRequest) (
 				fmt.Printf("[bootstrap] Retry attempt %d/%d after %v\n",
 					attempt, b.config.RetryAttempts, b.config.RetryDelay)
 			}
-			// Honor cancellation while backing off (a draining agent must
+			// Honor cancellation while backing off (a draining sensor must
 			// not block on a fixed sleep).
 			select {
 			case <-ctx.Done():
@@ -165,7 +165,7 @@ func (b *Bootstrapper) Register(ctx context.Context, req *RegistrationRequest) (
 		}
 
 		// Don't waste attempts on errors that can never succeed on retry.
-		if errors.Is(err, ErrBootstrapTokenInvalid) || errors.Is(err, ErrAgentAlreadyExists) {
+		if errors.Is(err, ErrBootstrapTokenInvalid) || errors.Is(err, ErrSensorAlreadyExists) {
 			return nil, err
 		}
 	}
@@ -206,7 +206,7 @@ func (b *Bootstrapper) doRegister(ctx context.Context, req *RegistrationRequest)
 		return nil, ErrBootstrapTokenInvalid
 	}
 	if resp.StatusCode == http.StatusConflict {
-		return nil, ErrAgentAlreadyExists
+		return nil, ErrSensorAlreadyExists
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
@@ -219,7 +219,7 @@ func (b *Bootstrapper) doRegister(ctx context.Context, req *RegistrationRequest)
 
 	if b.config.Verbose {
 		fmt.Printf("[bootstrap] Registration successful! Agent ID: %s, API Key Prefix: %s\n",
-			result.AgentID, result.APIPrefix)
+			result.SensorID, result.APIPrefix)
 	}
 
 	return &result, nil
@@ -248,10 +248,10 @@ func detectRegion() string {
 // Credential Storage Helpers
 // =============================================================================
 
-// CredentialStore interface for storing agent credentials.
+// CredentialStore interface for storing sensor credentials.
 type CredentialStore interface {
-	Save(creds *AgentCredentials) error
-	Load() (*AgentCredentials, error)
+	Save(creds *SensorCredentials) error
+	Load() (*SensorCredentials, error)
 	Exists() bool
 }
 
@@ -273,7 +273,7 @@ func NewFileCredentialStore(path string) *FileCredentialStore {
 // would lose the only copy of a rotated key), and a pre-existing file with
 // looser permissions is replaced by a 0600 one rather than rewritten in
 // place with its old mode.
-func (s *FileCredentialStore) Save(creds *AgentCredentials) error {
+func (s *FileCredentialStore) Save(creds *SensorCredentials) error {
 	data, err := json.MarshalIndent(creds, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal credentials: %w", err)
@@ -333,13 +333,13 @@ func writeFileAtomic(path string, data []byte) (err error) {
 }
 
 // Load loads credentials from the file.
-func (s *FileCredentialStore) Load() (*AgentCredentials, error) {
+func (s *FileCredentialStore) Load() (*SensorCredentials, error) {
 	data, err := os.ReadFile(s.Path)
 	if err != nil {
 		return nil, fmt.Errorf("read credentials file: %w", err)
 	}
 
-	var creds AgentCredentials
+	var creds SensorCredentials
 	if err := json.Unmarshal(data, &creds); err != nil {
 		return nil, fmt.Errorf("unmarshal credentials: %w", err)
 	}
@@ -357,10 +357,10 @@ func (s *FileCredentialStore) Exists() bool {
 // Bootstrap-Or-Load Helper
 // =============================================================================
 
-// EnsureRegistered ensures the agent is registered, either by loading existing
+// EnsureRegistered ensures the sensor is registered, either by loading existing
 // credentials or registering with a bootstrap token.
 //
-// This is the recommended way to initialize a platform agent:
+// This is the recommended way to initialize a platform sensor:
 //
 //	creds, err := platform.EnsureRegistered(ctx, &platform.EnsureRegisteredConfig{
 //	    BaseURL: "http://localhost:8080",
@@ -371,7 +371,7 @@ func (s *FileCredentialStore) Exists() bool {
 //	        Capabilities: []string{"sast", "sca"},
 //	    },
 //	})
-func EnsureRegistered(ctx context.Context, config *EnsureRegisteredConfig) (*AgentCredentials, error) {
+func EnsureRegistered(ctx context.Context, config *EnsureRegisteredConfig) (*SensorCredentials, error) {
 	if config.CredentialsFile == "" {
 		return nil, fmt.Errorf("credentials file path is required")
 	}
@@ -385,7 +385,7 @@ func EnsureRegistered(ctx context.Context, config *EnsureRegisteredConfig) (*Age
 			return nil, fmt.Errorf("failed to load credentials: %w", err)
 		}
 		if config.Verbose {
-			fmt.Printf("[bootstrap] Loaded existing credentials for agent %s\n", creds.AgentID)
+			fmt.Printf("[bootstrap] Loaded existing credentials for agent %s\n", creds.SensorID)
 		}
 		return creds, nil
 	}
@@ -398,7 +398,7 @@ func EnsureRegistered(ctx context.Context, config *EnsureRegisteredConfig) (*Age
 		return nil, fmt.Errorf("registration request is required when bootstrapping")
 	}
 
-	// Register the agent
+	// Register the sensor
 	bootstrapper := NewBootstrapper(config.BaseURL, config.BootstrapToken, &BootstrapConfig{
 		Verbose: config.Verbose,
 	})
@@ -409,8 +409,8 @@ func EnsureRegistered(ctx context.Context, config *EnsureRegisteredConfig) (*Age
 	}
 
 	// Save credentials
-	creds := &AgentCredentials{
-		AgentID:   resp.AgentID,
+	creds := &SensorCredentials{
+		SensorID:  resp.SensorID,
 		APIKey:    resp.APIKey,
 		APIPrefix: resp.APIPrefix,
 	}

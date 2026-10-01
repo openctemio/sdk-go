@@ -10,7 +10,7 @@ import (
 // The gRPC metadata keys are protocol v1 and must not change with the
 // agent -> sensor rename (RFC-023 §9.5).
 func TestAuthMetadataProtocolV1(t *testing.T) {
-	tr := &Transport{config: &Config{APIKey: "k", AgentID: "s-1"}}
+	tr := &Transport{config: &Config{APIKey: "k", SensorID: "s-1"}}
 	md, ok := metadata.FromOutgoingContext(tr.addAuthMetadata(context.Background()))
 	if !ok {
 		t.Fatal("no outgoing metadata")

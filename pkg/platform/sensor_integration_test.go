@@ -70,10 +70,10 @@ func (m *mockChunkUploader) UploadChunk(ctx context.Context, data *chunk.ChunkDa
 	return nil
 }
 
-func TestAgentBuilder_WithResourceController(t *testing.T) {
+func TestSensorBuilder_WithResourceController(t *testing.T) {
 	executor := &mockJobExecutor{}
 
-	agent, err := NewAgentBuilder().
+	sensor, err := NewSensorBuilder().
 		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
 		WithExecutor(executor).
 		WithMaxJobs(4).
@@ -88,18 +88,18 @@ func TestAgentBuilder_WithResourceController(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	if agent.ResourceController() == nil {
+	if sensor.ResourceController() == nil {
 		t.Error("Expected resource controller to be created")
 	}
 
 	// Verify the controller has correct max jobs
-	status := agent.ResourceController().GetStatus()
+	status := sensor.ResourceController().GetStatus()
 	if status.MaxJobs != 4 {
 		t.Errorf("MaxJobs = %d, want 4", status.MaxJobs)
 	}
 }
 
-func TestAgentBuilder_WithAuditLogger(t *testing.T) {
+func TestSensorBuilder_WithAuditLogger(t *testing.T) {
 	// Create temp directory for audit log
 	tmpDir, err := os.MkdirTemp("", "agent-audit-test-*")
 	if err != nil {
@@ -109,7 +109,7 @@ func TestAgentBuilder_WithAuditLogger(t *testing.T) {
 
 	executor := &mockJobExecutor{}
 
-	agent, err := NewAgentBuilder().
+	sensor, err := NewSensorBuilder().
 		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
 		WithExecutor(executor).
 		WithAuditLogger(&audit.LoggerConfig{
@@ -123,16 +123,16 @@ func TestAgentBuilder_WithAuditLogger(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	if agent.AuditLogger() == nil {
+	if sensor.AuditLogger() == nil {
 		t.Error("Expected audit logger to be created")
 	}
 }
 
-func TestAgentBuilder_WithPipeline(t *testing.T) {
+func TestSensorBuilder_WithPipeline(t *testing.T) {
 	executor := &mockJobExecutor{}
 	uploader := &mockPipelineUploader{}
 
-	agent, err := NewAgentBuilder().
+	sensor, err := NewSensorBuilder().
 		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
 		WithExecutor(executor).
 		WithPipeline(&pipeline.PipelineConfig{
@@ -145,12 +145,12 @@ func TestAgentBuilder_WithPipeline(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	if agent.Pipeline() == nil {
+	if sensor.Pipeline() == nil {
 		t.Error("Expected pipeline to be created")
 	}
 }
 
-func TestAgentBuilder_WithChunkManager(t *testing.T) {
+func TestSensorBuilder_WithChunkManager(t *testing.T) {
 	// Create temp directory for chunk storage
 	tmpDir, err := os.MkdirTemp("", "agent-chunk-test-*")
 	if err != nil {
@@ -164,7 +164,7 @@ func TestAgentBuilder_WithChunkManager(t *testing.T) {
 	chunkConfig := chunk.DefaultConfig()
 	chunkConfig.DatabasePath = filepath.Join(tmpDir, "chunks.db")
 
-	agent, err := NewAgentBuilder().
+	sensor, err := NewSensorBuilder().
 		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
 		WithExecutor(executor).
 		WithChunkManager(chunkConfig, chunkUploader).
@@ -174,12 +174,12 @@ func TestAgentBuilder_WithChunkManager(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	if agent.ChunkManager() == nil {
+	if sensor.ChunkManager() == nil {
 		t.Error("Expected chunk manager to be created")
 	}
 }
 
-func TestAgentBuilder_FullIntegration(t *testing.T) {
+func TestSensorBuilder_FullIntegration(t *testing.T) {
 	// Create temp directories
 	tmpDir, err := os.MkdirTemp("", "agent-full-test-*")
 	if err != nil {
@@ -194,7 +194,7 @@ func TestAgentBuilder_FullIntegration(t *testing.T) {
 	chunkConfig := chunk.DefaultConfig()
 	chunkConfig.DatabasePath = filepath.Join(tmpDir, "chunks.db")
 
-	agent, err := NewAgentBuilder().
+	sensor, err := NewSensorBuilder().
 		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
 		WithExecutor(executor).
 		WithMaxJobs(4).
@@ -220,21 +220,21 @@ func TestAgentBuilder_FullIntegration(t *testing.T) {
 	}
 
 	// Verify all components are created
-	if agent.ResourceController() == nil {
+	if sensor.ResourceController() == nil {
 		t.Error("Expected resource controller to be created")
 	}
-	if agent.AuditLogger() == nil {
+	if sensor.AuditLogger() == nil {
 		t.Error("Expected audit logger to be created")
 	}
-	if agent.Pipeline() == nil {
+	if sensor.Pipeline() == nil {
 		t.Error("Expected pipeline to be created")
 	}
-	if agent.ChunkManager() == nil {
+	if sensor.ChunkManager() == nil {
 		t.Error("Expected chunk manager to be created")
 	}
 }
 
-func TestPlatformAgent_SubmitReport(t *testing.T) {
+func TestPlatformSensor_SubmitReport(t *testing.T) {
 	// Create temp directory
 	tmpDir, err := os.MkdirTemp("", "agent-submit-test-*")
 	if err != nil {
@@ -245,7 +245,7 @@ func TestPlatformAgent_SubmitReport(t *testing.T) {
 	executor := &mockJobExecutor{}
 	pipelineUploader := &mockPipelineUploader{}
 
-	agent, err := NewAgentBuilder().
+	sensor, err := NewSensorBuilder().
 		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
 		WithExecutor(executor).
 		WithPipeline(&pipeline.PipelineConfig{
@@ -260,8 +260,8 @@ func TestPlatformAgent_SubmitReport(t *testing.T) {
 
 	// Start the pipeline
 	ctx := context.Background()
-	agent.uploadPipeline.Start(ctx)
-	defer agent.uploadPipeline.Stop(ctx)
+	sensor.uploadPipeline.Start(ctx)
+	defer sensor.uploadPipeline.Stop(ctx)
 
 	// Submit a report
 	report := &ctis.Report{
@@ -272,7 +272,7 @@ func TestPlatformAgent_SubmitReport(t *testing.T) {
 		},
 	}
 
-	id, err := agent.SubmitReport(report, pipeline.WithJobID("test-job"))
+	id, err := sensor.SubmitReport(report, pipeline.WithJobID("test-job"))
 	if err != nil {
 		t.Fatalf("SubmitReport failed: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestPlatformAgent_SubmitReport(t *testing.T) {
 	}
 }
 
-func TestPlatformAgent_NeedsChunking(t *testing.T) {
+func TestPlatformSensor_NeedsChunking(t *testing.T) {
 	// Create temp directory
 	tmpDir, err := os.MkdirTemp("", "agent-chunk-test-*")
 	if err != nil {
@@ -303,7 +303,7 @@ func TestPlatformAgent_NeedsChunking(t *testing.T) {
 	chunkConfig.DatabasePath = filepath.Join(tmpDir, "chunks.db")
 	chunkConfig.MinFindingsForChunking = 10 // Low threshold for testing
 
-	agent, err := NewAgentBuilder().
+	sensor, err := NewSensorBuilder().
 		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
 		WithExecutor(executor).
 		WithChunkManager(chunkConfig, chunkUploader).
@@ -318,7 +318,7 @@ func TestPlatformAgent_NeedsChunking(t *testing.T) {
 		Tool:     &ctis.Tool{Name: "test-tool"},
 		Findings: []ctis.Finding{{Title: "Finding 1"}},
 	}
-	if agent.NeedsChunking(smallReport) {
+	if sensor.NeedsChunking(smallReport) {
 		t.Error("Small report should not need chunking")
 	}
 
@@ -330,15 +330,15 @@ func TestPlatformAgent_NeedsChunking(t *testing.T) {
 	for i := range largeReport.Findings {
 		largeReport.Findings[i].Title = "Finding"
 	}
-	if !agent.NeedsChunking(largeReport) {
+	if !sensor.NeedsChunking(largeReport) {
 		t.Error("Large report should need chunking")
 	}
 }
 
-func TestPlatformAgent_ExtendedStatus(t *testing.T) {
+func TestPlatformSensor_ExtendedStatus(t *testing.T) {
 	executor := &mockJobExecutor{}
 
-	agent, err := NewAgentBuilder().
+	sensor, err := NewSensorBuilder().
 		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
 		WithExecutor(executor).
 		WithResourceController(&resource.ControllerConfig{
@@ -350,7 +350,7 @@ func TestPlatformAgent_ExtendedStatus(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	status := agent.ExtendedStatus()
+	status := sensor.ExtendedStatus()
 	if status == nil {
 		t.Fatal("Expected non-nil status")
 	}
@@ -362,32 +362,32 @@ func TestPlatformAgent_ExtendedStatus(t *testing.T) {
 	}
 }
 
-func TestAgentBuilder_ValidationErrors(t *testing.T) {
+func TestSensorBuilder_ValidationErrors(t *testing.T) {
 	executor := &mockJobExecutor{}
 
 	tests := []struct {
 		name    string
-		builder *AgentBuilder
+		builder *SensorBuilder
 		wantErr string
 	}{
 		{
 			name:    "missing base URL",
-			builder: NewAgentBuilder().WithCredentials("", "key", "id").WithExecutor(executor),
+			builder: NewSensorBuilder().WithCredentials("", "key", "id").WithExecutor(executor),
 			wantErr: "base URL is required",
 		},
 		{
 			name:    "missing API key",
-			builder: NewAgentBuilder().WithCredentials("http://localhost", "", "id").WithExecutor(executor),
+			builder: NewSensorBuilder().WithCredentials("http://localhost", "", "id").WithExecutor(executor),
 			wantErr: "API key is required",
 		},
 		{
 			name:    "missing agent ID",
-			builder: NewAgentBuilder().WithCredentials("http://localhost", "key", "").WithExecutor(executor),
+			builder: NewSensorBuilder().WithCredentials("http://localhost", "key", "").WithExecutor(executor),
 			wantErr: "agent ID is required",
 		},
 		{
 			name:    "missing executor",
-			builder: NewAgentBuilder().WithCredentials("http://localhost", "key", "id"),
+			builder: NewSensorBuilder().WithCredentials("http://localhost", "key", "id"),
 			wantErr: "executor is required",
 		},
 	}
@@ -406,11 +406,11 @@ func TestAgentBuilder_ValidationErrors(t *testing.T) {
 	}
 }
 
-func TestAgentBuilder_FluentAPI(t *testing.T) {
+func TestSensorBuilder_FluentAPI(t *testing.T) {
 	executor := &mockJobExecutor{}
 
 	// Test that all builder methods return the builder for chaining
-	builder := NewAgentBuilder().
+	builder := NewSensorBuilder().
 		WithCredentials("http://localhost:8080", "key", "id").
 		WithExecutor(executor).
 		WithLeaseDuration(60*time.Second).
@@ -427,12 +427,12 @@ func TestAgentBuilder_FluentAPI(t *testing.T) {
 		t.Fatal("Builder should not be nil")
 	}
 
-	agent, err := builder.Build()
+	sensor, err := builder.Build()
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	if agent.config.Verbose != true {
+	if sensor.config.Verbose != true {
 		t.Error("Verbose should be true")
 	}
 }

@@ -130,33 +130,33 @@ var (
 		Labels: []string{},
 	}
 
-	// Agent metrics
-	AgentJobsTotal = MetricDefinition{
+	// Sensor metrics
+	SensorJobsTotal = MetricDefinition{
 		Name:   "openctem_agent_jobs_total",
 		Type:   MetricTypeCounter,
 		Help:   "Total number of jobs processed",
 		Labels: []string{"job_type", "status"},
 	}
-	AgentJobDuration = MetricDefinition{
+	SensorJobDuration = MetricDefinition{
 		Name:    "openctem_agent_job_duration_seconds",
 		Type:    MetricTypeHistogram,
 		Help:    "Duration of job execution in seconds",
 		Labels:  []string{"job_type"},
 		Buckets: []float64{1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600},
 	}
-	AgentQueueSize = MetricDefinition{
+	SensorQueueSize = MetricDefinition{
 		Name:   "openctem_agent_queue_size",
 		Type:   MetricTypeGauge,
 		Help:   "Current number of jobs in queue",
 		Labels: []string{},
 	}
-	AgentActiveJobs = MetricDefinition{
+	SensorActiveJobs = MetricDefinition{
 		Name:   "openctem_agent_active_jobs",
 		Type:   MetricTypeGauge,
 		Help:   "Number of currently executing jobs",
 		Labels: []string{},
 	}
-	AgentHeartbeats = MetricDefinition{
+	SensorHeartbeats = MetricDefinition{
 		Name:   "openctem_agent_heartbeats_total",
 		Type:   MetricTypeCounter,
 		Help:   "Total number of heartbeats sent",

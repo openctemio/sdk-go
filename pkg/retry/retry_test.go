@@ -44,7 +44,7 @@ func TestFileRetryQueue_EnqueueDequeue(t *testing.T) {
 				},
 			},
 		},
-		AgentID:     "test-agent",
+		SensorID:    "test-agent",
 		ScannerName: "test-scanner",
 		TargetPath:  "/test/path",
 	}
