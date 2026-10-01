@@ -233,3 +233,58 @@ func TestPlatformClient_RenewKey_Non200(t *testing.T) {
 		t.Error("expected an error on non-200 renew response")
 	}
 }
+
+// RenewNow renews at once, even for a key the manager would not renew on its
+// own (never expires), and a second request right after a rotation is ignored.
+func TestKeyRenewManager_RenewNow(t *testing.T) {
+	exp := time.Now().Add(time.Hour)
+	fake := &fakeRenewer{responses: []*RenewKeyResponse{{APIKey: "k1", ExpiresAt: &exp}, {APIKey: "k2", ExpiresAt: &exp}}}
+	rotated := make(chan string, 4)
+	m := NewKeyRenewManager(fake, &KeyRenewConfig{
+		CurrentKeyNeverExpires: true,
+		MinInterval:            time.Hour,
+		OnRotated:              func(k string, _ *time.Time) error { rotated <- k; return nil },
+	})
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	time.Sleep(50 * time.Millisecond)
+	if fake.calls() != 0 {
+		t.Fatal("a never-expiring key must not be renewed unasked")
+	}
+	m.RenewNow()
+	select {
+	case k := <-rotated:
+		if k != "k1" {
+			t.Fatalf("rotated to %q", k)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RenewNow did not renew")
+	}
+	m.RenewNow() // within MinInterval of the rotation
+	time.Sleep(100 * time.Millisecond)
+	if fake.calls() != 1 {
+		t.Fatalf("renewals %d, want 1 (second request debounced)", fake.calls())
+	}
+}
+
+// RenewNow also cuts short a scheduled wait.
+func TestKeyRenewManager_RenewNowBeforeSchedule(t *testing.T) {
+	exp := time.Now().Add(10 * time.Hour)
+	fake := &fakeRenewer{responses: []*RenewKeyResponse{{APIKey: "k1", ExpiresAt: &exp}}}
+	m := NewKeyRenewManager(fake, &KeyRenewConfig{CurrentKeyExpiresAt: &exp})
+	m.RenewNow() // pending before Start is kept
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+	deadline := time.Now().Add(2 * time.Second)
+	for fake.calls() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if fake.calls() != 1 {
+		t.Fatalf("renewals %d, want 1", fake.calls())
+	}
+}

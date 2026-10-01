@@ -192,6 +192,10 @@ type CommandPoller struct {
 	// verbose is atomic: SetVerbose may be called concurrently with the
 	// poll/execute goroutines that read it.
 	verbose atomic.Bool
+
+	// doorbell, when set, drives polling from the heartbeat (SetDoorbell).
+	doorbell   *Doorbell
+	safetyPoll time.Duration
 }
 
 // CommandPollerConfig configures a CommandPoller.
@@ -200,6 +204,9 @@ type CommandPollerConfig struct {
 	MaxConcurrent int           `yaml:"max_concurrent" json:"max_concurrent"`
 	AllowedTypes  []string      `yaml:"allowed_types" json:"allowed_types"`
 	Verbose       bool          `yaml:"verbose" json:"verbose"`
+	// DoorbellSafetyPoll is how often the poller still polls on its own
+	// while the heartbeat doorbell is active. Default 5m.
+	DoorbellSafetyPoll time.Duration `yaml:"doorbell_safety_poll" json:"doorbell_safety_poll"`
 }
 
 // DefaultCommandPollerConfig returns default config.
@@ -246,6 +253,10 @@ func NewCommandPoller(client CommandClient, executor CommandExecutor, cfg *Comma
 		allowedTypes:  allowedTypes,
 		stopCh:        make(chan struct{}),
 		sem:           make(chan struct{}, maxConcurrent),
+		safetyPoll:    cfg.DoorbellSafetyPoll,
+	}
+	if p.safetyPoll <= 0 {
+		p.safetyPoll = DefaultDoorbellSafetyPoll
 	}
 	p.verbose.Store(cfg.Verbose)
 	return p
@@ -277,8 +288,15 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 
+	// wake is nil (never fires) without a doorbell.
+	var wake <-chan struct{}
+	if p.doorbell != nil {
+		wake = p.doorbell.Wake()
+	}
+
 	// Poll immediately on start
 	p.pollAndExecute(ctx)
+	lastPoll := time.Now()
 
 	for {
 		select {
@@ -288,10 +306,35 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 		case <-p.stopCh:
 			p.waitForActiveCommands()
 			return nil
-		case <-ticker.C:
+		case <-wake:
+			// The platform reported claimable work: poll now.
 			p.pollAndExecute(ctx)
+			lastPoll = time.Now()
+		case <-ticker.C:
+			// With the doorbell active the fixed poll is replaced by the
+			// doorbell plus a long safety poll; without hints (an older
+			// server, or heartbeats failing) poll on every tick as before.
+			if p.doorbell != nil && p.doorbell.HintsActive() && time.Since(lastPoll) < p.safetyPoll {
+				continue
+			}
+			p.pollAndExecute(ctx)
+			lastPoll = time.Now()
 		}
 	}
+}
+
+// SetDoorbell makes the poller follow the heartbeat doorbell: it polls when
+// the doorbell rings, and while the server sends hints it drops the fixed
+// interval for a long safety poll (CommandPollerConfig.DoorbellSafetyPoll).
+// While the platform has paused or drained the sensor it claims nothing.
+// Share d with the heartbeat (BaseSensor.SetDoorbell). Call before Start.
+func (p *CommandPoller) SetDoorbell(d *Doorbell) {
+	p.doorbell = d
+}
+
+// paused reports whether the platform paused or drained this sensor.
+func (p *CommandPoller) paused() bool {
+	return p.doorbell != nil && p.doorbell.Paused()
 }
 
 // Stop stops the command poller.
@@ -316,6 +359,16 @@ func (p *CommandPoller) waitForActiveCommands() {
 
 // pollAndExecute polls for commands and executes them.
 func (p *CommandPoller) pollAndExecute(ctx context.Context) {
+	// Paused by the platform: claim nothing. Running commands finish.
+	if p.paused() {
+		if p.verbose.Load() {
+			fmt.Printf("[command-poller] Not polling: %s\n", p.doorbell.State())
+		}
+		return
+	}
+	if p.verbose.Load() && p.doorbell != nil {
+		fmt.Printf("[command-poller] %s Polling for commands\n", time.Now().Format("15:04:05.000"))
+	}
 	resp, err := p.client.GetCommands(ctx)
 	if err != nil {
 		if p.verbose.Load() {
@@ -333,6 +386,11 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 	}
 
 	for _, cmd := range resp.Commands {
+		// Paused while this batch was being claimed: leave the rest pending
+		// (unacknowledged) for later or for another sensor.
+		if p.paused() {
+			return
+		}
 		// Validate command type
 		if !p.allowedTypes[cmd.Type] {
 			if p.verbose.Load() {
