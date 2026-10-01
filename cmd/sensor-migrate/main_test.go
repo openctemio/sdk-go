@@ -37,13 +37,14 @@ func TestMigrateFixture(t *testing.T) {
 
 	// -dry-run prints the diff and changes nothing.
 	var out, errb bytes.Buffer
-	if code := run([]string{"-dir", dir, "-dry-run"}, &out, &errb); code != 0 {
+	if code := run([]string{"-dir", dir, "-dry-run", "-tags", "extra"}, &out, &errb); code != 0 {
 		t.Fatalf("dry run exit %d: %s", code, errb.String())
 	}
 	for _, want := range []string{
 		"-\t*core.BaseAgent", "+\t*core.BaseSensor",
 		"+\tm := &myAgent{BaseSensor: core.NewBaseSensor(cfg, nil), agentNote: \"n\"}",
 		"+\t_ = client.NewWithOptions(client.WithSensorID(\"s-1\"))",
+		"+func extraCredentials(c *platform.SensorCredentials) string { return c.SensorID }",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("dry-run diff lacks %q:\n%s", want, out.String())
@@ -53,10 +54,10 @@ func TestMigrateFixture(t *testing.T) {
 		t.Fatal("-dry-run modified the file")
 	}
 
-	// Rewrite.
+	// Rewrite, the default build and the "extra" build in one pass.
 	out.Reset()
 	errb.Reset()
-	if code := run([]string{"-dir", dir, "-sdk-version", "none"}, &out, &errb); code != 0 {
+	if code := run([]string{"-dir", dir, "-sdk-version", "none", "-tags", "extra"}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
 	got := readFile(t, filepath.Join(dir, "main.go"))
@@ -64,20 +65,25 @@ func TestMigrateFixture(t *testing.T) {
 	if got != want {
 		t.Fatalf("migrated fixture differs from testdata/fixture.want.go:\n%s", got)
 	}
+	if got, want := readFile(t, filepath.Join(dir, "tagged.go")), readFile(t, "testdata/fixture.tagged.want.go"); got != want {
+		t.Fatalf("build-tagged file not migrated:\n%s", got)
+	}
 
 	// Build the result against the real, renamed SDK (this repository): the
 	// "upgrade the SDK" step, done offline with a replace directive.
 	useRealSDK(t, dir)
-	build := exec.Command("go", "build", "./...")
-	build.Dir = dir
-	if b, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("migrated fixture does not build against the new SDK: %v\n%s", err, b)
+	for _, args := range [][]string{{"build", "./..."}, {"build", "-tags", "extra", "./..."}} {
+		build := exec.Command("go", args...)
+		build.Dir = dir
+		if b, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("migrated fixture does not build against the new SDK (go %v): %v\n%s", args, err, b)
+		}
 	}
 
 	// Idempotent: on the upgraded module there is nothing left to rename.
 	out.Reset()
 	errb.Reset()
-	if code := run([]string{"-dir", dir, "-sdk-version", "none"}, &out, &errb); code != 0 {
+	if code := run([]string{"-dir", dir, "-sdk-version", "none", "-tags", "extra"}, &out, &errb); code != 0 {
 		t.Fatalf("second run exit %d: %s", code, errb.String())
 	}
 	if !strings.Contains(out.String(), "nothing to rename") {

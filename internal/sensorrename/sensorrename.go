@@ -166,11 +166,22 @@ type Result struct {
 
 // Load type-checks the packages matched by patterns in dir, tests included.
 func Load(dir string, patterns ...string) ([]*packages.Package, error) {
+	return LoadTags(dir, "", patterns...)
+}
+
+// LoadTags is Load for one build configuration: tags is a comma-separated
+// build tag list ("" for the default build). Files behind a build tag are
+// only seen by a load with that tag, so a module with tagged files is
+// loaded once per configuration and the results merged (Result.Merge).
+func LoadTags(dir, tags string, patterns ...string) ([]*packages.Package, error) {
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 			packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedModule,
 		Dir:   dir,
 		Tests: true,
+	}
+	if tags != "" {
+		cfg.BuildFlags = []string{"-tags=" + tags}
 	}
 	if len(patterns) == 0 {
 		patterns = []string{"./..."}
@@ -384,6 +395,25 @@ func Apply(file string, edits map[int]Edit) (before, after []byte, err error) {
 		out = formatted
 	}
 	return src, out, nil
+}
+
+// Merge adds other's edits and conflicts to r. Edits are keyed by file and
+// offset, and the name of an occurrence does not depend on the build
+// configuration, so an occurrence seen by several loads is edited once.
+func (r *Result) Merge(other *Result) {
+	for f, m := range other.Edits {
+		dst := r.Edits[f]
+		if dst == nil {
+			dst = map[int]Edit{}
+			r.Edits[f] = dst
+		}
+		for off, e := range m {
+			dst[off] = e
+		}
+	}
+	r.Conflicts = append(r.Conflicts, other.Conflicts...)
+	sort.Strings(r.Conflicts)
+	r.Conflicts = dedupe(r.Conflicts)
 }
 
 // Files returns the edited files in a stable order.

@@ -16,6 +16,11 @@
 // yours, it reports every collision and changes nothing. String literals,
 // struct tags and comments are left alone.
 //
+// Files behind a build tag are only type-checked in a build that sets it:
+// pass -tags once per extra build configuration (-tags platform, -tags
+// "linux,cgo"). All configurations are checked against the old SDK before
+// anything is written.
+//
 // After rewriting it runs `go get github.com/openctemio/sdk-go@<version>`,
 // where version is the release the command was run from (@latest above) or
 // -sdk-version. A second run on the upgraded module finds nothing to rename,
@@ -46,8 +51,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	dir := fs.String("dir", ".", "root of the module to migrate")
 	dry := fs.Bool("dry-run", false, "print a unified diff and change nothing")
 	sdkVersion := fs.String("sdk-version", "", "SDK version to upgrade to after rewriting (default: the version this command was built from; \"none\" skips the upgrade)")
+	var tagSets multiFlag
+	fs.Var(&tagSets, "tags", "an extra build configuration to rewrite, as a comma-separated build tag list (repeatable); the default build is always included")
 	fs.Usage = func() {
-		writef(stderr, "usage: sensor-migrate [-dry-run] [-dir path] [-sdk-version vX.Y.Z|none] [packages]\n\n")
+		writef(stderr, "usage: sensor-migrate [-dry-run] [-dir path] [-sdk-version vX.Y.Z|none] [-tags t1,t2 ...] [packages]\n\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -60,14 +67,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	pkgs, err := sensorrename.Load(root, fs.Args()...)
-	if err != nil {
-		writeln(stderr, "sensor-migrate:", err)
-		writeln(stderr, "sensor-migrate: run it while the module still builds against the old SDK; if it was already migrated, upgrade the SDK with: go get github.com/openctemio/sdk-go@<version>")
-		return 1
-	}
-
-	res := sensorrename.Collect(pkgs, sensorrename.Options{
+	opts := sensorrename.Options{
 		Target: func(p string) bool { return sensorrename.InModule(sensorrename.SDKModule, p) },
 		SkipFile: func(f string) bool {
 			rel, err := filepath.Rel(root, f)
@@ -76,7 +76,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 			// build cache.
 			return err != nil || strings.HasPrefix(rel, "..")
 		},
-	})
+	}
+	// Every build configuration is type-checked against the old SDK before
+	// anything is written: a file shared by two configurations must not be
+	// rewritten by the first while the second still needs the old names.
+	res := &sensorrename.Result{Edits: map[string]map[int]sensorrename.Edit{}}
+	for _, tags := range append([]string{""}, tagSets...) {
+		pkgs, err := sensorrename.LoadTags(root, tags, fs.Args()...)
+		if err != nil {
+			if tags != "" {
+				writef(stderr, "sensor-migrate: build tags %q: ", tags)
+			}
+			writeln(stderr, "sensor-migrate:", err)
+			writeln(stderr, "sensor-migrate: run it while the module still builds against the old SDK; if it was already migrated, upgrade the SDK with: go get github.com/openctemio/sdk-go@<version>")
+			return 1
+		}
+		res.Merge(sensorrename.Collect(pkgs, opts))
+	}
 	if len(res.Conflicts) > 0 {
 		for _, c := range res.Conflicts {
 			writeln(stderr, "conflict:", c)
@@ -158,3 +174,13 @@ func writef(w io.Writer, format string, a ...any) { _, _ = fmt.Fprintf(w, format
 func writeln(w io.Writer, a ...any) { _, _ = fmt.Fprintln(w, a...) }
 
 func write(w io.Writer, a ...any) { _, _ = fmt.Fprint(w, a...) }
+
+// multiFlag is a repeatable string flag.
+type multiFlag []string
+
+func (m *multiFlag) String() string { return strings.Join(*m, " ") }
+
+func (m *multiFlag) Set(v string) error {
+	*m = append(*m, v)
+	return nil
+}

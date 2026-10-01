@@ -26,7 +26,9 @@ objects (your own `agent` variable or `AgentPool` type are never touched),
 including the embedded field of a struct that embeds a renamed SDK type. It
 refuses, changing nothing, when a new name would collide with one of yours.
 A second run finds nothing to rename. Flags: `-dir`, `-dry-run`,
-`-sdk-version vX.Y.Z|none`.
+`-sdk-version vX.Y.Z|none`, and `-tags t1,t2` (repeatable) for files behind
+build tags — every build configuration is checked against the old SDK before
+anything is written, e.g. `sensor-migrate -tags platform`.
 
 ### What did not change: protocol v1
 
