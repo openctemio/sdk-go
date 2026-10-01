@@ -74,7 +74,7 @@ func TestSensorBuilder_WithResourceController(t *testing.T) {
 	executor := &mockJobExecutor{}
 
 	sensor, err := NewSensorBuilder().
-		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
+		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
 		WithExecutor(executor).
 		WithMaxJobs(4).
 		WithResourceController(&resource.ControllerConfig{
@@ -101,7 +101,7 @@ func TestSensorBuilder_WithResourceController(t *testing.T) {
 
 func TestSensorBuilder_WithAuditLogger(t *testing.T) {
 	// Create temp directory for audit log
-	tmpDir, err := os.MkdirTemp("", "agent-audit-test-*")
+	tmpDir, err := os.MkdirTemp("", "sensor-audit-test-*")
 	if err != nil {
 		t.Fatalf("create temp dir: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestSensorBuilder_WithAuditLogger(t *testing.T) {
 	executor := &mockJobExecutor{}
 
 	sensor, err := NewSensorBuilder().
-		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
+		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
 		WithExecutor(executor).
 		WithAuditLogger(&audit.LoggerConfig{
 			LogFile:       filepath.Join(tmpDir, "audit.log"),
@@ -133,7 +133,7 @@ func TestSensorBuilder_WithPipeline(t *testing.T) {
 	uploader := &mockPipelineUploader{}
 
 	sensor, err := NewSensorBuilder().
-		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
+		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
 		WithExecutor(executor).
 		WithPipeline(&pipeline.PipelineConfig{
 			QueueSize: 100,
@@ -152,7 +152,7 @@ func TestSensorBuilder_WithPipeline(t *testing.T) {
 
 func TestSensorBuilder_WithChunkManager(t *testing.T) {
 	// Create temp directory for chunk storage
-	tmpDir, err := os.MkdirTemp("", "agent-chunk-test-*")
+	tmpDir, err := os.MkdirTemp("", "sensor-chunk-test-*")
 	if err != nil {
 		t.Fatalf("create temp dir: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestSensorBuilder_WithChunkManager(t *testing.T) {
 	chunkConfig.DatabasePath = filepath.Join(tmpDir, "chunks.db")
 
 	sensor, err := NewSensorBuilder().
-		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
+		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
 		WithExecutor(executor).
 		WithChunkManager(chunkConfig, chunkUploader).
 		Build()
@@ -181,7 +181,7 @@ func TestSensorBuilder_WithChunkManager(t *testing.T) {
 
 func TestSensorBuilder_FullIntegration(t *testing.T) {
 	// Create temp directories
-	tmpDir, err := os.MkdirTemp("", "agent-full-test-*")
+	tmpDir, err := os.MkdirTemp("", "sensor-full-test-*")
 	if err != nil {
 		t.Fatalf("create temp dir: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestSensorBuilder_FullIntegration(t *testing.T) {
 	chunkConfig.DatabasePath = filepath.Join(tmpDir, "chunks.db")
 
 	sensor, err := NewSensorBuilder().
-		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
+		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
 		WithExecutor(executor).
 		WithMaxJobs(4).
 		WithVerbose(false).
@@ -236,7 +236,7 @@ func TestSensorBuilder_FullIntegration(t *testing.T) {
 
 func TestPlatformSensor_SubmitReport(t *testing.T) {
 	// Create temp directory
-	tmpDir, err := os.MkdirTemp("", "agent-submit-test-*")
+	tmpDir, err := os.MkdirTemp("", "sensor-submit-test-*")
 	if err != nil {
 		t.Fatalf("create temp dir: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestPlatformSensor_SubmitReport(t *testing.T) {
 	pipelineUploader := &mockPipelineUploader{}
 
 	sensor, err := NewSensorBuilder().
-		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
+		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
 		WithExecutor(executor).
 		WithPipeline(&pipeline.PipelineConfig{
 			QueueSize: 100,
@@ -290,7 +290,7 @@ func TestPlatformSensor_SubmitReport(t *testing.T) {
 
 func TestPlatformSensor_NeedsChunking(t *testing.T) {
 	// Create temp directory
-	tmpDir, err := os.MkdirTemp("", "agent-chunk-test-*")
+	tmpDir, err := os.MkdirTemp("", "sensor-chunk-test-*")
 	if err != nil {
 		t.Fatalf("create temp dir: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestPlatformSensor_NeedsChunking(t *testing.T) {
 	chunkConfig.MinFindingsForChunking = 10 // Low threshold for testing
 
 	sensor, err := NewSensorBuilder().
-		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
+		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
 		WithExecutor(executor).
 		WithChunkManager(chunkConfig, chunkUploader).
 		Build()
@@ -339,7 +339,7 @@ func TestPlatformSensor_ExtendedStatus(t *testing.T) {
 	executor := &mockJobExecutor{}
 
 	sensor, err := NewSensorBuilder().
-		WithCredentials("http://localhost:8080", "test-api-key", "test-agent-id").
+		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
 		WithExecutor(executor).
 		WithResourceController(&resource.ControllerConfig{
 			MaxConcurrentJobs: 4,
@@ -381,9 +381,9 @@ func TestSensorBuilder_ValidationErrors(t *testing.T) {
 			wantErr: "API key is required",
 		},
 		{
-			name:    "missing agent ID",
+			name:    "missing sensor ID",
 			builder: NewSensorBuilder().WithCredentials("http://localhost", "key", "").WithExecutor(executor),
-			wantErr: "agent ID is required",
+			wantErr: "sensor ID is required",
 		},
 		{
 			name:    "missing executor",

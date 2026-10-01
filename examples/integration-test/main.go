@@ -23,7 +23,7 @@ func main() {
 	// Parse command line flags
 	baseURL := flag.String("url", "http://localhost:8080", "OpenCTEM API base URL")
 	apiKey := flag.String("api-key", "", "API key for authentication")
-	sensorID := flag.String("agent-id", "", "Agent ID (optional)")
+	sensorID := flag.String("sensor-id", "", "Sensor ID (optional)")
 	verbose := flag.Bool("verbose", true, "Enable verbose output")
 	flag.Parse()
 

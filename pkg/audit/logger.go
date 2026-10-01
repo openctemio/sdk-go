@@ -22,9 +22,9 @@ type EventType string
 
 const (
 	// Lifecycle events
-	EventSensorStart EventType = "agent_start"
-	EventSensorStop  EventType = "agent_stop"
-	EventSensorError EventType = "agent_error"
+	EventSensorStart EventType = "sensor_start"
+	EventSensorStop  EventType = "sensor_stop"
+	EventSensorError EventType = "sensor_error"
 
 	// Job events
 	EventJobReceived  EventType = "job_received"
@@ -77,7 +77,7 @@ type Event struct {
 	Timestamp time.Time              `json:"timestamp"`
 	Type      EventType              `json:"type"`
 	Severity  Severity               `json:"severity"`
-	SensorID  string                 `json:"agent_id,omitempty"`
+	SensorID  string                 `json:"sensor_id,omitempty"`
 	TenantID  string                 `json:"tenant_id,omitempty"`
 	JobID     string                 `json:"job_id,omitempty"`
 	ReportID  string                 `json:"report_id,omitempty"`

@@ -234,7 +234,7 @@ func (a *BaseSensor) Start(ctx context.Context) error {
 	a.statusMu.Lock()
 	if a.running {
 		a.statusMu.Unlock()
-		return fmt.Errorf("agent already running")
+		return fmt.Errorf("sensor already running")
 	}
 	a.running = true
 	// The provided edit contained HTTP-related code that is syntactically incorrect
@@ -246,7 +246,7 @@ func (a *BaseSensor) Start(ctx context.Context) error {
 	a.statusMu.Unlock()
 
 	if a.verbose {
-		fmt.Printf("[%s] Starting agent (version %s)\n", a.name, a.version)
+		fmt.Printf("[%s] Starting sensor (version %s)\n", a.name, a.version)
 		fmt.Printf("[%s] Scanners: %v\n", a.name, a.status.Scanners)
 		fmt.Printf("[%s] Collectors: %v\n", a.name, a.status.Collectors)
 		fmt.Printf("[%s] Targets: %v\n", a.name, a.targets)
@@ -284,7 +284,7 @@ func (a *BaseSensor) Stop(ctx context.Context) error {
 	a.statusMu.Unlock()
 
 	if a.verbose {
-		fmt.Printf("[%s] Stopping agent...\n", a.name)
+		fmt.Printf("[%s] Stopping sensor...\n", a.name)
 	}
 
 	// Wait for goroutines to finish
@@ -317,7 +317,7 @@ func (a *BaseSensor) Stop(ctx context.Context) error {
 	}
 
 	if a.verbose {
-		fmt.Printf("[%s] Agent stopped\n", a.name)
+		fmt.Printf("[%s] Sensor stopped\n", a.name)
 	}
 
 	return nil

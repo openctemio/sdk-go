@@ -97,7 +97,7 @@ func TestScanTargetPolicy_NetworkTargets(t *testing.T) {
 		{"public cidr", "203.0.113.0/24", false, false},
 		{"image ref name tag", "nginx:latest", false, false},
 		{"image ref bare", "alpine", false, false},
-		{"image ref registry", "ghcr.io/openctemio/agent:v1", false, false},
+		{"image ref registry", "ghcr.io/openctemio/sensor:v1", false, false},
 		{"private with opt-in", "10.0.0.5", true, false},
 		{"private url with opt-in", "https://192.168.1.10/", true, false},
 		{"private dns with opt-in", "intranet.corp.test", true, false},

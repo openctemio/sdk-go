@@ -237,7 +237,7 @@ func runOnce(ctx context.Context, scanner *MyCustomScanner, pusher core.Pusher, 
 func runDaemon(ctx context.Context, scanner *MyCustomScanner, pusher core.Pusher, target string, interval time.Duration, verbose bool) {
 	// Create sensor with the custom scanner
 	sensor := core.NewBaseSensor(&core.BaseSensorConfig{
-		Name:              "custom-scanner-agent",
+		Name:              "custom-scanner-sensor",
 		Version:           "1.0.0",
 		ScanInterval:      interval,
 		HeartbeatInterval: 1 * time.Minute,
@@ -253,11 +253,11 @@ func runDaemon(ctx context.Context, scanner *MyCustomScanner, pusher core.Pusher
 
 	// Start sensor
 	if err := sensor.Start(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start agent: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to start sensor: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("Agent started. Press Ctrl+C to stop.")
+	fmt.Println("Sensor started. Press Ctrl+C to stop.")
 
 	// Wait for context cancellation
 	<-ctx.Done()
@@ -270,5 +270,5 @@ func runDaemon(ctx context.Context, scanner *MyCustomScanner, pusher core.Pusher
 		fmt.Fprintf(os.Stderr, "Shutdown error: %v\n", err)
 	}
 
-	fmt.Println("Agent stopped.")
+	fmt.Println("Sensor stopped.")
 }

@@ -42,7 +42,7 @@ func TestJobClient_EscapesJobID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	jc := NewHTTPJobClient(srv.URL, "k", "agent-1", time.Second)
+	jc := NewHTTPJobClient(srv.URL, "k", "sensor-1", time.Second)
 	if err := jc.AcknowledgeJob(context.Background(), "x/../../lease"); err != nil {
 		t.Fatal(err)
 	}

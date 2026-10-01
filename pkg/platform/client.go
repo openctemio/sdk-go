@@ -339,7 +339,7 @@ func (b *SensorBuilder) Build() (*PlatformSensor, error) {
 		return nil, fmt.Errorf("API key is required")
 	}
 	if b.config.SensorID == "" {
-		return nil, fmt.Errorf("agent ID is required")
+		return nil, fmt.Errorf("sensor ID is required")
 	}
 	if b.executor == nil {
 		return nil, fmt.Errorf("executor is required")
@@ -492,7 +492,7 @@ type PlatformSensor struct {
 // Start starts the platform sensor (lease manager + job poller).
 func (a *PlatformSensor) Start(ctx context.Context) error {
 	if a.config.Verbose {
-		fmt.Printf("[agent] Starting platform agent %s\n", a.config.SensorID)
+		fmt.Printf("[sensor] Starting platform sensor %s\n", a.config.SensorID)
 	}
 
 	// Start resource controller if configured
@@ -501,18 +501,18 @@ func (a *PlatformSensor) Start(ctx context.Context) error {
 			return fmt.Errorf("start resource controller: %w", err)
 		}
 		if a.config.Verbose {
-			fmt.Printf("[agent] Resource controller started\n")
+			fmt.Printf("[sensor] Resource controller started\n")
 		}
 	}
 
 	// Start audit logger if configured
 	if a.auditLogger != nil {
 		a.auditLogger.Start()
-		a.auditLogger.Info(audit.EventSensorStart, "Platform agent starting", map[string]interface{}{
-			"agent_id": a.config.SensorID,
+		a.auditLogger.Info(audit.EventSensorStart, "Platform sensor starting", map[string]interface{}{
+			"sensor_id": a.config.SensorID,
 		})
 		if a.config.Verbose {
-			fmt.Printf("[agent] Audit logger started\n")
+			fmt.Printf("[sensor] Audit logger started\n")
 		}
 	}
 
@@ -523,7 +523,7 @@ func (a *PlatformSensor) Start(ctx context.Context) error {
 			return fmt.Errorf("start upload pipeline: %w", err)
 		}
 		if a.config.Verbose {
-			fmt.Printf("[agent] Upload pipeline started\n")
+			fmt.Printf("[sensor] Upload pipeline started\n")
 		}
 	}
 
@@ -534,7 +534,7 @@ func (a *PlatformSensor) Start(ctx context.Context) error {
 			return fmt.Errorf("start chunk manager: %w", err)
 		}
 		if a.config.Verbose {
-			fmt.Printf("[agent] Chunk manager started\n")
+			fmt.Printf("[sensor] Chunk manager started\n")
 		}
 	}
 
@@ -553,7 +553,7 @@ func (a *PlatformSensor) Start(ctx context.Context) error {
 	}
 
 	if a.config.Verbose {
-		fmt.Printf("[agent] Platform agent started\n")
+		fmt.Printf("[sensor] Platform sensor started\n")
 	}
 
 	return nil
@@ -585,27 +585,27 @@ func (a *PlatformSensor) stopHelpers() {
 // Stop stops the platform sensor gracefully.
 func (a *PlatformSensor) Stop(ctx context.Context, timeout time.Duration) error {
 	if a.config.Verbose {
-		fmt.Printf("[agent] Stopping platform agent...\n")
+		fmt.Printf("[sensor] Stopping platform sensor...\n")
 	}
 
 	// Log sensor stop event
 	if a.auditLogger != nil {
-		a.auditLogger.Info(audit.EventSensorStop, "Platform agent stopping", map[string]interface{}{
-			"agent_id": a.config.SensorID,
+		a.auditLogger.Info(audit.EventSensorStop, "Platform sensor stopping", map[string]interface{}{
+			"sensor_id": a.config.SensorID,
 		})
 	}
 
 	// Stop poller first (stop accepting new jobs)
 	if err := a.poller.Stop(timeout); err != nil {
 		if a.config.Verbose {
-			fmt.Printf("[agent] Warning: poller stop error: %v\n", err)
+			fmt.Printf("[sensor] Warning: poller stop error: %v\n", err)
 		}
 	}
 
 	// Then release lease
 	if err := a.leaseManager.Stop(ctx); err != nil {
 		if a.config.Verbose {
-			fmt.Printf("[agent] Warning: lease release error: %v\n", err)
+			fmt.Printf("[sensor] Warning: lease release error: %v\n", err)
 		}
 	}
 
@@ -613,7 +613,7 @@ func (a *PlatformSensor) Stop(ctx context.Context, timeout time.Duration) error 
 	a.stopHelpers()
 
 	if a.config.Verbose {
-		fmt.Printf("[agent] Platform agent stopped\n")
+		fmt.Printf("[sensor] Platform sensor stopped\n")
 	}
 
 	return nil

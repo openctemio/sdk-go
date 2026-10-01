@@ -21,8 +21,8 @@ func TestGenerateHolderIdentity(t *testing.T) {
 		}
 
 		// First part should be default prefix
-		if parts[0] != "agent" {
-			t.Errorf("generateHolderIdentity() first part should be 'agent', got %q", parts[0])
+		if parts[0] != "sensor" {
+			t.Errorf("generateHolderIdentity() first part should be 'sensor', got %q", parts[0])
 		}
 
 		// Last part should be hex nonce (32 chars for 16 bytes)

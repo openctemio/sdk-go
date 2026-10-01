@@ -149,7 +149,7 @@ func generateHolderIdentity(config *LeaseConfig) string {
 	// Build base identity
 	prefix := config.IdentityPrefix
 	if prefix == "" {
-		prefix = "agent"
+		prefix = "sensor"
 	}
 
 	baseIdentity := fmt.Sprintf("%s-%s-%d", prefix, hostname, os.Getpid())

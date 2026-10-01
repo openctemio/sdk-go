@@ -45,7 +45,7 @@ func TestNew(t *testing.T) {
 	cfg := &Config{
 		BaseURL:    "https://localhost:8080",
 		APIKey:     "test-key",
-		SensorID:   "agent-123",
+		SensorID:   "sensor-123",
 		Timeout:    10 * time.Second,
 		MaxRetries: 5,
 		RetryDelay: 1 * time.Second,
@@ -60,7 +60,7 @@ func TestNew(t *testing.T) {
 		t.Errorf("apiKey = %q, want %q", c.apiKey, cfg.APIKey)
 	}
 	if c.sensorID != cfg.SensorID {
-		t.Errorf("agentID = %q, want %q", c.sensorID, cfg.SensorID)
+		t.Errorf("sensorID = %q, want %q", c.sensorID, cfg.SensorID)
 	}
 	if c.maxRetries != cfg.MaxRetries {
 		t.Errorf("maxRetries = %d, want %d", c.maxRetries, cfg.MaxRetries)
@@ -88,7 +88,7 @@ func TestNewWithOptions(t *testing.T) {
 	c := NewWithOptions(
 		WithBaseURL("https://custom.api.com"),
 		WithAPIKey("custom-key"),
-		WithSensorID("agent-456"),
+		WithSensorID("sensor-456"),
 		WithTimeout(15*time.Second),
 		WithRetry(5, 3*time.Second),
 		WithVerbose(true),
@@ -100,8 +100,8 @@ func TestNewWithOptions(t *testing.T) {
 	if c.apiKey != "custom-key" {
 		t.Errorf("apiKey = %q, want 'custom-key'", c.apiKey)
 	}
-	if c.sensorID != "agent-456" {
-		t.Errorf("agentID = %q, want 'agent-456'", c.sensorID)
+	if c.sensorID != "sensor-456" {
+		t.Errorf("sensorID = %q, want 'sensor-456'", c.sensorID)
 	}
 	if c.maxRetries != 5 {
 		t.Errorf("maxRetries = %d, want 5", c.maxRetries)
@@ -262,7 +262,7 @@ func TestClient_SendHeartbeat(t *testing.T) {
 
 		resp := map[string]interface{}{
 			"status":    "ok",
-			"agent_id":  "agent-123",
+			"agent_id":  "sensor-123",
 			"tenant_id": "tenant-456",
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -273,11 +273,11 @@ func TestClient_SendHeartbeat(t *testing.T) {
 	c := New(&Config{
 		BaseURL:  server.URL,
 		APIKey:   "test-key",
-		SensorID: "agent-123",
+		SensorID: "sensor-123",
 	})
 
 	status := &core.SensorStatus{
-		Name:     "test-agent",
+		Name:     "test-sensor",
 		Status:   core.SensorStateRunning,
 		Scanners: []string{"semgrep", "trivy"},
 	}
@@ -378,7 +378,7 @@ func TestClient_Headers(t *testing.T) {
 	c := New(&Config{
 		BaseURL:  server.URL,
 		APIKey:   "my-api-key",
-		SensorID: "agent-xyz",
+		SensorID: "sensor-xyz",
 	})
 
 	c.TestConnection(context.Background())
@@ -387,8 +387,8 @@ func TestClient_Headers(t *testing.T) {
 	if auth := capturedHeaders.Get("Authorization"); auth != "Bearer my-api-key" {
 		t.Errorf("Authorization = %q, want 'Bearer my-api-key'", auth)
 	}
-	if sensorID := capturedHeaders.Get("X-Agent-ID"); sensorID != "agent-xyz" {
-		t.Errorf("X-Agent-ID = %q, want 'agent-xyz'", sensorID)
+	if sensorID := capturedHeaders.Get("X-Agent-ID"); sensorID != "sensor-xyz" {
+		t.Errorf("X-Agent-ID = %q, want 'sensor-xyz'", sensorID)
 	}
 	if contentType := capturedHeaders.Get("Content-Type"); contentType != "application/json" {
 		t.Errorf("Content-Type = %q, want 'application/json'", contentType)

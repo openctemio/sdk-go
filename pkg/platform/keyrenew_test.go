@@ -151,7 +151,7 @@ func TestPlatformClient_RenewKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "rda_old", SensorID: "agent-1"})
+	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "rda_old", SensorID: "sensor-1"})
 	out, err := c.RenewKey(context.Background())
 	if err != nil {
 		t.Fatalf("RenewKey: %v", err)
@@ -165,8 +165,8 @@ func TestPlatformClient_RenewKey(t *testing.T) {
 	if gotAuth != "Bearer rda_old" {
 		t.Errorf("expected the current key in Authorization, got %q", gotAuth)
 	}
-	if gotSensor != "agent-1" {
-		t.Errorf("expected X-Agent-ID agent-1, got %q", gotSensor)
+	if gotSensor != "sensor-1" {
+		t.Errorf("expected X-Agent-ID sensor-1, got %q", gotSensor)
 	}
 }
 

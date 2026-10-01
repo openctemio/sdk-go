@@ -46,7 +46,7 @@ func TestNewLogger(t *testing.T) {
 	logFile := filepath.Join(tmpDir, "test.log")
 
 	logger, err := NewLogger(&LoggerConfig{
-		SensorID: "test-agent",
+		SensorID: "test-sensor",
 		TenantID: "test-tenant",
 		LogFile:  logFile,
 	})
@@ -57,8 +57,8 @@ func TestNewLogger(t *testing.T) {
 
 	defer logger.Stop()
 
-	if logger.config.SensorID != "test-agent" {
-		t.Errorf("AgentID = %s, want test-agent", logger.config.SensorID)
+	if logger.config.SensorID != "test-sensor" {
+		t.Errorf("SensorID = %s, want test-agent", logger.config.SensorID)
 	}
 
 	// Log file should be created
@@ -123,7 +123,7 @@ func TestLogger_Log(t *testing.T) {
 	logFile := filepath.Join(tmpDir, "test.log")
 
 	logger, _ := NewLogger(&LoggerConfig{
-		SensorID:      "test-agent",
+		SensorID:      "test-sensor",
 		TenantID:      "test-tenant",
 		LogFile:       logFile,
 		BufferSize:    1, // Small buffer to trigger immediate flush
@@ -164,8 +164,8 @@ func TestLogger_Log(t *testing.T) {
 		t.Errorf("Type = %s, want %s", event.Type, EventJobStarted)
 	}
 
-	if event.SensorID != "test-agent" {
-		t.Errorf("AgentID = %s, want test-agent", event.SensorID)
+	if event.SensorID != "test-sensor" {
+		t.Errorf("SensorID = %s, want test-agent", event.SensorID)
 	}
 
 	if event.TenantID != "test-tenant" {

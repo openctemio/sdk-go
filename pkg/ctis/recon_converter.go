@@ -13,7 +13,7 @@ import (
 // ReconConverterOptions configures the conversion from ReconResult to CTIS Report.
 type ReconConverterOptions struct {
 	// Source tracking
-	DiscoverySource string // "agent", "integration", "manual"
+	DiscoverySource string // legacyv1.DiscoverySourceSensor, "integration", "manual"
 	DiscoveryTool   string // Scanner name
 
 	// Default values

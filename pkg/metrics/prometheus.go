@@ -37,7 +37,7 @@ type PrometheusConfig struct {
 	// Namespace prefixes all metric names (e.g., "openctem")
 	Namespace string
 
-	// Subsystem prefixes metric names after namespace (e.g., "agent")
+	// Subsystem prefixes metric names after namespace (e.g., "sensor")
 	Subsystem string
 
 	// Registry is the Prometheus registry to use (nil = new registry)

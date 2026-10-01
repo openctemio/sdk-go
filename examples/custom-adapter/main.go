@@ -82,7 +82,7 @@ func main() {
 		apiClient := client.New(&client.Config{
 			BaseURL:  os.Getenv("API_URL"),
 			APIKey:   os.Getenv("API_KEY"),
-			SensorID: os.Getenv("AGENT_ID"),
+			SensorID: os.Getenv("SENSOR_ID"),
 		})
 
 		result, err := apiClient.PushFindings(ctx, report)
