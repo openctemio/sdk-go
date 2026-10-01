@@ -42,11 +42,17 @@ func (s *Splitter) NeedsChunking(report *ctis.Report) bool {
 // Split divides a report into chunks.
 //
 // Algorithm:
-// 1. If report is small enough, return single chunk
-// 2. Group findings by their asset_ref
-// 3. Create chunks that respect both findings and assets limits
-// 4. First chunk always includes tool and metadata
-// 5. Each chunk is self-contained with its assets and findings
+//  1. If report is small enough, return single chunk
+//  2. Group findings by their asset_ref
+//  3. Create chunks that respect both findings and assets limits
+//  4. Every chunk is self-describing: it carries the report's tool and
+//     metadata, and every asset its findings reference
+//
+// The platform ingests each chunk as a report of its own. A chunk without the
+// tool was attributed to tool "unknown", and a finding whose asset was sent in
+// an earlier chunk landed on a placeholder "scan:unknown:<report>" asset. So
+// the tool and metadata are repeated in every chunk, and an asset whose
+// findings span several chunks is repeated in each of them.
 func (s *Splitter) Split(report *ctis.Report) ([]*ChunkData, error) {
 	reportID := s.getReportID(report)
 
@@ -68,8 +74,12 @@ func (s *Splitter) Split(report *ctis.Report) ([]*ChunkData, error) {
 
 	// Build asset reference map: assetRef -> asset
 	assetMap := make(map[string]*ctis.Asset)
+	assetOrder := make([]string, 0, len(report.Assets))
 	for i := range report.Assets {
 		a := &report.Assets[i]
+		if _, dup := assetMap[a.ID]; !dup {
+			assetOrder = append(assetOrder, a.ID)
+		}
 		assetMap[a.ID] = a
 	}
 
@@ -96,7 +106,13 @@ func (s *Splitter) Split(report *ctis.Report) ([]*ChunkData, error) {
 	chunkIndex := 0
 	currentAssets := make([]ctis.Asset, 0, s.cfg.MaxAssetsPerChunk)
 	currentFindings := make([]ctis.Finding, 0, s.cfg.MaxFindingsPerChunk)
-	addedAssets := make(map[string]bool) // Track which assets we've added
+	inChunk := make(map[string]bool)     // assets already in the current chunk
+	addedAssets := make(map[string]bool) // assets sent in any chunk
+	// partial marks a chunk holding only part of one asset's findings. The
+	// platform auto-resolves an asset's findings that a full-coverage report
+	// does not contain, so such a chunk must not claim full coverage: it
+	// would resolve the findings still to come in the next chunk.
+	partial := false
 
 	flushChunk := func(isFinal bool) {
 		if len(currentAssets) == 0 && len(currentFindings) == 0 {
@@ -106,15 +122,11 @@ func (s *Splitter) Split(report *ctis.Report) ([]*ChunkData, error) {
 		chunk := &ChunkData{
 			ReportID:   reportID,
 			ChunkIndex: chunkIndex,
+			Tool:       report.Tool,
+			Metadata:   chunkMetadata(&report.Metadata, partial),
 			Assets:     currentAssets,
 			Findings:   currentFindings,
 			IsFinal:    isFinal,
-		}
-
-		// First chunk includes tool and metadata
-		if chunkIndex == 0 {
-			chunk.Tool = report.Tool
-			chunk.Metadata = &report.Metadata
 		}
 
 		chunks = append(chunks, chunk)
@@ -123,59 +135,49 @@ func (s *Splitter) Split(report *ctis.Report) ([]*ChunkData, error) {
 		// Reset for next chunk
 		currentAssets = make([]ctis.Asset, 0, s.cfg.MaxAssetsPerChunk)
 		currentFindings = make([]ctis.Finding, 0, s.cfg.MaxFindingsPerChunk)
+		inChunk = make(map[string]bool)
+		partial = false
+	}
+
+	// addAsset puts the referenced asset into the current chunk once.
+	addAsset := func(ref string) {
+		asset, ok := assetMap[ref]
+		if !ok || inChunk[ref] {
+			return
+		}
+		currentAssets = append(currentAssets, *asset)
+		inChunk[ref] = true
+		addedAssets[ref] = true
 	}
 
 	// Process findings grouped by asset
 	for _, assetRef := range assetRefs {
 		findings := findingsByAsset[assetRef]
+		_, hasAsset := assetMap[assetRef]
 
-		// Get the asset if exists and not already added
-		asset, hasAsset := assetMap[assetRef]
-		needsAsset := hasAsset && !addedAssets[assetRef]
-
-		// Check if we need to start a new chunk
-		needsNewChunk := false
-		if needsAsset && len(currentAssets) >= s.cfg.MaxAssetsPerChunk {
-			needsNewChunk = true
-		}
-		if len(currentFindings)+len(findings) > s.cfg.MaxFindingsPerChunk {
-			// If findings for this asset exceed chunk limit, we need special handling
-			if len(findings) > s.cfg.MaxFindingsPerChunk {
-				// Split findings across multiple chunks
-				for i := 0; i < len(findings); i += s.cfg.MaxFindingsPerChunk {
-					if len(currentFindings) > 0 || len(currentAssets) > 0 {
-						flushChunk(false)
-					}
-
-					end := i + s.cfg.MaxFindingsPerChunk
-					if end > len(findings) {
-						end = len(findings)
-					}
-
-					// Add asset to first chunk of this batch if needed
-					if needsAsset && i == 0 {
-						currentAssets = append(currentAssets, *asset)
-						addedAssets[assetRef] = true
-					}
-
-					currentFindings = append(currentFindings, findings[i:end]...)
+		// One asset with more findings than a chunk holds: give it chunks of
+		// its own, the asset repeated in each.
+		if len(findings) > s.cfg.MaxFindingsPerChunk {
+			flushChunk(false)
+			for i := 0; i < len(findings); i += s.cfg.MaxFindingsPerChunk {
+				end := min(i+s.cfg.MaxFindingsPerChunk, len(findings))
+				addAsset(assetRef)
+				currentFindings = append(currentFindings, findings[i:end]...)
+				if end < len(findings) {
+					partial = true
+					flushChunk(false)
 				}
-				continue
 			}
-			needsNewChunk = true
+			continue
 		}
 
-		if needsNewChunk && (len(currentAssets) > 0 || len(currentFindings) > 0) {
+		needsNewChunk := len(currentFindings)+len(findings) > s.cfg.MaxFindingsPerChunk ||
+			(hasAsset && !inChunk[assetRef] && len(currentAssets) >= s.cfg.MaxAssetsPerChunk)
+		if needsNewChunk {
 			flushChunk(false)
 		}
 
-		// Add asset if not already added
-		if needsAsset {
-			currentAssets = append(currentAssets, *asset)
-			addedAssets[assetRef] = true
-		}
-
-		// Add findings
+		addAsset(assetRef)
 		currentFindings = append(currentFindings, findings...)
 	}
 
@@ -188,13 +190,12 @@ func (s *Splitter) Split(report *ctis.Report) ([]*ChunkData, error) {
 	}
 
 	// Add any assets that weren't referenced by findings
-	for id, asset := range assetMap {
+	for _, id := range assetOrder {
 		if !addedAssets[id] {
 			if len(currentAssets) >= s.cfg.MaxAssetsPerChunk {
 				flushChunk(false)
 			}
-			currentAssets = append(currentAssets, *asset)
-			addedAssets[id] = true
+			addAsset(id)
 		}
 	}
 
@@ -213,6 +214,21 @@ func (s *Splitter) Split(report *ctis.Report) ([]*ChunkData, error) {
 	}
 
 	return chunks, nil
+}
+
+// coverageFull is the ctis coverage_type value that enables auto-resolve.
+const coverageFull = "full"
+
+// chunkMetadata returns the metadata a chunk carries: the report's own, or —
+// for a chunk holding only part of one asset's findings — a copy that does
+// not claim full coverage (see Split).
+func chunkMetadata(md *ctis.ReportMetadata, partial bool) *ctis.ReportMetadata {
+	if !partial || md.CoverageType != coverageFull {
+		return md
+	}
+	cp := *md
+	cp.CoverageType = "partial"
+	return &cp
 }
 
 // getReportID extracts or generates a report ID.
