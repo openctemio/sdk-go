@@ -205,9 +205,44 @@ func buildAsset(host *nessusHost, defaultCrit ctis.Criticality) (ctis.Asset, str
 		Value:       value,
 		Name:        value,
 		Criticality: defaultCrit,
+		Identifiers: hostIdentifiers(p),
 		Properties:  props,
 	}
 	return asset, id
+}
+
+// hostIdentifiers maps the HostProperties tags that identify the machine
+// itself, so the platform can follow a host across renames and new DHCP
+// leases. Nessus lists every interface in mac-address, one per line.
+// Returns nil when the scan recorded none of them.
+func hostIdentifiers(p map[string]string) *ctis.AssetIdentifiers {
+	ids := &ctis.AssetIdentifiers{
+		BIOSUUID:        strings.TrimSpace(p["bios-uuid"]),
+		CloudResourceID: strings.TrimSpace(p["aws-instance-instanceId"]),
+		MACAddresses:    splitMACs(p["mac-address"]),
+	}
+	if ids.BIOSUUID == "" && ids.CloudResourceID == "" && len(ids.MACAddresses) == 0 {
+		return nil
+	}
+	return ids
+}
+
+// splitMACs splits a Nessus mac-address tag (newline, space or comma
+// separated) into its addresses, lower-cased and de-duplicated.
+func splitMACs(raw string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, f := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == ' ' || r == '\t' || r == ','
+	}) {
+		mac := strings.ToLower(f)
+		if _, err := net.ParseMAC(mac); err != nil || seen[mac] {
+			continue
+		}
+		seen[mac] = true
+		out = append(out, mac)
+	}
+	return out
 }
 
 func buildFinding(item *nessusItem, assetID, assetValue string) ctis.Finding {

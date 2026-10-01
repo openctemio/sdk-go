@@ -12,8 +12,16 @@ type VulsReport struct {
 	ScannedVia    string          `json:"scannedVia"`
 	ScannedIPv4   []string        `json:"scannedIpv4Addrs"`
 	ScannedIPv6   []string        `json:"scannedIpv6Addrs"`
+	Platform      VulsPlatform    `json:"platform"`
 	Packages      VulsPackages    `json:"packages"`
 	ScannedCves   []VulsCveResult `json:"scannedCves"`
+}
+
+// VulsPlatform is the cloud platform Vuls detected from instance metadata.
+// InstanceID is empty outside a cloud (name "other").
+type VulsPlatform struct {
+	Name       string `json:"name"`
+	InstanceID string `json:"instanceID"`
 }
 
 // VulsKernel describes the running kernel.

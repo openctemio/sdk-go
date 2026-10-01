@@ -381,3 +381,30 @@ func containsSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+func TestAdapter_Convert_CloudInstanceIdentifier(t *testing.T) {
+	a := NewAdapter()
+	report := buildTestReport()
+	report.Platform = VulsPlatform{Name: "aws", InstanceID: "i-0abc1234def567890"}
+	data, _ := json.Marshal(report)
+
+	result, err := a.Convert(context.Background(), data, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ids := result.Assets[0].Identifiers
+	if ids == nil || ids.CloudResourceID != "i-0abc1234def567890" {
+		t.Fatalf("expected cloud_resource_id from platform.instanceID, got %+v", ids)
+	}
+
+	// Outside a cloud Vuls reports platform "other" with no instance ID.
+	report.Platform = VulsPlatform{Name: "other"}
+	data, _ = json.Marshal(report)
+	result, err = a.Convert(context.Background(), data, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Assets[0].Identifiers != nil {
+		t.Fatalf("no instance ID must mean no identifiers block, got %+v", result.Assets[0].Identifiers)
+	}
+}

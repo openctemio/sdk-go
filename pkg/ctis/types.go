@@ -179,8 +179,47 @@ type Asset struct {
 	// CTEM: Is the asset directly accessible from the internet
 	IsInternetAccessible bool `json:"is_internet_accessible,omitempty"`
 
+	// Stable identifiers of the asset. A platform matches an incoming asset
+	// to an existing one on these before it falls back to the name or an IP
+	// address, so a renamed host or repository keeps its history.
+	Identifiers *AssetIdentifiers `json:"identifiers,omitempty"`
+
 	// Custom properties
 	Properties Properties `json:"properties,omitempty"`
+}
+
+// AssetIdentifiers holds identifiers that stay the same when an asset is
+// renamed or readdressed. Send only values read from the asset itself; leave
+// a field empty rather than guessing. In order of trust:
+//
+//  1. MachineID, the operating system's own host ID
+//  2. CloudResourceID
+//  3. BIOSUUID, then SerialNumber
+//  4. MACAddresses
+//
+// SCMRepoID identifies a repository.
+type AssetIdentifiers struct {
+	// Host ID read by a sensor on the host: /etc/machine-id on Linux,
+	// MachineGuid on Windows, IOPlatformUUID on macOS.
+	MachineID string `json:"machine_id,omitempty"`
+
+	// Cloud instance ID (i-0abc...), VM ID or resource ARN.
+	CloudResourceID string `json:"cloud_resource_id,omitempty"`
+
+	// SMBIOS system UUID.
+	BIOSUUID string `json:"bios_uuid,omitempty"`
+
+	// Hardware serial number.
+	SerialNumber string `json:"serial_number,omitempty"`
+
+	// MAC addresses of the host's network interfaces. Receivers ignore
+	// locally administered, multicast and known shared addresses.
+	MACAddresses []string `json:"mac_addresses,omitempty"`
+
+	// Repository ID assigned by the source-code host (the numeric GitHub
+	// repository ID, the GitLab project ID). It survives renames and
+	// transfers.
+	SCMRepoID string `json:"scm_repo_id,omitempty"`
 }
 
 // AssetCompliance contains CTEM compliance context for an asset.
