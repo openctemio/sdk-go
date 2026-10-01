@@ -6,15 +6,10 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
-
-// warnedBaseURLs dedupes the plain-http warning so it is printed once per
-// base URL rather than on every poll/lease tick.
-var warnedBaseURLs sync.Map
 
 // apiURL validates baseURL and returns baseURL + path, where path is
 // built from pathFormat with every id path-escaped. IDs (job IDs, command
@@ -29,10 +24,9 @@ func apiURL(baseURL, pathFormat string, ids ...string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if warning != "" {
-		if _, loaded := warnedBaseURLs.LoadOrStore(baseURL, true); !loaded {
-			fmt.Fprintf(os.Stderr, "[platform] WARNING: %s\n", warning)
-		}
+	// Printed once per process per base URL, shared with pkg/client.
+	if warning != "" && httpsec.FirstWarning(baseURL) {
+		fmt.Fprintf(os.Stderr, "[platform] WARNING: %s\n", warning)
 	}
 	args := make([]any, len(ids))
 	for i, id := range ids {
