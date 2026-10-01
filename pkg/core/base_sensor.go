@@ -138,6 +138,8 @@ func NewBaseSensor(cfg *BaseSensorConfig, pusher Pusher) *BaseSensor {
 			Scanners:   []string{},
 			Collectors: []string{},
 			Region:     region,
+			Version:    cfg.Version,
+			Hostname:   hostname,
 		},
 		stopCh:   make(chan struct{}),
 		verbose:  cfg.Verbose,
