@@ -43,6 +43,10 @@ type BaseSensor struct {
 
 	// Verbose output
 	verbose bool
+
+	// doorbell, when set, makes the heartbeat announce the doorbell and act
+	// on the platform's hints (see SetDoorbell).
+	doorbell *Doorbell
 }
 
 // BaseSensorConfig configures a BaseSensor.
@@ -323,21 +327,67 @@ func (a *BaseSensor) Stop(ctx context.Context) error {
 	return nil
 }
 
-// heartbeatLoop sends periodic heartbeats.
+// SetDoorbell makes the sensor act on the heartbeat doorbell: heartbeats
+// announce the feature, their hints go to d, the advised interval replaces
+// the configured one, and scheduled scans and collections are skipped while
+// the platform has paused or drained the sensor. Share d with the
+// CommandPoller (CommandPoller.SetDoorbell) so it polls when the doorbell
+// rings. The pusher must implement DoorbellPusher (*client.Client does);
+// otherwise heartbeats stay plain. Call before Start.
+func (a *BaseSensor) SetDoorbell(d *Doorbell) {
+	a.doorbell = d
+}
+
+// sendHeartbeat sends one heartbeat and returns the delay before the next.
+func (a *BaseSensor) sendHeartbeat(ctx context.Context) time.Duration {
+	next := a.heartbeatInterval
+	if a.pusher == nil {
+		return next
+	}
+	status := a.Status()
+	dp, doorbell := a.pusher.(DoorbellPusher)
+	if a.doorbell == nil || !doorbell {
+		if err := a.pusher.SendHeartbeat(ctx, status); err != nil {
+			if a.verbose {
+				fmt.Printf("[%s] Heartbeat error: %v\n", a.name, err)
+			}
+		} else if a.verbose {
+			fmt.Printf("[%s] Heartbeat sent\n", a.name)
+		}
+		return next
+	}
+
+	if state := a.doorbell.State(); state != "running" {
+		status.Message = state
+	}
+	hints, err := dp.SendHeartbeatWithHints(ctx, status)
+	if err != nil {
+		a.doorbell.HeartbeatFailed()
+		if a.verbose {
+			fmt.Printf("[%s] Heartbeat error: %v\n", a.name, err)
+		}
+		return next
+	}
+	a.doorbell.Handle(hints)
+	if hints.NextHeartbeat > 0 {
+		next = hints.NextHeartbeat
+	}
+	return next
+}
+
+// paused reports whether the platform paused or drained this sensor.
+func (a *BaseSensor) paused() bool {
+	return a.doorbell != nil && a.doorbell.Paused()
+}
+
+// heartbeatLoop sends heartbeats: every heartbeatInterval, or as often as the
+// platform advises when a doorbell is set.
 func (a *BaseSensor) heartbeatLoop(ctx context.Context) {
 	defer a.wg.Done()
 
 	// Send initial heartbeat
-	if a.pusher != nil {
-		if err := a.pusher.SendHeartbeat(ctx, a.Status()); err != nil {
-			if a.verbose {
-				fmt.Printf("[%s] Heartbeat error: %v\n", a.name, err)
-			}
-		}
-	}
-
-	ticker := time.NewTicker(a.heartbeatInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(a.sendHeartbeat(ctx))
+	defer timer.Stop()
 
 	for {
 		select {
@@ -345,16 +395,8 @@ func (a *BaseSensor) heartbeatLoop(ctx context.Context) {
 			return
 		case <-a.stopCh:
 			return
-		case <-ticker.C:
-			if a.pusher != nil {
-				if err := a.pusher.SendHeartbeat(ctx, a.Status()); err != nil {
-					if a.verbose {
-						fmt.Printf("[%s] Heartbeat error: %v\n", a.name, err)
-					}
-				} else if a.verbose {
-					fmt.Printf("[%s] Heartbeat sent\n", a.name)
-				}
-			}
+		case <-timer.C:
+			timer.Reset(a.sendHeartbeat(ctx))
 		}
 	}
 }
@@ -405,6 +447,12 @@ func (a *BaseSensor) collectLoop(ctx context.Context) {
 
 // runAllScans runs all scanners on all targets.
 func (a *BaseSensor) runAllScans(ctx context.Context) {
+	if a.paused() {
+		if a.verbose {
+			fmt.Printf("[%s] Skipping scheduled scans: %s\n", a.name, a.doorbell.State())
+		}
+		return
+	}
 	a.statusMu.RLock()
 	scanners := make(map[string]Scanner)
 	for k, v := range a.scanners {
@@ -416,6 +464,9 @@ func (a *BaseSensor) runAllScans(ctx context.Context) {
 
 	for _, target := range targets {
 		for name, scanner := range scanners {
+			if a.paused() {
+				return // paused mid-run: start nothing more
+			}
 			if a.verbose {
 				fmt.Printf("[%s] Running scanner %s on %s\n", a.name, name, target)
 			}
@@ -467,6 +518,12 @@ func (a *BaseSensor) runAllScans(ctx context.Context) {
 
 // runAllCollections runs all collectors.
 func (a *BaseSensor) runAllCollections(ctx context.Context) {
+	if a.paused() {
+		if a.verbose {
+			fmt.Printf("[%s] Skipping scheduled collections: %s\n", a.name, a.doorbell.State())
+		}
+		return
+	}
 	a.statusMu.RLock()
 	collectors := make(map[string]Collector)
 	for k, v := range a.collectors {

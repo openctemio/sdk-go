@@ -95,6 +95,12 @@ type KeyRenewManager struct {
 	// unpersisted holds a rotated key whose persist (OnRotated) failed. Only
 	// touched by the loop goroutine.
 	unpersisted *RenewKeyResponse
+	// lastRotated is when the key was last swapped. Only touched by the loop
+	// goroutine.
+	lastRotated time.Time
+
+	// trigger carries at most one pending RenewNow request.
+	trigger chan struct{}
 }
 
 // NewKeyRenewManager creates a KeyRenewManager. A nil config uses defaults.
@@ -112,21 +118,33 @@ func NewKeyRenewManager(client KeyRenewer, config *KeyRenewConfig) *KeyRenewMana
 		config.RetryInterval = defaultRetryInterval
 	}
 	return &KeyRenewManager{
-		client: client,
-		config: config,
-		stopCh: make(chan struct{}),
+		client:  client,
+		config:  config,
+		stopCh:  make(chan struct{}),
+		trigger: make(chan struct{}, 1),
 	}
 }
 
-// Start launches the renewal loop in the background. It performs one discovery
-// renewal immediately: if the server returns no expiry (TTL disabled), the loop
-// exits and the sensor keeps its non-expiring key. Otherwise it schedules the
-// next renewal at RenewFraction of the remaining lifetime and repeats.
-func (m *KeyRenewManager) Start(ctx context.Context) error {
-	if m.config.CurrentKeyNeverExpires {
-		m.logf("[apikey] current key has no expiry — auto-renew idle")
-		return nil
+// RenewNow asks the running manager to renew the key now instead of at its
+// schedule, e.g. because the platform's heartbeat said the key is inside its
+// renewal window (the rotate_key doorbell action). It never blocks; requests
+// made while one is pending collapse into it, and a request within
+// MinInterval of the last rotation is ignored (the platform judged the key
+// that was just replaced).
+func (m *KeyRenewManager) RenewNow() {
+	select {
+	case m.trigger <- struct{}{}:
+	default:
 	}
+}
+
+// Start launches the renewal loop in the background. Without a known expiry
+// it performs one discovery renewal immediately: if the server returns no
+// expiry (TTL disabled), nothing more is scheduled and the sensor keeps its
+// non-expiring key. Otherwise it schedules the next renewal at RenewFraction
+// of the remaining lifetime and repeats. In every case RenewNow still renews
+// on request while the loop runs.
+func (m *KeyRenewManager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	if m.running {
 		m.mu.Unlock()
@@ -157,31 +175,50 @@ func (m *KeyRenewManager) Stop() {
 func (m *KeyRenewManager) loop(ctx context.Context) {
 	defer m.wg.Done()
 
-	// A known expiry for the starting key: wait until it is due instead of
-	// rotating a perfectly good key at startup.
-	if exp := m.config.CurrentKeyExpiresAt; exp != nil {
+	// due is when the next scheduled renewal runs; zero means none is
+	// scheduled and only RenewNow renews.
+	var due time.Time
+	switch {
+	case m.config.CurrentKeyNeverExpires:
+		m.logf("[apikey] current key has no expiry — auto-renew idle")
+	case m.config.CurrentKeyExpiresAt != nil:
+		// A known expiry for the starting key: wait until it is due instead
+		// of rotating a perfectly good key at startup.
+		exp := m.config.CurrentKeyExpiresAt
 		wait := m.scheduleFor(*exp)
 		m.logf("[apikey] current key expires %s, first renewal in %v", exp.Format(time.RFC3339), wait)
-		select {
-		case <-ctx.Done():
-			return
-		case <-m.stopCh:
-			return
-		case <-time.After(wait):
-		}
+		due = time.Now().Add(wait)
+	default:
+		due = time.Now() // discovery renewal
 	}
 
 	for {
-		next, keepGoing := m.renewOnce(ctx)
-		if !keepGoing {
-			return
+		if !due.IsZero() && !time.Now().Before(due) {
+			next, keepGoing := m.renewOnce(ctx)
+			due = time.Time{}
+			if keepGoing {
+				due = time.Now().Add(next)
+			}
+			continue
+		}
+		var timer <-chan time.Time
+		if !due.IsZero() {
+			timer = time.After(time.Until(due))
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-m.stopCh:
 			return
-		case <-time.After(next):
+		case <-timer:
+		case <-m.trigger:
+			if m.unpersisted == nil && !m.lastRotated.IsZero() && time.Since(m.lastRotated) < m.config.MinInterval {
+				m.logf("[apikey] renewal requested, but the key was rotated %v ago — skipped",
+					time.Since(m.lastRotated).Round(time.Second))
+				continue
+			}
+			m.logf("[apikey] renewal requested — renewing now")
+			due = time.Now()
 		}
 	}
 }
@@ -206,6 +243,7 @@ func (m *KeyRenewManager) renewOnce(ctx context.Context) (next time.Duration, ke
 	// invalidated the old one, so the running sensor must use the new key
 	// whether or not it can be saved.
 	m.client.SetAPIKey(resp.APIKey)
+	m.lastRotated = time.Now()
 	return m.persist(resp)
 }
 

@@ -98,6 +98,37 @@ sensor.Start(ctx)
 - **Daemon**: Long-running, polls for commands - for `worker`, `collector`, `sensor` types
 - **Server-controlled**: Receives commands via heartbeat stream
 
+### Heartbeat doorbell
+
+A daemon can let the heartbeat tell it when there is work, instead of polling
+for commands on a fixed interval (API: RFC-023 §9.2a). Share one
+`core.Doorbell` between the heartbeat and the command poller:
+
+```go
+bell := core.NewDoorbell(&core.DoorbellConfig{
+    OnRotateKey: keyRenewManager.RenewNow, // optional
+})
+sensor.SetDoorbell(bell) // heartbeat sends X-OpenCTEM-Sensor-Features: doorbell
+poller.SetDoorbell(bell) // polls when the doorbell rings
+```
+
+| Heartbeat answer | SDK action |
+|---|---|
+| `pending_jobs > 0` | the poller polls immediately (no fixed wait) |
+| `next_heartbeat_seconds` | next heartbeat delay, clamped to 5 s – 5 min |
+| any hint present | the fixed poll is dropped; poll on the doorbell plus a safety poll every 5 min |
+| no hints (older server) or heartbeat failed | fixed-interval polling exactly as before |
+| `actions: pause` | claim and start nothing (poll, scheduled scans); running jobs finish; heartbeats continue; lifted by the first answer without `pause` |
+| `actions: resume` | lifts a pause |
+| `actions: drain` | like `pause`, but final until the process restarts |
+| `actions: rotate_key` | `OnRotateKey` (e.g. `KeyRenewManager.RenewNow`) |
+| `actions: update` | logged once; nothing is downloaded or run |
+| unknown action | ignored, logged once |
+| `config_version` | `Doorbell.ConfigVersion()`; changes are logged |
+
+The hints only say *that* work is waiting; jobs are still fetched and claimed
+through `GET /api/v1/agent/commands`. There is no free-text or shell action.
+
 ### 3. Components
 
 Components are the building blocks that perform actual work:

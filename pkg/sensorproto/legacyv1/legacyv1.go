@@ -51,6 +51,14 @@ const (
 	HeaderSensorID = "X-Agent-ID"
 	// GRPCMetadataSensorID is the same for the gRPC transport.
 	GRPCMetadataSensorID = "x-agent-id"
+
+	// HeaderSensorFeatures lists, comma-separated, the optional protocol
+	// features a sensor acts on. Additive to v1: a server that does not know
+	// it ignores it.
+	HeaderSensorFeatures = "X-OpenCTEM-Sensor-Features"
+	// FeatureDoorbell: the sensor acts on the heartbeat doorbell hints
+	// (RFC-023 §9.2a).
+	FeatureDoorbell = "doorbell"
 )
 
 // Protocol v1 JSON keys and values.

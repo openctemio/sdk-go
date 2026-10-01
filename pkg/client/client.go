@@ -405,8 +405,32 @@ func (c *Client) pushAssetsInternal(ctx context.Context, report *ctis.Report) (*
 	}, nil
 }
 
-// SendHeartbeat sends a heartbeat to OpenCTEM.
+// SendHeartbeat sends a heartbeat to OpenCTEM. It does not announce the
+// heartbeat doorbell and ignores the response body: a caller that acts on the
+// platform's hints uses SendHeartbeatWithHints instead.
 func (c *Client) SendHeartbeat(ctx context.Context, status *core.SensorStatus) error {
+	_, err := c.sendHeartbeat(ctx, status, nil)
+	return err
+}
+
+// SendHeartbeatWithHints sends a heartbeat that announces the doorbell
+// (X-OpenCTEM-Sensor-Features: doorbell) and returns the hints the platform
+// answered with. Against a server without the doorbell the hints have
+// Present=false. Announcing the feature is a promise to act on it: a disabled
+// sensor is then answered 200 with the pause action instead of 401.
+func (c *Client) SendHeartbeatWithHints(ctx context.Context, status *core.SensorStatus) (*core.HeartbeatHints, error) {
+	data, err := c.sendHeartbeat(ctx, status, http.Header{
+		legacyv1.HeaderSensorFeatures: []string{legacyv1.FeatureDoorbell},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return core.ParseHeartbeatHints(data), nil
+}
+
+var _ core.DoorbellPusher = (*Client)(nil)
+
+func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, extra http.Header) ([]byte, error) {
 	url := c.baseURL + legacyv1.PathHeartbeat
 
 	req := HeartbeatRequest{
@@ -427,18 +451,19 @@ func (c *Client) SendHeartbeat(ctx context.Context, status *core.SensorStatus) e
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Errorf("marshal heartbeat: %w", err)
+		return nil, fmt.Errorf("marshal heartbeat: %w", err)
 	}
 
-	if _, err := c.doRequest(ctx, "POST", url, body); err != nil {
-		return err
+	data, err := c.doRequestWithHeaders(ctx, "POST", url, body, extra)
+	if err != nil {
+		return nil, err
 	}
 
 	if c.verbose {
 		fmt.Printf("[openctem] Heartbeat sent: %s\n", status.Status)
 	}
 
-	return nil
+	return data, nil
 }
 
 // TestConnection tests the API connection.
@@ -561,6 +586,11 @@ func (c *Client) BaselineDiff(ctx context.Context, repository, baseBranch string
 
 // doRequest performs an HTTP request with retry logic.
 func (c *Client) doRequest(ctx context.Context, method, url string, body []byte) ([]byte, error) {
+	return c.doRequestWithHeaders(ctx, method, url, body, nil)
+}
+
+// doRequestWithHeaders is doRequest with extra request headers.
+func (c *Client) doRequestWithHeaders(ctx context.Context, method, url string, body []byte, extra http.Header) ([]byte, error) {
 	if err := c.checkBaseURL(); err != nil {
 		return nil, err
 	}
@@ -597,7 +627,7 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			}
 		}
 
-		data, err := c.doRequestOnce(ctx, method, url, body)
+		data, err := c.doRequestOnce(ctx, method, url, body, extra)
 		if err == nil {
 			return data, nil
 		}
@@ -619,7 +649,7 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 }
 
 // doRequestOnce performs a single HTTP request.
-func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []byte) ([]byte, error) {
+func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []byte, extra http.Header) ([]byte, error) {
 	// Compress body if compression is enabled and body is large enough
 	requestBody := body
 	var contentEncoding string
@@ -654,6 +684,11 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 	// Add sensor ID header for audit trail
 	if c.sensorID != "" {
 		req.Header.Set(legacyv1.HeaderSensorID, c.sensorID)
+	}
+	for k, vs := range extra {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
 	}
 
 	resp, err := c.httpClient.Do(req)

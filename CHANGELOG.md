@@ -2,6 +2,28 @@
 
 All notable changes to `github.com/openctemio/sdk-go`.
 
+## Unreleased — release as **v0.7.1**
+
+### Added
+
+- **Heartbeat doorbell** (API RFC-023 §9.2a, api#619). `core.Doorbell`,
+  `BaseSensor.SetDoorbell` and `CommandPoller.SetDoorbell` let the heartbeat
+  tell a daemon when work is waiting: the heartbeat announces
+  `X-OpenCTEM-Sensor-Features: doorbell`, `pending_jobs > 0` wakes the
+  poller at once, `next_heartbeat_seconds` sets the next heartbeat (clamped
+  5 s – 5 min), and while the server sends hints the fixed command poll is
+  replaced by the doorbell plus a 5-minute safety poll. Actions: `pause` /
+  `drain` stop job intake (running jobs finish, heartbeats continue),
+  `resume` lifts a pause, `rotate_key` calls `DoorbellConfig.OnRotateKey`,
+  `update` and unknown actions are only logged. Against a server without the
+  doorbell nothing changes, detected per response.
+- `client.Client.SendHeartbeatWithHints` returns the parsed hints;
+  `SendHeartbeat` is unchanged (no feature header, body ignored).
+- `platform.KeyRenewManager.RenewNow` renews immediately (debounced to one
+  per `MinInterval` after a rotation). The manager now keeps running after a
+  no-expiry discovery renewal, and with `CurrentKeyNeverExpires`, so that a
+  later `RenewNow` still works; it still renews nothing on its own then.
+
 ## v0.7.0 — 2026-10-01 (breaking)
 
 The SDK moves from the *agent* to the *sensor* vocabulary
