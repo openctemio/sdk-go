@@ -52,6 +52,11 @@ type BaseSensor struct {
 	// stops command polling while the key is rejected and logs connection
 	// trouble without verbose mode (see AuthGate).
 	authGate *AuthGate
+
+	// firstHeartbeatNext is the delay FirstHeartbeat returned; the heartbeat
+	// loop waits it instead of sending at once (guarded by statusMu).
+	firstHeartbeatNext time.Duration
+	firstHeartbeatSent bool
 }
 
 // BaseSensorConfig configures a BaseSensor.
@@ -390,11 +395,39 @@ func (a *BaseSensor) afterHeartbeat(err error, next time.Duration) time.Duration
 
 // sendHeartbeat sends one heartbeat and returns the delay before the next.
 func (a *BaseSensor) sendHeartbeat(ctx context.Context) time.Duration {
+	next, _ := a.heartbeatOnce(ctx, a.Status())
+	return next
+}
+
+// FirstHeartbeat sends the sensor's first heartbeat now, before Start, and
+// returns the delay before the next one and the heartbeat's error. It is the
+// daemon's connection check: it goes through the doorbell and the AuthGate
+// exactly like the heartbeat loop, so a rejected key is logged and backed off
+// the same way (AuthFailureStatus(err) != 0; wait the returned delay before
+// trying again). The next Start does not send another heartbeat at once: its
+// first one follows the returned delay. Without this, a daemon that checked
+// the connection with Pusher.TestConnection sent two heartbeats back to back.
+func (a *BaseSensor) FirstHeartbeat(ctx context.Context) (time.Duration, error) {
+	status := a.Status()
+	if status.Status == SensorStateStopped {
+		// About to start; "stopped" would mislead the platform.
+		status.Status = SensorStateRunning
+	}
+	next, err := a.heartbeatOnce(ctx, status)
+	a.statusMu.Lock()
+	a.firstHeartbeatNext = next
+	a.firstHeartbeatSent = true
+	a.statusMu.Unlock()
+	return next, err
+}
+
+// heartbeatOnce sends one heartbeat and returns the delay before the next and
+// the heartbeat's error.
+func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (time.Duration, error) {
 	next := a.heartbeatInterval
 	if a.pusher == nil {
-		return next
+		return next, nil
 	}
-	status := a.Status()
 	dp, doorbell := a.pusher.(DoorbellPusher)
 	if a.doorbell == nil || !doorbell {
 		err := a.pusher.SendHeartbeat(ctx, status)
@@ -405,7 +438,7 @@ func (a *BaseSensor) sendHeartbeat(ctx context.Context) time.Duration {
 		} else if a.verbose {
 			fmt.Printf("[%s] Heartbeat sent\n", a.name)
 		}
-		return a.afterHeartbeat(err, next)
+		return a.afterHeartbeat(err, next), err
 	}
 
 	if state := a.doorbell.State(); state != "running" {
@@ -423,13 +456,13 @@ func (a *BaseSensor) sendHeartbeat(ctx context.Context) time.Duration {
 		if a.verbose {
 			fmt.Printf("[%s] Heartbeat error: %v\n", a.name, err)
 		}
-		return a.afterHeartbeat(err, next)
+		return a.afterHeartbeat(err, next), err
 	}
 	a.doorbell.Handle(hints)
 	if hints.NextHeartbeat > 0 {
 		next = hints.NextHeartbeat
 	}
-	return a.afterHeartbeat(nil, next)
+	return a.afterHeartbeat(nil, next), nil
 }
 
 // paused reports whether the platform paused or drained this sensor.
@@ -442,8 +475,15 @@ func (a *BaseSensor) paused() bool {
 func (a *BaseSensor) heartbeatLoop(ctx context.Context) {
 	defer a.wg.Done()
 
-	// Send initial heartbeat
-	timer := time.NewTimer(a.sendHeartbeat(ctx))
+	// Send the initial heartbeat, unless FirstHeartbeat just did.
+	a.statusMu.Lock()
+	first, sent := a.firstHeartbeatNext, a.firstHeartbeatSent
+	a.firstHeartbeatSent = false
+	a.statusMu.Unlock()
+	if !sent {
+		first = a.sendHeartbeat(ctx)
+	}
+	timer := time.NewTimer(first)
 	defer timer.Stop()
 
 	for {

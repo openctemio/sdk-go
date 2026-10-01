@@ -293,3 +293,34 @@ func TestBaseSensor_StopSkipsFinalHeartbeatWhenRejected(t *testing.T) {
 		t.Fatalf("heartbeats %d, want 1 (no final heartbeat with a rejected key)", n)
 	}
 }
+
+func TestBaseSensor_FirstHeartbeatIsNotRepeatedByStart(t *testing.T) {
+	p := &authPusher{}
+	s := NewBaseSensor(&BaseSensorConfig{Name: "t", HeartbeatInterval: time.Hour}, p)
+	d, _ := newTestDoorbell(t, nil)
+	s.SetDoorbell(d)
+	next, err := s.FirstHeartbeat(context.Background())
+	if err != nil || next != 30*time.Second {
+		t.Fatalf("FirstHeartbeat = %v, %v; want the advised 30s, nil", next, err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	_ = s.Stop(context.Background())
+	// FirstHeartbeat + the final heartbeat on Stop; Start sent none.
+	if n := p.beats.Load(); n != 2 {
+		t.Fatalf("heartbeats %d, want 2 (first + final), Start must not send one at once", n)
+	}
+
+	// A rejected first heartbeat returns the backoff and the error.
+	p2 := &authPusher{}
+	p2.setErr(&statusErr{401})
+	s2 := NewBaseSensor(&BaseSensorConfig{Name: "t2"}, p2)
+	gate, _ := newTestGate(t)
+	s2.SetAuthGate(gate)
+	next, err = s2.FirstHeartbeat(context.Background())
+	if AuthFailureStatus(err) != 401 || next != 30*time.Second {
+		t.Fatalf("rejected FirstHeartbeat = %v, %v", next, err)
+	}
+}
