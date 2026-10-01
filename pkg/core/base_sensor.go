@@ -608,9 +608,14 @@ func (a *BaseSensor) runAllScans(ctx context.Context) {
 				} else {
 					a.recordScan(int64(len(report.Findings)))
 					if a.verbose {
-						fmt.Printf("[%s] Pushed %d findings (%d created, %d updated)\n",
-							a.name, len(report.Findings),
-							pushResult.FindingsCreated, pushResult.FindingsUpdated)
+						if pushResult != nil && pushResult.Queued {
+							fmt.Printf("[%s] Queued %d findings in the outbox (report %s); delivered when the platform accepts them\n",
+								a.name, len(report.Findings), pushResult.ReportID)
+						} else {
+							fmt.Printf("[%s] Pushed %d findings (%d created, %d updated)\n",
+								a.name, len(report.Findings),
+								pushResult.FindingsCreated, pushResult.FindingsUpdated)
+						}
 					}
 				}
 			}
