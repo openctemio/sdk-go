@@ -1,13 +1,13 @@
-// Package platform provides components for running agents in platform mode.
+// Package platform provides components for running sensors in platform mode.
 //
-// Platform agents are centrally managed by OpenCTEM and execute jobs on behalf
-// of tenants. Unlike tenant agents that run within a tenant's infrastructure,
-// platform agents are deployed and operated by the OpenCTEM platform itself.
+// Platform sensors are centrally managed by OpenCTEM and execute jobs on behalf
+// of tenants. Unlike tenant sensors that run within a tenant's infrastructure,
+// platform sensors are deployed and operated by the OpenCTEM platform itself.
 //
 // REQUIRES THE PLATFORM (SaaS) CONTROL PLANE. The lease, poll, job and
 // registration calls in this package target /api/v1/platform/* routes that
 // the open-source OpenCTEM API does not serve; against an OSS API they fail
-// with 404. Self-hosted agents should use pkg/client together with
+// with 404. Self-hosted sensors should use pkg/client together with
 // core.CommandPoller (the /api/v1/agent/* routes) instead.
 //
 // Security note: jobs received through JobPoller are handed to the
@@ -19,13 +19,13 @@
 //
 // Key components:
 //   - LeaseManager: Handles K8s-style lease renewal for health monitoring
-//   - Bootstrapper: Handles agent registration using bootstrap tokens
+//   - Bootstrapper: Handles sensor registration using bootstrap tokens
 //   - JobPoller: Long-polls for jobs using /platform/poll endpoint
 //   - Client: Extended client with platform-specific endpoints
 //
 // Usage:
 //
-//	// Bootstrap a new platform agent
+//	// Bootstrap a new platform sensor
 //	bootstrapper := platform.NewBootstrapper(baseURL, bootstrapToken)
 //	creds, err := bootstrapper.Register(ctx, &platform.RegistrationRequest{
 //	    Name: "scanner-001",
@@ -36,7 +36,7 @@
 //	client := platform.NewClient(&platform.ClientConfig{
 //	    BaseURL: baseURL,
 //	    APIKey:  creds.APIKey,
-//	    AgentID: creds.AgentID,
+//	    SensorID: creds.SensorID,
 //	})
 //
 //	// Start lease manager
@@ -70,9 +70,13 @@ const (
 	DefaultBootstrapTimeout  = 30 * time.Second
 )
 
-// AgentCredentials contains the credentials returned after agent registration.
-type AgentCredentials struct {
-	AgentID   string `json:"agent_id"`
+// SensorCredentials contains the credentials returned after sensor registration.
+//
+// This is also the format of the credentials file (FileCredentialStore). The
+// sensor id is written as "sensor_id"; files written before the agent ->
+// sensor rename carry "agent_id" and are still read (see UnmarshalJSON).
+type SensorCredentials struct {
+	SensorID  string `json:"sensor_id"`
 	APIKey    string `json:"api_key"`
 	APIPrefix string `json:"api_prefix"`
 	// ExpiresAt is the key's expiry when known (from a key renewal). Pass it
@@ -81,8 +85,8 @@ type AgentCredentials struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
-// AgentInfo contains information about a registered platform agent.
-type AgentInfo struct {
+// SensorInfo contains information about a registered platform sensor.
+type SensorInfo struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
 	Capabilities []string  `json:"capabilities"`
@@ -93,7 +97,7 @@ type AgentInfo struct {
 
 // LeaseInfo contains information about the current lease.
 type LeaseInfo struct {
-	AgentID          string    `json:"agent_id"`
+	SensorID         string    `json:"agent_id"`
 	HolderIdentity   string    `json:"holder_identity"`
 	LeaseDurationSec int       `json:"lease_duration_seconds"`
 	AcquireTime      time.Time `json:"acquire_time"`
@@ -161,7 +165,7 @@ func (r *JobResult) HasWorkflowContext() bool {
 	return r.WorkflowContext != nil && r.WorkflowContext.WorkflowRunID != ""
 }
 
-// SystemMetrics contains agent system metrics for health reporting.
+// SystemMetrics contains sensor system metrics for health reporting.
 type SystemMetrics struct {
 	CPUPercent    float64 `json:"cpu_percent"`
 	MemoryPercent float64 `json:"memory_percent"`

@@ -12,6 +12,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/pipeline"
 	"github.com/openctemio/sdk-go/pkg/resource"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
 // ClientConfig configures the PlatformClient.
@@ -19,11 +20,11 @@ type ClientConfig struct {
 	// BaseURL is the API base URL.
 	BaseURL string
 
-	// APIKey is the agent's API key.
+	// APIKey is the sensor's API key.
 	APIKey string
 
-	// AgentID is the agent's ID.
-	AgentID string
+	// SensorID is the sensor's ID.
+	SensorID string
 
 	// PollTimeout is the long-poll timeout for job polling.
 	PollTimeout time.Duration
@@ -32,7 +33,7 @@ type ClientConfig struct {
 	Verbose bool
 }
 
-// PlatformClient provides a unified interface for platform agent operations.
+// PlatformClient provides a unified interface for platform sensor operations.
 // It implements LeaseClient and JobClient interfaces.
 type PlatformClient struct {
 	leaseClient LeaseClient
@@ -55,8 +56,8 @@ func NewPlatformClient(config *ClientConfig) *PlatformClient {
 		config.PollTimeout = DefaultPollTimeout
 	}
 
-	lease := NewHTTPLeaseClient(config.BaseURL, config.APIKey, config.AgentID)
-	job := NewHTTPJobClient(config.BaseURL, config.APIKey, config.AgentID, config.PollTimeout)
+	lease := NewHTTPLeaseClient(config.BaseURL, config.APIKey, config.SensorID)
+	job := NewHTTPJobClient(config.BaseURL, config.APIKey, config.SensorID, config.PollTimeout)
 
 	pc := &PlatformClient{
 		leaseClient: lease,
@@ -81,12 +82,12 @@ type RenewKeyResponse struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
-// RenewKey rotates this agent's API key by presenting the current one to
+// RenewKey rotates this sensor's API key by presenting the current one to
 // POST /api/v1/agent/renew. It does NOT swap the key in — the caller decides
 // when to call SetAPIKey (and persist), so a failed persist never leaves the
-// running client on a key the agent can't recover after a restart.
+// running client on a key the sensor can't recover after a restart.
 func (c *PlatformClient) RenewKey(ctx context.Context) (*RenewKeyResponse, error) {
-	url, err := apiURL(c.config.BaseURL, "/api/v1/agent/renew")
+	url, err := apiURL(c.config.BaseURL, legacyv1.PathRenew)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +96,7 @@ func (c *PlatformClient) RenewKey(ctx context.Context) (*RenewKeyResponse, error
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.currentAPIKey())
-	req.Header.Set("X-Agent-ID", c.config.AgentID)
+	req.Header.Set(legacyv1.HeaderSensorID, c.config.SensorID)
 
 	resp, err := c.renewClient.Do(req)
 	if err != nil {
@@ -186,11 +187,11 @@ var _ LeaseClient = (*PlatformClient)(nil)
 var _ JobClient = (*PlatformClient)(nil)
 
 // =============================================================================
-// Platform Agent Builder
+// Platform Sensor Builder
 // =============================================================================
 
-// AgentBuilder provides a fluent API for building a platform agent.
-type AgentBuilder struct {
+// SensorBuilder provides a fluent API for building a platform sensor.
+type SensorBuilder struct {
 	config           *ClientConfig
 	leaseConfig      *LeaseConfig
 	pollerConfig     *PollerConfig
@@ -209,87 +210,87 @@ type AgentBuilder struct {
 	chunkUploader  chunk.Uploader
 }
 
-// NewAgentBuilder creates a new AgentBuilder.
-func NewAgentBuilder() *AgentBuilder {
-	return &AgentBuilder{
+// NewSensorBuilder creates a new SensorBuilder.
+func NewSensorBuilder() *SensorBuilder {
+	return &SensorBuilder{
 		config:       &ClientConfig{},
 		leaseConfig:  &LeaseConfig{},
 		pollerConfig: &PollerConfig{},
 	}
 }
 
-// WithCredentials sets the agent credentials.
-func (b *AgentBuilder) WithCredentials(baseURL, apiKey, agentID string) *AgentBuilder {
+// WithCredentials sets the sensor credentials.
+func (b *SensorBuilder) WithCredentials(baseURL, apiKey, sensorID string) *SensorBuilder {
 	b.config.BaseURL = baseURL
 	b.config.APIKey = apiKey
-	b.config.AgentID = agentID
+	b.config.SensorID = sensorID
 	return b
 }
 
 // WithLeaseDuration sets the lease duration.
-func (b *AgentBuilder) WithLeaseDuration(d time.Duration) *AgentBuilder {
+func (b *SensorBuilder) WithLeaseDuration(d time.Duration) *SensorBuilder {
 	b.leaseConfig.LeaseDuration = d
 	return b
 }
 
 // WithRenewInterval sets the lease renewal interval.
-func (b *AgentBuilder) WithRenewInterval(d time.Duration) *AgentBuilder {
+func (b *SensorBuilder) WithRenewInterval(d time.Duration) *SensorBuilder {
 	b.leaseConfig.RenewInterval = d
 	return b
 }
 
 // WithMaxJobs sets the maximum concurrent jobs.
-func (b *AgentBuilder) WithMaxJobs(n int) *AgentBuilder {
+func (b *SensorBuilder) WithMaxJobs(n int) *SensorBuilder {
 	b.leaseConfig.MaxJobs = n
 	b.pollerConfig.MaxConcurrentJobs = n
 	return b
 }
 
 // WithPollTimeout sets the poll timeout.
-func (b *AgentBuilder) WithPollTimeout(d time.Duration) *AgentBuilder {
+func (b *SensorBuilder) WithPollTimeout(d time.Duration) *SensorBuilder {
 	b.config.PollTimeout = d
 	b.pollerConfig.PollTimeout = d
 	return b
 }
 
-// WithCapabilities sets the agent capabilities.
-func (b *AgentBuilder) WithCapabilities(caps ...string) *AgentBuilder {
+// WithCapabilities sets the sensor capabilities.
+func (b *SensorBuilder) WithCapabilities(caps ...string) *SensorBuilder {
 	b.pollerConfig.Capabilities = caps
 	return b
 }
 
 // WithExecutor sets the job executor.
-func (b *AgentBuilder) WithExecutor(executor JobExecutor) *AgentBuilder {
+func (b *SensorBuilder) WithExecutor(executor JobExecutor) *SensorBuilder {
 	b.executor = executor
 	return b
 }
 
 // WithMetricsCollector sets the metrics collector.
-func (b *AgentBuilder) WithMetricsCollector(collector MetricsCollector) *AgentBuilder {
+func (b *SensorBuilder) WithMetricsCollector(collector MetricsCollector) *SensorBuilder {
 	b.metricsCollector = collector
 	return b
 }
 
 // OnLeaseExpired sets the callback for lease expiration.
-func (b *AgentBuilder) OnLeaseExpired(fn func()) *AgentBuilder {
+func (b *SensorBuilder) OnLeaseExpired(fn func()) *SensorBuilder {
 	b.onLeaseExpired = fn
 	return b
 }
 
 // OnJobStarted sets the callback for job start.
-func (b *AgentBuilder) OnJobStarted(fn func(*JobInfo)) *AgentBuilder {
+func (b *SensorBuilder) OnJobStarted(fn func(*JobInfo)) *SensorBuilder {
 	b.onJobStarted = fn
 	return b
 }
 
 // OnJobCompleted sets the callback for job completion.
-func (b *AgentBuilder) OnJobCompleted(fn func(*JobInfo, *JobResult)) *AgentBuilder {
+func (b *SensorBuilder) OnJobCompleted(fn func(*JobInfo, *JobResult)) *SensorBuilder {
 	b.onJobCompleted = fn
 	return b
 }
 
 // WithVerbose enables verbose logging.
-func (b *AgentBuilder) WithVerbose(v bool) *AgentBuilder {
+func (b *SensorBuilder) WithVerbose(v bool) *SensorBuilder {
 	b.config.Verbose = v
 	b.leaseConfig.Verbose = v
 	b.pollerConfig.Verbose = v
@@ -298,14 +299,14 @@ func (b *AgentBuilder) WithVerbose(v bool) *AgentBuilder {
 
 // WithResourceController enables resource throttling with the given config.
 // When enabled, jobs will only be accepted when CPU/memory are below thresholds.
-func (b *AgentBuilder) WithResourceController(config *resource.ControllerConfig) *AgentBuilder {
+func (b *SensorBuilder) WithResourceController(config *resource.ControllerConfig) *SensorBuilder {
 	b.resourceConfig = config
 	return b
 }
 
 // WithAuditLogger enables audit logging with the given config.
 // When enabled, all job lifecycle events will be logged.
-func (b *AgentBuilder) WithAuditLogger(config *audit.LoggerConfig) *AgentBuilder {
+func (b *SensorBuilder) WithAuditLogger(config *audit.LoggerConfig) *SensorBuilder {
 	b.auditConfig = config
 	return b
 }
@@ -313,7 +314,7 @@ func (b *AgentBuilder) WithAuditLogger(config *audit.LoggerConfig) *AgentBuilder
 // WithPipeline enables the async upload pipeline.
 // The pipeline allows scan results to be uploaded asynchronously in the background,
 // so scans can complete immediately without waiting for uploads.
-func (b *AgentBuilder) WithPipeline(config *pipeline.PipelineConfig, uploader pipeline.Uploader) *AgentBuilder {
+func (b *SensorBuilder) WithPipeline(config *pipeline.PipelineConfig, uploader pipeline.Uploader) *SensorBuilder {
 	b.pipelineConfig = config
 	b.uploader = uploader
 	return b
@@ -323,22 +324,22 @@ func (b *AgentBuilder) WithPipeline(config *pipeline.PipelineConfig, uploader pi
 // When enabled, large reports are automatically detected and split into chunks
 // for efficient upload. The chunk manager handles compression, storage,
 // retry, and background upload.
-func (b *AgentBuilder) WithChunkManager(config *chunk.Config, uploader chunk.Uploader) *AgentBuilder {
+func (b *SensorBuilder) WithChunkManager(config *chunk.Config, uploader chunk.Uploader) *SensorBuilder {
 	b.chunkConfig = config
 	b.chunkUploader = uploader
 	return b
 }
 
-// Build creates a PlatformAgent from the builder configuration.
-func (b *AgentBuilder) Build() (*PlatformAgent, error) {
+// Build creates a PlatformSensor from the builder configuration.
+func (b *SensorBuilder) Build() (*PlatformSensor, error) {
 	if b.config.BaseURL == "" {
 		return nil, fmt.Errorf("base URL is required")
 	}
 	if b.config.APIKey == "" {
 		return nil, fmt.Errorf("API key is required")
 	}
-	if b.config.AgentID == "" {
-		return nil, fmt.Errorf("agent ID is required")
+	if b.config.SensorID == "" {
+		return nil, fmt.Errorf("sensor ID is required")
 	}
 	if b.executor == nil {
 		return nil, fmt.Errorf("executor is required")
@@ -356,7 +357,7 @@ func (b *AgentBuilder) Build() (*PlatformAgent, error) {
 	poller := NewJobPoller(client, b.executor, b.pollerConfig)
 	poller.SetLeaseManager(leaseManager)
 
-	agent := &PlatformAgent{
+	sensor := &PlatformSensor{
 		client:       client,
 		leaseManager: leaseManager,
 		poller:       poller,
@@ -373,15 +374,15 @@ func (b *AgentBuilder) Build() (*PlatformAgent, error) {
 			b.resourceConfig.MaxConcurrentJobs = b.pollerConfig.MaxConcurrentJobs
 		}
 
-		agent.resourceController = resource.NewController(b.resourceConfig)
-		poller.SetResourceController(agent.resourceController)
+		sensor.resourceController = resource.NewController(b.resourceConfig)
+		poller.SetResourceController(sensor.resourceController)
 	}
 
 	// Create audit logger if configured
 	if b.auditConfig != nil {
-		// Set agent ID if not already set
-		if b.auditConfig.AgentID == "" {
-			b.auditConfig.AgentID = b.config.AgentID
+		// Set sensor ID if not already set
+		if b.auditConfig.SensorID == "" {
+			b.auditConfig.SensorID = b.config.SensorID
 		}
 		b.auditConfig.Verbose = b.config.Verbose
 
@@ -389,7 +390,7 @@ func (b *AgentBuilder) Build() (*PlatformAgent, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create audit logger: %w", err)
 		}
-		agent.auditLogger = logger
+		sensor.auditLogger = logger
 		poller.SetAuditLogger(logger)
 	}
 
@@ -398,10 +399,10 @@ func (b *AgentBuilder) Build() (*PlatformAgent, error) {
 		b.pipelineConfig.Verbose = b.config.Verbose
 
 		// Wire audit logging to pipeline callbacks
-		if agent.auditLogger != nil {
+		if sensor.auditLogger != nil {
 			originalOnCompleted := b.pipelineConfig.OnCompleted
 			b.pipelineConfig.OnCompleted = func(item *pipeline.QueueItem, result *pipeline.Result) {
-				agent.auditLogger.Info(audit.EventUploadCompleted, "Upload completed", map[string]interface{}{
+				sensor.auditLogger.Info(audit.EventUploadCompleted, "Upload completed", map[string]interface{}{
 					"queue_item_id":    item.ID,
 					"job_id":           item.JobID,
 					"findings_created": result.FindingsCreated,
@@ -414,7 +415,7 @@ func (b *AgentBuilder) Build() (*PlatformAgent, error) {
 
 			originalOnFailed := b.pipelineConfig.OnFailed
 			b.pipelineConfig.OnFailed = func(item *pipeline.QueueItem, err error) {
-				agent.auditLogger.Error(audit.EventUploadFailed, "Upload failed", err, map[string]interface{}{
+				sensor.auditLogger.Error(audit.EventUploadFailed, "Upload failed", err, map[string]interface{}{
 					"queue_item_id": item.ID,
 					"job_id":        item.JobID,
 					"attempts":      item.Attempts,
@@ -425,7 +426,7 @@ func (b *AgentBuilder) Build() (*PlatformAgent, error) {
 			}
 		}
 
-		agent.uploadPipeline = pipeline.NewPipeline(b.pipelineConfig, b.uploader)
+		sensor.uploadPipeline = pipeline.NewPipeline(b.pipelineConfig, b.uploader)
 	}
 
 	// Create chunk manager if configured
@@ -443,39 +444,39 @@ func (b *AgentBuilder) Build() (*PlatformAgent, error) {
 		chunkMgr.SetVerbose(b.config.Verbose)
 
 		// Wire audit logging to chunk callbacks
-		if agent.auditLogger != nil {
+		if sensor.auditLogger != nil {
 			chunkMgr.SetCallbacks(
 				// onProgress
 				func(p *chunk.Progress) {
-					agent.auditLogger.ChunkUploaded(p.ReportID, p.CompletedChunks, p.TotalChunks, int(p.BytesUploaded))
+					sensor.auditLogger.ChunkUploaded(p.ReportID, p.CompletedChunks, p.TotalChunks, int(p.BytesUploaded))
 				},
 				// onComplete
 				func(reportID string) {
-					agent.auditLogger.Info(audit.EventUploadCompleted, "Chunked upload completed", map[string]interface{}{
+					sensor.auditLogger.Info(audit.EventUploadCompleted, "Chunked upload completed", map[string]interface{}{
 						"report_id": reportID,
 					})
 				},
 				// onError
 				func(reportID string, err error) {
-					agent.auditLogger.Error(audit.EventChunkFailed, "Chunked upload failed", err, map[string]interface{}{
+					sensor.auditLogger.Error(audit.EventChunkFailed, "Chunked upload failed", err, map[string]interface{}{
 						"report_id": reportID,
 					})
 				},
 			)
 		}
 
-		agent.chunkManager = chunkMgr
+		sensor.chunkManager = chunkMgr
 	}
 
-	return agent, nil
+	return sensor, nil
 }
 
 // =============================================================================
-// Platform Agent
+// Platform Sensor
 // =============================================================================
 
-// PlatformAgent represents a fully configured platform agent.
-type PlatformAgent struct {
+// PlatformSensor represents a fully configured platform sensor.
+type PlatformSensor struct {
 	client       *PlatformClient
 	leaseManager *LeaseManager
 	poller       *JobPoller
@@ -488,10 +489,10 @@ type PlatformAgent struct {
 	chunkManager       *chunk.Manager
 }
 
-// Start starts the platform agent (lease manager + job poller).
-func (a *PlatformAgent) Start(ctx context.Context) error {
+// Start starts the platform sensor (lease manager + job poller).
+func (a *PlatformSensor) Start(ctx context.Context) error {
 	if a.config.Verbose {
-		fmt.Printf("[agent] Starting platform agent %s\n", a.config.AgentID)
+		fmt.Printf("[sensor] Starting platform sensor %s\n", a.config.SensorID)
 	}
 
 	// Start resource controller if configured
@@ -500,18 +501,18 @@ func (a *PlatformAgent) Start(ctx context.Context) error {
 			return fmt.Errorf("start resource controller: %w", err)
 		}
 		if a.config.Verbose {
-			fmt.Printf("[agent] Resource controller started\n")
+			fmt.Printf("[sensor] Resource controller started\n")
 		}
 	}
 
 	// Start audit logger if configured
 	if a.auditLogger != nil {
 		a.auditLogger.Start()
-		a.auditLogger.Info(audit.EventAgentStart, "Platform agent starting", map[string]interface{}{
-			"agent_id": a.config.AgentID,
+		a.auditLogger.Info(audit.EventSensorStart, "Platform sensor starting", map[string]interface{}{
+			"sensor_id": a.config.SensorID,
 		})
 		if a.config.Verbose {
-			fmt.Printf("[agent] Audit logger started\n")
+			fmt.Printf("[sensor] Audit logger started\n")
 		}
 	}
 
@@ -522,7 +523,7 @@ func (a *PlatformAgent) Start(ctx context.Context) error {
 			return fmt.Errorf("start upload pipeline: %w", err)
 		}
 		if a.config.Verbose {
-			fmt.Printf("[agent] Upload pipeline started\n")
+			fmt.Printf("[sensor] Upload pipeline started\n")
 		}
 	}
 
@@ -533,7 +534,7 @@ func (a *PlatformAgent) Start(ctx context.Context) error {
 			return fmt.Errorf("start chunk manager: %w", err)
 		}
 		if a.config.Verbose {
-			fmt.Printf("[agent] Chunk manager started\n")
+			fmt.Printf("[sensor] Chunk manager started\n")
 		}
 	}
 
@@ -552,14 +553,14 @@ func (a *PlatformAgent) Start(ctx context.Context) error {
 	}
 
 	if a.config.Verbose {
-		fmt.Printf("[agent] Platform agent started\n")
+		fmt.Printf("[sensor] Platform sensor started\n")
 	}
 
 	return nil
 }
 
 // stopHelpers stops resource controller, audit logger, pipeline, and chunk manager.
-func (a *PlatformAgent) stopHelpers() {
+func (a *PlatformSensor) stopHelpers() {
 	// Stop pipeline first (wait for pending uploads)
 	if a.uploadPipeline != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -581,30 +582,30 @@ func (a *PlatformAgent) stopHelpers() {
 	}
 }
 
-// Stop stops the platform agent gracefully.
-func (a *PlatformAgent) Stop(ctx context.Context, timeout time.Duration) error {
+// Stop stops the platform sensor gracefully.
+func (a *PlatformSensor) Stop(ctx context.Context, timeout time.Duration) error {
 	if a.config.Verbose {
-		fmt.Printf("[agent] Stopping platform agent...\n")
+		fmt.Printf("[sensor] Stopping platform sensor...\n")
 	}
 
-	// Log agent stop event
+	// Log sensor stop event
 	if a.auditLogger != nil {
-		a.auditLogger.Info(audit.EventAgentStop, "Platform agent stopping", map[string]interface{}{
-			"agent_id": a.config.AgentID,
+		a.auditLogger.Info(audit.EventSensorStop, "Platform sensor stopping", map[string]interface{}{
+			"sensor_id": a.config.SensorID,
 		})
 	}
 
 	// Stop poller first (stop accepting new jobs)
 	if err := a.poller.Stop(timeout); err != nil {
 		if a.config.Verbose {
-			fmt.Printf("[agent] Warning: poller stop error: %v\n", err)
+			fmt.Printf("[sensor] Warning: poller stop error: %v\n", err)
 		}
 	}
 
 	// Then release lease
 	if err := a.leaseManager.Stop(ctx); err != nil {
 		if a.config.Verbose {
-			fmt.Printf("[agent] Warning: lease release error: %v\n", err)
+			fmt.Printf("[sensor] Warning: lease release error: %v\n", err)
 		}
 	}
 
@@ -612,18 +613,18 @@ func (a *PlatformAgent) Stop(ctx context.Context, timeout time.Duration) error {
 	a.stopHelpers()
 
 	if a.config.Verbose {
-		fmt.Printf("[agent] Platform agent stopped\n")
+		fmt.Printf("[sensor] Platform sensor stopped\n")
 	}
 
 	return nil
 }
 
-// Status returns the current agent status.
-func (a *PlatformAgent) Status() *AgentStatus {
+// Status returns the current sensor status.
+func (a *PlatformSensor) Status() *SensorStatus {
 	leaseStatus := a.leaseManager.GetStatus()
 
-	return &AgentStatus{
-		AgentID:     a.config.AgentID,
+	return &SensorStatus{
+		SensorID:    a.config.SensorID,
 		Running:     leaseStatus.Running,
 		Healthy:     leaseStatus.Healthy,
 		CurrentJobs: a.poller.CurrentJobCount(),
@@ -632,9 +633,9 @@ func (a *PlatformAgent) Status() *AgentStatus {
 	}
 }
 
-// AgentStatus represents the current agent status.
-type AgentStatus struct {
-	AgentID     string
+// SensorStatus represents the current sensor status.
+type SensorStatus struct {
+	SensorID    string
 	Running     bool
 	Healthy     bool
 	CurrentJobs int
@@ -646,17 +647,17 @@ type AgentStatus struct {
 }
 
 // ResourceController returns the resource controller if configured.
-func (a *PlatformAgent) ResourceController() *resource.Controller {
+func (a *PlatformSensor) ResourceController() *resource.Controller {
 	return a.resourceController
 }
 
 // AuditLogger returns the audit logger if configured.
-func (a *PlatformAgent) AuditLogger() *audit.Logger {
+func (a *PlatformSensor) AuditLogger() *audit.Logger {
 	return a.auditLogger
 }
 
-// ExtendedStatus returns the full agent status including resource metrics.
-func (a *PlatformAgent) ExtendedStatus() *AgentStatus {
+// ExtendedStatus returns the full sensor status including resource metrics.
+func (a *PlatformSensor) ExtendedStatus() *SensorStatus {
 	status := a.Status()
 
 	if a.resourceController != nil {
@@ -667,14 +668,14 @@ func (a *PlatformAgent) ExtendedStatus() *AgentStatus {
 }
 
 // Pipeline returns the upload pipeline if configured.
-func (a *PlatformAgent) Pipeline() *pipeline.Pipeline {
+func (a *PlatformSensor) Pipeline() *pipeline.Pipeline {
 	return a.uploadPipeline
 }
 
 // SubmitReport queues a report for async upload via the pipeline.
 // Returns immediately after queueing. Use Pipeline().GetStats() to monitor progress.
 // Returns an error if the pipeline is not configured.
-func (a *PlatformAgent) SubmitReport(report *ctis.Report, opts ...pipeline.SubmitOption) (string, error) {
+func (a *PlatformSensor) SubmitReport(report *ctis.Report, opts ...pipeline.SubmitOption) (string, error) {
 	if a.uploadPipeline == nil {
 		return "", fmt.Errorf("upload pipeline not configured")
 	}
@@ -683,7 +684,7 @@ func (a *PlatformAgent) SubmitReport(report *ctis.Report, opts ...pipeline.Submi
 
 // FlushPipeline waits for all pending uploads to complete.
 // Returns an error if the pipeline is not configured or if the context is canceled.
-func (a *PlatformAgent) FlushPipeline(ctx context.Context) error {
+func (a *PlatformSensor) FlushPipeline(ctx context.Context) error {
 	if a.uploadPipeline == nil {
 		return nil // No pipeline, nothing to flush
 	}
@@ -692,7 +693,7 @@ func (a *PlatformAgent) FlushPipeline(ctx context.Context) error {
 
 // PipelineStats returns the current pipeline statistics.
 // Returns nil if the pipeline is not configured.
-func (a *PlatformAgent) PipelineStats() *pipeline.Stats {
+func (a *PlatformSensor) PipelineStats() *pipeline.Stats {
 	if a.uploadPipeline == nil {
 		return nil
 	}
@@ -700,13 +701,13 @@ func (a *PlatformAgent) PipelineStats() *pipeline.Stats {
 }
 
 // ChunkManager returns the chunk manager if configured.
-func (a *PlatformAgent) ChunkManager() *chunk.Manager {
+func (a *PlatformSensor) ChunkManager() *chunk.Manager {
 	return a.chunkManager
 }
 
 // NeedsChunking checks if a report should be uploaded via chunking.
 // Returns false if chunk manager is not configured.
-func (a *PlatformAgent) NeedsChunking(report *ctis.Report) bool {
+func (a *PlatformSensor) NeedsChunking(report *ctis.Report) bool {
 	if a.chunkManager == nil {
 		return false
 	}
@@ -716,7 +717,7 @@ func (a *PlatformAgent) NeedsChunking(report *ctis.Report) bool {
 // SubmitChunkedReport queues a large report for chunked upload.
 // The report will be split into chunks, compressed, and uploaded in the background.
 // Returns an error if the chunk manager is not configured.
-func (a *PlatformAgent) SubmitChunkedReport(ctx context.Context, report *ctis.Report) (*chunk.Report, error) {
+func (a *PlatformSensor) SubmitChunkedReport(ctx context.Context, report *ctis.Report) (*chunk.Report, error) {
 	if a.chunkManager == nil {
 		return nil, fmt.Errorf("chunk manager not configured")
 	}
@@ -731,7 +732,7 @@ func (a *PlatformAgent) SubmitChunkedReport(ctx context.Context, report *ctis.Re
 // - For pipeline submissions: (pipelineItemID, nil, nil)
 // - For chunked submissions: ("", chunkReport, nil)
 // - If neither is configured: ("", nil, error)
-func (a *PlatformAgent) SmartSubmitReport(ctx context.Context, report *ctis.Report, opts ...pipeline.SubmitOption) (string, *chunk.Report, error) {
+func (a *PlatformSensor) SmartSubmitReport(ctx context.Context, report *ctis.Report, opts ...pipeline.SubmitOption) (string, *chunk.Report, error) {
 	// Check if report needs chunking
 	if a.NeedsChunking(report) {
 		if a.chunkManager == nil {

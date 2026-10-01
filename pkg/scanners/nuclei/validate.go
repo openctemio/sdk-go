@@ -17,10 +17,10 @@ import (
 // proof-of-exposure, NOT exploitation: detection/matcher templates only, never a
 // weaponized payload.
 //
-// This primitive is the sdk-go half of the agent bump: it runs exactly one
+// This primitive is the sdk-go half of the sensor bump: it runs exactly one
 // template against exactly one target, with the destructive template classes
 // excluded, bounded by a caller timeout and per-asset rate limit, and returns a
-// boolean match + sanitized evidence. The agent wraps it with SSRF-guarded
+// boolean match + sanitized evidence. The sensor wraps it with SSRF-guarded
 // target validation and the command-id audit log; the api maps the outcome into
 // the confirm-or-downgrade verdict.
 
@@ -57,7 +57,7 @@ const (
 
 // ValidateOptions configures a single-template re-verification.
 type ValidateOptions struct {
-	// Target is the URL or host to re-verify. The caller (agent) MUST have
+	// Target is the URL or host to re-verify. The caller (sensor) MUST have
 	// already passed it through the SSRF guard; this package does not resolve or
 	// re-guard it.
 	Target string

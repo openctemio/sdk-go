@@ -79,9 +79,9 @@ func main() {
 	// Push results to OpenCTEM platform
 	if os.Getenv("API_URL") != "" {
 		apiClient := client.New(&client.Config{
-			BaseURL: os.Getenv("API_URL"),
-			APIKey:  os.Getenv("API_KEY"),
-			AgentID: os.Getenv("AGENT_ID"),
+			BaseURL:  os.Getenv("API_URL"),
+			APIKey:   os.Getenv("API_KEY"),
+			SensorID: os.Getenv("SENSOR_ID"),
 		})
 
 		for _, report := range result.Reports {

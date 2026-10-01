@@ -65,7 +65,11 @@ type Config struct {
 
 ## Services
 
-### AgentService
+### AgentService (protocol v1)
+
+The gRPC service and message names are part of protocol v1 and keep the
+pre-sensor vocabulary (`AgentService`, `agent_id`); they change only in
+protocol v2. See `pkg/sensorproto/legacyv1`.
 
 For worker registration, heartbeat, and command polling.
 
@@ -119,7 +123,7 @@ service ThreatIntelService {
 
 ```go
 // Start heartbeat stream
-stream, err := agentClient.Heartbeat(ctx)
+stream, err := sensorClient.Heartbeat(ctx)
 if err != nil {
     log.Fatal(err)
 }

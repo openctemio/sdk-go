@@ -136,7 +136,7 @@ func (s *BaseScanner) Scan(ctx context.Context, target string, opts *ScanOptions
 	}
 
 	// Allowlisted environment (see scanner_env.go) plus the scanner's and
-	// this scan's explicit variables; the agent's credentials are not passed.
+	// this scan's explicit variables; the sensor's credentials are not passed.
 	if opts != nil {
 		cmd.Env = ScannerEnviron(s.env, opts.Env)
 	} else {

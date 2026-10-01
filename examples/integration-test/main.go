@@ -23,7 +23,7 @@ func main() {
 	// Parse command line flags
 	baseURL := flag.String("url", "http://localhost:8080", "OpenCTEM API base URL")
 	apiKey := flag.String("api-key", "", "API key for authentication")
-	agentID := flag.String("agent-id", "", "Agent ID (optional)")
+	sensorID := flag.String("sensor-id", "", "Sensor ID (optional)")
 	verbose := flag.Bool("verbose", true, "Enable verbose output")
 	flag.Parse()
 
@@ -40,7 +40,7 @@ func main() {
 	cfg := &client.Config{
 		BaseURL:    *baseURL,
 		APIKey:     *apiKey,
-		AgentID:    *agentID,
+		SensorID:   *sensorID,
 		Timeout:    30 * time.Second,
 		MaxRetries: 3,
 		RetryDelay: 2 * time.Second,
@@ -103,9 +103,9 @@ func main() {
 }
 
 func testHeartbeat(ctx context.Context, c *client.Client) error {
-	status := &core.AgentStatus{
+	status := &core.SensorStatus{
 		Name:     "integration-test",
-		Status:   core.AgentStateRunning,
+		Status:   core.SensorStateRunning,
 		Message:  "Integration test running",
 		Scanners: []string{"semgrep", "trivy"},
 		Uptime:   100,

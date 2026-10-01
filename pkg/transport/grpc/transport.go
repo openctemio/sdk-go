@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -32,8 +33,8 @@ type Config struct {
 	Address string `yaml:"address" json:"address"`
 
 	// Authentication
-	APIKey  string `yaml:"api_key" json:"api_key"`
-	AgentID string `yaml:"agent_id" json:"agent_id"`
+	APIKey   string `yaml:"api_key" json:"api_key"`
+	SensorID string `yaml:"sensor_id" json:"sensor_id"` // the pre-rename key agent_id is still read (config_compat.go)
 
 	// TLS configuration
 	UseTLS             bool   `yaml:"use_tls" json:"use_tls"`
@@ -199,8 +200,8 @@ func (t *Transport) addAuthMetadata(ctx context.Context) context.Context {
 	md := metadata.New(map[string]string{
 		"authorization": "Bearer " + t.config.APIKey,
 	})
-	if t.config.AgentID != "" {
-		md.Set("x-agent-id", t.config.AgentID)
+	if t.config.SensorID != "" {
+		md.Set(legacyv1.GRPCMetadataSensorID, t.config.SensorID)
 	}
 	return metadata.NewOutgoingContext(ctx, md)
 }

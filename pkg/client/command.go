@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
 // Ensure Client implements core.CommandClient
@@ -31,9 +32,9 @@ type Command struct {
 	Result         json.RawMessage `json:"result,omitempty"`
 }
 
-// PollCommands retrieves pending commands for this agent.
+// PollCommands retrieves pending commands for this sensor.
 func (c *Client) PollCommands(ctx context.Context, limit int) ([]Command, error) {
-	reqURL := fmt.Sprintf("%s/api/v1/agent/commands?limit=%d", c.baseURL, limit)
+	reqURL := fmt.Sprintf("%s%s?limit=%d", c.baseURL, legacyv1.PathCommands, limit)
 
 	if c.verbose {
 		fmt.Printf("[openctem] Polling commands from %s\n", reqURL)
@@ -75,7 +76,7 @@ func (c *Client) GetCommands(ctx context.Context) (*core.GetCommandsResponse, er
 		}
 		// Carry the expiry through: the poller skips commands whose
 		// ExpiresAt has passed, and dropping it here made every stale
-		// command (e.g. one queued while the agent was offline) run.
+		// command (e.g. one queued while the sensor was offline) run.
 		if cmd.ExpiresAt != nil {
 			cc.ExpiresAt = *cmd.ExpiresAt
 		}
@@ -89,7 +90,7 @@ func (c *Client) GetCommands(ctx context.Context) (*core.GetCommandsResponse, er
 
 // AcknowledgeCommand acknowledges receipt of a command.
 func (c *Client) AcknowledgeCommand(ctx context.Context, cmdID string) error {
-	reqURL := fmt.Sprintf("%s/api/v1/agent/commands/%s/acknowledge", c.baseURL, url.PathEscape(cmdID))
+	reqURL := c.baseURL + legacyv1.PathCommand(url.PathEscape(cmdID), "acknowledge")
 
 	if c.verbose {
 		fmt.Printf("[openctem] Acknowledging command %s\n", cmdID)
@@ -101,7 +102,7 @@ func (c *Client) AcknowledgeCommand(ctx context.Context, cmdID string) error {
 
 // StartCommand marks a command as started.
 func (c *Client) StartCommand(ctx context.Context, cmdID string) error {
-	reqURL := fmt.Sprintf("%s/api/v1/agent/commands/%s/start", c.baseURL, url.PathEscape(cmdID))
+	reqURL := c.baseURL + legacyv1.PathCommand(url.PathEscape(cmdID), "start")
 
 	if c.verbose {
 		fmt.Printf("[openctem] Starting command %s\n", cmdID)
@@ -113,7 +114,7 @@ func (c *Client) StartCommand(ctx context.Context, cmdID string) error {
 
 // CompleteCommand marks a command as completed with optional result.
 func (c *Client) CompleteCommand(ctx context.Context, cmdID string, result json.RawMessage) error {
-	reqURL := fmt.Sprintf("%s/api/v1/agent/commands/%s/complete", c.baseURL, url.PathEscape(cmdID))
+	reqURL := c.baseURL + legacyv1.PathCommand(url.PathEscape(cmdID), "complete")
 
 	if c.verbose {
 		fmt.Printf("[openctem] Completing command %s\n", cmdID)
@@ -131,7 +132,7 @@ func (c *Client) CompleteCommand(ctx context.Context, cmdID string, result json.
 
 // FailCommand marks a command as failed with an error message.
 func (c *Client) FailCommand(ctx context.Context, cmdID string, errorMsg string) error {
-	reqURL := fmt.Sprintf("%s/api/v1/agent/commands/%s/fail", c.baseURL, url.PathEscape(cmdID))
+	reqURL := c.baseURL + legacyv1.PathCommand(url.PathEscape(cmdID), "fail")
 
 	if c.verbose {
 		fmt.Printf("[openctem] Failing command %s: %s\n", cmdID, errorMsg)

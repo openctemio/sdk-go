@@ -285,6 +285,6 @@ var (
 	// ErrMissingAPIKey is returned when API key is missing.
 	ErrMissingAPIKey = &Error{Kind: KindAuthentication, Message: "API key is required"}
 
-	// ErrMissingAgentID is returned when agent ID is missing.
-	ErrMissingAgentID = &Error{Kind: KindInvalidInput, Message: "agent ID is required"}
+	// ErrMissingSensorID is returned when sensor ID is missing.
+	ErrMissingSensorID = &Error{Kind: KindInvalidInput, Message: "sensor ID is required"}
 )

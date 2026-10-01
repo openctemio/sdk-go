@@ -20,6 +20,22 @@ OpenCTEM SDK provides Go packages for:
 go get github.com/openctemio/sdk-go
 ```
 
+## Upgrading from v0.6 (agent → sensor)
+
+v0.7.0 renames the *agent* vocabulary to *sensor* (`core.BaseAgent` →
+`core.BaseSensor`, `client.WithAgentID` → `client.WithSensorID`, …). Upgrade
+your module with the codemod, which rewrites only SDK identifiers, type-safely,
+then moves you to the new SDK:
+
+```bash
+go run github.com/openctemio/sdk-go/cmd/sensor-migrate@v0.7.0 -dry-run   # review
+go run github.com/openctemio/sdk-go/cmd/sensor-migrate@v0.7.0            # apply
+```
+
+The wire to the platform (protocol v1) is unchanged, and the SDK migrates a
+sensor's saved credentials and old `AGENT_*` settings by itself. See
+[CHANGELOG.md](CHANGELOG.md) for the full list.
+
 ## Quick Start
 
 ### API Client
@@ -103,8 +119,9 @@ func main() {
 | `pkg/credentials` | Credential management |
 | `pkg/connectors` | SCM connectors (GitHub, GitLab) |
 | `pkg/enrichers` | Data enrichment (CVE, NVD) |
-| `pkg/audit` | Structured audit logging for agent operations |
-| `pkg/platform` | Components for running agents in platform mode |
+| `pkg/audit` | Structured audit logging for sensor operations |
+| `pkg/platform` | Components for running sensors in platform mode |
+| `pkg/sensorproto/legacyv1` | Protocol v1 wire vocabulary (frozen) and migration of pre-sensor settings |
 | `pkg/ctis` | Common Threat Intelligence Schema (CTIS) types |
 
 ## Examples
@@ -136,7 +153,7 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 - [openctemio/api](https://github.com/openctemio/api) - Backend API
 - [openctemio/ui](https://github.com/openctemio/ui) - Web UI
-- [openctemio/agent](https://github.com/openctemio/agent) - Scanning Agent
+- [openctemio/agent](https://github.com/openctemio/agent) - the OpenCTEM sensor (binary `openctemio-sensor`, image `ghcr.io/openctemio/sensor`)
 
 ## Enterprise Edition
 

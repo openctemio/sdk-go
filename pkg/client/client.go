@@ -23,6 +23,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/retry"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
 // Client is the OpenCTEM API client.
@@ -30,7 +31,7 @@ import (
 type Client struct {
 	baseURL    string
 	apiKey     string
-	agentID    string // Agent ID for tracking which agent is pushing
+	sensorID   string // Sensor ID for tracking which sensor is pushing
 	httpClient *http.Client
 	maxRetries int
 	retryDelay time.Duration
@@ -46,7 +47,7 @@ type Client struct {
 	retryWorker *retry.RetryWorker
 	retryMu     sync.RWMutex
 
-	// keyMu guards apiKey so it can be rotated at runtime (agent key
+	// keyMu guards apiKey so it can be rotated at runtime (sensor key
 	// auto-renewal) while push/heartbeat requests read it concurrently.
 	keyMu sync.RWMutex
 
@@ -59,7 +60,7 @@ type Client struct {
 
 // Response size limits. The API never legitimately returns more than a few
 // MiB; an unbounded io.ReadAll lets a hostile or broken endpoint exhaust the
-// agent's memory. Error bodies are only used for diagnostics, so they are
+// sensor's memory. Error bodies are only used for diagnostics, so they are
 // capped much lower and truncated before they reach an error string.
 const (
 	maxResponseBodyBytes = 10 << 20 // 10 MiB
@@ -76,7 +77,7 @@ var _ core.Pusher = (*Client)(nil)
 type Config struct {
 	BaseURL    string        `yaml:"base_url" json:"base_url"`
 	APIKey     string        `yaml:"api_key" json:"api_key"`
-	AgentID    string        `yaml:"agent_id" json:"agent_id"` // Registered agent ID for audit trail
+	SensorID   string        `yaml:"sensor_id" json:"sensor_id"` // Registered sensor ID for audit trail; the pre-rename key agent_id is still read (config_compat.go)
 	Timeout    time.Duration `yaml:"timeout" json:"timeout"`
 	MaxRetries int           `yaml:"max_retries" json:"max_retries"`
 	RetryDelay time.Duration `yaml:"retry_delay" json:"retry_delay"`
@@ -139,7 +140,7 @@ func New(cfg *Config) *Client {
 	return &Client{
 		baseURL:    cfg.BaseURL,
 		apiKey:     cfg.APIKey,
-		agentID:    cfg.AgentID,
+		sensorID:   cfg.SensorID,
 		maxRetries: cfg.MaxRetries,
 		retryDelay: cfg.RetryDelay,
 		// SSRF: BaseURL is operator-configured at SDK consumer site.
@@ -169,7 +170,7 @@ type Option func(*Client)
 //	client := client.NewWithOptions(
 //	    client.WithBaseURL("http://localhost:8080"),
 //	    client.WithAPIKey("xxx"),
-//	    client.WithAgentID("agent-1"),
+//	    client.WithSensorID("agent-1"),
 //	    client.WithTimeout(30 * time.Second),
 //	)
 func NewWithOptions(opts ...Option) *Client {
@@ -199,10 +200,10 @@ func WithAPIKey(key string) Option {
 	}
 }
 
-// WithAgentID sets the agent ID for tracking which agent is pushing data.
-func WithAgentID(id string) Option {
+// WithSensorID sets the sensor ID for tracking which sensor is pushing data.
+func WithSensorID(id string) Option {
 	return func(c *Client) {
-		c.agentID = id
+		c.sensorID = id
 	}
 }
 
@@ -267,16 +268,16 @@ type IngestResponse struct {
 
 // HeartbeatRequest is the heartbeat payload.
 type HeartbeatRequest struct {
-	Name       string          `json:"name,omitempty"`
-	Status     core.AgentState `json:"status"`
-	Version    string          `json:"version,omitempty"`
-	Hostname   string          `json:"hostname,omitempty"`
-	Message    string          `json:"message,omitempty"`
-	Scanners   []string        `json:"scanners,omitempty"`
-	Collectors []string        `json:"collectors,omitempty"`
-	Uptime     int64           `json:"uptime_seconds,omitempty"`
-	TotalScans int64           `json:"total_scans,omitempty"`
-	Errors     int64           `json:"errors,omitempty"`
+	Name       string           `json:"name,omitempty"`
+	Status     core.SensorState `json:"status"`
+	Version    string           `json:"version,omitempty"`
+	Hostname   string           `json:"hostname,omitempty"`
+	Message    string           `json:"message,omitempty"`
+	Scanners   []string         `json:"scanners,omitempty"`
+	Collectors []string         `json:"collectors,omitempty"`
+	Uptime     int64            `json:"uptime_seconds,omitempty"`
+	TotalScans int64            `json:"total_scans,omitempty"`
+	Errors     int64            `json:"errors,omitempty"`
 
 	// System Metrics
 	CPUPercent    float64 `json:"cpu_percent,omitempty"`
@@ -306,7 +307,7 @@ func (c *Client) PushFindings(ctx context.Context, report *ctis.Report) (*core.P
 
 // pushFindingsInternal performs the actual push without retry queue logic.
 func (c *Client) pushFindingsInternal(ctx context.Context, report *ctis.Report) (*core.PushResult, error) {
-	url := fmt.Sprintf("%s/api/v1/agent/ingest", c.baseURL)
+	url := c.baseURL + legacyv1.PathIngest
 
 	if c.verbose {
 		fmt.Printf("[openctem] Pushing %d findings to %s\n", len(report.Findings), url)
@@ -370,7 +371,7 @@ func (c *Client) PushAssets(ctx context.Context, report *ctis.Report) (*core.Pus
 
 // pushAssetsInternal performs the actual push without retry queue logic.
 func (c *Client) pushAssetsInternal(ctx context.Context, report *ctis.Report) (*core.PushResult, error) {
-	url := fmt.Sprintf("%s/api/v1/agent/ingest", c.baseURL)
+	url := c.baseURL + legacyv1.PathIngest
 
 	if c.verbose {
 		fmt.Printf("[openctem] Pushing %d assets to %s\n", len(report.Assets), url)
@@ -405,8 +406,8 @@ func (c *Client) pushAssetsInternal(ctx context.Context, report *ctis.Report) (*
 }
 
 // SendHeartbeat sends a heartbeat to OpenCTEM.
-func (c *Client) SendHeartbeat(ctx context.Context, status *core.AgentStatus) error {
-	url := fmt.Sprintf("%s/api/v1/agent/heartbeat", c.baseURL)
+func (c *Client) SendHeartbeat(ctx context.Context, status *core.SensorStatus) error {
+	url := c.baseURL + legacyv1.PathHeartbeat
 
 	req := HeartbeatRequest{
 		Name:       status.Name,
@@ -442,9 +443,9 @@ func (c *Client) SendHeartbeat(ctx context.Context, status *core.AgentStatus) er
 
 // TestConnection tests the API connection.
 func (c *Client) TestConnection(ctx context.Context) error {
-	status := &core.AgentStatus{
+	status := &core.SensorStatus{
 		Name:    "connection-test",
-		Status:  core.AgentStateRunning,
+		Status:  core.SensorStateRunning,
 		Message: "connection test",
 	}
 	return c.SendHeartbeat(ctx, status)
@@ -482,7 +483,7 @@ func (c *Client) CheckFingerprints(ctx context.Context, fingerprints []string) (
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := c.baseURL + "/api/v1/agent/ingest/check"
+	url := c.baseURL + legacyv1.PathIngestCheck
 	respBody, err := c.doRequest(ctx, "POST", url, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("check fingerprints: %w", err)
@@ -541,7 +542,7 @@ func (c *Client) BaselineDiff(ctx context.Context, repository, baseBranch string
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := c.baseURL + "/api/v1/agent/ingest/baseline-diff"
+	url := c.baseURL + legacyv1.PathIngestBaselineDiff
 	respBody, err := c.doRequest(ctx, "POST", url, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("baseline diff: %w", err)
@@ -570,7 +571,7 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 		if attempt > 0 {
 			// Exponential backoff with a cap + jitter. Uncapped `1<<(attempt-1)`
 			// grows unbounded (and can overflow), and identical delays across
-			// many agents cause synchronized retry storms. Cap the shift, cap
+			// many sensors cause synchronized retry storms. Cap the shift, cap
 			// the ceiling, then apply full jitter in [backoff/2, backoff].
 			shift := attempt - 1
 			if shift > maxBackoffShift {
@@ -650,9 +651,9 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 		req.Header.Set("Content-Encoding", contentEncoding)
 	}
 
-	// Add agent ID header for audit trail
-	if c.agentID != "" {
-		req.Header.Set("X-Agent-ID", c.agentID)
+	// Add sensor ID header for audit trail
+	if c.sensorID != "" {
+		req.Header.Set(legacyv1.HeaderSensorID, c.sensorID)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -814,7 +815,7 @@ func (c *Client) SetVerbose(v bool) {
 }
 
 // SetAPIKey atomically replaces the API key used by subsequent requests.
-// Safe to call concurrently with in-flight pushes (agent key auto-renewal).
+// Safe to call concurrently with in-flight pushes (sensor key auto-renewal).
 func (c *Client) SetAPIKey(key string) {
 	c.keyMu.Lock()
 	c.apiKey = key
@@ -853,7 +854,7 @@ func (c *Client) queueForRetry(ctx context.Context, report *ctis.Report, itemTyp
 		Type:        itemType,
 		Report:      report,
 		LastError:   originalErr.Error(),
-		AgentID:     c.agentID,
+		SensorID:    c.sensorID,
 		ScannerName: "",
 	}
 
@@ -1157,11 +1158,11 @@ func (c *Client) PushExposures(ctx context.Context, events []ExposureEvent) (*Pu
 	}
 
 	input := struct {
-		AgentID string          `json:"agent_id,omitempty"`
-		Events  []ExposureEvent `json:"events"`
+		SensorID string          `json:"agent_id,omitempty"`
+		Events   []ExposureEvent `json:"events"`
 	}{
-		AgentID: c.agentID,
-		Events:  events,
+		SensorID: c.sensorID,
+		Events:   events,
 	}
 
 	body, err := json.Marshal(input)
@@ -1308,7 +1309,7 @@ type ChunkUploadResponse struct {
 // UploadChunk uploads a single chunk of a large report.
 // This implements the chunk.Uploader interface.
 func (c *Client) UploadChunk(ctx context.Context, data *chunk.ChunkData) error {
-	url := fmt.Sprintf("%s/api/v1/agent/ingest/chunk", c.baseURL)
+	url := c.baseURL + legacyv1.PathIngestChunk
 
 	if c.verbose {
 		fmt.Printf("[openctem] Uploading chunk %d/%d for report %s\n",

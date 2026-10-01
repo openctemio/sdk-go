@@ -37,7 +37,7 @@ type PrometheusConfig struct {
 	// Namespace prefixes all metric names (e.g., "openctem")
 	Namespace string
 
-	// Subsystem prefixes metric names after namespace (e.g., "agent")
+	// Subsystem prefixes metric names after namespace (e.g., "sensor")
 	Subsystem string
 
 	// Registry is the Prometheus registry to use (nil = new registry)
@@ -95,12 +95,12 @@ func (c *PrometheusCollector) registerDefaultMetrics() {
 	_ = c.RegisterCounter(PusherAssetsPushed)
 	_ = c.RegisterCounter(PusherRetries)
 
-	// Agent metrics
-	_ = c.RegisterCounter(AgentJobsTotal)
-	_ = c.RegisterHistogram(AgentJobDuration)
-	_ = c.RegisterGauge(AgentQueueSize)
-	_ = c.RegisterGauge(AgentActiveJobs)
-	_ = c.RegisterCounter(AgentHeartbeats)
+	// Sensor metrics
+	_ = c.RegisterCounter(SensorJobsTotal)
+	_ = c.RegisterHistogram(SensorJobDuration)
+	_ = c.RegisterGauge(SensorQueueSize)
+	_ = c.RegisterGauge(SensorActiveJobs)
+	_ = c.RegisterCounter(SensorHeartbeats)
 
 	// Enricher metrics
 	_ = c.RegisterCounter(EnricherEnrichmentsTotal)
