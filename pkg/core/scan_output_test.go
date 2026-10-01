@@ -169,3 +169,101 @@ func TestExecuteScanAssetResolver(t *testing.T) {
 		t.Fatalf("parse options = %+v", parser.opts)
 	}
 }
+
+// listScanner records how it was invoked.
+type listScanner struct {
+	rawScanner
+	single string
+	list   []string
+}
+
+func (s *listScanner) Scan(_ context.Context, target string, _ *core.ScanOptions) (*core.ScanResult, error) {
+	s.single = target
+	return &core.ScanResult{ScannerName: s.name}, nil
+}
+
+func (s *listScanner) ScanTargets(_ context.Context, targets []string, _ *core.ScanOptions) (*core.ScanResult, error) {
+	s.list = append([]string(nil), targets...)
+	return &core.ScanResult{ScannerName: s.name}, nil
+}
+
+func execPayload(t *testing.T, exec *core.DefaultCommandExecutor, payload map[string]any) (*core.CommandExecutionResult, error) {
+	t.Helper()
+	b, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return exec.Execute(context.Background(), &core.Command{ID: "c", Type: "scan", Payload: b})
+}
+
+// The platform sends a multi-target nuclei job as "targets" only (no
+// "target"); a single-target or older job as "target".
+func TestExecuteScanTargetShapes(t *testing.T) {
+	newExec := func(s core.Scanner) *core.DefaultCommandExecutor {
+		e := core.NewDefaultCommandExecutor(&mocks.MockPusher{})
+		e.AddScanner(s)
+		return e
+	}
+
+	t.Run("single target", func(t *testing.T) {
+		s := &listScanner{rawScanner: rawScanner{name: "nuclei"}}
+		if _, err := execPayload(t, newExec(s), map[string]any{"scanner": "nuclei", "target": "http://203.0.113.10"}); err != nil {
+			t.Fatal(err)
+		}
+		if s.single != "http://203.0.113.10" || s.list != nil {
+			t.Fatalf("single=%q list=%v", s.single, s.list)
+		}
+	})
+
+	t.Run("target with a one-entry list", func(t *testing.T) {
+		s := &listScanner{rawScanner: rawScanner{name: "nuclei"}}
+		if _, err := execPayload(t, newExec(s), map[string]any{"scanner": "nuclei", "target": "203.0.113.10", "targets": []string{"203.0.113.10"}}); err != nil {
+			t.Fatal(err)
+		}
+		if s.single != "203.0.113.10" || s.list != nil {
+			t.Fatalf("single=%q list=%v", s.single, s.list)
+		}
+	})
+
+	t.Run("targets only", func(t *testing.T) {
+		s := &listScanner{rawScanner: rawScanner{name: "nuclei"}}
+		res, err := execPayload(t, newExec(s), map[string]any{"scanner": "nuclei",
+			"targets": []string{"http://203.0.113.10", "http://203.0.113.11", "http://203.0.113.10", "203.0.113.12"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"http://203.0.113.10", "http://203.0.113.11", "203.0.113.12"} // deduplicated
+		if s.single != "" || strings.Join(s.list, ",") != strings.Join(want, ",") {
+			t.Fatalf("single=%q list=%v, want list %v", s.single, s.list, want)
+		}
+		if res.Metadata["targets_scanned"] != 3 {
+			t.Fatalf("targets_scanned = %v", res.Metadata["targets_scanned"])
+		}
+	})
+
+	t.Run("a refused target fails the command and is named", func(t *testing.T) {
+		s := &listScanner{rawScanner: rawScanner{name: "nuclei"}}
+		_, err := execPayload(t, newExec(s), map[string]any{"scanner": "nuclei",
+			"targets": []string{"http://203.0.113.10", "http://169.254.169.254/latest/meta-data/", "-u=evil"}})
+		if err == nil || !strings.Contains(err.Error(), "169.254.169.254") || !strings.Contains(err.Error(), "-u=evil") ||
+			!strings.Contains(err.Error(), "2 of 3") {
+			t.Fatalf("want both refused targets named, got %v", err)
+		}
+		if s.single != "" || s.list != nil {
+			t.Fatal("nothing may be scanned when a target is refused")
+		}
+	})
+
+	t.Run("single-target scanner refuses a list", func(t *testing.T) {
+		e := newExec(&rawScanner{name: "gitleaks"})
+		if _, err := execPayload(t, e, map[string]any{"scanner": "gitleaks", "targets": []string{"203.0.113.10", "203.0.113.11"}}); err == nil {
+			t.Fatal("a scanner without list support must not silently scan one of several targets")
+		}
+	})
+
+	t.Run("no target", func(t *testing.T) {
+		if _, err := execPayload(t, newExec(&rawScanner{name: "nuclei"}), map[string]any{"scanner": "nuclei"}); err == nil {
+			t.Fatal("a command without targets must fail")
+		}
+	})
+}
