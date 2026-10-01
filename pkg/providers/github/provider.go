@@ -4,6 +4,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -187,25 +188,7 @@ func (c *RepoCollector) Collect(ctx context.Context, opts *core.CollectOptions) 
 	report.Metadata.SourceType = "collector"
 
 	for _, repo := range allRepos {
-		asset := ctis.Asset{
-			ID:          fmt.Sprintf("repo-%d", repo.ID),
-			Type:        ctis.AssetTypeRepository,
-			Value:       repo.FullName,
-			Name:        repo.Name,
-			Description: repo.Description,
-			Technical: &ctis.AssetTechnical{
-				Repository: &ctis.RepositoryTechnical{
-					Platform:      "github",
-					Owner:         c.connector.Organization(),
-					Name:          repo.Name,
-					DefaultBranch: repo.DefaultBranch,
-					Visibility:    repo.Visibility,
-					URL:           repo.HTMLURL,
-					CloneURL:      repo.CloneURL,
-				},
-			},
-		}
-		report.Assets = append(report.Assets, asset)
+		report.Assets = append(report.Assets, repoAsset(repo, c.connector.Organization()))
 	}
 
 	return &core.CollectResult{
@@ -216,6 +199,34 @@ func (c *RepoCollector) Collect(ctx context.Context, opts *core.CollectOptions) 
 		Reports:     []*ctis.Report{report},
 		TotalItems:  len(allRepos),
 	}, nil
+}
+
+// repoAsset converts a GitHub repository to a CTIS asset. The numeric
+// repository ID goes in identifiers.scm_repo_id: it survives a rename or a
+// transfer, so the platform keeps the same asset when the full name changes.
+func repoAsset(repo github.Repository, org string) ctis.Asset {
+	asset := ctis.Asset{
+		ID:          fmt.Sprintf("repo-%d", repo.ID),
+		Type:        ctis.AssetTypeRepository,
+		Value:       repo.FullName,
+		Name:        repo.Name,
+		Description: repo.Description,
+		Technical: &ctis.AssetTechnical{
+			Repository: &ctis.RepositoryTechnical{
+				Platform:      "github",
+				Owner:         org,
+				Name:          repo.Name,
+				DefaultBranch: repo.DefaultBranch,
+				Visibility:    repo.Visibility,
+				URL:           repo.HTMLURL,
+				CloneURL:      repo.CloneURL,
+			},
+		},
+	}
+	if repo.ID > 0 {
+		asset.Identifiers = &ctis.AssetIdentifiers{SCMRepoID: strconv.FormatInt(repo.ID, 10)}
+	}
+	return asset
 }
 
 func (c *RepoCollector) TestConnection(ctx context.Context) error {

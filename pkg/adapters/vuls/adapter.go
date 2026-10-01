@@ -113,6 +113,12 @@ func (a *Adapter) buildAsset(vr *VulsReport) ctis.Asset {
 
 	asset.Tags = []string{"vuls", vr.Family, vr.Release}
 
+	// The cloud instance ID survives a rename and a new address, so the
+	// platform can follow the host by it.
+	if id := strings.TrimSpace(vr.Platform.InstanceID); id != "" {
+		asset.Identifiers = &ctis.AssetIdentifiers{CloudResourceID: id}
+	}
+
 	return asset
 }
 
