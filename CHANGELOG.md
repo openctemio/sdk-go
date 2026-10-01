@@ -50,6 +50,17 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `core.APIKeyHinter`, `core.AuthFailureAdvice`, `BaseSensor.AuthGate`/`SetAuthGate`/`FirstHeartbeat`,
   `CommandPoller.SetAuthGate`, `client.HTTPError.HTTPStatusCode`,
   `client.Client.APIKeyHint`, `httpsec.FirstWarning`.
+- **A User-Agent that says who is calling.** Every SDK request to the
+  platform (`pkg/client`, and `pkg/platform` lease, poll, job, bootstrap and
+  key renewal, which used to send Go's default) and the collectors' requests
+  now carry `[<product>/<version> ]openctem-sdk-go/<sdk version>` instead of
+  the fixed `sdk/1.0`. The SDK version comes from the binary's build info.
+  The embedding binary names itself with `useragent.SetProduct(name,
+  version)` (process-wide) or, per client, `client.Config.UserAgent` /
+  `client.WithUserAgent`, for example
+  `openctemio-sensor/0.3.1 openctem-sdk-go/0.7.4`. Product tokens are
+  sanitized (HTTP token characters only, bounded length). Operators can now
+  tell old agents from new sensors in proxy and API logs.
 
 ## v0.7.3 — 2026-10-01
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/useragent"
 )
 
 // apiURL validates baseURL and returns baseURL + path, where path is
@@ -41,7 +42,10 @@ func apiURL(baseURL, pathFormat string, ids ...string) (string, error) {
 // newAPIHTTPClient returns the HTTP client used for every request that
 // carries the sensor's API key or bootstrap token: SSRF-guarded dialer and
 // no redirect following (the API never redirects; following one would
-// forward the credential).
+// forward the credential). Requests carry the SDK User-Agent
+// (useragent.String, with the product set by useragent.SetProduct).
 func newAPIHTTPClient(timeout time.Duration) *http.Client {
-	return httpsec.NewAPIClient(timeout)
+	c := httpsec.NewAPIClient(timeout)
+	c.Transport = useragent.Transport(c.Transport)
+	return c
 }
