@@ -190,6 +190,13 @@ func (c *Client) awaitTicket(ctx context.Context, tk *outbox.Ticket) (*core.Push
 	if c.obSyncWait < 0 {
 		return queued, nil
 	}
+	// The platform is known to be unreachable or to refuse the key: waiting
+	// for a delivery that cannot happen would only stall the caller.
+	if ob := c.Outbox(); ob != nil {
+		if st := ob.Stats(); st.CircuitOpen || st.AuthPaused {
+			return queued, nil
+		}
+	}
 	timer := time.NewTimer(c.obSyncWait)
 	defer timer.Stop()
 	select {

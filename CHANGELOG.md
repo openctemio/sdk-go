@@ -4,6 +4,27 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Added
+
+- `outbox.Inspect(dir, keyFile)` reads an outbox directory without taking its
+  lock or changing anything (pending count, bytes, oldest age, dead letters
+  with their reasons), so an operator can look at the outbox of a running
+  sensor. `Open` refuses a locked directory, so the sensor's
+  `-outbox-status` could not run next to its daemon.
+
+### Fixed
+
+- **`PushFindings` no longer stalls while the platform is unreachable.** With
+  an outbox it waited up to `SyncWait` (30 s) for a delivery even when the
+  circuit was open or delivery was paused on a rejected key, so a daemon's
+  scheduled scans took 30 s per report during an outage. It now answers
+  `Queued` at once in those states.
+- A daemon's scheduled scan logged "Pushed N findings (0 created, 0
+  updated)" for results it had only queued; it now says they were queued in
+  the outbox, with the report id.
+
+## v0.8.0 — 2026-10-01
+
 ### Changed (breaking)
 
 - **Betterleaks replaces gitleaks as the secret scanner.**
