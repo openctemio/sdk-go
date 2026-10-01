@@ -17,7 +17,11 @@ import (
 // ParserRegistry manages registered parsers.
 type ParserRegistry struct {
 	parsers map[string]Parser
-	mu      sync.RWMutex
+	// order is the registration order. FindParser probes in this order so
+	// detection is deterministic: iterating the map directly picked a
+	// different parser from run to run when two parsers accepted the data.
+	order []string
+	mu    sync.RWMutex
 }
 
 // NewParserRegistry creates a new parser registry with built-in parsers.
@@ -33,11 +37,16 @@ func NewParserRegistry() *ParserRegistry {
 	return registry
 }
 
-// Register adds a parser to the registry.
+// Register adds a parser to the registry. Registering a name again replaces
+// that parser and keeps its original position.
 func (r *ParserRegistry) Register(parser Parser) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.parsers[parser.Name()] = parser
+	name := parser.Name()
+	if _, exists := r.parsers[name]; !exists {
+		r.order = append(r.order, name)
+	}
+	r.parsers[name] = parser
 }
 
 // Get returns a parser by name.
@@ -47,17 +56,43 @@ func (r *ParserRegistry) Get(name string) Parser {
 	return r.parsers[name]
 }
 
-// FindParser finds a parser that can handle the given data.
+// FindParser finds a parser that can handle the given data. Parsers are
+// probed in registration order, after the generic SARIF and JSON parsers
+// that NewParserRegistry registers, so a tool-specific parser registered
+// later wins only when the generic formats do not match.
 func (r *ParserRegistry) FindParser(data []byte) Parser {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	for _, parser := range r.parsers {
-		if parser.CanParse(data) {
+	for _, name := range r.order {
+		if parser := r.parsers[name]; parser.CanParse(data) {
 			return parser
 		}
 	}
 	return nil
+}
+
+// ForScanner returns the parser for a scanner's raw output, or an error when
+// no parser recognizes it.
+//
+// Selection order: the parser registered under the scanner's own name (when it
+// accepts the data), then content detection, then nothing. Output that no
+// parser recognizes is an error, never "0 findings": a scanner whose results
+// cannot be read must fail its command, or real findings vanish while the scan
+// reports success. Callers decide what empty output means before calling.
+func (r *ParserRegistry) ForScanner(scannerName string, data []byte) (Parser, error) {
+	if r != nil {
+		if p := r.Get(scannerName); p != nil && p.CanParse(data) {
+			return p, nil
+		}
+		if p := r.FindParser(data); p != nil {
+			return p, nil
+		}
+	} else if sarif := (&SARIFParser{}); sarif.CanParse(data) {
+		return sarif, nil
+	}
+	return nil, fmt.Errorf("no parser recognizes the output of scanner %q (%d bytes); register a parser for it",
+		scannerName, len(data))
 }
 
 // List returns all registered parser names.
@@ -89,21 +124,34 @@ func (p *SARIFParser) SupportedFormats() []string {
 	return []string{"sarif", "sarif-2.1.0"}
 }
 
-// CanParse checks if this parser can handle the data.
+// CanParse checks if this parser can handle the data: a single JSON object
+// with a "runs" array, the one member every SARIF log must have. Substring
+// checks are not enough: a JSON Lines stream (nuclei) whose response bodies
+// mention "version" and "runs" passed them, and was then read as an empty
+// SARIF log.
 func (p *SARIFParser) CanParse(data []byte) bool {
-	// Check for SARIF markers
-	if len(data) == 0 {
-		return false
-	}
-
-	// Quick check for SARIF schema or version
-	s := string(data)
-	return strings.Contains(s, `"$schema"`) && strings.Contains(s, "sarif") ||
-		strings.Contains(s, `"version"`) && strings.Contains(s, `"runs"`)
+	return isSARIFLog(data)
 }
 
-// Parse converts SARIF to CTIS format.
+// isSARIFLog reports whether data is one JSON object with a "runs" array.
+func isSARIFLog(data []byte) bool {
+	var probe struct {
+		Runs json.RawMessage `json:"runs"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return false
+	}
+	runs := strings.TrimSpace(string(probe.Runs))
+	return strings.HasPrefix(runs, "[")
+}
+
+// Parse converts SARIF to CTIS format. Data that is not a SARIF log is an
+// error: decoding arbitrary JSON into the SARIF structure succeeds with no
+// runs, which used to turn a scanner's real results into "0 findings".
 func (p *SARIFParser) Parse(ctx context.Context, data []byte, opts *ParseOptions) (*ctis.Report, error) {
+	if !isSARIFLog(data) {
+		return nil, fmt.Errorf("not a SARIF log: expected a JSON object with a \"runs\" array")
+	}
 	if opts == nil {
 		opts = &ParseOptions{
 			DefaultConfidence: 90,
