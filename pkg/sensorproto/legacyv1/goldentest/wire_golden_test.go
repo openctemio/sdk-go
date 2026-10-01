@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -65,12 +66,21 @@ type recorder struct {
 // ignoredHeaders are set by net/http itself and say nothing about the SDK.
 var ignoredHeaders = map[string]bool{"Accept-Encoding": true}
 
+// sdkVersionInUA matches the SDK version in the User-Agent, which depends on
+// how the test binary was built; the recording pins the format, not the
+// version. The User-Agent is free-form, not part of the v1 contract: no API
+// server parses it.
+var sdkVersionInUA = regexp.MustCompile(`openctem-sdk-go/\S+`)
+
 func (r *recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	body, _ := io.ReadAll(req.Body)
 	h := map[string]string{}
 	for k, v := range req.Header {
 		if !ignoredHeaders[k] {
 			h[k] = strings.Join(v, ", ")
+		}
+		if k == "User-Agent" {
+			h[k] = sdkVersionInUA.ReplaceAllString(h[k], "openctem-sdk-go/VERSION")
 		}
 	}
 	r.mu.Lock()

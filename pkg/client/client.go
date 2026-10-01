@@ -24,6 +24,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/retry"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
+	"github.com/openctemio/sdk-go/pkg/useragent"
 )
 
 // Client is the OpenCTEM API client.
@@ -36,6 +37,9 @@ type Client struct {
 	maxRetries int
 	retryDelay time.Duration
 	verbose    bool
+	// userAgent is the product token (Config.UserAgent); empty: the
+	// process-wide one (useragent.SetProduct).
+	userAgent string
 
 	// Compression configuration
 	compressor       *compress.Compressor
@@ -82,6 +86,12 @@ type Config struct {
 	MaxRetries int           `yaml:"max_retries" json:"max_retries"`
 	RetryDelay time.Duration `yaml:"retry_delay" json:"retry_delay"`
 	Verbose    bool          `yaml:"verbose" json:"verbose"`
+
+	// UserAgent is this client's product token, "name/version" (for example
+	// "openctemio-sensor/0.3.1"), sent before the SDK's own token:
+	// "openctemio-sensor/0.3.1 openctem-sdk-go/0.7.4". Empty: the process-wide
+	// product set with useragent.SetProduct, if any.
+	UserAgent string `yaml:"user_agent" json:"user_agent"`
 
 	// Compression configuration
 	EnableCompression bool   `yaml:"enable_compression" json:"enable_compression"` // Enable request compression (default: true)
@@ -149,6 +159,7 @@ func New(cfg *Config) *Client {
 		// the bearer key never follows one. See httpsec.NewAPIClient.
 		httpClient:       httpsec.NewAPIClient(cfg.Timeout),
 		verbose:          cfg.Verbose,
+		userAgent:        cfg.UserAgent,
 		compressor:       compressor,
 		compressionLevel: compressionLevel,
 		analyzer:         analyzer,
@@ -218,6 +229,22 @@ func WithRetry(maxRetries int, retryDelay time.Duration) Option {
 		c.maxRetries = maxRetries
 		c.retryDelay = retryDelay
 	}
+}
+
+// WithUserAgent sets this client's product token, "name/version", sent
+// before the SDK's own token in the User-Agent (see Config.UserAgent).
+func WithUserAgent(product string) Option {
+	return func(c *Client) {
+		c.userAgent = product
+	}
+}
+
+// userAgentHeader returns the User-Agent this client sends.
+func (c *Client) userAgentHeader() string {
+	if c.userAgent != "" {
+		return useragent.WithProduct(c.userAgent)
+	}
+	return useragent.String()
 }
 
 // WithVerbose enables verbose logging.
@@ -672,7 +699,7 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
-	req.Header.Set("User-Agent", "sdk/1.0")
+	req.Header.Set("User-Agent", c.userAgentHeader())
 
 	// Add Content-Encoding header if compressed
 	if contentEncoding != "" {
