@@ -352,3 +352,49 @@ type bodyStatusErr struct {
 
 func (e *bodyStatusErr) Error() string       { return fmt.Sprintf("http %d: %s", e.code, e.body) }
 func (e *bodyStatusErr) HTTPStatusCode() int { return e.code }
+
+// A sensor that is deactivated while stopped must start paused, not be
+// treated as having a bad key: the API answers a doorbell heartbeat from a
+// paused sensor 200 with the pause action (a plain heartbeat gets 401).
+func TestBaseSensor_FirstHeartbeatOfDeactivatedSensorStartsPaused(t *testing.T) {
+	paused := atomic.Bool{}
+	paused.Store(true)
+	p := &doorbellPusher{answer: func(int) *HeartbeatHints {
+		h := &HeartbeatHints{Present: true, NextHeartbeat: 30 * time.Second}
+		if paused.Load() {
+			h.Actions = []HeartbeatAction{HeartbeatActionPause}
+		}
+		return h
+	}}
+	s := NewBaseSensor(&BaseSensorConfig{Name: "t"}, p)
+	d, logs := newTestDoorbell(t, nil)
+	s.SetDoorbell(d)
+	gate, gateLogs := newTestGate(t)
+	s.SetAuthGate(gate)
+	cc := &countingCommandClient{cmds: make(chan *Command, 1)}
+	poller := NewCommandPoller(cc, &recordingExecutor{ran: make(chan string, 1)}, nil)
+	poller.SetDoorbell(d)
+	ctx := context.Background()
+
+	if _, err := s.FirstHeartbeat(ctx); err != nil {
+		t.Fatalf("deactivated sensor's first heartbeat: %v (must not look like a bad key)", err)
+	}
+	if gate.Rejected() || gateLogs.String() != "" {
+		t.Fatalf("a paused sensor is not a rejected key: rejected=%v logs=%q", gate.Rejected(), gateLogs.String())
+	}
+	if !d.Paused() || !strings.Contains(logs.String(), "paused by platform") {
+		t.Fatalf("sensor must start paused; doorbell log:\n%s", logs.String())
+	}
+	poller.pollAndExecute(ctx)
+	if cc.polls.Load() != 0 {
+		t.Fatal("a paused sensor must not poll")
+	}
+
+	// Activated: the next heartbeat lifts the pause and polling resumes.
+	paused.Store(false)
+	s.sendHeartbeat(ctx)
+	poller.pollAndExecute(ctx)
+	if cc.polls.Load() != 1 || !strings.Contains(logs.String(), "resumed by platform") {
+		t.Fatalf("not resumed: polls=%d log:\n%s", cc.polls.Load(), logs.String())
+	}
+}
