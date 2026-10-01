@@ -270,6 +270,13 @@ variables set explicitly in the scanner config or scan options.
 
 - API clients (`pkg/client`, `pkg/platform`) refuse HTTP redirects; the API
   never issues them and following one would forward the bearer key.
+- They only ever talk to the operator-configured base URL, so they do not
+  apply the scan-target IP blocklist: a platform on loopback, RFC1918, ULA
+  or CGNAT (Tailscale) addresses works without any opt-in. Link-local
+  (including the cloud metadata service), multicast, reserved and
+  unspecified addresses are still refused, and `HTTP(S)_PROXY` / `NO_PROXY`
+  are honored. `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE` is no longer needed to
+  reach the platform; it only widens what scanners and collectors may reach.
 - Other `httpsec.SafeHTTPClient` users follow redirects but never downgrade
   https to http, and strip credential headers on any origin change.
 - The base URL must be `http`/`https` with a host and no embedded

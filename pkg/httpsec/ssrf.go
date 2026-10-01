@@ -232,6 +232,17 @@ func ValidateURL(rawURL string) (*ValidationResult, error) {
 // attacker-controlled resolver). ValidateURL rejects before the
 // lookup leaves the host process.
 func SafeHTTPClient(timeout time.Duration) *http.Client {
+	tr := guardedTransport(IsIPBlocked)
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     tr,
+		CheckRedirect: SafeCheckRedirect,
+	}
+}
+
+// guardedTransport returns a transport whose dialer resolves the host once,
+// refuses it when blocked reports any resolved IP, and dials the checked IP.
+func guardedTransport(blocked func(net.IP) bool) *http.Transport {
 	baseDialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	safeDialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
@@ -244,7 +255,7 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 		}
 		var dialIP string
 		for _, ip := range ips {
-			if IsIPBlocked(ip.IP) {
+			if blocked(ip.IP) {
 				return nil, fmt.Errorf("ssrf guard: blocked IP %s for host %s", ip.IP, host)
 			}
 			if dialIP == "" {
@@ -261,16 +272,11 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 		// weaken TLS.
 		return baseDialer.DialContext(ctx, network, net.JoinHostPort(dialIP, port))
 	}
-	tr := &http.Transport{
+	return &http.Transport{
 		DialContext:           safeDialer,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 15 * time.Second,
 		IdleConnTimeout:       30 * time.Second,
-	}
-	return &http.Client{
-		Timeout:       timeout,
-		Transport:     tr,
-		CheckRedirect: SafeCheckRedirect,
 	}
 }
 
@@ -334,12 +340,38 @@ func RefuseRedirects(req *http.Request, _ []*http.Request) error {
 	return fmt.Errorf("httpsec: refusing to follow redirect to %s; configure the API base URL to the final address", req.URL.Redacted())
 }
 
-// NewAPIClient returns a SafeHTTPClient that refuses all redirects. It is
-// the client to use for requests that carry an OpenCTEM API key.
+// NewAPIClient returns the client for requests that carry an OpenCTEM API
+// key. Every such request goes to the operator-configured API base URL, so
+// the destination is trusted configuration, not attacker input: on-prem and
+// in-cluster platforms live on loopback, RFC1918, ULA or CGNAT (Tailscale)
+// addresses, and SafeHTTPClient's blocklist would refuse all of them. The
+// client still refuses every redirect (the bearer key never follows one),
+// still refuses link-local destinations such as the cloud metadata service
+// and multicast/reserved/unspecified addresses (so a poisoned DNS answer
+// cannot point the key there), and honors HTTP(S)_PROXY / NO_PROXY.
 func NewAPIClient(timeout time.Duration) *http.Client {
-	c := SafeHTTPClient(timeout)
-	c.CheckRedirect = RefuseRedirects
-	return c
+	tr := guardedTransport(isAPIDestinationBlocked)
+	tr.Proxy = http.ProxyFromEnvironment
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     tr,
+		CheckRedirect: RefuseRedirects,
+	}
+}
+
+// isAPIDestinationBlocked is the IP policy for the OpenCTEM API itself:
+// nothing a platform can legitimately listen on is refused.
+func isAPIDestinationBlocked(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] >= 240 { // 240.0.0.0/4 reserved, incl. broadcast
+		return true
+	}
+	return false
 }
 
 func sameOrigin(a, b *url.URL) bool {
