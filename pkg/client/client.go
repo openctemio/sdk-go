@@ -143,12 +143,10 @@ func New(cfg *Config) *Client {
 		sensorID:   cfg.SensorID,
 		maxRetries: cfg.MaxRetries,
 		retryDelay: cfg.RetryDelay,
-		// SSRF: BaseURL is operator-configured at SDK consumer site.
-		// Using SafeHTTPClient ensures the dialer rejects RFC1918 /
-		// link-local / CGNAT targets even when a custom scanner binds
-		// the SDK to an attacker-influenced API endpoint.
-		// Redirects are refused: the API never issues them, and following
-		// one would forward the bearer key to wherever it points.
+		// BaseURL is operator configuration, so the API client reaches a
+		// platform on loopback or a private network; it still refuses
+		// link-local (cloud metadata) destinations and every redirect, so
+		// the bearer key never follows one. See httpsec.NewAPIClient.
 		httpClient:       httpsec.NewAPIClient(cfg.Timeout),
 		verbose:          cfg.Verbose,
 		compressor:       compressor,

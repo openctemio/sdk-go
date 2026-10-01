@@ -2,7 +2,22 @@
 
 All notable changes to `github.com/openctemio/sdk-go`.
 
-## Unreleased — release as **v0.7.1**
+## Unreleased — release as **v0.7.2**
+
+### Fixed
+
+- **Sensors can reach a platform on a private network again.** The API
+  client (`httpsec.NewAPIClient`, used by `pkg/client` and `pkg/platform`)
+  applied the scan-target SSRF blocklist to the operator-configured API base
+  URL, so a platform on loopback, RFC1918 (Docker, Kubernetes service IPs),
+  ULA or CGNAT/Tailscale addresses was refused with `ssrf guard: blocked IP`
+  unless `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1` was set (affected since
+  v0.6.0). The API client now allows them, still refuses link-local (cloud
+  metadata), multicast, reserved and unspecified addresses and every
+  redirect, and honors `HTTP(S)_PROXY` / `NO_PROXY` again (dropped in
+  v0.6.0). Scanners, collectors and enrichers keep the full guard.
+
+## v0.7.1 — 2026-10-01
 
 ### Added
 
