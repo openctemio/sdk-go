@@ -729,7 +729,7 @@ func (c *Client) checkBaseURL() error {
 			c.baseURLErr = err
 			return
 		}
-		if warning != "" {
+		if warning != "" && httpsec.FirstWarning(c.baseURL) {
 			fmt.Fprintf(os.Stderr, "[openctem] WARNING: %s\n", warning)
 		}
 	})
@@ -750,6 +750,11 @@ func (e *HTTPError) Error() string {
 	}
 	return fmt.Sprintf("http %d: %s", e.StatusCode, body)
 }
+
+// HTTPStatusCode returns the response status. pkg/core uses it to tell a
+// rejected API key (401/403) from other failures without importing this
+// package.
+func (e *HTTPError) HTTPStatusCode() int { return e.StatusCode }
 
 // truncateForError shortens s to at most limit bytes (on a UTF-8 boundary)
 // and marks the cut.
@@ -853,6 +858,12 @@ func (c *Client) SetAPIKey(key string) {
 	c.keyMu.Lock()
 	c.apiKey = key
 	c.keyMu.Unlock()
+}
+
+// APIKeyHint names the client's API key in log lines without revealing it
+// (core.APIKeyHint: at most its first 8 characters).
+func (c *Client) APIKeyHint() string {
+	return core.APIKeyHint(c.getAPIKey())
 }
 
 // getAPIKey returns the current API key under a read lock.
