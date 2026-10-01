@@ -131,7 +131,10 @@ func (p *Parser) convertFinding(f Finding, index int, opts *core.ParseOptions) c
 		EndLine:     f.EndLine,
 		StartColumn: f.StartColumn,
 		EndColumn:   f.EndColumn,
-		Snippet:     f.Match,
+		// SECURITY: gitleaks' Match is the matched text including the raw
+		// secret. Never ship it verbatim to the platform — mask the secret
+		// inside it the same way MaskedValue is masked.
+		Snippet: core.MaskSecretInText(f.Match, f.Secret),
 	}
 
 	// Add branch/commit if available
