@@ -181,6 +181,11 @@ type Doorbell struct {
 
 	// wake carries at most one pending "poll now".
 	wake chan struct{}
+
+	// authGate is the heartbeat's AuthGate, attached by
+	// BaseSensor.SetDoorbell so a poller sharing this doorbell can tell
+	// that the platform rejects the key.
+	authGate *AuthGate
 }
 
 // NewDoorbell creates a Doorbell. A nil config uses defaults.
@@ -309,6 +314,28 @@ func (d *Doorbell) HeartbeatFailed() {
 		d.hintsActive = false
 		d.logf("heartbeat failed: fixed-interval polling until the next answered heartbeat")
 	}
+}
+
+// heartbeatRejected records a heartbeat the platform rejected for
+// authentication: the hints are no longer valid. Unlike HeartbeatFailed it
+// logs nothing, because polling stops (the AuthGate logs) rather than
+// falling back to the fixed interval.
+func (d *Doorbell) heartbeatRejected() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.hintsActive = false
+}
+
+func (d *Doorbell) setAuthGate(g *AuthGate) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.authGate = g
+}
+
+func (d *Doorbell) getAuthGate() *AuthGate {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.authGate
 }
 
 func (d *Doorbell) ring() {
