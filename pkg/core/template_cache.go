@@ -136,7 +136,7 @@ func (c *TemplateCache) Get(contentHash string) (string, bool) {
 // GetFor retrieves a cached template for one tenant and template type.
 // Entries cached for other tenants are never returned.
 func (c *TemplateCache) GetFor(tenantID, templateType, contentHash string) (string, bool) {
-	return c.getByKey(cacheKey(tenantID, templateType, contentHash))
+	return c.getByKey(cacheKey(tenantID, CanonicalScannerName(templateType), contentHash))
 }
 
 func (c *TemplateCache) getByKey(key string) (string, bool) {
@@ -182,7 +182,7 @@ func validateCacheScope(tenantID, templateType string) error {
 		return fmt.Errorf("invalid tenant ID %q: must be a UUID", tenantID)
 	}
 	if !ValidTemplateTypes[templateType] {
-		return fmt.Errorf("invalid template type %q (allowed: nuclei, semgrep, gitleaks)", templateType)
+		return fmt.Errorf("invalid template type %q (allowed: nuclei, semgrep, betterleaks)", templateType)
 	}
 	return nil
 }
@@ -219,6 +219,10 @@ func (c *TemplateCache) Put(tenantID string, template *EmbeddedTemplate) (string
 	if template == nil {
 		return "", fmt.Errorf("template is nil")
 	}
+	// A retired type ("gitleaks") is cached under its replacement.
+	canonical := *template
+	canonical.TemplateType = CanonicalScannerName(template.TemplateType)
+	template = &canonical
 	if err := validateCacheScope(tenantID, template.TemplateType); err != nil {
 		return "", err
 	}
@@ -245,7 +249,7 @@ func (c *TemplateCache) Put(tenantID string, template *EmbeddedTemplate) (string
 
 	// Determine file extension based on template type
 	ext := ".yaml"
-	if template.TemplateType == "gitleaks" {
+	if template.TemplateType == ScannerBetterleaks {
 		ext = ".toml"
 	}
 
@@ -307,6 +311,9 @@ func (c *TemplateCache) GetOrPut(tenantID string, template *EmbeddedTemplate) (s
 	if template == nil {
 		return "", fmt.Errorf("template is nil")
 	}
+	canonical := *template
+	canonical.TemplateType = CanonicalScannerName(template.TemplateType)
+	template = &canonical
 	if err := validateCacheScope(tenantID, template.TemplateType); err != nil {
 		return "", err
 	}

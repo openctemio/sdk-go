@@ -10,7 +10,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 
-	"github.com/openctemio/sdk-go/pkg/adapters/gitleaks"
+	"github.com/openctemio/sdk-go/pkg/adapters/betterleaks"
 	"github.com/openctemio/sdk-go/pkg/adapters/nuclei"
 	"github.com/openctemio/sdk-go/pkg/adapters/semgrep"
 	"github.com/openctemio/sdk-go/pkg/adapters/trivy"
@@ -33,7 +33,7 @@ func NewRegistry() *Registry {
 	r.Register(trivy.NewAdapter())
 	r.Register(nuclei.NewAdapter())
 	r.Register(semgrep.NewAdapter())
-	r.Register(gitleaks.NewAdapter())
+	r.Register(betterleaks.NewAdapter())
 	r.Register(vuls.NewAdapter())
 
 	return r

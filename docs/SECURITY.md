@@ -202,7 +202,7 @@ import "github.com/openctemio/sdk-go/pkg/core"
 err := core.ValidateTemplate(&core.EmbeddedTemplate{
     ID:           "my-template",
     Name:         "sql-injection.yaml",  // Must be simple filename
-    TemplateType: "nuclei",              // Must be: nuclei, semgrep, gitleaks
+    TemplateType: "nuclei",              // Must be: nuclei, semgrep, betterleaks ("gitleaks" is accepted as betterleaks)
     Content:      templateContent,
     ContentHash:  "sha256:...",          // Optional integrity check
 })
@@ -257,7 +257,7 @@ exec.SetScanTargetPolicy(&core.ScanTargetPolicy{
 Scanner child processes no longer inherit the sensor's whole environment
 (which holds the API key). They get an allowlist: `PATH`, `HOME`, temp and
 locale vars, proxy and CA-bundle vars, Docker host vars, `XDG_*`, and the
-`TRIVY_*` / `NUCLEI_*` / `SEMGREP_*` / `GITLEAKS_*` / `CODEQL_*` and ProjectDiscovery (`SUBFINDER_*`, `HTTPX_*`, `DNSX_*`, `NAABU_*`, `KATANA_*`, `PDCP_*`) namespaces, plus any
+`TRIVY_*` / `NUCLEI_*` / `SEMGREP_*` / `BETTERLEAKS_*` / `GITLEAKS_*` / `CODEQL_*` and ProjectDiscovery (`SUBFINDER_*`, `HTTPX_*`, `DNSX_*`, `NAABU_*`, `KATANA_*`, `PDCP_*`) namespaces, plus any
 variables set explicitly in the scanner config or scan options.
 
 | Variable / API | Effect |

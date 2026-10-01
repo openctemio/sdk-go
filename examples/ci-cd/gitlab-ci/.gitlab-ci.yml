@@ -5,7 +5,7 @@
 #
 # Features:
 # - SAST scanning with semgrep (with dataflow/taint tracking)
-# - Secret detection with gitleaks
+# - Secret detection with betterleaks
 # - SCA/Dependency scanning with trivy
 # - IaC scanning with trivy
 # - Container scanning with trivy
@@ -45,7 +45,7 @@ security-scan:
   script:
     - |
       openctemio-sensor \
-        -tools semgrep,gitleaks,trivy \
+        -tools semgrep,betterleaks,trivy \
         -target . \
         -auto-ci \
         -comments \
@@ -83,7 +83,7 @@ mr-security-review:
       echo "Target: ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
 
       openctemio-sensor \
-        -tools semgrep,gitleaks \
+        -tools semgrep,betterleaks \
         -target . \
         -auto-ci \
         -comments \
@@ -118,7 +118,7 @@ secret-scan:
   script:
     - |
       openctemio-sensor \
-        -tool gitleaks \
+        -tool betterleaks \
         -target . \
         -verbose \
         -json \
@@ -240,7 +240,7 @@ weekly-audit:
   script:
     - |
       openctemio-sensor \
-        -tools semgrep,gitleaks,trivy \
+        -tools semgrep,betterleaks,trivy \
         -target . \
         -verbose \
         -json \

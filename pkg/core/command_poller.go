@@ -75,7 +75,7 @@ type ScanCommandPayload struct {
 type EmbeddedTemplate struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
-	TemplateType string `json:"template_type"` // nuclei, semgrep, gitleaks
+	TemplateType string `json:"template_type"` // nuclei, semgrep, betterleaks
 	Content      string `json:"content"`       // Base64-encoded template content (YAML/TOML)
 	ContentHash  string `json:"content_hash"`  // SHA256 hash of decoded content for verification
 }
@@ -96,10 +96,11 @@ const MaxScanTargets = 10000
 const maxRefusedListed = 10
 
 // ValidTemplateTypes defines allowed template types for security validation.
+// A retired type ("gitleaks") is accepted through CanonicalScannerName.
 var ValidTemplateTypes = map[string]bool{
-	"nuclei":   true,
-	"semgrep":  true,
-	"gitleaks": true,
+	"nuclei":           true,
+	"semgrep":          true,
+	ScannerBetterleaks: true,
 }
 
 // MaxTemplateSize is the maximum allowed size for a single template (1MB).
@@ -140,8 +141,8 @@ func ValidateTemplate(tpl *EmbeddedTemplate) error {
 	}
 
 	// Validate template type
-	if !ValidTemplateTypes[tpl.TemplateType] {
-		return fmt.Errorf("invalid template type: %s (allowed: nuclei, semgrep, gitleaks)", tpl.TemplateType)
+	if !ValidTemplateTypes[CanonicalScannerName(tpl.TemplateType)] {
+		return fmt.Errorf("invalid template type: %s (allowed: nuclei, semgrep, betterleaks)", tpl.TemplateType)
 	}
 
 	// Validate content size. Content is base64, so bound the encoded form of
@@ -622,7 +623,7 @@ func (e *DefaultCommandExecutor) ScanTargetPolicy() *ScanTargetPolicy {
 // ParserRegistry.ForScanner). Without a registry only SARIF output is
 // understood. Output no parser recognizes fails the command instead of being
 // reported as 0 findings — register a parser for every scanner that does not
-// emit SARIF (gitleaks, semgrep, trivy, nuclei).
+// emit SARIF (betterleaks, semgrep, trivy, nuclei).
 func (e *DefaultCommandExecutor) SetParserRegistry(r *ParserRegistry) {
 	e.parsers = r
 }
@@ -633,7 +634,7 @@ type AssetResolver func(scanner, target string) (ctis.AssetType, string)
 
 // SetAssetResolver sets how executeScan names the scanned asset. Without one,
 // parsers that cannot tell the asset from the scanner output (a filesystem scan
-// by gitleaks, for one) send findings without an asset, which the platform
+// by betterleaks, for one) send findings without an asset, which the platform
 // files under a placeholder. Set it before the poller starts.
 func (e *DefaultCommandExecutor) SetAssetResolver(r AssetResolver) {
 	e.assetResolver = r
@@ -668,6 +669,9 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
 		return nil, fmt.Errorf("unmarshal scan payload: %w", err)
 	}
+	// A platform that has not migrated its scan configs still dispatches the
+	// retired name ("gitleaks"); run the replacement.
+	payload.Scanner = CanonicalScannerName(payload.Scanner)
 
 	scanner, ok := e.scanners[payload.Scanner]
 	if !ok {
@@ -925,7 +929,7 @@ func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templa
 
 		// Determine file extension based on template type
 		ext := ".yaml"
-		if tpl.TemplateType == "gitleaks" {
+		if CanonicalScannerName(tpl.TemplateType) == ScannerBetterleaks {
 			ext = ".toml"
 		}
 

@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/scanners/betterleaks"
 	"github.com/openctemio/sdk-go/pkg/scanners/codeql"
-	"github.com/openctemio/sdk-go/pkg/scanners/gitleaks"
 	"github.com/openctemio/sdk-go/pkg/scanners/nuclei"
 	"github.com/openctemio/sdk-go/pkg/scanners/recon/dnsx"
 	"github.com/openctemio/sdk-go/pkg/scanners/recon/httpx"
@@ -43,7 +43,7 @@ func NewRegistry() *Registry {
 	}
 
 	// Register built-in scanners
-	registry.RegisterSecretScanner(gitleaks.NewScanner())
+	registry.RegisterSecretScanner(betterleaks.NewScanner())
 	registry.RegisterSASTScanner(semgrep.NewScanner())
 	// Trivy is registered via preset functions, not as ScaScanner
 	// because it implements the general Scanner interface
@@ -69,7 +69,7 @@ func (r *Registry) RegisterSecretScanner(scanner core.SecretScanner) {
 func (r *Registry) GetSecretScanner(name string) core.SecretScanner {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.secretScanners[name]
+	return r.secretScanners[core.CanonicalScannerName(name)]
 }
 
 // ListSecretScanners returns all registered secret scanner names.
@@ -166,17 +166,17 @@ func (r *Registry) ListReconScanners() []string {
 // Preset Scanners - Ready-to-use scanner instances
 // =============================================================================
 
-// GitleaksScanner is a type alias for external package access.
-type GitleaksScanner = gitleaks.Scanner
+// BetterleaksScanner is a type alias for external package access.
+type BetterleaksScanner = betterleaks.Scanner
 
-// Gitleaks returns a new gitleaks scanner with default configuration.
-func Gitleaks() *gitleaks.Scanner {
-	return gitleaks.NewScanner()
+// Betterleaks returns a new betterleaks secret scanner with default configuration.
+func Betterleaks() *betterleaks.Scanner {
+	return betterleaks.NewScanner()
 }
 
-// GitleaksWithConfig returns a gitleaks scanner with custom configuration.
-func GitleaksWithConfig(opts GitleaksOptions) *gitleaks.Scanner {
-	scanner := gitleaks.NewScanner()
+// BetterleaksWithConfig returns a betterleaks scanner with custom configuration.
+func BetterleaksWithConfig(opts BetterleaksOptions) *betterleaks.Scanner {
+	scanner := betterleaks.NewScanner()
 	if opts.Binary != "" {
 		scanner.Binary = opts.Binary
 	}
@@ -193,10 +193,10 @@ func GitleaksWithConfig(opts GitleaksOptions) *gitleaks.Scanner {
 	return scanner
 }
 
-// GitleaksOptions configures the gitleaks scanner.
-type GitleaksOptions struct {
-	Binary     string        // Path to gitleaks binary
-	ConfigFile string        // Custom gitleaks config file
+// BetterleaksOptions configures the betterleaks scanner.
+type BetterleaksOptions struct {
+	Binary     string        // Path to betterleaks binary
+	ConfigFile string        // Custom config file (.betterleaks.toml or .gitleaks.toml)
 	OutputFile string        // Output file path
 	Timeout    time.Duration // Scan timeout
 	Verbose    bool          // Enable verbose output

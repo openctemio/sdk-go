@@ -1,4 +1,4 @@
-package gitleaks
+package betterleaks
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/ctis"
 )
 
-// relPath returns a scan-target-relative file path. gitleaks reports paths that
+// relPath returns a scan-target-relative file path. betterleaks reports paths that
 // include the scan root (e.g. "/scan/README.md" for a mounted repo). Persisting
 // that leaks the runner's mount point and — worse — makes the secret fingerprint
 // depend on where the repo happened to be checked out, so the same secret fails
@@ -24,12 +24,14 @@ func relPath(file string, opts *core.ParseOptions) string {
 	return strings.TrimPrefix(file, base)
 }
 
-// Parser converts gitleaks output to CTIS format.
+// Parser converts betterleaks (v1) JSON reports to CTIS format. gitleaks
+// reports have the same shape and parse too, but are reported under the
+// betterleaks tool name: the platform keeps one secret-scanner identity.
 type Parser struct{}
 
 // Name returns the parser name.
 func (p *Parser) Name() string {
-	return "gitleaks"
+	return core.ScannerBetterleaks
 }
 
 // SupportedFormats returns the output formats this parser can handle.
@@ -39,17 +41,16 @@ func (p *Parser) SupportedFormats() []string {
 
 // CanParse checks if the parser can handle the given data.
 func (p *Parser) CanParse(data []byte) bool {
-	// Try to parse as gitleaks JSON
+	// Try to parse as a betterleaks/gitleaks JSON report
 	_, err := ParseJSONBytes(data)
 	return err == nil
 }
 
-// Parse converts gitleaks JSON output to CTIS report.
+// Parse converts a betterleaks JSON report to a CTIS report.
 func (p *Parser) Parse(ctx context.Context, data []byte, opts *core.ParseOptions) (*ctis.Report, error) {
-	// Parse gitleaks findings
 	findings, err := ParseJSONBytes(data)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse gitleaks output: %w", err)
+		return nil, fmt.Errorf("failed to parse betterleaks output: %w", err)
 	}
 
 	// Create CTIS report
@@ -59,8 +60,9 @@ func (p *Parser) Parse(ctx context.Context, data []byte, opts *core.ParseOptions
 
 	// Set tool info
 	report.Tool = &ctis.Tool{
-		Name:   "gitleaks",
-		Vendor: "Gitleaks",
+		Name:    core.ScannerBetterleaks,
+		Vendor:  "Betterleaks",
+		InfoURL: "https://github.com/betterleaks/betterleaks",
 		Capabilities: []string{
 			"secret_detection",
 			"api_key_detection",
@@ -95,7 +97,7 @@ func (p *Parser) Parse(ctx context.Context, data []byte, opts *core.ParseOptions
 	return report, nil
 }
 
-// convertFinding converts a gitleaks finding to CTIS finding.
+// convertFinding converts a betterleaks finding to CTIS finding.
 func (p *Parser) convertFinding(f Finding, index int, opts *core.ParseOptions) ctis.Finding {
 	file := relPath(f.File, opts)
 	title := fmt.Sprintf("%s detected in %s:%d", f.Description, file, f.StartLine)
@@ -114,10 +116,12 @@ func (p *Parser) convertFinding(f Finding, index int, opts *core.ParseOptions) c
 	}
 
 	// Generate or use fingerprint (relative path → stable across checkout dirs).
-	// gitleaks' own fingerprint embeds the file path it was given ("<commit>:
+	// The tool's own fingerprint embeds the file path it was given ("<commit>:
 	// <file>:<rule>:<line>" or "<file>:<rule>:<line>"), which is the absolute
 	// mount path — so rewrite that path segment to the repo-relative one, else the
 	// fingerprint still varies by mount and defeats cross-scan dedupe/auto-resolve.
+	// betterleaks v1 builds it exactly as gitleaks did, so a secret both tools
+	// report keeps its fingerprint across the switch.
 	if f.Fingerprint != "" {
 		finding.Fingerprint = strings.Replace(f.Fingerprint, f.File, file, 1)
 	} else {
@@ -131,7 +135,7 @@ func (p *Parser) convertFinding(f Finding, index int, opts *core.ParseOptions) c
 		EndLine:     f.EndLine,
 		StartColumn: f.StartColumn,
 		EndColumn:   f.EndColumn,
-		// SECURITY: gitleaks' Match is the matched text including the raw
+		// SECURITY: the report's Match is the matched text including the raw
 		// secret. Never ship it verbatim to the platform — mask the secret
 		// inside it the same way MaskedValue is masked.
 		Snippet: core.MaskSecretInText(f.Match, f.Secret),
@@ -147,12 +151,12 @@ func (p *Parser) convertFinding(f Finding, index int, opts *core.ParseOptions) c
 		}
 	}
 
-	// If commit from gitleaks is available, use it
+	// If the report names a commit, use it
 	if f.Commit != "" {
 		finding.Location.CommitSHA = f.Commit
 	}
 
-	// Set git metadata from gitleaks
+	// Set git metadata from the report
 	if f.Author != "" {
 		finding.Author = f.Author
 	}
@@ -203,8 +207,11 @@ func (p *Parser) convertFinding(f Finding, index int, opts *core.ParseOptions) c
 		}
 	}
 
-	// Add default confidence
-	if opts != nil && opts.DefaultConfidence > 0 {
+	// Confidence: the rule's own confidence when betterleaks reports one,
+	// else the caller's default, else 90.
+	if c, ok := ruleConfidence[f.Confidence()]; ok {
+		finding.Confidence = c
+	} else if opts != nil && opts.DefaultConfidence > 0 {
 		finding.Confidence = opts.DefaultConfidence
 	}
 
@@ -224,7 +231,7 @@ func (p *Parser) convertFinding(f Finding, index int, opts *core.ParseOptions) c
 
 	// Add references
 	finding.References = []string{
-		"https://github.com/gitleaks/gitleaks",
+		"https://github.com/betterleaks/betterleaks",
 		"https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information",
 	}
 
@@ -295,7 +302,15 @@ func (p *Parser) createAssetFromOptions(opts *core.ParseOptions) *ctis.Asset {
 	return nil
 }
 
-// ParseToCTIS is a convenience function to parse gitleaks JSON to CTIS.
+// ruleConfidence maps the confidence betterleaks reports for a rule to a
+// CTIS confidence score.
+var ruleConfidence = map[string]int{
+	"high":   90,
+	"medium": 70,
+	"low":    40,
+}
+
+// ParseToCTIS is a convenience function to parse betterleaks JSON to CTIS.
 func ParseToCTIS(data []byte, opts *core.ParseOptions) (*ctis.Report, error) {
 	parser := &Parser{}
 	return parser.Parse(context.Background(), data, opts)

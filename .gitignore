@@ -127,7 +127,8 @@ secrets.json
 .semgrep/
 semgrep-results.*
 
-# Gitleaks
+# Betterleaks (and legacy gitleaks) reports
+betterleaks-report.*
 gitleaks-report.*
 
 # Trivy

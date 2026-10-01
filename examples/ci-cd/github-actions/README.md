@@ -79,7 +79,7 @@ permissions:
 
 ```yaml
 args: >-
-  -tools semgrep,gitleaks,trivy    # Scanners to run
+  -tools semgrep,betterleaks,trivy    # Scanners to run
   -target .                         # Directory to scan
   -auto-ci                          # Auto-detect CI environment
   -comments                         # Post inline comments

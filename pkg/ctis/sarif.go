@@ -335,7 +335,7 @@ func detectFindingType(toolName string, toolType string) FindingType {
 	}
 
 	// Secret scanners
-	secretTools := []string{"gitleaks", "trufflehog", "detect-secrets", "secret"}
+	secretTools := []string{"betterleaks", "gitleaks", "trufflehog", "detect-secrets", "secret"}
 	for _, t := range secretTools {
 		if strings.Contains(name, t) {
 			return FindingTypeSecret
@@ -378,7 +378,7 @@ func detectCapabilities(toolName string, toolType string) []string {
 	}
 
 	// Auto-detect
-	if strings.Contains(name, "secret") || strings.Contains(name, "gitleaks") || strings.Contains(name, "trufflehog") {
+	if strings.Contains(name, "secret") || strings.Contains(name, "leaks") || strings.Contains(name, "trufflehog") {
 		return []string{"secret"}
 	}
 	if strings.Contains(name, "slither") || strings.Contains(name, "mythril") {

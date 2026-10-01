@@ -58,7 +58,7 @@ variables:
   API_URL: $API_URL
   API_KEY: $API_KEY
 script:
-  - openctemio-sensor -tools semgrep,gitleaks,trivy -target . -push
+  - openctemio-sensor -tools semgrep,betterleaks,trivy -target . -push
 ```
 
 ## Environment Variables
@@ -106,7 +106,7 @@ secret-detection:
   image: openctemio/sensor:ci
   script:
     - |
-      openctemio-sensor -tool gitleaks -target . -verbose -json -output secrets.json
+      openctemio-sensor -tool betterleaks -target . -verbose -json -output secrets.json
       SECRETS=$(cat secrets.json | jq '.findings | length')
       if [ "$SECRETS" -gt 0 ]; then
         exit 1

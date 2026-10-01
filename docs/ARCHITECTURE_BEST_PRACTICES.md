@@ -18,7 +18,7 @@ Tài liệu này tổng hợp các best practices từ việc nghiên cứu:
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐        │
-│  │ Semgrep  │  │ Gitleaks │  │  Trivy   │  │ Custom   │        │
+│  │ Semgrep  │  │Betterleak│  │  Trivy   │  │ Custom   │        │
 │  │ Scanner  │  │ Scanner  │  │ Scanner  │  │ Scanner  │        │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘        │
 │       │             │             │             │               │
@@ -352,9 +352,9 @@ func streamOutput(reader io.ReadCloser, logFn func(string)) {
 semgrep scan --config auto --json --output result.json <target>
 ```
 
-**Gitleaks:**
+**Betterleaks** (v1; the successor to gitleaks, same flags and JSON report):
 ```bash
-gitleaks dir <path> --ignore-gitleaks-allow --exit-code 0 \
+betterleaks dir <path> --ignore-gitleaks-allow --exit-code 0 --no-banner \
     --report-format json --report-path result.json
 ```
 
@@ -446,7 +446,7 @@ func GenerateScaFingerprint(pkgName, pkgVersion, vulnID string) string {
 }
 ```
 
-**Best Practice**: Gitleaks provides its own fingerprint which already includes commit + file + rule + line + secret_hash. Use native fingerprint when available, fall back to our own when not.
+**Best Practice**: Betterleaks (like gitleaks before it) provides its own fingerprint which already includes commit + file + rule + line + secret_hash. Use native fingerprint when available, fall back to our own when not.
 
 ### 6.2.1 Best Fingerprint Format Recommendation
 
@@ -511,7 +511,7 @@ func getFingerprint(finding Finding) string {
 "MEDIUM"   → SeverityMedium
 "LOW"      → SeverityLow
 
-// Gitleaks
+// Betterleaks
 All secrets → SeverityHigh  // Default high severity
 
 // CVSS-based (preferred)
@@ -641,7 +641,7 @@ COPY . .
 RUN go build -o /sensor ./cmd/sensor
 
 # Stage 2: Runtime with scanner
-FROM returntocorp/semgrep  # Or aquasec/trivy, zricethezav/gitleaks
+FROM returntocorp/semgrep  # Or aquasec/trivy, ghcr.io/betterleaks/betterleaks:v1
 COPY --from=build /sensor /sensor
 ENTRYPOINT []
 CMD ["/sensor", "run"]
@@ -653,7 +653,7 @@ CMD ["/sensor", "run"]
 |---------|-----------|
 | Semgrep | `returntocorp/semgrep` |
 | Trivy | `aquasec/trivy` |
-| Gitleaks | `zricethezav/gitleaks` |
+| Betterleaks | `ghcr.io/betterleaks/betterleaks:v1` |
 
 ---
 
@@ -687,7 +687,7 @@ testdata/
 ├── trivy/
 │   ├── sbom.json
 │   └── vulnerabilities.json
-├── gitleaks/
+├── betterleaks/
 │   └── secrets.json
 └── sample_project/
     ├── vulnerable_code.py
@@ -715,7 +715,7 @@ SCAN_TIMEOUT=30m
 # Scanner-specific
 SEMGREP_RULES=auto
 TRIVY_SKIP_DB_UPDATE=false
-GITLEAKS_CONFIG=.gitleaks.toml
+BETTERLEAKS_CONFIG=.betterleaks.toml   # GITLEAKS_CONFIG is read too
 
 # Output
 VERBOSE=true
@@ -739,7 +739,7 @@ openctem:
 scanners:
   - name: semgrep
     enabled: true
-  - name: gitleaks
+  - name: betterleaks
     enabled: true
   - name: trivy
     enabled: true
@@ -782,7 +782,7 @@ targets:
 
 ### Scanner Implementations
 - [ ] Semgrep scanner (SAST)
-- [x] Gitleaks scanner (Secret Detection)
+- [x] Betterleaks scanner (Secret Detection; replaced the gitleaks scanner)
 - [ ] Trivy scanner (SCA)
 - [ ] Web3 scanners (Slither, Aderyn)
 
@@ -802,23 +802,30 @@ targets:
 
 ---
 
-## 13. Gitleaks Scanner Implementation
+## 13. Betterleaks Scanner Implementation
+
+Betterleaks replaced gitleaks as the secret scanner. Use a v1.x binary: it keeps
+the gitleaks CLI flags, config files (`.gitleaks.toml` still loads) and JSON
+report, so a secret both tools report keeps the same fingerprint. v2 changes the
+report format and is refused by the parser (`betterleaks.ErrV2Report`).
+A platform that still sends the old name ("gitleaks") as a scanner or template
+type is handled by `core.CanonicalScannerName`.
 
 ### 13.1 Scanner Usage
 
 ```go
 import (
     "github.com/openctemio/sdk-go/sdk/scanners"
-    "github.com/openctemio/sdk-go/sdk/scanners/gitleaks"
+    "github.com/openctemio/sdk-go/pkg/scanners/betterleaks"
 )
 
 // Quick start - default configuration
-scanner := scanners.Gitleaks()
+scanner := scanners.Betterleaks()
 
 // Custom configuration
-scanner := scanners.GitleaksWithConfig(scanners.GitleaksOptions{
-    Binary:     "/usr/local/bin/gitleaks",
-    ConfigFile: ".gitleaks.toml",
+scanner := scanners.BetterleaksWithConfig(scanners.BetterleaksOptions{
+    Binary:     "/usr/local/bin/betterleaks",
+    ConfigFile: ".betterleaks.toml",
     Timeout:    30 * time.Minute,
     Verbose:    true,
 })
@@ -828,18 +835,17 @@ installed, version, _ := scanner.IsInstalled(ctx)
 
 // Run scan
 result, err := scanner.Scan(ctx, "/path/to/repo", &core.SecretScanOptions{
-    Exclude: []string{"vendor/", "node_modules/"},
-    NoGit:   false,
+    Exclude: []string{"vendor/", "node_modules/"}, // applied to the report
 })
 ```
 
 ### 13.2 Parser Usage
 
 ```go
-import "github.com/openctemio/sdk-go/sdk/scanners/gitleaks"
+import "github.com/openctemio/sdk-go/pkg/scanners/betterleaks"
 
-// Parse gitleaks JSON output to CTIS format
-parser := &gitleaks.Parser{}
+// Parse betterleaks (or gitleaks) JSON output to CTIS format
+parser := &betterleaks.Parser{}
 report, err := parser.Parse(ctx, jsonData, &core.ParseOptions{
     AssetType:  ctis.AssetTypeRepository,
     AssetValue: "github.com/org/repo",
@@ -850,7 +856,7 @@ report, err := parser.Parse(ctx, jsonData, &core.ParseOptions{
 
 ### 13.3 Fingerprint Strategy
 
-Gitleaks native fingerprint format: `{commit}:{file}:{rule}:{startLine}:{secretHash}`
+Native fingerprint format (betterleaks v1 and gitleaks): `{file}:{rule}:{startLine}` for a `dir` scan, `{commit}:{file}:{rule}:{startLine}` for a `git` scan
 
 Our fallback (when native not available):
 ```go

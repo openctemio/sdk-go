@@ -196,6 +196,20 @@ func execPayload(t *testing.T, exec *core.DefaultCommandExecutor, payload map[st
 	return exec.Execute(context.Background(), &core.Command{ID: "c", Type: "scan", Payload: b})
 }
 
+// A platform that still dispatches "gitleaks" (scan configs not migrated)
+// runs the betterleaks scanner instead of failing "scanner not found".
+func TestExecuteRetiredScannerNameRunsReplacement(t *testing.T) {
+	s := &listScanner{rawScanner: rawScanner{name: core.ScannerBetterleaks, out: `{"version":"2.1.0","runs":[]}`}}
+	e := core.NewDefaultCommandExecutor(&mocks.MockPusher{})
+	e.AddScanner(s)
+	if _, err := execPayload(t, e, map[string]any{"scanner": "gitleaks", "target": "203.0.113.10"}); err != nil {
+		t.Fatalf("gitleaks command: %v", err)
+	}
+	if s.single != "203.0.113.10" {
+		t.Fatalf("betterleaks scanner was not run (single=%q)", s.single)
+	}
+}
+
 // The platform sends a multi-target nuclei job as "targets" only (no
 // "target"); a single-target or older job as "target".
 func TestExecuteScanTargetShapes(t *testing.T) {
@@ -255,8 +269,8 @@ func TestExecuteScanTargetShapes(t *testing.T) {
 	})
 
 	t.Run("single-target scanner refuses a list", func(t *testing.T) {
-		e := newExec(&rawScanner{name: "gitleaks"})
-		if _, err := execPayload(t, e, map[string]any{"scanner": "gitleaks", "targets": []string{"203.0.113.10", "203.0.113.11"}}); err == nil {
+		e := newExec(&rawScanner{name: "betterleaks"})
+		if _, err := execPayload(t, e, map[string]any{"scanner": "betterleaks", "targets": []string{"203.0.113.10", "203.0.113.11"}}); err == nil {
 			t.Fatal("a scanner without list support must not silently scan one of several targets")
 		}
 	})

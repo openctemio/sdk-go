@@ -20,7 +20,7 @@ import (
 // malicious tenant admin, or anyone who can inject a command must not be able
 // to turn the sensor into an SSRF proxy (e.g. nuclei against
 // http://169.254.169.254 returns cloud IAM credentials inside a finding), a
-// local file reader (semgrep/gitleaks over /etc or ~/.ssh ships their content
+// local file reader (semgrep/betterleaks over /etc or ~/.ssh ships their content
 // back as findings), or a flag injector (a target of "-config=/tmp/x" is
 // parsed by the scanner as an option). DefaultCommandExecutor therefore runs
 // every scan target through a ScanTargetPolicy before invoking the scanner.
