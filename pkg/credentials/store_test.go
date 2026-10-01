@@ -546,6 +546,10 @@ func TestSecureCompare(t *testing.T) {
 		{"different lengths", "short", "longer", false},
 		{"empty strings", "", "", true},
 		{"one empty", "secret", "", false},
+		{"prefix", "secret", "secret123", false},
+		{"last byte differs", "secret123", "secret124", false},
+		{"case differs", "Secret", "secret", false},
+		{"unicode equal", "pässwörd", "pässwörd", true},
 	}
 
 	for _, tt := range tests {
