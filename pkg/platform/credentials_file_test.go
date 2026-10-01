@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -127,6 +128,40 @@ func TestMigrateCredentialsFileInvalidOldIsKept(t *testing.T) {
 	}
 	if _, err := os.Stat(to); !os.IsNotExist(err) {
 		t.Fatalf("no new file may be written from an invalid old one: %v", err)
+	}
+}
+
+// A credentials directory the sensor cannot write (a read-only volume or a
+// Kubernetes Secret) must not stop an upgraded sensor from starting: the old
+// file is used where it is and nothing is changed.
+func TestResolveCredentialsFileReadOnlyFallsBack(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".openctem")
+	legacy := filepath.Join(dir, "agent-credentials.json")
+	writeLegacy(t, legacy, 0o400)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	_, err := MigrateCredentialsFile(legacy, filepath.Join(dir, "sensor-credentials.json"))
+	if !errors.Is(err, ErrCredentialsFileNotMoved) {
+		t.Fatalf("MigrateCredentialsFile err = %v, want ErrCredentialsFileNotMoved", err)
+	}
+	got, err := ResolveCredentialsFile("")
+	if err != nil || got != legacy {
+		t.Fatalf("= %q, %v; want the old file used in place", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sensor-credentials.json")); !os.IsNotExist(err) {
+		t.Fatal("no new file may be left behind")
+	}
+	creds, err := NewFileCredentialStore(got).Load()
+	if err != nil || creds.SensorID != "11111111-2222-3333-4444-555555555555" {
+		t.Fatalf("old file unusable: %+v %v", creds, err)
 	}
 }
 

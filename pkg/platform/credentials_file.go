@@ -32,11 +32,18 @@ func homeFile(name string) (string, error) {
 	return filepath.Join(home, ".openctem", name), nil
 }
 
+// ErrCredentialsFileNotMoved is returned by MigrateCredentialsFile when the
+// old file is valid but could not be moved (a read-only volume, a Kubernetes
+// Secret, a single bind-mounted file). Nothing was changed.
+var ErrCredentialsFileNotMoved = errors.New("credentials file not moved")
+
 // ResolveCredentialsFile returns the credentials file a sensor should use.
 // An explicit path is returned as is. With an empty path it returns
 // DefaultCredentialsFile, after moving a pre-rename credentials file there
 // (MigrateCredentialsFile), so an upgraded sensor keeps its identity and API
-// key without registering again.
+// key without registering again. When the old file cannot be moved (see
+// ErrCredentialsFileNotMoved) it is used where it is, with a warning, so a
+// deployment that mounts it read-only keeps starting exactly as before.
 func ResolveCredentialsFile(explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
@@ -50,6 +57,11 @@ func ResolveCredentialsFile(explicit string) (string, error) {
 		return "", err
 	}
 	if _, err := MigrateCredentialsFile(legacy, path); err != nil {
+		if errors.Is(err, ErrCredentialsFileNotMoved) {
+			slog.Warn("cannot move the credentials file to its new name; using it at its old path",
+				"path", legacy, "new_name", path, "reason", err.Error())
+			return legacy, nil
+		}
 		return "", err
 	}
 	return path, nil
@@ -66,9 +78,11 @@ func ResolveCredentialsFile(explicit string) (string, error) {
 //  4. only then is from removed.
 //
 // An interruption at any step leaves from in place, and the next start
-// migrates again. When to already exists it wins: from is left untouched and
-// a warning names both files. When from does not exist there is nothing to
-// do. It reports whether a file was moved.
+// migrates again. If writing to, verifying it or removing from fails, to is
+// removed again and the error wraps ErrCredentialsFileNotMoved: the state is
+// exactly as before. When to already exists it wins: from is left untouched
+// and a warning names both files. When from does not exist there is nothing
+// to do. It reports whether a file was moved.
 func MigrateCredentialsFile(from, to string) (moved bool, err error) {
 	if _, err := os.Lstat(from); errors.Is(err, fs.ErrNotExist) {
 		return false, nil
@@ -93,19 +107,22 @@ func MigrateCredentialsFile(from, to string) (moved bool, err error) {
 	}
 
 	store := NewFileCredentialStore(to)
+	undo := func(cause error) (bool, error) {
+		_ = os.Remove(to)
+		return false, fmt.Errorf("%w from %s to %s: %w", ErrCredentialsFileNotMoved, from, to, cause)
+	}
 	if err := store.Save(creds); err != nil {
-		return false, fmt.Errorf("migrate credentials to %s: %w", to, err)
+		return undo(err)
 	}
 	back, err := store.Load()
 	if err != nil {
-		return false, fmt.Errorf("migrate credentials: read back %s: %w", to, err)
+		return undo(fmt.Errorf("read back: %w", err))
 	}
 	if !sameCredentials(creds, back) {
-		return false, fmt.Errorf("migrate credentials: %s does not read back as written; %s kept", to, from)
+		return undo(errors.New("the new file does not read back as written"))
 	}
-
 	if err := os.Remove(from); err != nil {
-		return false, fmt.Errorf("migrate credentials: remove %s (the new file %s is complete): %w", from, to, err)
+		return undo(fmt.Errorf("remove the old file: %w", err))
 	}
 	syncDir(filepath.Dir(from))
 	slog.Warn("moved the credentials file to its new name (sensor rename)", "from", from, "to", to)
