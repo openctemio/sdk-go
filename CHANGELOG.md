@@ -43,6 +43,16 @@ All notable changes to `github.com/openctemio/sdk-go`.
   and falls back once to the old route on a 404. A failure is now returned
   instead of an empty rule list, so callers can tell the operator that the
   gate ran without suppressions.
+- **Scanners no longer write their report into the scanned tree.** gitleaks,
+  semgrep and CodeQL joined their default (relative) report file, and CodeQL
+  its database, onto the target directory. A read-only target (a `:ro`
+  volume, the usual Kubernetes and compose mount) failed with
+  `Report path is not writable` / `failed to read gitleaks output`; two scans
+  of one tree could overwrite each other's report; and an interrupted scan
+  left the file in the user's repository. A relative `OutputFile` (the
+  default) is now written, under its base name, into a private temporary
+  directory that is removed after the scan; so is a CodeQL database built
+  for the run. An absolute `OutputFile` or `DatabasePath` is used as before.
 
 ### Added
 

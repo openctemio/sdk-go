@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/scanners/internal/report"
 )
 
 const (
@@ -32,13 +33,13 @@ const (
 type Scanner struct {
 	// Configuration
 	Binary     string        // Path to codeql binary (default: "codeql")
-	OutputFile string        // Output file path (default: "codeql-results.sarif")
+	OutputFile string        // Report file: an absolute path is used as is; otherwise the base name, in a temporary directory removed after the scan
 	Timeout    time.Duration // Scan timeout (default: 60 minutes)
 	Verbose    bool          // Enable verbose output
 
 	// CodeQL-specific options
 	Language       Language // Target language (required)
-	DatabasePath   string   // Path to CodeQL database (optional, will create if not provided)
+	DatabasePath   string   // Path to CodeQL database (optional: when empty, built in a temporary directory removed after the scan)
 	QueryPacks     []string // Query packs to use (default: security-extended)
 	QueryFiles     []string // Specific .ql files to run
 	Threads        int      // Number of threads (0 = auto)
@@ -160,17 +161,28 @@ func (s *Scanner) Scan(ctx context.Context, target string, opts *core.ScanOption
 	// Determine database path
 	dbPath := s.DatabasePath
 	if dbPath == "" {
-		dbPath = filepath.Join(absTarget, ".codeql-db")
+		if s.SkipDBCreation {
+			// Analyze the database a previous run left in the tree.
+			dbPath = filepath.Join(absTarget, ".codeql-db")
+		} else {
+			// A database built for this run goes outside the scanned
+			// tree (it may be read-only) and is removed afterwards.
+			dbDir, err := os.MkdirTemp("", "openctem-codeql-db-*")
+			if err != nil {
+				return nil, fmt.Errorf("create codeql database directory: %w", err)
+			}
+			defer func() { _ = os.RemoveAll(dbDir) }()
+			dbPath = filepath.Join(dbDir, "db")
+		}
 	}
 
-	// Determine output file path
-	outputFile := s.OutputFile
-	if outputFile == "" {
-		outputFile = DefaultOutputFile
+	// The report never goes into the scanned tree (it may be read-only):
+	// a relative OutputFile lands in a private temporary directory.
+	outputFile, cleanupReport, err := report.Path(s.OutputFile, DefaultOutputFile, "codeql")
+	if err != nil {
+		return nil, err
 	}
-	if !filepath.IsAbs(outputFile) {
-		outputFile = filepath.Join(absTarget, outputFile)
-	}
+	defer cleanupReport()
 
 	binary := s.Binary
 	if binary == "" {
