@@ -324,3 +324,31 @@ func TestBaseSensor_FirstHeartbeatIsNotRepeatedByStart(t *testing.T) {
 		t.Fatalf("rejected FirstHeartbeat = %v, %v", next, err)
 	}
 }
+
+func TestAuthFailureAdvice(t *testing.T) {
+	rejected := AuthFailureAdvice(&statusErr{401}, "rda_ab12…")
+	for _, part := range []string{"rejected the API key", "HTTP 401", "rda_ab12…", "Settings → Sensors", "API_KEY"} {
+		if !strings.Contains(rejected, part) {
+			t.Errorf("advice lacks %q: %s", part, rejected)
+		}
+	}
+	// The key never reached the API (web UI origin, header-stripping proxy).
+	stripped := AuthFailureAdvice(fmt.Errorf("request failed: %w", &bodyStatusErr{401, `{"code":"UNAUTHORIZED","message":"API key required"}`}), "rda_ab12…")
+	for _, part := range []string{"never reached the API", "web UI", "Authorization header", "API_URL", "rda_ab12…"} {
+		if !strings.Contains(stripped, part) {
+			t.Errorf("stripped-key advice lacks %q: %s", part, stripped)
+		}
+	}
+	if strings.Contains(stripped, "regenerate") {
+		t.Errorf("a key that never arrived must not be blamed: %s", stripped)
+	}
+}
+
+// bodyStatusErr mimics *client.HTTPError, whose message includes the body.
+type bodyStatusErr struct {
+	code int
+	body string
+}
+
+func (e *bodyStatusErr) Error() string       { return fmt.Sprintf("http %d: %s", e.code, e.body) }
+func (e *bodyStatusErr) HTTPStatusCode() int { return e.code }

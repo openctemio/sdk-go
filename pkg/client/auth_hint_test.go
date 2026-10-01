@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -27,5 +28,23 @@ func TestAuthFailureVisibleToCore(t *testing.T) {
 	var hinter core.APIKeyHinter = c
 	if got := hinter.APIKeyHint(); got != "rda_5d22…" {
 		t.Fatalf("APIKeyHint = %q", got)
+	}
+}
+
+// Through the web UI origin (or a proxy that strips Authorization) the API
+// answers 401 "API key required": the advice must point at API_URL, not at
+// the key.
+func TestAuthFailureAdvice_KeyNeverReachedAPI(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"UNAUTHORIZED","code":"UNAUTHORIZED","message":"API key required"}`))
+	}))
+	defer srv.Close()
+
+	c := New(&Config{BaseURL: srv.URL, APIKey: "rda_5d221b75e7c2c415", MaxRetries: 1})
+	err := c.SendHeartbeat(context.Background(), &core.SensorStatus{Name: "t"})
+	advice := core.AuthFailureAdvice(err, c.APIKeyHint())
+	if !strings.Contains(advice, "never reached the API") || !strings.Contains(advice, "API_URL") {
+		t.Fatalf("advice %q", advice)
 	}
 }

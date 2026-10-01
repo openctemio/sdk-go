@@ -20,7 +20,10 @@ All notable changes to `github.com/openctemio/sdk-go`.
   platform said nothing. The `AuthGate` now logs once per backoff step or
   change of state, never per request: the HTTP status, the key's non-secret
   prefix (`core.APIKeyHint`, at most 8 characters) and what to do (create or
-  regenerate a key under Settings → Sensors, set `API_KEY`, restart). Network
+  regenerate a key under Settings → Sensors, set `API_KEY`, restart). A 401
+  "API key required" although a key was sent says instead that the key never
+  reached the API: `API_URL` points at the web UI or at a proxy that strips
+  `Authorization` (`core.AuthFailureAdvice`). Network
   failures are logged at 1, 2, 4, 8, ... consecutive attempts, and recovery
   is logged too.
 - **One heartbeat at daemon start, not two.** `BaseSensor.FirstHeartbeat`
@@ -35,7 +38,7 @@ All notable changes to `github.com/openctemio/sdk-go`.
 ### Added
 
 - `core.AuthGate`, `core.AuthFailureStatus`, `core.APIKeyHint`,
-  `core.APIKeyHinter`, `BaseSensor.AuthGate`/`SetAuthGate`/`FirstHeartbeat`,
+  `core.APIKeyHinter`, `core.AuthFailureAdvice`, `BaseSensor.AuthGate`/`SetAuthGate`/`FirstHeartbeat`,
   `CommandPoller.SetAuthGate`, `client.HTTPError.HTTPStatusCode`,
   `client.Client.APIKeyHint`, `httpsec.FirstWarning`.
 
