@@ -23,13 +23,19 @@ All notable changes to `github.com/openctemio/sdk-go`.
   regenerate a key under Settings → Sensors, set `API_KEY`, restart). Network
   failures are logged at 1, 2, 4, 8, ... consecutive attempts, and recovery
   is logged too.
+- **One heartbeat at daemon start, not two.** `BaseSensor.FirstHeartbeat`
+  sends the first heartbeat (through the doorbell and the `AuthGate`) before
+  `Start`, which then waits the advised interval instead of sending another.
+  A daemon uses it as its connection check in place of
+  `Pusher.TestConnection` (a plain heartbeat followed at once by the loop's
+  first one).
 - **The plain-http warning is printed once per process per base URL**,
   shared by `pkg/client` and `pkg/platform` (`httpsec.FirstWarning`).
 
 ### Added
 
 - `core.AuthGate`, `core.AuthFailureStatus`, `core.APIKeyHint`,
-  `core.APIKeyHinter`, `BaseSensor.AuthGate`/`SetAuthGate`,
+  `core.APIKeyHinter`, `BaseSensor.AuthGate`/`SetAuthGate`/`FirstHeartbeat`,
   `CommandPoller.SetAuthGate`, `client.HTTPError.HTTPStatusCode`,
   `client.Client.APIKeyHint`, `httpsec.FirstWarning`.
 
