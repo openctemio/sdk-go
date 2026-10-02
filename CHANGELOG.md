@@ -6,6 +6,38 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **Sensor control plane under load** (api RFC-035 Phase 1). A sensor whose
+  scanners saturate the machine keeps heartbeating, and the kernel kills a
+  scanner, not the sensor, when memory runs out.
+  - **Control channel.** Heartbeats use their own HTTP client: a clone of
+    the API client's transport (same proxy, TLS settings and dial guard)
+    with its own connection pool. Each request is bounded by the new
+    `Config.ControlTimeout` (default `client.DefaultControlTimeout`, 15s;
+    never above `Timeout`) and retried at most once. A failed heartbeat is
+    not retried with its stale report: the next one follows after
+    `core.HeartbeatRetryDelay` (10s ± 20%, never above the interval). The
+    manifest exchange before a heartbeat is bounded by 15s.
+  - **Version probes off the heartbeat.** `ToolRegistry.SetBackgroundRefresh`
+    reports a stale probe as it is and probes again in the background (the
+    first probe and the one after `Refresh` stay in the report). sensorkit
+    turns it on. Under load the inline probes delayed a heartbeat by 4s.
+  - **`control` on every heartbeat** (`core.ControlStats`,
+    `SensorStatus.Control`): the interval followed, the gap since the
+    previous delivered heartbeat, how late the timer fired (CPU wait), the
+    time spent building the report, the previous round trip, and the
+    failures since. Additive; a platform that does not know it ignores it.
+  - **Scanner priority** (`core.ScannerPriority`, `SetScannerPriority`,
+    `ApplyScannerPriority`; Linux). Every scanner process group the SDK's
+    exec helpers start runs at nice +10 and best-effort I/O level 7, with
+    `oom_score_adj` 500 (`core.DefaultScannerPriority`). The change is best
+    effort and is skipped where refused. It is off by default in `core`.
+    sensorkit turns it on unless `SENSOR_SCANNER_PRIORITY=normal`
+    (`Options.ScannerPriority`, `ResolveScannerPriority`).
+  - **Memory headroom.** The slots leave memory free for the sensor itself
+    (`resource.ManagerConfig.ReservedMemBytes`). The default
+    (`resource.DefaultReservedMem`) is a tenth of the memory the sensor may
+    use, between 256 MiB and 1 GiB.
+
 - **Proxy settings per outbound path** (api RFC-034 Phase 0).
   - **Two new sensorkit settings:**
     - `SENSOR_CONTROL_PROXY` covers every request to the platform.
@@ -48,6 +80,7 @@ All notable changes to `github.com/openctemio/sdk-go`.
   hard-codes. When local DNS cannot resolve such a name, it may still go
   through a proxy, which resolves it. The KEV and EPSS enrichers register
   their default hosts.
+||||||| parent of 8fcd393 (feat(sensor): control plane under load (api RFC-035 Phase 1))
 
 - **Platform policy and slim heartbeats** (api RFC-033 §6.12, owner decisions
   O2 and O3).

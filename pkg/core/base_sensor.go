@@ -82,6 +82,9 @@ type BaseSensor struct {
 	// manifest is the registration state of the sensor manifest (api
 	// RFC-033, manifest.go).
 	manifest manifestState
+
+	// control measures the heartbeat loop (ControlStats, api RFC-035).
+	control controlTracker
 }
 
 // manifestState is what a BaseSensor knows about its registered manifest.
@@ -781,24 +784,40 @@ func (a *BaseSensor) FirstHeartbeat(ctx context.Context) (time.Duration, error) 
 
 // heartbeatOnce sends one heartbeat and returns the delay before the next and
 // the heartbeat's error.
+//
+// The report is built first (load snapshot, tool inventory, manifest; the
+// manifest exchange is bounded by manifestSyncTimeout) and carries the
+// control channel's own stats (ControlStats). A heartbeat that fails is not
+// retried with its stale report: the next one follows after
+// HeartbeatRetryDelay instead of the full interval.
 func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (time.Duration, error) {
 	next := a.heartbeatInterval
 	if a.pusher == nil {
 		return next, nil
 	}
+	start := time.Now()
 	status = a.withCapabilities(ctx, status)
-	a.syncManifest(ctx, status)
+	mctx, cancel := context.WithTimeout(ctx, manifestSyncTimeout)
+	a.syncManifest(mctx, status)
+	cancel()
+	sent := time.Now()
+	status.Control = a.control.stats(sent, sent.Sub(start), next)
+
 	dp, doorbell := a.pusher.(DoorbellPusher)
 	if a.doorbell == nil || !doorbell {
 		err := a.pusher.SendHeartbeat(ctx, status)
 		if err != nil {
+			a.control.failed()
 			if a.verbose {
 				fmt.Printf("[%s] Heartbeat error: %v\n", a.name, err)
 			}
-		} else if a.verbose {
+			return a.afterHeartbeat(err, a.nextAfterFailure(err, next)), err
+		}
+		a.control.delivered(sent, time.Since(sent), next)
+		if a.verbose {
 			fmt.Printf("[%s] Heartbeat sent\n", a.name)
 		}
-		return a.afterHeartbeat(err, next), err
+		return a.afterHeartbeat(nil, next), nil
 	}
 
 	if state := a.doorbell.State(); state != "running" {
@@ -806,6 +825,7 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 	}
 	hints, err := dp.SendHeartbeatWithHints(ctx, status)
 	if err != nil {
+		a.control.failed()
 		if AuthFailureStatus(err) != 0 {
 			// The auth gate logs this and stops polling; the doorbell's
 			// "fixed-interval polling" fallback does not apply.
@@ -816,14 +836,26 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 		if a.verbose {
 			fmt.Printf("[%s] Heartbeat error: %v\n", a.name, err)
 		}
-		return a.afterHeartbeat(err, next), err
+		return a.afterHeartbeat(err, a.nextAfterFailure(err, next)), err
 	}
+	rtt := time.Since(sent)
 	a.doorbell.Handle(hints)
 	a.manifestAsked(hints)
 	if hints.NextHeartbeat > 0 {
 		next = hints.NextHeartbeat
 	}
+	a.control.delivered(sent, rtt, next)
 	return a.afterHeartbeat(nil, next), nil
+}
+
+// nextAfterFailure is the delay after a heartbeat that failed: about
+// HeartbeatRetryDelay, never more than next. A rejected key keeps next (the
+// auth gate backs off instead).
+func (a *BaseSensor) nextAfterFailure(err error, next time.Duration) time.Duration {
+	if AuthFailureStatus(err) != 0 {
+		return next
+	}
+	return retryDelay(next)
 }
 
 // paused reports whether the platform paused or drained this sensor.
@@ -846,6 +878,7 @@ func (a *BaseSensor) heartbeatLoop(ctx context.Context) {
 	}
 	timer := time.NewTimer(first)
 	defer timer.Stop()
+	due := time.Now().Add(first)
 
 	for {
 		select {
@@ -854,7 +887,11 @@ func (a *BaseSensor) heartbeatLoop(ctx context.Context) {
 		case <-a.stopCh:
 			return
 		case <-timer.C:
-			timer.Reset(a.sendHeartbeat(ctx))
+			// How late the timer fired: the time the loop waited for a CPU.
+			a.control.fired(due, time.Now())
+			d := a.sendHeartbeat(ctx)
+			timer.Reset(d)
+			due = time.Now().Add(d)
 		}
 	}
 }

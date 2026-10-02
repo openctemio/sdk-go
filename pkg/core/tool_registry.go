@@ -155,6 +155,8 @@ type registeredTool struct {
 	probedAt  time.Time
 	installed bool
 	version   string
+	// refreshing: a background probe of this tool is running.
+	refreshing bool
 }
 
 // ToolRegistry is the inventory a sensor reports: the tools it registered,
@@ -173,6 +175,14 @@ type ToolRegistry struct {
 	ttl     time.Duration
 	timeout time.Duration
 	now     func() time.Time
+	// background: after the first probe, a stale result is reported as it is
+	// and the tool is probed again in the background (SetBackgroundRefresh).
+	background bool
+	// refreshes counts the background refreshes running (tests wait on it).
+	refreshes sync.WaitGroup
+	// gen moves on every Refresh: a background probe started before one
+	// does not overwrite what the probe after it found.
+	gen uint64
 }
 
 var _ CapabilityReporter = (*ToolRegistry)(nil)
@@ -333,9 +343,23 @@ func (r *ToolRegistry) SetProbeTimeout(d time.Duration) {
 	r.mu.Unlock()
 }
 
+// SetBackgroundRefresh moves the probes after a tool's first one off the
+// report: a result older than the probe TTL is reported as it is and the
+// tool is probed again in the background, so the next report has the new
+// result. A probe runs the tool's version check, which on a sensor whose
+// scanners saturate the CPU can take many seconds; in the report it delays
+// the heartbeat by as much (api RFC-035 §5.1). The first probe of each tool
+// (and the one after Refresh) stays in the report. sensorkit turns it on.
+func (r *ToolRegistry) SetBackgroundRefresh(on bool) {
+	r.mu.Lock()
+	r.background = on
+	r.mu.Unlock()
+}
+
 // Refresh makes the next report probe every tool again.
 func (r *ToolRegistry) Refresh() {
 	r.mu.Lock()
+	r.gen++
 	for _, t := range r.tools {
 		t.probedAt = time.Time{}
 	}
@@ -410,13 +434,18 @@ func (r *ToolRegistry) CapabilityReport(ctx context.Context) CapabilityReport {
 		rep.Tools = make([]ToolInfo, 0, len(r.tools))
 	}
 	var caps []string
+	var stale []*registeredTool
 	for _, t := range r.tools {
 		if !r.allowedLocked(t.spec.Name) {
 			continue
 		}
-		if t.probedAt.IsZero() || now.Sub(t.probedAt) >= r.ttl {
+		switch {
+		case t.probedAt.IsZero() || (!r.background && now.Sub(t.probedAt) >= r.ttl):
 			t.installed, t.version = r.probeLocked(ctx, t.spec)
 			t.probedAt = now
+		case r.background && now.Sub(t.probedAt) >= r.ttl && !t.refreshing:
+			t.refreshing = true
+			stale = append(stale, t)
 		}
 		info := ToolInfo{Name: t.spec.Name, Kind: t.spec.Kind, Version: t.version, Installed: t.installed}
 		if len(t.spec.Capabilities) > 0 {
@@ -429,6 +458,10 @@ func (r *ToolRegistry) CapabilityReport(ctx context.Context) CapabilityReport {
 		}
 	}
 	caps = appendUnique(caps, r.sensorCap...)
+	if len(stale) > 0 {
+		r.refreshes.Add(1)
+		go r.refresh(context.WithoutCancel(ctx), stale, r.timeout, r.gen)
+	}
 	if caps != nil || rep.Tools != nil {
 		rep.Capabilities = caps
 		if rep.Capabilities == nil {
@@ -438,12 +471,32 @@ func (r *ToolRegistry) CapabilityReport(ctx context.Context) CapabilityReport {
 	return rep
 }
 
+// refresh probes stale tools in the background, without the lock (reports
+// go on with the previous results meanwhile), one after the other.
+func (r *ToolRegistry) refresh(ctx context.Context, tools []*registeredTool, timeout time.Duration, gen uint64) {
+	defer r.refreshes.Done()
+	for _, t := range tools {
+		installed, version := probeTool(ctx, t.spec, timeout)
+		r.mu.Lock()
+		if r.gen == gen { // after a Refresh the next report probes it itself
+			t.installed, t.version, t.probedAt = installed, version, r.now()
+		}
+		t.refreshing = false
+		r.mu.Unlock()
+	}
+}
+
 // probeLocked runs one tool's probe under the probe timeout.
 func (r *ToolRegistry) probeLocked(ctx context.Context, spec ToolSpec) (bool, string) {
+	return probeTool(ctx, spec, r.timeout)
+}
+
+// probeTool runs one tool's probe under timeout.
+func probeTool(ctx context.Context, spec ToolSpec, timeout time.Duration) (bool, string) {
 	if spec.Probe == nil {
 		return true, spec.Version
 	}
-	pctx, cancel := context.WithTimeout(ctx, r.timeout)
+	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	installed, version, err := spec.Probe(pctx)
 	if err != nil || !installed {
