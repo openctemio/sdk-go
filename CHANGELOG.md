@@ -4,9 +4,11 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
-Only additions (checked by `api-compat` against v0.11.0).
+### Added after v0.11.0
 
-### Added
+Only additions (checked by `api-compat` against v0.11.0). v0.11.0 was
+tagged from the entries below this section, which still need their
+`## v0.11.0` heading (with `sdk.Version` bumped in the same release PR).
 
 - **`pkg/sensorkit`: everything a sensor needs to work with the platform, in
   one call.** A sensor implements its tools; `sensorkit.New(Options)` +
@@ -37,7 +39,7 @@ Only additions (checked by `api-compat` against v0.11.0).
   `ApplyRenamedFlags`: the sensor binary's renamed settings, migrated in one
   place (moved from the sensor).
 
-## v0.11.0 (2026-10-02)
+### v0.11.0 (released 2026-10-02)
 
 ### Upgrade notes
 
