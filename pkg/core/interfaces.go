@@ -443,6 +443,10 @@ type SensorStatus struct {
 	// on the Sensors page). Both are sent with every heartbeat.
 	Version  string `json:"version,omitempty"`
 	Hostname string `json:"hostname,omitempty"`
+	// InstanceID identifies this sensor process (ProcessInstanceID when
+	// empty). The platform flags a key whose heartbeats come from two
+	// instances in turn: a copied or shared key (api RFC-032 Phase 0).
+	InstanceID string `json:"instance_id,omitempty"`
 
 	// What the sensor reports it can do (see CapabilityReport): its tool
 	// inventory, the capabilities it serves and how many jobs it runs at

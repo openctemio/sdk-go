@@ -29,6 +29,12 @@ git -C "$ROOT" worktree add --detach "$WORK/base" "$BASE" >/dev/null 2>&1
 (cd "$ROOT" && GOWORK=off apidiff -m -w "$WORK/head.export" "$MODULE")
 
 INCOMPATIBLE="$(apidiff -m -incompatible "$WORK/base.export" "$WORK/head.export" || true)"
+# One change is expected in every release and breaks no sensor: the value of
+# the release constant pkg/sdk.Version (a release PR sets it to the tag).
+# Drop exactly that line; anything else still fails.
+INCOMPATIBLE="$(printf '%s\n' "$INCOMPATIBLE" |
+	grep -Ev '^- (\./|'"$MODULE"'/)pkg/sdk\.Version: value changed from "[0-9]+\.[0-9]+\.[0-9]+" to "[0-9]+\.[0-9]+\.[0-9]+"$' |
+	grep -v '^[[:space:]]*$' || true)"
 echo "check-api-compat: exported API of $MODULE, $BASE -> HEAD"
 apidiff -m "$WORK/base.export" "$WORK/head.export" | sed 's/^/  /' || true
 if [ -n "$INCOMPATIBLE" ]; then

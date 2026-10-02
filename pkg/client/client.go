@@ -3,6 +3,7 @@ package client
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -371,16 +372,21 @@ type IngestResponse struct {
 
 // HeartbeatRequest is the heartbeat payload.
 type HeartbeatRequest struct {
-	Name       string           `json:"name,omitempty"`
-	Status     core.SensorState `json:"status"`
-	Version    string           `json:"version,omitempty"`
-	Hostname   string           `json:"hostname,omitempty"`
-	Message    string           `json:"message,omitempty"`
-	Scanners   []string         `json:"scanners,omitempty"`
-	Collectors []string         `json:"collectors,omitempty"`
-	Uptime     int64            `json:"uptime_seconds,omitempty"`
-	TotalScans int64            `json:"total_scans,omitempty"`
-	Errors     int64            `json:"errors,omitempty"`
+	Name     string           `json:"name,omitempty"`
+	Status   core.SensorState `json:"status"`
+	Version  string           `json:"version,omitempty"`
+	Hostname string           `json:"hostname,omitempty"`
+	// InstanceID is this sensor process's random id
+	// (core.ProcessInstanceID): a restart changes it once, a key running in
+	// two places makes two ids alternate, which the platform flags (api
+	// RFC-032 Phase 0). Platforms that do not know it ignore it.
+	InstanceID string   `json:"instance_id,omitempty"`
+	Message    string   `json:"message,omitempty"`
+	Scanners   []string `json:"scanners,omitempty"`
+	Collectors []string `json:"collectors,omitempty"`
+	Uptime     int64    `json:"uptime_seconds,omitempty"`
+	TotalScans int64    `json:"total_scans,omitempty"`
+	Errors     int64    `json:"errors,omitempty"`
 
 	// System Metrics
 	CPUPercent    float64 `json:"cpu_percent,omitempty"`
@@ -631,8 +637,9 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		ActiveJobsReported: status.ActiveJobsReported,
 		// Version and Hostname were declared on the request but never set, so
 		// every sensor showed "No host info" on the platform.
-		Version:  status.Version,
-		Hostname: status.Hostname,
+		Version:    status.Version,
+		Hostname:   status.Hostname,
+		InstanceID: cmp.Or(status.InstanceID, core.ProcessInstanceID()),
 		// What the sensor reports it can do (nil: nothing reported).
 		Tools:             status.Tools,
 		Capabilities:      status.Capabilities,
