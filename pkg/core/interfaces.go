@@ -470,6 +470,12 @@ type SensorStatus struct {
 	SDK    *SDKInfo     `json:"sdk,omitempty"`
 	Sensor *SensorBuild `json:"sensor,omitempty"`
 
+	// ManifestDigest is the digest of the manifest the platform stored for
+	// this sensor (api RFC-033); BaseSensor sets it once its manifest is
+	// registered. "" sends none, and the platform derives the manifest
+	// from this heartbeat.
+	ManifestDigest string `json:"manifest_digest,omitempty"`
+
 	Resources       *resource.HostResources `json:"resources,omitempty"`
 	Capacity        *resource.Capacity      `json:"capacity,omitempty"`
 	Queue           *QueueStats             `json:"queue,omitempty"`

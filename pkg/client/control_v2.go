@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
@@ -133,6 +134,35 @@ func (c *Client) heartbeatV2(ctx context.Context, req *HeartbeatRequest) ([]byte
 	_ = json.Unmarshal(raw, &resp)
 	return raw, &resp, nil
 }
+
+// PutManifest registers the sensor manifest (api RFC-033) when the platform
+// lists "manifest" on hello; core.ErrManifestUnsupported otherwise. It
+// implements core.ManifestPusher.
+func (c *Client) PutManifest(ctx context.Context, m *core.Manifest) (*core.ManifestAck, error) {
+	if ok, _ := c.controlV2(ctx, protov2.FeatureManifest); !ok {
+		return nil, core.ErrManifestUnsupported
+	}
+	var resp protov2.ManifestResponse
+	if _, err := c.v2JSON(ctx, http.MethodPut, protov2.PathPrefix+protov2.ManifestPath, m, &resp, nil, c.maxRetries); err != nil {
+		if isRouteMissing(err) {
+			c.renegotiate() // listed on hello but not served
+			return nil, core.ErrManifestUnsupported
+		}
+		return nil, err
+	}
+	ack := &core.ManifestAck{
+		Digest:               resp.ManifestDigest,
+		Changed:              resp.Changed,
+		AcceptedTools:        resp.Accepted.Tools,
+		AcceptedCapabilities: resp.Accepted.Capabilities,
+	}
+	for _, i := range resp.Ignored {
+		ack.Ignored = append(ack.Ignored, core.ManifestIgnored{Path: i.Path, Value: i.Value, Reason: i.Reason})
+	}
+	return ack, nil
+}
+
+var _ core.ManifestPusher = (*Client)(nil)
 
 // errPausedHeartbeat is what SendHeartbeat (which does not act on the
 // doorbell) returns for a disabled sensor on v2: v2 answers a disabled
