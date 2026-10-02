@@ -34,6 +34,10 @@ const (
 	DefaultTimeout = 30 * time.Second
 )
 
+// The default feed's host is compiled in, so it may be resolved by an egress
+// proxy when this host has no public DNS (httpsec.TrustUpstreamHosts).
+func init() { httpsec.TrustUpstreamHosts("api.first.org") }
+
 // EPSSData represents EPSS data for a CVE.
 type EPSSData struct {
 	CVE        string    `json:"cve"`
