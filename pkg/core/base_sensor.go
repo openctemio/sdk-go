@@ -2,9 +2,11 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -75,6 +77,101 @@ type BaseSensor struct {
 	// loadReporter supplies the active and maximum jobs on every heartbeat
 	// (see SetLoadReporter).
 	loadReporter LoadReporter
+
+	// manifest is the registration state of the sensor manifest (api
+	// RFC-033, manifest.go).
+	manifest manifestState
+}
+
+// manifestState is what a BaseSensor knows about its registered manifest.
+type manifestState struct {
+	mu sync.Mutex
+	// local is the digest of the manifest last registered, platform the
+	// digest the platform returned for it (echoed on every heartbeat).
+	local, platform string
+	// requested: a heartbeat answer asked for the manifest again.
+	requested bool
+	// retryAt delays a registration after a failure.
+	retryAt time.Time
+}
+
+// manifestRetryDelay is how long a failed registration waits; the heartbeat
+// keeps reporting meanwhile.
+const manifestRetryDelay = time.Minute
+
+// syncManifest registers the sensor's manifest when the platform accepts
+// one and it is new, changed or asked for, and puts the platform's digest on
+// the heartbeat. It never fails the heartbeat: without a registration the
+// platform derives the manifest from the heartbeat itself.
+func (a *BaseSensor) syncManifest(ctx context.Context, status *SensorStatus) {
+	mp, ok := a.pusher.(ManifestPusher)
+	if !ok || status == nil || status.Tools == nil {
+		return
+	}
+	model := ""
+	switch {
+	case status.Capacity != nil:
+		model = ConcurrencyModelDynamic
+	case status.MaxConcurrentJobs > 0:
+		model = ConcurrencyModelFixed
+	}
+	m := BuildManifest(status, status.Resources, model)
+	local, err := m.Digest()
+	if err != nil {
+		return
+	}
+
+	st := &a.manifest
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	now := time.Now()
+	if local == st.local && !st.requested {
+		status.ManifestDigest = st.platform
+		return
+	}
+	if now.Before(st.retryAt) {
+		// Changed but backing off: the old digest would be asked for again
+		// and the platform derives meanwhile, so send none.
+		return
+	}
+	ack, err := mp.PutManifest(ctx, &m)
+	switch {
+	case errors.Is(err, ErrManifestUnsupported):
+		st.local, st.platform, st.requested = "", "", false
+		return
+	case err != nil:
+		st.retryAt = now.Add(manifestRetryDelay)
+		if a.verbose {
+			fmt.Printf("[%s] Manifest not registered (retry in %s): %v\n", a.name, manifestRetryDelay, err)
+		}
+		return
+	}
+	st.local, st.platform, st.requested, st.retryAt = local, ack.Digest, false, time.Time{}
+	status.ManifestDigest = ack.Digest
+	if a.verbose || len(ack.Ignored) > 0 {
+		fmt.Printf("[%s] Manifest registered: %s (%d tools accepted, %d items ignored)\n",
+			a.name, shortDigest(ack.Digest), len(ack.AcceptedTools), len(ack.Ignored))
+		for _, i := range ack.Ignored {
+			fmt.Printf("[%s]   ignored %s %q: %s\n", a.name, i.Path, i.Value, i.Reason)
+		}
+	}
+}
+
+// manifestAsked notes a heartbeat answer that asks for the manifest.
+func (a *BaseSensor) manifestAsked(hints *HeartbeatHints) {
+	if hints == nil || !slices.Contains(hints.Actions, HeartbeatActionSendManifest) {
+		return
+	}
+	a.manifest.mu.Lock()
+	a.manifest.requested = true
+	a.manifest.mu.Unlock()
+}
+
+func shortDigest(d string) string {
+	if len(d) > len("sha256:")+12 {
+		return d[:len("sha256:")+12]
+	}
+	return d
 }
 
 // SetLoadReporter makes every heartbeat carry r's load: the commands the
@@ -535,6 +632,7 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 		return next, nil
 	}
 	status = a.withCapabilities(ctx, status)
+	a.syncManifest(ctx, status)
 	dp, doorbell := a.pusher.(DoorbellPusher)
 	if a.doorbell == nil || !doorbell {
 		err := a.pusher.SendHeartbeat(ctx, status)
@@ -566,6 +664,7 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 		return a.afterHeartbeat(err, next), err
 	}
 	a.doorbell.Handle(hints)
+	a.manifestAsked(hints)
 	if hints.NextHeartbeat > 0 {
 		next = hints.NextHeartbeat
 	}

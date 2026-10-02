@@ -92,6 +92,10 @@ type FakePlatform struct {
 	Control bool
 	// Paused answers heartbeats as for a disabled sensor (v2: 200 + pause).
 	Paused bool
+	// Manifest serves PUT /manifest (api RFC-033) with Control and lists it
+	// on hello: the fake stores the manifest's digest and asks for it again
+	// (send_manifest) when a heartbeat names another one.
+	Manifest bool
 
 	mu        sync.Mutex
 	fault     Fault
@@ -107,6 +111,30 @@ type FakePlatform struct {
 	beats     []json.RawMessage
 	keys      int
 	released  []Release
+	manifests []json.RawMessage
+	digest    string
+}
+
+// SetManifest serves or stops serving the sensor manifest (api RFC-033).
+func (f *FakePlatform) SetManifest(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Manifest = on
+}
+
+// Manifests returns the manifests registered, in order.
+func (f *FakePlatform) Manifests() []json.RawMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]json.RawMessage(nil), f.manifests...)
+}
+
+// ForgetManifest drops the stored digest, as a platform that lost it: the
+// next heartbeat naming it is asked for the manifest again.
+func (f *FakePlatform) ForgetManifest() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.digest = ""
 }
 
 // Release is one release a sensor sent (api RFC-030).
@@ -491,6 +519,7 @@ func (f *FakePlatform) problem(w http.ResponseWriter, status int, t protov2.Prob
 var sensorProblems = map[protov2.ProblemType]bool{
 	protov2.ProblemInvalidTransition: true, protov2.ProblemCommandClaimed: true,
 	protov2.ProblemTransitionConflict: true, protov2.ProblemRenewalRefused: true, protov2.ProblemTooManyItems: true,
+	protov2.ProblemManifestInvalid: true, protov2.ProblemManifestSchemaUnsupported: true,
 }
 
 func (f *FakePlatform) problemState(w http.ResponseWriter, status int, t protov2.ProblemType, state string) {
@@ -518,6 +547,9 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 		if f.Control {
 			features = append(features, protov2.FeatureHeartbeat, protov2.FeatureCommands,
 				protov2.FeatureSuppressions, protov2.FeatureFingerprints, protov2.FeatureKeys)
+			if f.Manifest {
+				features = append(features, protov2.FeatureManifest)
+			}
 		}
 		f.mu.Unlock()
 		h := protov2.Hello{

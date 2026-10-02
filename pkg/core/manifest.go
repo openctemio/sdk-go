@@ -1,0 +1,196 @@
+package core
+
+// The sensor manifest (api RFC-033, docs/rfcs/RFC-033-sensor-manifest.md):
+// what a sensor is, registered once and again when it changes. Build,
+// platform, resources, the operator's concurrency ceiling, the sensor-wide
+// capabilities and every tool with its kind, version, installed state,
+// capabilities and content versions. Its load is not in it: that stays on
+// every heartbeat.
+//
+// A BaseSensor builds the manifest from its capability report (a sensor only
+// registers tools) and, when the platform serves it (protocol v2 feature
+// "manifest"), registers it before its first heartbeat, again when its own
+// digest changes and when a heartbeat answer asks (HeartbeatActionSendManifest).
+// Every heartbeat then echoes the digest the platform returned.
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+
+	"github.com/openctemio/sdk-go/pkg/resource"
+)
+
+// ManifestSchema is the manifest document version this SDK writes.
+const ManifestSchema = 1
+
+// Concurrency models of a manifest.
+const (
+	// ConcurrencyModelDynamic: the SDK sizes the slots from CPU, memory and
+	// the tools' learned cost (a resource manager), at most the ceiling.
+	ConcurrencyModelDynamic = "dynamic"
+	// ConcurrencyModelFixed: the ceiling is the slot count.
+	ConcurrencyModelFixed = "fixed"
+)
+
+// HeartbeatActionSendManifest: the platform does not have the manifest this
+// sensor's heartbeat names (api RFC-033); register it again.
+const HeartbeatActionSendManifest HeartbeatAction = "send_manifest"
+
+// ErrManifestUnsupported is returned by ManifestPusher.PutManifest when the
+// platform does not serve manifests (no "manifest" on hello). The sensor
+// then keeps reporting only on its heartbeat, as before.
+var ErrManifestUnsupported = errors.New("the platform does not accept sensor manifests")
+
+// Manifest is a sensor's self-description (api RFC-033 §6.2).
+type Manifest struct {
+	Schema       int                  `json:"schema"`
+	Sensor       *SensorBuild         `json:"sensor,omitempty"`
+	SDK          *SDKInfo             `json:"sdk,omitempty"`
+	Platform     *ManifestPlatform    `json:"platform,omitempty"`
+	Resources    *ManifestResources   `json:"resources,omitempty"`
+	Concurrency  *ManifestConcurrency `json:"concurrency,omitempty"`
+	Capabilities []string             `json:"capabilities,omitempty"`
+	Tools        []ManifestTool       `json:"tools"`
+}
+
+// ManifestPlatform is the operating system and architecture.
+type ManifestPlatform struct {
+	OS   string `json:"os,omitempty"`
+	Arch string `json:"arch,omitempty"`
+}
+
+// ManifestResources is what the sensor may use (container limits when it
+// runs in one).
+type ManifestResources struct {
+	CPUCores      float64 `json:"cpu_cores,omitempty"`
+	MemTotalBytes int64   `json:"mem_total_bytes,omitempty"`
+}
+
+// ManifestConcurrency is the operator's ceiling (0: none) and the model.
+type ManifestConcurrency struct {
+	Ceiling int    `json:"ceiling"`
+	Model   string `json:"model,omitempty"`
+}
+
+// ManifestTool is one registered tool.
+type ManifestTool struct {
+	Name         string            `json:"name"`
+	Kind         ToolKind          `json:"kind,omitempty"`
+	Version      string            `json:"version,omitempty"`
+	Installed    bool              `json:"installed"`
+	Capabilities []string          `json:"capabilities,omitempty"`
+	TargetTypes  []string          `json:"target_types,omitempty"`
+	Content      []ManifestContent `json:"content,omitempty"`
+}
+
+// ManifestContent is a tool's content version, without the timestamps
+// (they change on every refresh and stay on the heartbeat).
+type ManifestContent struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+	Digest  string `json:"digest,omitempty"`
+	Source  string `json:"source,omitempty"`
+	Managed bool   `json:"managed"`
+}
+
+// ManifestAck is the platform's answer to a registered manifest.
+type ManifestAck struct {
+	// Digest is what the platform stored; heartbeats echo it.
+	Digest string
+	// Changed is false when the platform already had it.
+	Changed bool
+	// AcceptedTools and AcceptedCapabilities are what the platform kept.
+	AcceptedTools        []string
+	AcceptedCapabilities []string
+	// Ignored lists what it dropped and why.
+	Ignored []ManifestIgnored
+}
+
+// ManifestIgnored is one manifest item the platform dropped.
+type ManifestIgnored struct {
+	Path   string `json:"path"`
+	Value  string `json:"value,omitempty"`
+	Reason string `json:"reason"`
+}
+
+// ManifestPusher is implemented by a Pusher that can register a manifest
+// (client.Client on protocol v2).
+type ManifestPusher interface {
+	PutManifest(ctx context.Context, m *Manifest) (*ManifestAck, error)
+}
+
+// BuildManifest builds the manifest of a heartbeat status that already
+// carries the capability report (BaseSensor.withCapabilities): its tools,
+// the capabilities no installed tool provides (sensor-wide), the operator's
+// ceiling, the build and the platform. res, when known, gives the
+// resources; model is ConcurrencyModelDynamic when a resource manager sizes
+// the slots.
+func BuildManifest(status *SensorStatus, res *resource.HostResources, model string) Manifest {
+	m := Manifest{Schema: ManifestSchema, Tools: []ManifestTool{}}
+	if status == nil {
+		return m
+	}
+	m.Sensor, m.SDK = status.Sensor, status.SDK
+	if status.OS != "" || status.Arch != "" {
+		m.Platform = &ManifestPlatform{OS: status.OS, Arch: status.Arch}
+	}
+	if res != nil && (res.CPUCores > 0 || res.MemTotalBytes > 0) {
+		m.Resources = &ManifestResources{CPUCores: res.CPUCores, MemTotalBytes: res.MemTotalBytes}
+	}
+	if status.MaxConcurrentJobs > 0 || model != "" {
+		m.Concurrency = &ManifestConcurrency{Ceiling: max(status.MaxConcurrentJobs, 0), Model: model}
+	}
+	provided := map[string]bool{}
+	for _, t := range status.Tools {
+		mt := ManifestTool{Name: t.Name, Kind: t.Kind, Version: t.Version, Installed: t.Installed,
+			Capabilities: slices.Clone(t.Capabilities)}
+		for _, c := range t.Content {
+			mt.Content = append(mt.Content, ManifestContent{Name: c.Name, Version: c.Version, Digest: c.Digest,
+				Source: c.Source, Managed: c.Managed})
+		}
+		m.Tools = append(m.Tools, mt)
+		if t.Installed {
+			provided[t.Name] = true
+			for _, c := range t.Capabilities {
+				provided[c] = true
+			}
+		}
+	}
+	for _, c := range status.Capabilities {
+		if !provided[c] && !slices.Contains(m.Capabilities, c) {
+			m.Capabilities = append(m.Capabilities, c)
+		}
+	}
+	return m
+}
+
+// Digest is "sha256:" + the hex SHA-256 of the manifest's canonical JSON
+// (object members sorted, no whitespace, no HTML escaping), the form the
+// platform digests. The sensor uses it to notice its own changes; the
+// heartbeat echoes the digest the platform returned.
+func (m Manifest) Digest() (string, error) {
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return "", fmt.Errorf("encode manifest: %w", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return "", fmt.Errorf("decode manifest: %w", err)
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return "", fmt.Errorf("encode manifest: %w", err)
+	}
+	sum := sha256.Sum256(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
