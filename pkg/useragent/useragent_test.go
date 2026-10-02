@@ -6,6 +6,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
+
+	"github.com/openctemio/sdk-go/pkg/sdk"
 )
 
 func TestVersionFromBuildInfo(t *testing.T) {
@@ -15,7 +17,7 @@ func TestVersionFromBuildInfo(t *testing.T) {
 		ok   bool
 		want string
 	}{
-		{"no build info", nil, false, "devel"},
+		{"no build info", nil, false, sdk.Version},
 		{"sdk as a dependency", &debug.BuildInfo{
 			Main: debug.Module{Path: "github.com/openctemio/agent", Version: "v0.3.1"},
 			Deps: []*debug.Module{
@@ -26,14 +28,14 @@ func TestVersionFromBuildInfo(t *testing.T) {
 		{"sdk replaced", &debug.BuildInfo{
 			Main: debug.Module{Path: "example.com/x"},
 			Deps: []*debug.Module{{Path: sdkModule, Version: "v0.7.4", Replace: &debug.Module{Path: "../sdk-go"}}},
-		}, true, "devel"},
+		}, true, sdk.Version + "-devel"},
 		{"sdk is the main module", &debug.BuildInfo{
 			Main: debug.Module{Path: sdkModule, Version: "v0.8.0-0.20261001000000-abcdef123456"},
 		}, true, "0.8.0-0.20261001000000-abcdef123456"},
 		{"main module devel", &debug.BuildInfo{
 			Main: debug.Module{Path: sdkModule, Version: "(devel)"},
-		}, true, "devel"},
-		{"sdk not linked", &debug.BuildInfo{Main: debug.Module{Path: "example.com/x", Version: "v1.0.0"}}, true, "devel"},
+		}, true, sdk.Version + "-devel"},
+		{"sdk not linked", &debug.BuildInfo{Main: debug.Module{Path: "example.com/x", Version: "v1.0.0"}}, true, sdk.Version},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

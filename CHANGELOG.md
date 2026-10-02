@@ -27,6 +27,23 @@ sends its own heartbeats sets the same fields on `core.SensorStatus`.
 
 ### Added
 
+- **Every heartbeat names the SDK and the sensor** (v1 and v2, no sensor
+  code change needed): `"sdk": {"name": "openctem-sdk-go", "version": "<v>"}`
+  and `"sensor": {"name", "version", "commit"?, "build_time"?}`. The SDK
+  version comes from the binary's build info, so a release tag sets it
+  (`useragent.SDKVersion`); the new `pkg/sdk` holds `sdk.Name` and
+  `sdk.Version`, the fallback for a binary without build info (a build from
+  a local checkout reports `<sdk.Version>-devel`; it was `devel`). A release
+  PR bumps `sdk.Version`; a test fails when it is older than the newest
+  release in this file. The sensor block comes from `BaseSensorConfig`
+  (`Version` and the new optional `ProductName`, `Commit`, `BuildTime`
+  (RFC 3339)); the name defaults to the product given to
+  `useragent.SetProduct`, then to the executable's name. New:
+  `core.SDKInfo`, `core.SensorBuild`, `core.CurrentSDKInfo`,
+  `core.NewSensorBuild`, `useragent.ProductName`, `SensorStatus.SDK` /
+  `.Sensor`, `client.HeartbeatRequest.SDK` / `.Sensor`,
+  `conformance.FakePlatform.HeartbeatBuilds`.
+
 - **Sensor-reported capabilities** (api RFC-029 §4.3.1). The heartbeat (v1 and
   v2) carries the sensor's tool inventory (`tools`: name, version,
   installed), the capabilities it serves (`capabilities`), its concurrency
