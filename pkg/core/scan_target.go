@@ -138,11 +138,15 @@ func DefaultScanTargetPolicy() *ScanTargetPolicy {
 // pre-rename name set to different values, or an allow-private switch set
 // to anything but "1" (allow) or "0"/empty (refuse). Only "1" enables the
 // switch, so "true" or "yes" would otherwise be silently ignored and every
-// private target refused. A sensor calls it at startup to refuse to start
-// instead of failing jobs later.
+// private target refused. It also reports an unrecognized
+// OPENCTEM_SDK_SCANNER_PROXY (EnvScannerProxy). A sensor calls it at startup
+// to refuse to start instead of failing jobs later.
 func CheckEnv() error {
 	if err := DefaultScanTargetPolicy().configErr; err != nil {
 		return err
+	}
+	if scannerProxyErr != nil {
+		return scannerProxyErr
 	}
 	for _, name := range []string{
 		EnvAllowPrivateTargets,

@@ -27,6 +27,10 @@ const (
 	DefaultTimeout = 60 * time.Second
 )
 
+// The default feed's host is compiled in, so it may be resolved by an egress
+// proxy when this host has no public DNS (httpsec.TrustUpstreamHosts).
+func init() { httpsec.TrustUpstreamHosts("www.cisa.gov") }
+
 // KEVEntry represents a Known Exploited Vulnerability entry.
 type KEVEntry struct {
 	CVEID             string `json:"cveID"`

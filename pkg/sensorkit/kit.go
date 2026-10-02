@@ -49,9 +49,18 @@ type Options struct {
 	// Timeout bounds one request to the platform (default 30s).
 	Timeout time.Duration
 	// CACertFile is a PEM file with the platform's private CA
-	// (SENSOR_CA_CERT_FILE): trusted for platform requests besides the
-	// system trust store. HTTP(S)_PROXY and NO_PROXY are always honored.
+	// (SENSOR_CA_CERT_FILE), or the CA of a TLS-inspecting egress proxy:
+	// trusted besides the system trust store for platform requests and
+	// content downloads.
 	CACertFile string
+	// ControlProxy, ContentProxy and ScanProxy are the proxy settings of
+	// the three outbound paths (SENSOR_CONTROL_PROXY, SENSOR_CONTENT_PROXY,
+	// SENSOR_SCAN_PROXY; see ResolveProxies for values and precedence).
+	// Unset, the platform and content paths use HTTP(S)_PROXY / NO_PROXY
+	// and scanners inherit them (api RFC-034).
+	ControlProxy string
+	ContentProxy string
+	ScanProxy    string
 	// Standalone runs without the platform: scheduled scans only, results
 	// are not sent.
 	Standalone bool
@@ -261,7 +270,15 @@ func New(opts Options) (*Kit, error) {
 			return nil, err
 		}
 		httpsec.SetAPIRootCAs(pool)
+		httpsec.SetContentRootCAs(pool)
 	}
+	proxyOpts := ProxyOptions{Control: opts.ControlProxy, Content: opts.ContentProxy, Scan: opts.ScanProxy}
+	proxies, err := ResolveProxies(proxyOpts)
+	if err != nil {
+		return nil, err
+	}
+	proxies.Apply()
+	proxies.report(k.out, k.errw, proxyOpts)
 
 	s.stateDir = ResolveStateDir(opts.StateDir)
 

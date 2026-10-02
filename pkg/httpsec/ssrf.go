@@ -31,6 +31,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -231,8 +232,19 @@ func ValidateURL(rawURL string) (*ValidationResult, error) {
 // supplied URL will have burned a DNS lookup (possibly against an
 // attacker-controlled resolver). ValidateURL rejects before the
 // lookup leaves the host process.
+//
+// Proxy: the content path's setting (SetContentProxy; by default the
+// environment's HTTP_PROXY / HTTPS_PROXY / NO_PROXY). When a request goes
+// through a proxy, its target is checked before the proxy is used (the
+// dialer then only sees the proxy's address): see guardedProxy. The proxy
+// itself is operator configuration and is dialed with the API-destination
+// policy (private addresses allowed; link-local, multicast and reserved
+// refused).
 func SafeHTTPClient(timeout time.Duration) *http.Client {
-	tr := guardedTransport(IsIPBlocked)
+	proxies := &sync.Map{}
+	tr := guardedTransportVia(IsIPBlocked, proxies)
+	tr.Proxy = guardedProxy(ContentProxy().Func(), IsIPBlocked, proxies)
+	tr.TLSClientConfig = contentTLSConfig()
 	return &http.Client{
 		Timeout:       timeout,
 		Transport:     tr,
@@ -243,11 +255,25 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 // guardedTransport returns a transport whose dialer resolves the host once,
 // refuses it when blocked reports any resolved IP, and dials the checked IP.
 func guardedTransport(blocked func(net.IP) bool) *http.Transport {
+	return guardedTransportVia(blocked, nil)
+}
+
+// guardedTransportVia is guardedTransport for a client that may use a proxy:
+// an address recorded in proxies (by guardedProxy) is a proxy, checked with
+// the API-destination policy; every other address is a target, checked with
+// blocked.
+func guardedTransportVia(blocked func(net.IP) bool, proxies *sync.Map) *http.Transport {
 	baseDialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	safeDialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, err
+		}
+		check := blocked
+		if proxies != nil {
+			if _, ok := proxies.Load(net.JoinHostPort(strings.ToLower(host), port)); ok {
+				check = isAPIDestinationBlocked
+			}
 		}
 		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 		if err != nil {
@@ -255,7 +281,7 @@ func guardedTransport(blocked func(net.IP) bool) *http.Transport {
 		}
 		var dialIP string
 		for _, ip := range ips {
-			if blocked(ip.IP) {
+			if check(ip.IP) {
 				return nil, fmt.Errorf("ssrf guard: blocked IP %s for host %s", ip.IP, host)
 			}
 			if dialIP == "" {
@@ -348,10 +374,11 @@ func RefuseRedirects(req *http.Request, _ []*http.Request) error {
 // client still refuses every redirect (the bearer key never follows one),
 // still refuses link-local destinations such as the cloud metadata service
 // and multicast/reserved/unspecified addresses (so a poisoned DNS answer
-// cannot point the key there), and honors HTTP(S)_PROXY / NO_PROXY.
+// cannot point the key there), and uses the API path's proxy setting
+// (SetAPIProxy; by default the environment's HTTP(S)_PROXY / NO_PROXY).
 func NewAPIClient(timeout time.Duration) *http.Client {
 	tr := guardedTransport(isAPIDestinationBlocked)
-	tr.Proxy = http.ProxyFromEnvironment
+	tr.Proxy = APIProxy().Func()
 	// A private platform CA set with SetAPIRootCAs; nil keeps Go's defaults.
 	tr.TLSClientConfig = apiTLSConfig()
 	return &http.Client{

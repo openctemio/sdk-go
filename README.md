@@ -160,8 +160,10 @@ one, the new key wins. Every heartbeat also carries the process's
 | Drain grace | `SENSOR_DRAIN_GRACE` (1s-1h) | 30s |
 | Outbox | `SENSOR_OUTBOX`, `SENSOR_OUTBOX_DIR`, `_MAX_BYTES`, `_MAX_AGE`, `_KEY_FILE` | on, `/var/lib/openctem/outbox` |
 | State (the renewed API key, tool cost history) | `SENSOR_STATE_DIR` | `/var/lib/openctem/state` when writable, else `~/.openctem`: **mount a persistent volume there** |
-| Private CA | `SENSOR_CA_CERT_FILE` (PEM, added to the system roots) | system roots |
-| Proxy | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | none |
+| Private CA | `SENSOR_CA_CERT_FILE` (PEM, added to the system roots; trusted for the platform and content downloads, so a TLS-inspecting proxy works) | system roots |
+| Proxy to the platform | `SENSOR_CONTROL_PROXY` (URL or `direct`), else `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | none |
+| Proxy for content and feeds | `SENSOR_CONTENT_PROXY` (URL or `direct`), else the platform setting | the platform setting |
+| Proxy variables for scanners | `SENSOR_SCAN_PROXY`: `inherit` (scanners get the sensor's `HTTP(S)_PROXY`; warned at start) or `direct` | `inherit` |
 | Key renewal | `PLATFORM_KEY_AUTORENEW=true\|false`, `Options.KeyAutoRenew` / `NoKeyAutoRenew`, `Options.CredentialsFile` | on when the state directory persists (outside a container; inside one, a mounted, non-tmpfs volume), else off |
 | Pre-rename names | `AGENT_ID`, `AGENT_NAME`, `AGENT_ALLOW_PRIVATE_TARGETS`, `-agent-id` | applied with a warning; both names set differently: exit 2 |
 
