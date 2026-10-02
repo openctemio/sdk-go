@@ -50,6 +50,11 @@ sends its own heartbeats sets the same fields on `core.SensorStatus`.
   the trivy database, the nuclei templates, the semgrep rules. The platform
   shows it per sensor and reports stale content. The member is absent when
   a tool reports none.
+  `ContentInfo.CheckedAt` is when the sensor last confirmed the content is
+  still the newest (or pinned) version, and `ContentInfo.Stale(now, maxAge)`
+  is the shared staleness rule: older than the limit **and** not confirmed
+  current within it, so a template set whose newest release is weeks old is
+  not reported stale while the sensor keeps checking.
 - The `refresh_content` command (`core.CommandTypeRefreshContent`): its
   payload `core.RefreshContentRequest` (content names, force, and the
   tenant's `core.ContentPolicy`: refresh interval, and per content a maximum
