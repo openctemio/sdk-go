@@ -282,6 +282,9 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 		args = append(args, "-u", target)
 	}
 
+	// No update check: it calls ProjectDiscovery's servers on every run.
+	args = append(args, "-duc")
+
 	// Output format - JSON for structured parsing
 	if s.OutputJSON {
 		args = append(args, "-json")
@@ -316,9 +319,10 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 		if s.MaxRedirects > 0 {
 			args = append(args, "-max-redirects", fmt.Sprintf("%d", s.MaxRedirects))
 		}
-	} else {
-		args = append(args, "-no-follow-redirects")
 	}
+	// Not following redirects is httpx's default; it has no
+	// -no-follow-redirects flag (the run failed with "flag provided but not
+	// defined").
 
 	if s.Proxy != "" {
 		args = append(args, "-proxy", s.Proxy)
@@ -427,17 +431,26 @@ type HTTPXOutput struct {
 	Technologies  []string `json:"tech,omitempty"`
 	CDN           bool     `json:"cdn,omitempty"`
 	CDNName       string   `json:"cdn_name,omitempty"`
-	IP            string   `json:"a,omitempty"`
-	CNAME         string   `json:"cname,omitempty"`
-	FaviconHash   string   `json:"favicon,omitempty"`
-	Jarm          string   `json:"jarm,omitempty"`
-	ASN           *ASNInfo `json:"asn,omitempty"`
-	TLS           *TLSData `json:"tls,omitempty"`
-	FinalURL      string   `json:"final_url,omitempty"`
-	Method        string   `json:"method,omitempty"`
-	ResponseTime  string   `json:"time,omitempty"`
-	Words         int      `json:"words,omitempty"`
-	Lines         int      `json:"lines,omitempty"`
+	// httpx writes "a" and "cname" as arrays. Decoding "a" into a string
+	// failed the whole line, so every result was dropped as "not JSON".
+	HostIP       string   `json:"host_ip,omitempty"`
+	A            []string `json:"a,omitempty"`
+	AAAA         []string `json:"aaaa,omitempty"`
+	CNAMEs       []string `json:"cname,omitempty"`
+	FaviconHash  string   `json:"favicon,omitempty"`
+	Jarm         string   `json:"jarm_hash,omitempty"`
+	ASN          *ASNInfo `json:"asn,omitempty"`
+	TLS          *TLSData `json:"tls,omitempty"`
+	FinalURL     string   `json:"final_url,omitempty"`
+	Method       string   `json:"method,omitempty"`
+	ResponseTime string   `json:"time,omitempty"`
+	Words        int      `json:"words,omitempty"`
+	Lines        int      `json:"lines,omitempty"`
+
+	// Deprecated: use HostIP or A. The parser sets it to the host's IP.
+	IP string `json:"-"`
+	// Deprecated: use CNAMEs. The parser sets it to the first CNAME.
+	CNAME string `json:"-"`
 }
 
 // ASNInfo represents ASN information.
@@ -452,10 +465,10 @@ type ASNInfo struct {
 type TLSData struct {
 	TLSVersion       string   `json:"tls_version"`
 	CipherSuite      string   `json:"cipher"`
-	DNSNames         []string `json:"dns_names"`
-	CommonName       string   `json:"common_name"`
-	Organization     []string `json:"organization"`
-	IssuerCommonName string   `json:"issuer_common_name"`
+	DNSNames         []string `json:"subject_an"`
+	CommonName       string   `json:"subject_cn"`
+	Organization     []string `json:"subject_org"`
+	IssuerCommonName string   `json:"issuer_cn"`
 	NotBefore        string   `json:"not_before"`
 	NotAfter         string   `json:"not_after"`
 }
@@ -523,10 +536,19 @@ func (s *Scanner) parseOutput(data []byte) ([]core.LiveHost, []core.Technology, 
 			cdn = output.CDNName
 		}
 
+		ip := output.HostIP
+		if ip == "" && len(output.A) > 0 {
+			ip = output.A[0]
+		}
+		output.IP = ip
+		if len(output.CNAMEs) > 0 {
+			output.CNAME = output.CNAMEs[0]
+		}
+
 		liveHost := core.LiveHost{
 			URL:           output.URL,
 			Host:          output.Host,
-			IP:            output.IP,
+			IP:            ip,
 			Port:          port,
 			Scheme:        output.Scheme,
 			StatusCode:    output.StatusCode,

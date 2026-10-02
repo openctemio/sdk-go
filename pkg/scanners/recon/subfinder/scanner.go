@@ -227,6 +227,9 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 		args = append(args, "-d", target)
 	}
 
+	// No update check: it calls ProjectDiscovery's servers on every run.
+	args = append(args, "-duc")
+
 	// Output format - JSON for structured parsing
 	args = append(args, "-oJ")
 
