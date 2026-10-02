@@ -4,81 +4,6 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
-### Security
-
-- **Scanner extra args are checked in the SDK** (`core.ValidateExtraArgs`,
-  `core.DangerousToolFlags`). Every scanner that appends
-  `ScanOptions.ExtraArgs` / `ReconOptions.ExtraArgs` (base scanner, nuclei
-  `Scan` and `ScanTargets`, semgrep, subfinder, httpx, dnsx, naabu, katana)
-  now refuses a scan whose extra args contain a flag that redirects output,
-  sets a proxy, names targets or target files, loads templates or rules, sets
-  an interaction server, enables a headless browser, sets DNS resolvers, or
-  picks an interface or source address, runs a command (naabu
-  `-nmap-cli`), exports files, or loads remote templates, workflows or the
-  code protocol, bare or as `flag=value`, with any number of leading dashes
-  (Go's flag package treats `-proxy` and `--proxy` alike). The sensor
-  enforced this set in its platform-mode executor until that mode was removed
-  (sensor#107); without this, nothing guarded extra args.
-
-### Added
-
-- **Sensor OOM protection** (api RFC-035 §5.3, opt-in). A new sensorkit
-  setting `SENSOR_PROTECT_FROM_OOM=true` (`Options.ProtectFromOOM`,
-  `ResolveProtectFromOOM`; default off) makes `Run` set the sensor's own
-  `oom_score_adj` to `sensorkit.SensorOOMScoreAdj` (-500), so the kernel
-  kills almost anything else before the sensor when memory runs out. Linux
-  only. Lowering the score needs `CAP_SYS_RESOURCE`, which Docker does not
-  grant by default (`docker run --cap-add SYS_RESOURCE`; root under
-  systemd has it). Without it the sensor prints one warning and runs
-  unprotected; startup never fails for it. The banner shows the outcome.
-  - **Scanners never inherit the protection.** A child inherits
-    `oom_score_adj` at fork. `core.ApplyScannerPriority` now raises a
-    scanner whose sensor has a negative score to at least 0, also with
-    `SENSOR_SCANNER_PRIORITY=normal` (the low priority already sets 500).
-    This also covers a sensor protected by systemd's `OOMScoreAdjust`.
-
-### Fixed
-
-- Protocol v2 results: a 413 without a problem document (a reverse proxy's
-  body limit, such as ingress-nginx's 1 MiB default in front of the
-  platform's 16 MiB) now splits the report into smaller segments, as the
-  platform's own 413 does. Before, the report was refused for good and the
-  outbox moved it to the dead-letter folder.
-- Outbox: when the byte or age cap evicts a result of a command (or the
-  result becomes unreadable), the command's result now reports the command
-  `failed` ("results of the command were lost before delivery: ...")
-  instead of `completed`. Before, the platform saw a clean, complete run
-  that was missing its findings. The mark is persisted in the command
-  result's state (`outbox.State.LostResults`), so it survives a restart.
-- Outbox: the byte cap evicts command results after every other pending
-  item. A command result is a few hundred bytes, and evicting it left its
-  command running on the platform until the command timed out.
-- **Scanner output is bounded.** `ExecuteScanner`, `StreamScanner` and
-  `BaseScanner.Scan` kept all of a scanner's stdout and stderr in memory,
-  however much it wrote; a scanner pointed at a hostile target, or one that
-  loops, could exhaust the sensor's memory. Stdout is now bounded (512 MiB by
-  default, `ExecConfig.MaxOutputBytes` / `BaseScannerConfig.MaxOutputBytes`
-  to change it): past the bound the scanner's process group is killed and
-  the call returns `ErrScannerOutputTooLarge`, so the scan fails visibly
-  instead of reporting partial results. Stderr keeps its first 4 MiB and is
-  marked as cut.
-- **`StreamScanner` stalled on long lines.** It read with `bufio.Scanner`,
-  whose 64 KiB line limit stopped the reader at the first longer line (a
-  nuclei finding carrying a response body): the scanner then blocked on a
-  full pipe until its timeout and the rest of its output was lost. Lines of
-  any length are now delivered.
-- **The outbox no longer replaces a missing key while sealed items exist.**
-  When the key file was missing (a secret that failed to mount, a key
-  deleted by hand) `outbox.Open` created a new key, and every pending result
-  and dead letter, sealed with the old key, was quarantined: lost. `Open` now
-  refuses with `outbox.ErrKeyMissing`; the error names the key path and the
-  number of sealed items, and says how to recover (restore the key, or move
-  `pending/` and `dead/` aside to start fresh). An empty outbox still gets a
-  new key. The sensor exits with that message instead of starting. The
-  outbox status command (`sensorkit.OutboxCommand`) never creates a key: it
-  reports the same error, or an empty outbox. New: `outbox.ErrKeyMissing`,
-  `outbox.CheckKey`, `outbox.SealedItems`, `outbox.DefaultKeyFile`.
-
 ## v0.15.0 — 2026-10-02
 
 ### Added
@@ -186,6 +111,20 @@ All notable changes to `github.com/openctemio/sdk-go`.
     `ProblemManifestNotFound`.
   - **Conformance fake.** New `SetManifestPolicy`; `GET /manifest` is now
     served.
+- **Sensor OOM protection** (api RFC-035 §5.3, opt-in). A new sensorkit
+  setting `SENSOR_PROTECT_FROM_OOM=true` (`Options.ProtectFromOOM`,
+  `ResolveProtectFromOOM`; default off) makes `Run` set the sensor's own
+  `oom_score_adj` to `sensorkit.SensorOOMScoreAdj` (-500), so the kernel
+  kills almost anything else before the sensor when memory runs out. Linux
+  only. Lowering the score needs `CAP_SYS_RESOURCE`, which Docker does not
+  grant by default (`docker run --cap-add SYS_RESOURCE`; root under
+  systemd has it). Without it the sensor prints one warning and runs
+  unprotected; startup never fails for it. The banner shows the outcome.
+  - **Scanners never inherit the protection.** A child inherits
+    `oom_score_adj` at fork. `core.ApplyScannerPriority` now raises a
+    scanner whose sensor has a negative score to at least 0, also with
+    `SENSOR_SCANNER_PRIORITY=normal` (the low priority already sets 500).
+    This also covers a sensor protected by systemd's `OOMScoreAdjust`.
 
 ### Changed
 
@@ -210,6 +149,71 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 - The doorbell logged `send_manifest` (api RFC-033) as an unknown heartbeat
   action, although the BaseSensor acts on it.
+- Protocol v2 results: a 413 without a problem document (a reverse proxy's
+  body limit, such as ingress-nginx's 1 MiB default in front of the
+  platform's 16 MiB) now splits the report into smaller segments, as the
+  platform's own 413 does. Before, the report was refused for good and the
+  outbox moved it to the dead-letter folder.
+- Outbox: when the byte or age cap evicts a result of a command (or the
+  result becomes unreadable), the command's result now reports the command
+  `failed` ("results of the command were lost before delivery: ...")
+  instead of `completed`. Before, the platform saw a clean, complete run
+  that was missing its findings. The mark is persisted in the command
+  result's state (`outbox.State.LostResults`), so it survives a restart.
+- Outbox: the byte cap evicts command results after every other pending
+  item. A command result is a few hundred bytes, and evicting it left its
+  command running on the platform until the command timed out.
+- **Scanner output is bounded.** `ExecuteScanner`, `StreamScanner` and
+  `BaseScanner.Scan` kept all of a scanner's stdout and stderr in memory,
+  however much it wrote; a scanner pointed at a hostile target, or one that
+  loops, could exhaust the sensor's memory. Stdout is now bounded (512 MiB by
+  default, `ExecConfig.MaxOutputBytes` / `BaseScannerConfig.MaxOutputBytes`
+  to change it): past the bound the scanner's process group is killed and
+  the call returns `ErrScannerOutputTooLarge`, so the scan fails visibly
+  instead of reporting partial results. Stderr keeps its first 4 MiB and is
+  marked as cut.
+- **`StreamScanner` stalled on long lines.** It read with `bufio.Scanner`,
+  whose 64 KiB line limit stopped the reader at the first longer line (a
+  nuclei finding carrying a response body): the scanner then blocked on a
+  full pipe until its timeout and the rest of its output was lost. Lines of
+  any length are now delivered.
+- **The outbox no longer replaces a missing key while sealed items exist.**
+  When the key file was missing (a secret that failed to mount, a key
+  deleted by hand) `outbox.Open` created a new key, and every pending result
+  and dead letter, sealed with the old key, was quarantined: lost. `Open` now
+  refuses with `outbox.ErrKeyMissing`; the error names the key path and the
+  number of sealed items, and says how to recover (restore the key, or move
+  `pending/` and `dead/` aside to start fresh). An empty outbox still gets a
+  new key. The sensor exits with that message instead of starting. The
+  outbox status command (`sensorkit.OutboxCommand`) never creates a key: it
+  reports the same error, or an empty outbox. New: `outbox.ErrKeyMissing`,
+  `outbox.CheckKey`, `outbox.SealedItems`, `outbox.DefaultKeyFile`.
+
+### Security
+
+- **Scanner extra args are checked in the SDK** (`core.ValidateExtraArgs`,
+  `core.DangerousToolFlags`). Every scanner that appends
+  `ScanOptions.ExtraArgs` / `ReconOptions.ExtraArgs` (base scanner, nuclei
+  `Scan` and `ScanTargets`, semgrep, subfinder, httpx, dnsx, naabu, katana)
+  now refuses a scan whose extra args contain a flag that redirects output,
+  sets a proxy, names targets or target files, loads templates or rules, sets
+  an interaction server, enables a headless browser, sets DNS resolvers, or
+  picks an interface or source address, runs a command (naabu
+  `-nmap-cli`), exports files, or loads remote templates, workflows or the
+  code protocol, bare or as `flag=value`, with any number of leading dashes
+  (Go's flag package treats `-proxy` and `--proxy` alike). The sensor
+  enforced this set in its platform-mode executor until that mode was removed
+  (sensor#107); without this, nothing guarded extra args.
+- `httpsec` always blocks the cloud metadata service over IPv6 (AWS
+  `fd00:ec2::254`, GCP `fd20:ce::254`), as it already did `169.254.169.254`.
+  Both sit inside `fc00::/7`, so allowing private ranges
+  (`OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE`, `SENSOR_ALLOW_PRIVATE_TARGETS`) used
+  to open them. The scan-target policy (`core.ScanTargetPolicy`) applies
+  the same hard block.
+- `core.WebhookCollector` enforces its `Secret` (sent as
+  `Authorization: Bearer <secret>` or `X-Webhook-Secret`; without it a
+  delivery is refused with 401) and bounds the request body (413 past the
+  limit), which it used to read without a limit.
 
 ## v0.14.0 — 2026-10-02
 
