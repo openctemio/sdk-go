@@ -432,6 +432,10 @@ type SensorStatus struct {
 	MemoryPercent float64 `json:"memory_percent,omitempty"`
 	ActiveJobs    int     `json:"active_jobs,omitempty"`
 	Region        string  `json:"region,omitempty"`
+	// ActiveJobsReported is true when ActiveJobs is a measured value (the
+	// sensor has a LoadReporter): the heartbeat then sends active_jobs even
+	// when it is 0, so the platform can tell "idle" from "not reported".
+	ActiveJobsReported bool `json:"-"`
 
 	// Version and Hostname identify the running sensor to the platform (shown
 	// on the Sensors page). Both are sent with every heartbeat.

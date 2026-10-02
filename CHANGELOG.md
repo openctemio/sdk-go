@@ -43,6 +43,7 @@ sends its own heartbeats sets the same fields on `core.SensorStatus`.
   `core.SensorStatus` and `client.HeartbeatRequest`.
 - `pkg/conformance`: `FakePlatform.Heartbeats()` returns the heartbeat
   bodies received, and the suite checks the report on v1 and v2.
+<<<<<<< Updated upstream
 - **Scanner content versions** (api RFC-031). `core.ToolInfo.Content` lists
   the content a tool scans with (`core.ContentInfo`: name, version,
   `updated_at`, `fetched_at`, source, digest, managed, last refresh error):
@@ -63,6 +64,34 @@ sends its own heartbeats sets the same fields on `core.SensorStatus`.
   not applied to a scan with platform-provided templates), for scans that
   run a managed template set; `nuclei.ValidateOptions.TemplatesDir` makes a
   re-verification look its template up in that set.
+||||||| Stash base
+=======
+- **Load on the heartbeat** (api RFC-030 Phase 0). `core.LoadReporter`
+  (implemented by `*core.CommandPoller`) and
+  `(*core.BaseSensor).SetLoadReporter`: every heartbeat carries the
+  commands the sensor holds now (`active_jobs`, sent also when 0, via
+  `core.SensorStatus.ActiveJobsReported` / `client.HeartbeatRequest.ActiveJobsReported`)
+  and, when the capability report does not set it, `max_concurrent_jobs`.
+- `core.LimitedCommandClient` and `(*client.Client).GetCommandsLimit`; the
+  constant `client.DefaultCommandPollLimit` (10, what `GetCommands` asks
+  for).
+
+### Fixed
+
+- **No more claimed-but-waiting commands, no duplicate scans** (api RFC-030
+  B6). The `CommandPoller` takes a free slot *before* it claims a command,
+  polls with `limit` = its free slots (with a client that implements
+  `LimitedCommandClient`), does not poll at all while every slot is busy
+  (a doorbell ring then waits for a slot), and polls again as soon as a
+  slot frees when the platform may hold more. Before, it polled `limit=10`
+  and acknowledged every command first, so with 5 slots busy it held up to
+  10 acknowledged commands; the platform re-queued those after 10 minutes
+  and another sensor ran them while this one still would.
+- **A refused start is not executed.** When the platform does not accept a
+  command's `start` (409: re-queued, reassigned or canceled; or any other
+  error) the poller releases the slot and does not run it. Before, a
+  failed start was only logged and the scan ran anyway.
+>>>>>>> Stashed changes
 
 ## v0.9.0 — 2026-10-02
 
