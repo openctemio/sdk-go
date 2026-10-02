@@ -4,6 +4,43 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Added after v0.11.0
+
+Only additions (checked by `api-compat` against v0.11.0). v0.11.0 was
+tagged from the entries below this section, which still need their
+`## v0.11.0` heading (with `sdk.Version` bumped in the same release PR).
+
+- **`pkg/sensorkit`: everything a sensor needs to work with the platform, in
+  one call.** A sensor implements its tools; `sensorkit.New(Options)` +
+  `kit.AddScanner(...)` + `kit.Run(ctx)` does the rest: standard settings
+  (`API_URL`, `API_KEY`, `SENSOR_*`, pre-rename `AGENT_*` migrated with a
+  warning) with clear errors and exit codes (`ExitCode`, `Exit`: 2 for a
+  missing or out-of-range setting), protocol v2 negotiation with v1
+  fallback, the first heartbeat before the first poll and a wait while the
+  key is rejected, the tool registry on every heartbeat (with optional
+  scanner content, `Options.Content`), the heartbeat doorbell, API-key
+  auto-renewal (`PLATFORM_KEY_AUTORENEW`), the command poller with
+  resource-sized slots (`SENSOR_MAX_JOBS` cap), the durable outbox
+  (`SENSOR_OUTBOX*`), the `SENSOR_TOOLS` allowlist and a SIGINT/SIGTERM
+  drain (`SENSOR_DRAIN_GRACE`; a second signal exits 130). Extension points:
+  `AddCollector`, `AddParser`, `HandleCommand`, `UseCommandMiddleware`,
+  `Tools`, `Options.ScanTargetPolicy`, `AssetResolver`,
+  `UnavailableReason`. The resolvers are exported for sensors with their own
+  flags or configuration file (`ResolveMaxJobs`, `ResolveOutbox`,
+  `ResolveProtocol`, `ResolveDrainGrace`, `CheckCredentials`,
+  `MigrateSettings`, `OutboxCommand`, `FlushOutbox`, `SignalContext`).
+  README "Build a sensor in 30 lines" and `examples/minimal-sensor`. The
+  official sensor's daemon runs on it with its wire unchanged.
+- `SENSOR_CA_CERT_FILE` (`sensorkit.Options.CACertFile`): a PEM file with the
+  platform's private CA, trusted for platform requests besides the system
+  roots. `httpsec.SetAPIRootCAs`, `httpsec.LoadCAFile`: the roots every
+  `httpsec.NewAPIClient` created afterwards trusts.
+- `legacyv1.SensorRenamedEnv`, `SensorRenamedFlags`, `ApplyRenamedEnv`,
+  `ApplyRenamedFlags`: the sensor binary's renamed settings, migrated in one
+  place (moved from the sensor).
+
+### v0.11.0 (released 2026-10-02)
+
 ### Upgrade notes
 
 Only additions (checked by `api-compat` against v0.10.0). One behavior
