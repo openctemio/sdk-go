@@ -232,11 +232,18 @@ func (c *Client) commandV2(ctx context.Context, cmdID, action string, body any, 
 // core.CommandClient). With the outbox enabled the result is stored and
 // delivered after every report of the same command was accepted (or
 // refused, which turns a "completed" result into "failed"); it returns once
-// the result is on disk.
+// the result was delivered, or after OutboxConfig.SyncWait (or at once
+// while the platform is unreachable) with the result safe on disk.
+//
+// Waiting for the delivery matters for dispatch (api RFC-030): the
+// platform counts the command as held by this sensor until its complete
+// arrives, so a poller that freed the slot and polled first was refused
+// (no free capacity) or, before the platform knew the sensor's capacity,
+// handed one command too many.
 func (c *Client) ReportCommandResult(ctx context.Context, cmdID string, result *core.CommandResult) error {
 	if ob := c.Outbox(); ob != nil {
-		if err := c.enqueueCommandResult(ob, cmdID, result); err == nil {
-			return nil
+		if tk, err := c.enqueueCommandResult(ob, cmdID, result); err == nil {
+			return c.awaitResultTicket(ctx, tk)
 		} else {
 			c.logOutbox(c.obLogf, "cannot store the result of command %s (%v); reporting it directly", cmdID, err)
 		}

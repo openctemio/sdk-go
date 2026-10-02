@@ -117,6 +117,14 @@ sends its own heartbeats sets the same fields on `core.SensorStatus`.
   and acknowledged every command first, so with 5 slots busy it held up to
   10 acknowledged commands; the platform re-queued those after 10 minutes
   and another sensor ran them while this one still would.
+- **A command's slot is reused only after its result reached the
+  platform.** With the outbox (the daemon default) `ReportCommandResult`
+  returned once the result was on disk, so the poller freed the slot and
+  polled while the platform still counted the command as held: the poll
+  was refused (no free capacity) or, before the platform knew the
+  sensor's capacity, one command too many was handed out. It now waits
+  for the delivery (up to `OutboxConfig.SyncWait`; not while the platform
+  is unreachable).
 - **A refused start is not executed.** When the platform does not accept a
   command's `start` (409: re-queued, reassigned or canceled; or any other
   error) the poller releases the slot and does not run it. Before, a
