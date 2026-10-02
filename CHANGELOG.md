@@ -4,11 +4,9 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
-### Added after v0.11.0
+### Added
 
-Only additions (checked by `api-compat` against v0.11.0). v0.11.0 was
-tagged from the entries below this section, which still need their
-`## v0.11.0` heading (with `sdk.Version` bumped in the same release PR).
+Only additions (checked by `api-compat` against v0.11.0).
 
 - **`pkg/sensorkit`: everything a sensor needs to work with the platform, in
   one call.** A sensor implements its tools; `sensorkit.New(Options)` +
@@ -39,7 +37,7 @@ tagged from the entries below this section, which still need their
   `ApplyRenamedFlags`: the sensor binary's renamed settings, migrated in one
   place (moved from the sensor).
 
-### v0.11.0 (released 2026-10-02)
+## v0.11.0 — 2026-10-02
 
 ### Upgrade notes
 
@@ -93,6 +91,11 @@ platform then dispatches by those tools; to keep sending nothing, set
   a tool without history: `resource.ManagerConfig.CostHints`
   (`registry.CostHints()`) and `CostBook.SetPrior`. The learned history
   still replaces it.
+
+### Fixed
+
+- `TestQueue_DrainReleasesUnfinished` no longer races the poller's claim
+  of the next command (test only; #100).
 
 ## v0.10.0 — 2026-10-02
 
