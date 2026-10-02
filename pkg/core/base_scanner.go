@@ -143,6 +143,8 @@ func (s *BaseScanner) Scan(ctx context.Context, target string, opts *ScanOptions
 		cmd.Env = ScannerEnviron(s.env)
 	}
 
+	ConfigureScannerProcess(cmd)
+
 	// Capture output
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -150,6 +152,7 @@ func (s *BaseScanner) Scan(ctx context.Context, target string, opts *ScanOptions
 
 	// Execute
 	err := cmd.Run()
+	ReapScannerProcess(cmd)
 	RecordProcessState(ctx, cmd.ProcessState)
 	result.FinishedAt = time.Now().Unix()
 	result.DurationMs = time.Since(startTime).Milliseconds()

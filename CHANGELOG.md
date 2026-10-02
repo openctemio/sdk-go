@@ -122,6 +122,15 @@ sends its own heartbeats sets the same fields on `core.SensorStatus`.
   and acknowledged every command first, so with 5 slots busy it held up to
   10 acknowledged commands; the platform re-queued those after 10 minutes
   and another sensor ran them while this one still would.
+- **A canceled or finished scan leaves no processes behind** (api RFC-030
+  §5.4). The SDK's exec helpers (`ExecuteScanner`, `StreamScanner`,
+  `BaseScanner`) run each scanner in its own process group: cancellation
+  (drain, platform cancel, timeout) kills the whole group, not only the
+  direct child, so a wrapper script's children die too; background
+  children left by a finished scanner are reaped; on Linux a scanner is
+  killed if the sensor dies. `core.ConfigureScannerProcess` and
+  `core.ReapScannerProcess` do the same for executors that start
+  processes themselves.
 - **A command's slot is reused only after its result reached the
   platform.** With the outbox (the daemon default) `ReportCommandResult`
   returned once the result was on disk, so the poller freed the slot and

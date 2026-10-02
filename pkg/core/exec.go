@@ -50,6 +50,7 @@ func ExecuteScanner(ctx context.Context, cfg *ExecConfig) (*ExecResult, error) {
 	// Allowlisted environment only (see scanner_env.go): the sensor's API key
 	// and other credentials must not leak into scanner processes.
 	cmd.Env = ScannerEnviron(cfg.Env)
+	ConfigureScannerProcess(cmd)
 
 	// Create pipes for stdout/stderr
 	stdout, err := cmd.StdoutPipe()
@@ -87,6 +88,7 @@ func ExecuteScanner(ctx context.Context, cfg *ExecConfig) (*ExecResult, error) {
 
 	// Wait for process to exit
 	err = cmd.Wait()
+	ReapScannerProcess(cmd)
 	RecordProcessState(ctx, cmd.ProcessState)
 
 	result := &ExecResult{
@@ -149,6 +151,7 @@ func StreamScanner(ctx context.Context, cfg *ExecConfig, handler OutputHandler) 
 	}
 
 	cmd.Env = ScannerEnviron(cfg.Env)
+	ConfigureScannerProcess(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -182,6 +185,7 @@ func StreamScanner(ctx context.Context, cfg *ExecConfig, handler OutputHandler) 
 
 	wg.Wait()
 	err = cmd.Wait()
+	ReapScannerProcess(cmd)
 	RecordProcessState(ctx, cmd.ProcessState)
 
 	result := &ExecResult{
