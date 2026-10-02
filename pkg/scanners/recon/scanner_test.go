@@ -109,6 +109,32 @@ func TestScanTargets_ToolErrorFailsTheJob(t *testing.T) {
 	}
 }
 
+// One target that fails (a host that does not resolve) does not discard the
+// other targets' results; it is listed in the report.
+func TestScanTargets_PartialFailureKeepsResults(t *testing.T) {
+	f := &fakeRecon{name: "naabu", typ: core.ReconTypePort, results: map[string]*core.ReconResult{
+		"192.0.2.10":       {OpenPorts: []core.OpenPort{{Host: "192.0.2.10", IP: "192.0.2.10", Port: 443, Protocol: "tcp"}}},
+		"gone.example.com": {ExitCode: 1},
+	}}
+	res, err := NewScanner(f).ScanTargets(context.Background(), []string{"gone.example.com", "192.0.2.10"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := parse(t, res.RawOutput)
+	if len(r.Assets) == 0 {
+		t.Fatal("results of the working target were dropped")
+	}
+	failed, ok := r.Properties["failed_targets"].([]any)
+	if !ok || len(failed) != 1 {
+		t.Fatalf("failed_targets = %#v", r.Properties["failed_targets"])
+	}
+
+	f.results["192.0.2.10"] = &core.ReconResult{ExitCode: 2}
+	if _, err := NewScanner(f).ScanTargets(context.Background(), []string{"gone.example.com", "192.0.2.10"}, nil); !errors.Is(err, ErrToolFailed) {
+		t.Fatalf("every target failed: err = %v, want ErrToolFailed", err)
+	}
+}
+
 // The capabilities are the platform tool catalog's names for each tool, so
 // a job that requires them is offered to the sensor.
 func TestCapabilities_MatchThePlatformCatalog(t *testing.T) {

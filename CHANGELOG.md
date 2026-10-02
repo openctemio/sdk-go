@@ -13,8 +13,10 @@ All notable changes to `github.com/openctemio/sdk-go`.
   report as raw output, which the generic CTIS parser reads, so discovered
   hosts, IPs, services and URLs reach the platform as assets through normal
   ingest. It advertises the platform catalog's capabilities for each tool
-  (`recon.Capabilities`). A run that fails or exits non-zero fails the job
-  instead of reporting 0 assets.
+  (`recon.Capabilities`). A target the tool fails on (exits non-zero) is
+  listed in the report's `failed_targets` property while the other targets'
+  results are kept; a job where every target failed fails instead of
+  reporting 0 assets.
 
 - **Command lease epoch** (api RFC-035 D6). Protocol v2 commands carry
   `lease_epoch` and `lease_expires_at` (`protov2.Command.LeaseEpoch`,

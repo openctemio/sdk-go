@@ -140,6 +140,11 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []string, opts *core.
 		Target:      strings.Join(targets, ","),
 		StartedAt:   start.Unix(),
 	}
+	// One target that does not resolve (naabu exits 1 with "no valid
+	// targets") must not discard the others' results; a job where every
+	// target failed is a failed job.
+	var failed []failedTarget
+	var lastErr error
 	for _, t := range targets {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -154,25 +159,27 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []string, opts *core.
 			ro.Verbose = ro.Verbose || opts.Verbose
 		}
 		res, err := s.recon.Scan(ctx, t, &ro)
+		if err == nil {
+			err = runError(res)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("%w: %s on %s: %w", ErrToolFailed, name, t, err)
-		}
-		if res == nil {
-			return nil, fmt.Errorf("%w: %s on %s returned no result", ErrToolFailed, name, t)
-		}
-		if res.Error != "" {
-			return nil, fmt.Errorf("%w: %s on %s: %s", ErrToolFailed, name, t, res.Error)
-		}
-		// The ProjectDiscovery tools exit 0 when they finish, results or
-		// not; any other exit (an unknown flag exits 2, a missing input 1)
-		// means the run did not happen.
-		if res.ExitCode != 0 {
-			return nil, fmt.Errorf("%w: %s on %s exited with status %d", ErrToolFailed, name, t, res.ExitCode)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			failed = append(failed, failedTarget{Target: t, Error: err.Error()})
+			lastErr = err
+			continue
 		}
 		if in.ScannerVersion == "" {
 			in.ScannerVersion = res.ScannerVersion
 		}
 		appendResult(in, res)
+	}
+	if len(targets) > 0 && len(failed) == len(targets) {
+		if len(targets) == 1 {
+			return nil, fmt.Errorf("%w: %s on %s: %w", ErrToolFailed, name, targets[0], lastErr)
+		}
+		return nil, fmt.Errorf("%w: %s failed on all %d targets, last: %w", ErrToolFailed, name, len(targets), lastErr)
 	}
 	finished := time.Now()
 	in.FinishedAt = finished.Unix()
@@ -187,6 +194,12 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []string, opts *core.
 	if err != nil {
 		return nil, fmt.Errorf("convert %s results: %w", name, err)
 	}
+	if len(failed) > 0 {
+		if report.Properties == nil {
+			report.Properties = ctis.Properties{}
+		}
+		report.Properties["failed_targets"] = failed
+	}
 	raw, err := json.Marshal(report)
 	if err != nil {
 		return nil, fmt.Errorf("encode %s report: %w", name, err)
@@ -199,6 +212,30 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []string, opts *core.
 		DurationMs:     in.DurationMs,
 		RawOutput:      raw,
 	}, nil
+}
+
+// failedTarget is a target the tool did not complete on, reported in the
+// CTIS report's properties ("failed_targets").
+type failedTarget struct {
+	Target string `json:"target"`
+	Error  string `json:"error"`
+}
+
+// runError is the failure of a recon run that returned a result: the
+// wrapper's error, a missing result, or a non-zero exit. The
+// ProjectDiscovery tools exit 0 when they finish, results or not; any other
+// exit (an unknown flag exits 2, no valid input 1) means the run did not
+// happen.
+func runError(res *core.ReconResult) error {
+	switch {
+	case res == nil:
+		return errors.New("no result")
+	case res.Error != "":
+		return errors.New(res.Error)
+	case res.ExitCode != 0:
+		return fmt.Errorf("exited with status %d", res.ExitCode)
+	}
+	return nil
 }
 
 // appendResult adds one run's results to the converter input.
