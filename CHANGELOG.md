@@ -4,6 +4,14 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Fixed
+
+- Protocol v2 results: a 413 without a problem document (a reverse proxy's
+  body limit, such as ingress-nginx's 1 MiB default in front of the
+  platform's 16 MiB) now splits the report into smaller segments, as the
+  platform's own 413 does. Before, the report was refused for good and the
+  outbox moved it to the dead-letter folder.
+
 ## v0.15.0 — 2026-10-02
 
 ### Added

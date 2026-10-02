@@ -226,6 +226,52 @@ func TestV2_SplitsOn413(t *testing.T) {
 	}
 }
 
+// A reverse proxy in front of the platform (an ingress with a body limit
+// below the platform's) answers 413 with its own HTML page, not a problem
+// document. The report must be split like after the platform's own 413, not
+// refused for good.
+func TestV2_SplitsOnProxy413WithoutProblem(t *testing.T) {
+	f := NewFakePlatform(true)
+	defer f.Close()
+	f.SetFault(func(r *http.Request, _ int) *FaultAnswer {
+		if r.Method == http.MethodPut {
+			raw, _ := decodeBody(r.Header.Get("Content-Encoding"), mustRead(r))
+			var rep ctis.Report
+			_ = json.Unmarshal(raw, &rep)
+			if len(rep.Findings) > 10 {
+				return &FaultAnswer{Status: 413} // plain answer, no problem
+			}
+		}
+		return nil
+	})
+	c := newClient(t, f, client.ProtocolV2)
+	st, err := c.PushResultsV2(context.Background(), report("semgrep", 4, 10), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := f.Reports()[st.ReportID]
+	if rep == nil || !rep.Committed || rep.Status.Accepted.Findings != 40 {
+		t.Fatalf("after a proxy 413: %+v", rep)
+	}
+}
+
+// A report that needs more segments than the platform accepts is refused
+// locally (a 413 the SDK makes up): splitting further cannot help.
+func TestV2_TooManySegmentsIsNotResplit(t *testing.T) {
+	f := NewFakePlatform(true)
+	defer f.Close()
+	f.Limits.MaxSegmentsPerReport = 2
+	c := newClient(t, f, client.ProtocolV2)
+	_, err := c.PushResultsV2(context.Background(), report("semgrep", 3, 7), &client.V2PushOptions{MaxFindingsPerSegment: 5})
+	var ve *client.V2Error
+	if !errors.As(err, &ve) || ve.Status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("err = %v, want a 413", err)
+	}
+	if n := len(f.RequestsTo(http.MethodPut, protov2.PathPrefix+"/results/")); n != 0 {
+		t.Fatalf("%d segments sent for a report that cannot fit", n)
+	}
+}
+
 func mustRead(r *http.Request) []byte {
 	b := make([]byte, r.ContentLength)
 	_, _ = r.Body.Read(b)
