@@ -331,6 +331,37 @@ func TestDefaultCommandExecutor_ValidatesScanTarget(t *testing.T) {
 		}
 	})
 
+	// Out-of-band callbacks (nuclei Interactsh) are off unless the command
+	// opts in with a JSON boolean true.
+	t.Run("allow_interactsh only from a boolean true", func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			config map[string]interface{}
+			want   bool
+		}{
+			{"no config", nil, false},
+			{"absent", map[string]interface{}{}, false},
+			{"false", map[string]interface{}{"allow_interactsh": false}, false},
+			{"string true", map[string]interface{}{"allow_interactsh": "true"}, false},
+			{"number 1", map[string]interface{}{"allow_interactsh": 1}, false},
+			{"true", map[string]interface{}{"allow_interactsh": true}, true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				sc := &recordingScanner{}
+				e := NewDefaultCommandExecutor(nil)
+				e.AddScanner(sc)
+				e.SetScanTargetPolicy(newTestPolicy(root))
+				cmd := scanCommand(t, ScanCommandPayload{Scanner: "rec", Target: "https://example.com", Config: tc.config})
+				if _, err := e.Execute(context.Background(), cmd); err != nil {
+					t.Fatalf("execute: %v", err)
+				}
+				if sc.options == nil || sc.options.AllowInteractsh != tc.want {
+					t.Errorf("AllowInteractsh = %v, want %v", sc.options != nil && sc.options.AllowInteractsh, tc.want)
+				}
+			})
+		}
+	})
+
 	t.Run("reject flag-like exclude", func(t *testing.T) {
 		sc := &recordingScanner{}
 		e := NewDefaultCommandExecutor(nil)
