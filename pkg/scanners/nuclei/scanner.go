@@ -89,6 +89,18 @@ type Scanner struct {
 	Silent              bool // Silent mode
 	AutoUpdateTemplates bool // Update templates before scan
 
+	// DisableUpdateCheck passes -disable-update-check: nuclei neither checks
+	// for nor installs template (or engine) updates while it scans. Set it
+	// when the templates are managed outside nuclei (TemplateDir), so a scan
+	// uses exactly that template set and never downloads another.
+	DisableUpdateCheck bool
+	// DisableUnsignedTemplates passes -disable-unsigned-templates: nuclei
+	// skips every template whose signature is missing or does not match
+	// (the official templates are signed). Not applied to a scan that loads
+	// platform-provided templates (ScanOptions.CustomTemplateDir), which are
+	// not signed by the template publisher.
+	DisableUnsignedTemplates bool
+
 	// Internal
 	version string
 }
@@ -543,6 +555,12 @@ func (s *Scanner) buildArgsFor(target, listFile string, opts *core.ScanOptions) 
 	}
 	if s.AutoUpdateTemplates {
 		args = append(args, "-ut")
+	}
+	if s.DisableUpdateCheck {
+		args = append(args, "-disable-update-check")
+	}
+	if s.DisableUnsignedTemplates && (opts == nil || opts.CustomTemplateDir == "") {
+		args = append(args, "-disable-unsigned-templates")
 	}
 
 	// Apply options from opts
