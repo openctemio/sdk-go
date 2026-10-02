@@ -102,6 +102,69 @@ func main() {
 }
 ```
 
+## Build a sensor in 30 lines
+
+`pkg/sensorkit` is the whole sensor runtime in one call. A sensor implements
+its tools; the kit reads the settings, connects (protocol v2 negotiated on
+hello, v1 for what an older platform lacks), reports the tools on every
+heartbeat, waits while the key is rejected, follows the heartbeat doorbell,
+claims commands into resource-sized slots, delivers results through the
+durable outbox, renews the API key and drains on SIGTERM.
+
+```go
+package main
+
+import (
+	"context"
+	"time"
+
+	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/sensorkit"
+)
+
+var version = "dev"
+
+func main() {
+	tool := core.NewBaseScanner(&core.BaseScannerConfig{ // your tool's binary
+		Name: "mytool", Binary: "mytool", Capabilities: []string{"sast"},
+		DefaultArgs: []string{"scan", "--sarif", "{target}"}, Timeout: 30 * time.Minute,
+	})
+	kit, err := sensorkit.New(sensorkit.Options{Name: "my-sensor", Version: version})
+	sensorkit.Exit(err)    // a clear message and exit code for a bad setting
+	kit.AddScanner(tool)   // reported (installed? version?), dispatched, scheduled
+	sensorkit.Exit(kit.Run(context.Background())) // blocks; SIGINT/SIGTERM drain
+}
+```
+
+Run it with `API_URL` and `API_KEY` (a sensor key from Settings > Sensors).
+[examples/minimal-sensor](examples/minimal-sensor) is a complete one with an
+in-process tool.
+
+| Setting | Environment (an `Options` field wins) | Default |
+|---|---|---|
+| Platform | `API_URL`, `API_KEY`, `SENSOR_ID` | required to run commands (exit 2 with what is missing) |
+| Name | `SENSOR_NAME` | `sensor-<hostname>` |
+| Protocol | `SENSOR_PROTOCOL` = `auto`, `v1`, `v2` | `auto` |
+| Concurrency cap | `SENSOR_MAX_JOBS` (1-100) | none: slots follow CPU, memory and tool cost |
+| Tool allowlist | `SENSOR_TOOLS` (comma-separated) | none |
+| Drain grace | `SENSOR_DRAIN_GRACE` (1s-1h) | 30s |
+| Outbox | `SENSOR_OUTBOX`, `SENSOR_OUTBOX_DIR`, `_MAX_BYTES`, `_MAX_AGE`, `_KEY_FILE` | on, `/var/lib/openctem/outbox` |
+| State | `SENSOR_STATE_DIR` | the outbox's parent |
+| Private CA | `SENSOR_CA_CERT_FILE` (PEM, added to the system roots) | system roots |
+| Proxy | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | none |
+| Key renewal | `PLATFORM_KEY_AUTORENEW=true`, `Options.CredentialsFile` | off |
+| Pre-rename names | `AGENT_ID`, `AGENT_NAME`, `AGENT_ALLOW_PRIVATE_TARGETS`, `-agent-id` | applied with a warning; both names set differently: exit 2 |
+
+Plug your own parts in: `kit.AddCollector`, `kit.AddParser` (your tool's
+output format), `kit.HandleCommand("type", executor)`,
+`kit.UseCommandMiddleware(mw, "type")` (wrap every command),
+`Options.Content` (managed scanner content on the heartbeat),
+`Options.ScanTargetPolicy`, `Options.AssetResolver`, `kit.Tools()` (more
+tools or capabilities). The resolvers (`ResolveMaxJobs`, `ResolveOutbox`,
+`ResolveProtocol`, `CheckCredentials`, `MigrateSettings`) are exported for a
+sensor with its own flags or configuration file. `pkg/core` stays available
+for anything the kit does not cover; the sections below describe it.
+
 ## Writing a sensor: you implement executors; the SDK owns queue, slots, leases and reporting
 
 The platform's queue is authoritative (api RFC-030). A sensor only says what
@@ -168,6 +231,7 @@ s.Tools().Limit(strings.Split(os.Getenv("MY_TOOLS"), ",")...) // optional operat
 | `pkg/client` | API client for OpenCTEM API |
 | `pkg/scanners` | Scanner integrations: SAST/SCA/secrets (Semgrep, CodeQL, Trivy, Betterleaks), DAST (Nuclei + validation executor), recon (subfinder, dnsx, naabu, httpx, katana) |
 | `pkg/handler` | Result handlers and output formatters |
+| `pkg/sensorkit` | The sensor runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain |
 | `pkg/core` | Core types and interfaces |
 | `pkg/errors` | Error types and handling |
 | `pkg/retry` | Retry utilities |
@@ -186,6 +250,7 @@ s.Tools().Limit(strings.Split(os.Getenv("MY_TOOLS"), ",")...) // optional operat
 ## Examples
 
 See [examples/](examples/) for complete examples:
+- A complete sensor on `pkg/sensorkit` ([minimal-sensor](examples/minimal-sensor))
 - Basic API client usage
 - Scanner integration
 - CI/CD pipeline integration

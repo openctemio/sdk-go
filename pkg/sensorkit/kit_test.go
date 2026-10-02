@@ -1,0 +1,653 @@
+package sensorkit
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/openctemio/sdk-go/pkg/client"
+	"github.com/openctemio/sdk-go/pkg/conformance"
+	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/platform"
+)
+
+func clientOutbox(dir string) client.OutboxConfig { return client.OutboxConfig{Dir: dir} }
+
+// syncBuffer is a goroutine-safe log sink.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// testScanner is an in-process tool that reports one SARIF finding.
+type testScanner struct {
+	name      string
+	installed bool
+	block     chan struct{} // non-nil: Scan waits for it or ctx
+	scans     chan string
+}
+
+func (s *testScanner) Name() string           { return s.name }
+func (s *testScanner) Version() string        { return "1.0.0" }
+func (s *testScanner) Capabilities() []string { return []string{"sast"} }
+func (s *testScanner) IsInstalled(context.Context) (bool, string, error) {
+	if !s.installed {
+		return false, "", errors.New("not here")
+	}
+	return true, "1.0.0", nil
+}
+
+const testSARIF = `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"kit-tool"}},"results":[{"ruleId":"r1","level":"error","message":{"text":"bad"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"a.go"},"region":{"startLine":1}}}]}]}]}`
+
+func (s *testScanner) Scan(ctx context.Context, target string, _ *core.ScanOptions) (*core.ScanResult, error) {
+	if s.scans != nil {
+		select {
+		case s.scans <- target:
+		default:
+		}
+	}
+	if s.block != nil {
+		select {
+		case <-s.block:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return &core.ScanResult{ScannerName: s.name, RawOutput: []byte(testSARIF)}, nil
+}
+
+type testContent struct {
+	started chan struct{}
+	stamped chan struct{}
+}
+
+func (c *testContent) Decorate(r core.CapabilityReport) core.CapabilityReport {
+	for i := range r.Tools {
+		r.Tools[i].Content = []core.ContentInfo{{Name: "kit-rules", Version: "7"}}
+	}
+	return r
+}
+func (c *testContent) Start(context.Context) { close(c.started) }
+func (c *testContent) WrapPusher(p core.Pusher) core.Pusher {
+	return stampPusher{Pusher: p, stamped: c.stamped}
+}
+
+type stampPusher struct {
+	core.Pusher
+	stamped chan struct{}
+}
+
+func (p stampPusher) PushFindings(ctx context.Context, r *ctis.Report) (*core.PushResult, error) {
+	select {
+	case p.stamped <- struct{}{}:
+	default:
+	}
+	return p.Pusher.PushFindings(ctx, r)
+}
+
+// baseOptions points a kit at fake with private dirs and captured logs.
+func baseOptions(t *testing.T, f *conformance.FakePlatform) (Options, *syncBuffer, *syncBuffer) {
+	t.Helper()
+	clearEnv(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(EnvDrainGrace, "1s")
+	out, errw := &syncBuffer{}, &syncBuffer{}
+	return Options{
+		Name: "kit-test", Version: "1.2.3",
+		APIURL: f.URL(), APIKey: f.APIKey,
+		Outbox:   OutboxSettings{Dir: filepath.Join(t.TempDir(), "outbox")},
+		StateDir: t.TempDir(),
+		Stdout:   out, Stderr: errw,
+	}, out, errw
+}
+
+// runKit runs k until stop is closed; it returns Run's error.
+func runKit(t *testing.T, k *Kit) (cancel func() error) {
+	t.Helper()
+	ctx, stop := context.WithCancel(context.WithValue(context.Background(), signalKey{}, true))
+	done := make(chan error, 1)
+	go func() { done <- k.Run(ctx) }()
+	return func() error {
+		stop()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(20 * time.Second):
+			t.Fatal("Run did not return after cancel")
+			return nil
+		}
+	}
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+type heartbeat struct {
+	Name         string          `json:"name"`
+	Version      string          `json:"version"`
+	Tools        []core.ToolInfo `json:"tools"`
+	Capabilities []string        `json:"capabilities"`
+	MaxJobs      int             `json:"max_concurrent_jobs"`
+	SDK          *struct {
+		Version string `json:"version"`
+	} `json:"sdk"`
+	Sensor *struct {
+		Version string `json:"version"`
+	} `json:"sensor"`
+}
+
+func lastBeat(t *testing.T, f *conformance.FakePlatform) heartbeat {
+	t.Helper()
+	beats := f.Heartbeats()
+	if len(beats) == 0 {
+		t.Fatal("no heartbeat")
+	}
+	var hb heartbeat
+	if err := json.Unmarshal(beats[len(beats)-1], &hb); err != nil {
+		t.Fatal(err)
+	}
+	return hb
+}
+
+// A whole sensor life on a v2 platform: hello, a first heartbeat that
+// reports the tools before the first poll, a dispatched scan run through the
+// middleware and the SDK's executor with its results delivered, scheduled
+// scans, and a clean shutdown.
+func TestRun_V2Lifecycle(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	f.SetControl(true)
+	t.Cleanup(f.Close)
+	cmdID := "0192a3b4-0000-7000-8000-000000000001"
+	f.QueueCommand(cmdID)
+
+	opts, out, errw := baseOptions(t, f)
+	target := t.TempDir()
+	opts.Targets = []string{target}
+	opts.MaxJobs = 2
+	stamped := make(chan struct{}, 4)
+	content := &testContent{started: make(chan struct{}), stamped: stamped}
+	opts.Content = content
+	opts.ScanTargetPolicy = &core.ScanTargetPolicy{AllowedRoots: []string{target}}
+	opts.AssetResolver = func(_, _ string) (ctis.AssetType, string) {
+		return ctis.AssetTypeRepository, "github.com/openctemio/kit-test"
+	}
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scans := make(chan string, 8)
+	k.AddScanner(&testScanner{name: "kit-tool", installed: true, scans: scans}, As("kit-tool-fs"), WithCapabilities("container"))
+	k.AddScanner(&testScanner{name: "missing-tool"})
+	k.Tools().AddCapabilities("validate")
+	var seen []string
+	var mu sync.Mutex
+	// The fake dispatches {"scanner":"fake"}: the middleware routes it to
+	// the configured name and gives it a target, like a sensor's own
+	// executor wrapper would.
+	k.UseCommandMiddleware(func(next core.CommandExecutor) core.CommandExecutor {
+		return execFunc(func(ctx context.Context, cmd *core.Command) (*core.CommandExecutionResult, error) {
+			mu.Lock()
+			seen = append(seen, cmd.Type)
+			mu.Unlock()
+			if cmd.Type == "scan" {
+				c := *cmd
+				c.Payload = json.RawMessage(fmt.Sprintf(`{"scanner":"kit-tool-fs","target":%q}`, target))
+				cmd = &c
+			}
+			return next.Execute(ctx, cmd)
+		})
+	}, "validate")
+	stop := runKit(t, k)
+
+	waitFor(t, "the command to complete", func() bool {
+		s, e := f.CommandState(cmdID)
+		if s == "failed" {
+			t.Fatalf("command failed: %s\nstdout:%s\nstderr:%s", e, out.String(), errw.String())
+		}
+		return s == "completed"
+	})
+	waitFor(t, "findings delivered", func() bool { return f.AcceptedFindings() >= 1 })
+	select {
+	case <-content.started:
+	default:
+		t.Fatal("ContentStarter.Start not called")
+	}
+	select {
+	case <-stamped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dispatched results did not go through PusherWrapper")
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	reqs := f.Requests()
+	if reqs[0].Path != "/api/v2/sensor/hello" || reqs[1].Path != "/api/v2/sensor/heartbeat" {
+		t.Fatalf("start sequence %s %s, want hello then heartbeat (before any poll)", reqs[0].Path, reqs[1].Path)
+	}
+	for _, r := range reqs {
+		if strings.HasPrefix(r.Path, "/api/v1/") {
+			t.Errorf("v1 request on a v2 platform: %s %s", r.Method, r.Path)
+		}
+	}
+	hb := lastBeat(t, f)
+	if hb.Name != "kit-test" || hb.Version != "1.2.3" || hb.SDK == nil || hb.Sensor == nil || hb.Sensor.Version != "1.2.3" {
+		t.Fatalf("identity: %+v", hb)
+	}
+	if len(hb.Tools) != 2 || hb.Tools[0].Name != "kit-tool" || !hb.Tools[0].Installed || hb.Tools[1].Installed ||
+		len(hb.Tools[0].Content) != 1 {
+		t.Fatalf("tools: %+v", hb.Tools)
+	}
+	for _, c := range []string{"kit-tool", "sast", "container", "validate"} {
+		if !strings.Contains(strings.Join(hb.Capabilities, ","), c) {
+			t.Errorf("capabilities %v lack %s", hb.Capabilities, c)
+		}
+	}
+	if hb.MaxJobs != 2 {
+		t.Errorf("max_concurrent_jobs %d", hb.MaxJobs)
+	}
+	logs := out.String()
+	for _, want := range []string{"  Outbox: ", "  Added scanner: kit-tool", "Command polling: on the heartbeat doorbell",
+		"Concurrent jobs: up to 2", "✓ Connected to API", "kit-test started", "Mode: Hybrid", "Sensor stopped."} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, logs)
+		}
+	}
+	if !strings.Contains(errw.String(), "Warning: Scanner missing-tool skipped: its check failed: not here") {
+		t.Errorf("stderr: %s", errw.String())
+	}
+	// Scheduled scan of the target ran too.
+	if len(scans) < 2 {
+		t.Errorf("scans %d, want the dispatched one and a scheduled one", len(scans))
+	}
+}
+
+type execFunc func(ctx context.Context, cmd *core.Command) (*core.CommandExecutionResult, error)
+
+func (f execFunc) Execute(ctx context.Context, cmd *core.Command) (*core.CommandExecutionResult, error) {
+	return f(ctx, cmd)
+}
+
+// Against a platform without protocol v2 everything goes over v1.
+func TestRun_V1Fallback(t *testing.T) {
+	f := conformance.NewFakePlatform(false)
+	t.Cleanup(f.Close)
+	opts, _, _ := baseOptions(t, f)
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.AddScanner(&testScanner{name: "kit-tool", installed: true})
+	stop := runKit(t, k)
+	waitFor(t, "a v1 poll", func() bool { return len(f.RequestsTo("GET", "/api/v1/agent/commands")) > 0 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.RequestsTo("POST", "/api/v1/agent/heartbeat")) == 0 {
+		t.Fatal("no v1 heartbeat")
+	}
+	for _, r := range f.Requests() {
+		if strings.HasPrefix(r.Path, "/api/v2/") && r.Path != "/api/v2/sensor/hello" {
+			t.Errorf("v2 request to a v1 platform: %s", r.Path)
+		}
+	}
+	if hb := lastBeat(t, f); len(hb.Tools) != 1 || hb.Tools[0].Name != "kit-tool" {
+		t.Fatalf("v1 heartbeat tools: %+v", hb.Tools)
+	}
+}
+
+// Shutdown drains: a command still running after the drain grace is
+// stopped and handed back to the platform; Run then returns nil.
+func TestRun_DrainReleasesRunningCommand(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	f.SetControl(true)
+	t.Cleanup(f.Close)
+	cmdID := "0192a3b4-0000-7000-8000-000000000002"
+	f.QueueCommand(cmdID)
+	opts, out, _ := baseOptions(t, f)
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	// HandleCommand replaces the SDK's executor for "scan".
+	k.HandleCommand("scan", execFunc(func(ctx context.Context, _ *core.Command) (*core.CommandExecutionResult, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}))
+	stop := runKit(t, k)
+	select {
+	case <-started:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the command never started")
+	}
+	begin := time.Now()
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(begin); d < time.Second {
+		t.Errorf("returned after %s, before the 1s drain grace", d)
+	}
+	rel := f.Releases()
+	if len(rel) != 1 || rel[0].CommandID != cmdID {
+		t.Fatalf("releases %+v, want %s handed back", rel, cmdID)
+	}
+	if !strings.Contains(out.String(), "Draining: 1 command(s) running; up to 1s") {
+		t.Errorf("stdout: %s", out.String())
+	}
+}
+
+// While the platform rejects the key the sensor stays up, retrying with the
+// heartbeat's backoff, and never polls; cancel stops it cleanly.
+func TestRun_RejectedKeyWaitsAndStops(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	f.SetControl(true)
+	t.Cleanup(f.Close)
+	opts, out, _ := baseOptions(t, f)
+	opts.APIKey = "rda_wrong"
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := runKit(t, k)
+	waitFor(t, "a rejected heartbeat", func() bool {
+		for _, r := range f.Requests() {
+			if strings.HasSuffix(r.Path, "/heartbeat") && r.Status == 401 {
+				return true
+			}
+		}
+		return false
+	})
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.RequestsTo("GET", "/api/v2/sensor/commands")); n != 0 {
+		t.Fatalf("%d polls with a rejected key", n)
+	}
+	if strings.Contains(out.String(), "Connected to API") || !strings.Contains(out.String(), "Sensor stopped.") {
+		t.Fatalf("stdout: %s", out.String())
+	}
+}
+
+// SENSOR_TOOLS narrows what is run and reported; As names count.
+func TestRun_ToolAllowlist(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	f.SetControl(true)
+	t.Cleanup(f.Close)
+	opts, _, errw := baseOptions(t, f)
+	t.Setenv(EnvTools, "trivy-fs")
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.AddScanner(&testScanner{name: "trivy", installed: true}, As("trivy-fs"))
+	k.AddScanner(&testScanner{name: "nuclei", installed: true})
+	stop := runKit(t, k)
+	waitFor(t, "a heartbeat", func() bool { return len(f.Heartbeats()) > 0 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	hb := lastBeat(t, f)
+	if len(hb.Tools) != 1 || hb.Tools[0].Name != "trivy" {
+		t.Fatalf("tools %+v, want only trivy", hb.Tools)
+	}
+	if !strings.Contains(errw.String(), "scanner nuclei is not in SENSOR_TOOLS") {
+		t.Errorf("stderr: %s", errw.String())
+	}
+	// An empty, non-nil Tools sets no allowlist whatever SENSOR_TOOLS says.
+	opts.Tools = []string{}
+	k2, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k2.AddScanner(&testScanner{name: "nuclei", installed: true})
+	if !k2.allowed(k2.scanners[0]) {
+		t.Fatal("Tools: []string{} must lift the allowlist")
+	}
+}
+
+func TestNew_Errors(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	cases := []struct {
+		name string
+		env  map[string]string
+		opts func(*Options)
+		want string
+		code int
+	}{
+		{name: "no key", opts: func(o *Options) { o.APIKey = "" }, want: "needs the platform URL and a sensor API key; missing: [API_KEY]", code: ExitUsage},
+		{name: "drain grace", env: map[string]string{EnvDrainGrace: "lots"}, want: "SENSOR_DRAIN_GRACE", code: ExitUsage},
+		{name: "max jobs", env: map[string]string{EnvMaxJobs: "0"}, want: "SENSOR_MAX_JOBS=0", code: ExitUsage},
+		{name: "max jobs option", opts: func(o *Options) { o.MaxJobs = 101 }, want: "MaxJobs=101", code: ExitUsage},
+		{name: "protocol", env: map[string]string{EnvProtocol: "v3"}, want: "SENSOR_PROTOCOL", code: ExitError},
+		{name: "outbox", env: map[string]string{EnvOutboxMaxAge: "-1h"}, want: "SENSOR_OUTBOX_MAX_AGE", code: ExitError},
+		{name: "private targets", env: map[string]string{"SENSOR_ALLOW_PRIVATE_TARGETS": "yes please"}, want: "SENSOR_ALLOW_PRIVATE_TARGETS", code: ExitError},
+		{name: "CA file", env: map[string]string{EnvCACertFile: "/nonexistent/ca.pem"}, want: "CA certificate file", code: ExitError},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			opts, _, _ := baseOptions(t, f)
+			for k, v := range c.env {
+				t.Setenv(k, v)
+			}
+			if c.opts != nil {
+				c.opts(&opts)
+			}
+			_, err := New(opts)
+			if err == nil || !strings.Contains(err.Error(), c.want) || ExitCode(err) != c.code {
+				t.Fatalf("err = %v (exit %d), want %q (exit %d)", err, ExitCode(err), c.want, c.code)
+			}
+		})
+	}
+}
+
+// Settings come from the environment when Options leave them zero.
+func TestNew_ReadsEnvironment(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	opts, _, _ := baseOptions(t, f)
+	t.Setenv(EnvAPIURL, opts.APIURL)
+	t.Setenv(EnvAPIKey, opts.APIKey)
+	t.Setenv(EnvSensorName, "env-name")
+	t.Setenv(EnvSensorID, "env-id")
+	t.Setenv(EnvMaxJobs, "7")
+	t.Setenv(EnvTools, "a, b")
+	opts.APIURL, opts.APIKey, opts.Name = "", "", ""
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.closeClient()
+	if k.Client() == nil || k.Name() != "env-name" || k.s.sensorID != "env-id" || k.s.maxJobs != 7 ||
+		strings.Join(k.s.allow, ",") != "a,b" || k.s.protocol != "auto" {
+		t.Fatalf("settings %+v", k.s)
+	}
+}
+
+// A key an earlier run renewed is used at start; each rotation is saved
+// with its expiry for the next start; another sensor's file is ignored.
+func TestKeyRenewal_PersistsAndIsReloaded(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "sensor-credentials.json")
+	exp := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Second)
+	var log bytes.Buffer
+	rc := keyRenewConfig(file, "sensor-1", nil, false, &log)
+	if err := rc.OnRotated("oct_newkey_123456", &exp); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(log.String(), "rotated key saved to the credentials file") {
+		t.Fatalf("log %q", log.String())
+	}
+	rk, err := loadRenewedKey(file, "sensor-1")
+	if err != nil || rk.file != file || rk.key != "oct_newkey_123456" || rk.expiresAt == nil || !rk.expiresAt.Equal(exp) {
+		t.Fatalf("reloaded %+v, %v", rk, err)
+	}
+	if rk, err := loadRenewedKey(file, "sensor-2"); err != nil || rk.key != "" {
+		t.Fatalf("another sensor's key was used: %+v %v", rk, err)
+	}
+
+	// New starts with the renewed key and says so.
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	opts, _, errw := baseOptions(t, f)
+	opts.SensorID, opts.APIKey, opts.KeyAutoRenew, opts.CredentialsFile = "sensor-1", "oct_configured", true, file
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.closeClient()
+	if k.s.apiKey != "oct_newkey_123456" || !strings.Contains(errw.String(), "Using the renewed API key from "+file) {
+		t.Fatalf("key %q stderr %q", k.s.apiKey, errw.String())
+	}
+}
+
+func TestKeyRenewer_SwapsEveryClient(t *testing.T) {
+	api := client.New(&client.Config{BaseURL: "https://api.example", APIKey: "old"})
+	r := &keyRenewer{
+		renew: platform.NewPlatformClient(&platform.ClientConfig{BaseURL: "https://api.example", APIKey: "old"}),
+		api:   api,
+	}
+	var _ platform.KeyRenewer = r
+	r.SetAPIKey("new")
+	if api.APIKeyHint() == core.APIKeyHint("old") {
+		t.Fatal("the API client kept the old key")
+	}
+}
+
+// Key auto-renewal: a key without a known expiry is renewed at start, saved
+// for the next start, and the new key is used from then on.
+func TestRun_KeyAutoRenew(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	f.SetControl(true)
+	t.Cleanup(f.Close)
+	opts, out, _ := baseOptions(t, f)
+	opts.KeyAutoRenew = true
+	opts.CredentialsFile = filepath.Join(t.TempDir(), "creds.json")
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := runKit(t, k)
+	waitFor(t, "a key renewal", func() bool { return len(f.RequestsTo("POST", "/api/v2/sensor/keys")) > 0 })
+	waitFor(t, "the renewed key saved", func() bool {
+		rk, _ := loadRenewedKey(opts.CredentialsFile, "")
+		return rk.key != "" && rk.key != opts.APIKey
+	})
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Key auto-renew: enabled (credentials: "+opts.CredentialsFile+")") {
+		t.Fatalf("stdout: %s", out.String())
+	}
+}
+
+type statusErr struct{ code int }
+
+func (e *statusErr) Error() string       { return fmt.Sprintf("http %d", e.code) }
+func (e *statusErr) HTTPStatusCode() int { return e.code }
+
+func TestWaitForAcceptedKey_RetriesWhileRejected(t *testing.T) {
+	results := []error{&statusErr{401}, fmt.Errorf("wrapped: %w", &statusErr{403}), nil}
+	delays := []time.Duration{30 * time.Second, time.Minute, 30 * time.Second}
+	calls := 0
+	first := func(context.Context) (time.Duration, error) {
+		d, err := delays[calls], results[calls]
+		calls++
+		return d, err
+	}
+	var waited []time.Duration
+	wait := func(_ context.Context, d time.Duration) bool { waited = append(waited, d); return true }
+	var out bytes.Buffer
+	if !waitForAcceptedKey(context.Background(), first, wait, &out) {
+		t.Fatal("must return true once the key is accepted")
+	}
+	if calls != 3 || len(waited) != 2 || waited[0] != 30*time.Second || waited[1] != time.Minute {
+		t.Fatalf("calls %d waited %v", calls, waited)
+	}
+	if out.String() != "✓ Connected to API\n" {
+		t.Fatalf("out %q", out.String())
+	}
+}
+
+func TestWaitForAcceptedKey_NetworkFailureDoesNotBlockStart(t *testing.T) {
+	calls := 0
+	first := func(context.Context) (time.Duration, error) {
+		calls++
+		return time.Minute, errors.New("dial tcp: connection refused")
+	}
+	wait := func(context.Context, time.Duration) bool { t.Fatal("must not wait on a network failure"); return false }
+	var out bytes.Buffer
+	if !waitForAcceptedKey(context.Background(), first, wait, &out) || calls != 1 || out.Len() != 0 {
+		t.Fatalf("network failure: calls %d out %q", calls, out.String())
+	}
+}
+
+func TestWaitForAcceptedKey_StopsOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	first := func(context.Context) (time.Duration, error) { return time.Hour, &statusErr{401} }
+	if waitForAcceptedKey(ctx, first, sleepCtx, &bytes.Buffer{}) {
+		t.Fatal("a canceled wait must return false")
+	}
+}
+
+// The first SIGTERM cancels the context (drain) and says so.
+func TestSignalContext(t *testing.T) {
+	var out syncBuffer
+	ctx, stop := SignalContext(context.Background(), &out)
+	defer stop()
+	if ctx.Value(signalKey{}) == nil {
+		t.Fatal("context not marked")
+	}
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("SIGTERM did not cancel the context")
+	}
+	waitFor(t, "the shutdown message", func() bool {
+		return strings.Contains(out.String(), "Shutting down... (running scans get a grace period; signal again to stop at once)")
+	})
+}
+
+// The capability reporter reports "no tool" rather than nothing.
+func TestCapabilityReporter_EmptyInventory(t *testing.T) {
+	r := &capabilityReporter{tools: core.NewToolRegistry()}
+	rep := r.CapabilityReport(context.Background())
+	if rep.Tools == nil || rep.Capabilities == nil || len(rep.Tools) != 0 {
+		t.Fatalf("report %+v", rep)
+	}
+}
