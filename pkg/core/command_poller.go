@@ -461,6 +461,13 @@ func (p *CommandPoller) ReportStatus(status *SensorStatus) {
 		res, capacity := p.resources.Snapshot(active)
 		status.Resources = &res
 		status.Capacity = &capacity
+		// The operator ceiling (max_concurrent_jobs) is the manager's cap.
+		// Without one the poller's bound is the manager's HardMax, a safety
+		// bound and not a capacity: nothing is reported and the platform
+		// goes by the slots.
+		if status.MaxConcurrentJobs == 0 {
+			status.MaxConcurrentJobs = p.resources.Cap()
+		}
 	}
 }
 
@@ -547,7 +554,9 @@ func (p *CommandPoller) ActiveJobs() int {
 
 // MaxJobs is the most commands this poller runs at once: the configured
 // cap (CommandPollerConfig.MaxConcurrent, or the resource manager's). The
-// live slot count is at most this. It implements LoadReporter.
+// live slot count is at most this. It implements LoadReporter. With a
+// resource manager the heartbeat reports the live slots (ReportStatus)
+// rather than this bound.
 func (p *CommandPoller) MaxJobs() int {
 	return p.maxConcurrent
 }

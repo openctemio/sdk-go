@@ -194,7 +194,7 @@ func (s *Scanner) IsInstalled(ctx context.Context) (bool, string, error) {
 		binary = DefaultBinary
 	}
 
-	installed, version, err := core.CheckBinaryInstalled(ctx, binary, "-version")
+	installed, version, err := core.VersionOutput(ctx, binary, "-version")
 	if err != nil {
 		return false, "", err
 	}
@@ -206,17 +206,20 @@ func (s *Scanner) IsInstalled(ctx context.Context) (bool, string, error) {
 	return installed, s.version, nil
 }
 
-// parseVersion extracts version from nuclei output.
+// parseVersion extracts the engine version from `nuclei -version` output.
+// nuclei prints a colored banner to stderr, e.g.
+//
+//	[INF] Nuclei Engine Version: v3.11.1
+//	[INF] Nuclei Config Directory: /home/openctem/.config/nuclei
+//
+// (VersionOutput has already removed the colors).
 func parseVersion(output string) string {
-	// Nuclei version output: "Nuclei Engine Version: v3.1.0"
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		if strings.Contains(line, "Version:") {
-			parts := strings.Split(line, ":")
-			if len(parts) >= 2 {
-				return strings.TrimSpace(parts[1])
-			}
-		}
+	if v := core.VersionAfterLabel(output, "Engine Version:"); v != "" {
+		return v
+	}
+	// Older releases: "Current Version: v2.9.x".
+	if v := core.VersionAfterLabel(output, "Version:"); v != "" {
+		return v
 	}
 	return strings.TrimSpace(output)
 }

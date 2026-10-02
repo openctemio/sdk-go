@@ -4,6 +4,39 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Upgrade notes
+
+Only additions. A heartbeat's `max_concurrent_jobs` is now only the
+operator's ceiling (`SENSOR_MAX_JOBS`, `ToolRegistry.SetMaxConcurrentJobs`,
+`resource.ManagerConfig.Cap`): a sensor with resource-sized slots and no cap
+no longer reports the resource manager's safety bound (64) there. What it
+can run now is `capacity.slots_total`, as before. Platforms from before
+api RFC-033 then fall back to the administrator's limit, still bounded by
+the free slots the sensor reports.
+
+### Added
+
+- **Each heartbeat tool carries its capabilities** (`core.ToolInfo.Capabilities`,
+  `"capabilities"` on the wire): the tool registry reports which tool serves
+  what (`nuclei` → `dast`, `validate:nuclei`; `semgrep` → `sast`) instead of
+  only the sensor's flat list. Platforms that do not know it ignore it.
+- `core.VersionOutput`: a tool's whole version output, read from stderr
+  when stdout is empty, with ANSI colors removed; `core.StripANSI`,
+  `core.VersionAfterLabel`. `resource.(*Manager).Cap`: the operator's cap.
+
+### Fixed
+
+- **nuclei's version was never reported.** nuclei v3 prints its version
+  banner (`[INF] Nuclei Engine Version: v3.11.1`, in color) only to stderr;
+  `CheckBinaryInstalled` read stdout, so nuclei was installed with no
+  version. It now falls back to stderr and strips colors, and nuclei,
+  subfinder, dnsx, httpx, katana and naabu parse their whole banner
+  (`Engine Version:` / `Current Version:`).
+- **A sensor without `SENSOR_MAX_JOBS` reported `max_concurrent_jobs: 64`**
+  (the resource manager's upper bound) next to `slots_total: 4` on a 4-core
+  machine, and the platform took 64 as its capacity. The ceiling is now
+  reported only when the operator set one (see Upgrade notes).
+
 ## v0.12.0 — 2026-10-02
 
 ### Upgrade notes

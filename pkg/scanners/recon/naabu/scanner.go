@@ -139,7 +139,7 @@ func (s *Scanner) IsInstalled(ctx context.Context) (bool, string, error) {
 		binary = DefaultBinary
 	}
 
-	installed, version, err := core.CheckBinaryInstalled(ctx, binary, "-version")
+	installed, version, err := core.VersionOutput(ctx, binary, "-version")
 	if err != nil {
 		return false, "", err
 	}
@@ -153,6 +153,10 @@ func (s *Scanner) IsInstalled(ctx context.Context) (bool, string, error) {
 
 // parseVersion extracts version from naabu output.
 func parseVersion(output string) string {
+	// Current releases print "[INF] Current Version: vX.Y.Z" to stderr.
+	if v := core.VersionAfterLabel(output, "Current Version:"); v != "" {
+		return v
+	}
 	// naabu version output: "naabu v2.x.x"
 	output = strings.TrimSpace(output)
 	lines := strings.Split(output, "\n")

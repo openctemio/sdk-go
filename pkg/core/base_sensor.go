@@ -78,9 +78,11 @@ type BaseSensor struct {
 }
 
 // SetLoadReporter makes every heartbeat carry r's load: the commands the
-// sensor runs now (active_jobs, sent even when 0) and, when the capability
-// report does not already say it, how many it runs at once
-// (max_concurrent_jobs). Pass the sensor's *CommandPoller. Call before Start.
+// sensor runs now (active_jobs, sent even when 0), its dynamic slots when r
+// is a StatusReporter with a resource manager (capacity), and otherwise,
+// when the capability report does not already say it, its fixed
+// concurrency (max_concurrent_jobs). Pass the sensor's *CommandPoller. Call
+// before Start.
 func (a *BaseSensor) SetLoadReporter(r LoadReporter) {
 	a.statusMu.Lock()
 	a.loadReporter = r
@@ -125,11 +127,17 @@ func (a *BaseSensor) withCapabilities(ctx context.Context, status *SensorStatus)
 	if lr != nil && status != nil {
 		status.ActiveJobs = lr.ActiveJobs()
 		status.ActiveJobsReported = true
-		if status.MaxConcurrentJobs == 0 {
-			status.MaxConcurrentJobs = lr.MaxJobs()
-		}
 		if sr, ok := lr.(StatusReporter); ok {
 			sr.ReportStatus(status)
+		}
+		// max_concurrent_jobs is the operator's ceiling. A load reporter
+		// that reports dynamic slots (Capacity) sizes them itself; its
+		// MaxJobs is then only the resource manager's upper bound (64 when
+		// the operator set no cap), not a capacity, and reporting it made
+		// the platform hand a 4-core sensor more jobs than it runs. Without
+		// slots, MaxJobs is the fixed concurrency and stays the report.
+		if status.MaxConcurrentJobs == 0 && status.Capacity == nil {
+			status.MaxConcurrentJobs = lr.MaxJobs()
 		}
 	}
 	return status

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -454,5 +455,49 @@ func TestDefaultCommandExecutorRegistersTools(t *testing.T) {
 	e2.AddScanner(&registryScanner{name: "semgrep", installed: true})
 	if got := s.withCapabilities(context.Background(), s.Status()); !slices.Equal(toolNames(got.Tools), []string{"semgrep"}) {
 		t.Fatalf("heartbeat tools = %v", toolNames(got.Tools))
+	}
+}
+
+// Each reported tool carries its own capabilities and kind, so the platform
+// knows which tool serves what (live: every tool arrived with neither and
+// only the flat list said "dast", "sast", ...).
+func TestToolRegistryReportsPerToolCapabilities(t *testing.T) {
+	r := NewToolRegistry()
+	installed := func(context.Context) (bool, string, error) { return true, "v3.11.1", nil }
+	if err := r.Register(ToolSpec{Name: "nuclei", Capabilities: []string{"dast", "validate:nuclei"}, Probe: installed}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Register(ToolSpec{Name: "nuclei", Capabilities: []string{"web"}}); err != nil { // a second mode adds
+		t.Fatal(err)
+	}
+	if err := r.Register(ToolSpec{Name: "inventory", Kind: ToolKindCollector}); err != nil {
+		t.Fatal(err)
+	}
+	rep := r.CapabilityReport(context.Background())
+	if len(rep.Tools) != 2 {
+		t.Fatalf("tools = %+v", rep.Tools)
+	}
+	n := rep.Tools[0]
+	if n.Kind != ToolKindScanner || strings.Join(n.Capabilities, ",") != "dast,validate:nuclei,web" {
+		t.Fatalf("nuclei = %+v", n)
+	}
+	if c := rep.Tools[1]; c.Kind != ToolKindCollector || c.Capabilities != nil {
+		t.Fatalf("collector = %+v", c)
+	}
+	// The report's slices are the caller's.
+	n.Capabilities[0] = "x"
+	if again := r.CapabilityReport(context.Background()).Tools[0].Capabilities[0]; again != "dast" {
+		t.Fatalf("registry shares its slice: %q", again)
+	}
+
+	var st SensorStatus
+	rep.Apply(&st)
+	b, err := json.Marshal(st.Tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `[{"name":"nuclei","kind":"scanner","version":"v3.11.1","installed":true,"capabilities":["x","validate:nuclei","web"]},{"name":"inventory","kind":"collector","installed":true}]`
+	if string(b) != want {
+		t.Fatalf("wire = %s\nwant %s", b, want)
 	}
 }
