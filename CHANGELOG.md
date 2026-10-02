@@ -68,6 +68,20 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Security
 
+- **nuclei: Interactsh (out-of-band callbacks) is off by default.** Every
+  nuclei scan now runs with `-ni` unless something opts in, so a scan no
+  longer makes targets call out to the public `oast.*` servers, and no scan
+  data leaves through them, without anyone choosing that. Opting in:
+  `nuclei.Scanner.AllowInteractsh` (new; also `NucleiOptions.AllowInteractsh`),
+  an operator-run `InteractshServer`, or per scan the new
+  `core.ScanOptions.AllowInteractsh`, which the command executor sets only
+  when the platform's scan command carries `config.allow_interactsh: true`
+  (a JSON boolean; meant for approved intrusive runs). `NoInteractsh` still
+  forces it off, and `InteractshToken` is passed only when it is on. The new
+  `Scanner.InteractshEnabled(opts)` reports the decision. Templates that need
+  OAST (tag `oast`, e.g. in `NewDAST`) are skipped by nuclei while it is off:
+  that is the intended trade.
+
 - `strategy.GetChangedFiles` ran `git diff` in the scanned repository with
   the sensor's whole environment (its API key included). It now gets the
   scanner environment (`core.ScannerEnviron`) plus the git variables that

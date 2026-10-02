@@ -49,6 +49,12 @@ type ScanOptions struct {
 	// Used by Nuclei (-t), Semgrep (--config), Betterleaks (--config)
 	CustomTemplateDir string `yaml:"custom_template_dir" json:"custom_template_dir"`
 
+	// AllowInteractsh lets this scan use out-of-band callbacks (nuclei's
+	// Interactsh), which are off by default. The command executor sets it
+	// only when the platform's scan command allows it
+	// (config "allow_interactsh": true, an approved intrusive run).
+	AllowInteractsh bool `yaml:"allow_interactsh" json:"allow_interactsh"`
+
 	// Asset information for linking findings
 	RepoURL   string `yaml:"repo_url" json:"repo_url"`
 	Branch    string `yaml:"branch" json:"branch"`

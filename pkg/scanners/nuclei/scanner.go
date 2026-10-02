@@ -60,10 +60,19 @@ type Scanner struct {
 	MarkdownExport string // Export results as markdown
 	SarifExport    string // Export results as SARIF
 
-	// Interactsh options
-	InteractshServer string // Custom interactsh server
-	InteractshToken  string // Interactsh auth token
-	NoInteractsh     bool   // Disable interactsh server
+	// Interactsh (out-of-band) options. Interactsh is OFF by default: a scan
+	// runs with -ni, so no target is made to call out to a third-party host
+	// and no scan data leaves through the public oast.* servers. It is on
+	// only when one of these opts in, and never when NoInteractsh is set:
+	//   - AllowInteractsh, set by the operator for this scanner;
+	//   - InteractshServer, the operator's own server (implies opting in);
+	//   - core.ScanOptions.AllowInteractsh, set per scan when the platform's
+	//     command allows it (an approved intrusive run).
+	// Templates that need OAST (tag "oast") are skipped while it is off.
+	InteractshServer string // Custom interactsh server (opts in)
+	InteractshToken  string // Interactsh auth token (sent only when on)
+	NoInteractsh     bool   // Force interactsh off, whatever opts in
+	AllowInteractsh  bool   // Opt in to interactsh with the default servers
 
 	// Network options
 	Proxy           string   // HTTP/SOCKS proxy
@@ -415,6 +424,16 @@ func (s *Scanner) ScanDAST(ctx context.Context, targets []string, opts *core.Sca
 	return report, nil
 }
 
+// InteractshEnabled reports whether a scan with opts may use Interactsh
+// (out-of-band callbacks). False unless AllowInteractsh, InteractshServer or
+// opts.AllowInteractsh opts in; always false with NoInteractsh.
+func (s *Scanner) InteractshEnabled(opts *core.ScanOptions) bool {
+	if s.NoInteractsh {
+		return false
+	}
+	return s.AllowInteractsh || s.InteractshServer != "" || (opts != nil && opts.AllowInteractsh)
+}
+
 // buildArgs builds the nuclei command arguments.
 func (s *Scanner) buildArgs(target string, opts *core.ScanOptions) []string {
 	return s.buildArgsFor(target, "", opts)
@@ -505,15 +524,16 @@ func (s *Scanner) buildArgsFor(target, listFile string, opts *core.ScanOptions) 
 		args = append(args, "-bs", fmt.Sprintf("%d", s.BulkSize))
 	}
 
-	// Interactsh options
-	if s.NoInteractsh {
+	// Interactsh: off unless something opts in (see the Scanner fields).
+	if s.InteractshEnabled(opts) {
+		if s.InteractshServer != "" {
+			args = append(args, "-iserver", s.InteractshServer)
+		}
+		if s.InteractshToken != "" {
+			args = append(args, "-itoken", s.InteractshToken)
+		}
+	} else {
 		args = append(args, "-ni")
-	}
-	if s.InteractshServer != "" {
-		args = append(args, "-iserver", s.InteractshServer)
-	}
-	if s.InteractshToken != "" {
-		args = append(args, "-itoken", s.InteractshToken)
 	}
 
 	// Network options
