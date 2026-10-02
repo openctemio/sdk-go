@@ -74,6 +74,10 @@ type ValidateOptions struct {
 	RateLimit int
 	// Binary overrides the nuclei binary path (default "nuclei").
 	Binary string
+	// TemplatesDir is the template set a TemplateID is looked up in (and run
+	// from), when the templates are managed outside nuclei's own directory.
+	// Empty: nuclei's configured templates directory.
+	TemplatesDir string
 	// Verbose streams nuclei output to logs.
 	Verbose bool
 }
@@ -166,6 +170,12 @@ func buildValidateArgs(opts ValidateOptions) ([]string, error) {
 		"-u", target,
 	}
 	if id != "" {
+		if dir := strings.TrimSpace(opts.TemplatesDir); dir != "" {
+			if strings.HasPrefix(dir, "-") {
+				return nil, fmt.Errorf("validate: refusing suspicious templates dir %q", dir)
+			}
+			args = append(args, "-t", dir)
+		}
 		args = append(args, "-id", id)
 	} else {
 		args = append(args, "-t", path)
@@ -198,7 +208,7 @@ func ValidateSingleTemplate(ctx context.Context, opts ValidateOptions) (*Validat
 	// a false downgrade. Confirm the template exists first; if we cannot confirm,
 	// stay inconclusive rather than guess.
 	if id := strings.TrimSpace(opts.TemplateID); id != "" {
-		installed, terr := templateInstalled(ctx, binary, id, opts.Verbose)
+		installed, terr := templateInstalled(ctx, binary, id, strings.TrimSpace(opts.TemplatesDir), opts.Verbose)
 		if terr != nil || !installed {
 			return &ValidateResult{
 				Outcome:    OutcomeInconclusive,
@@ -279,10 +289,15 @@ func ValidateSingleTemplate(ctx context.Context, opts ValidateOptions) (*Validat
 // templateInstalled reports whether nuclei has a template with the given id,
 // using `-tl` (template list) filtered by id. A run error (e.g. templates not
 // downloaded, offline) returns (false, err) so the caller stays inconclusive.
-func templateInstalled(ctx context.Context, binary, id string, verbose bool) (bool, error) {
+func templateInstalled(ctx context.Context, binary, id, templatesDir string, verbose bool) (bool, error) {
+	args := []string{"-tl"}
+	if templatesDir != "" {
+		args = append(args, "-t", templatesDir)
+	}
+	args = append(args, "-id", id, "-silent", "-no-color", "-disable-update-check")
 	res, err := core.ExecuteScanner(ctx, &core.ExecConfig{
 		Binary:  binary,
-		Args:    []string{"-tl", "-id", id, "-silent", "-no-color", "-disable-update-check"},
+		Args:    args,
 		Timeout: 30 * time.Second,
 		Verbose: verbose,
 	})

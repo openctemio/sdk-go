@@ -22,6 +22,10 @@ type ToolInfo struct {
 	// cannot find (or cannot run). The platform does not dispatch jobs for
 	// it and shows it as not installed.
 	Installed bool `json:"installed"`
+	// Content is the data the tool scans with (vulnerability database,
+	// templates, rules) and how fresh it is; see ContentInfo. nil reports
+	// nothing (the platform shows no content for the tool).
+	Content []ContentInfo `json:"content,omitzero"`
 }
 
 // CapabilityReport is what a sensor reports it can do.
@@ -65,7 +69,13 @@ func (r CapabilityReport) Apply(status *SensorStatus) {
 		return
 	}
 	if r.Tools != nil {
-		status.Tools = append(make([]ToolInfo, 0, len(r.Tools)), r.Tools...)
+		status.Tools = make([]ToolInfo, 0, len(r.Tools))
+		for _, t := range r.Tools {
+			if t.Content != nil {
+				t.Content = append(make([]ContentInfo, 0, len(t.Content)), t.Content...)
+			}
+			status.Tools = append(status.Tools, t)
+		}
 	}
 	if r.Capabilities != nil {
 		status.Capabilities = append(make([]string, 0, len(r.Capabilities)), r.Capabilities...)

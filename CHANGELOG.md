@@ -43,6 +43,26 @@ sends its own heartbeats sets the same fields on `core.SensorStatus`.
   `core.SensorStatus` and `client.HeartbeatRequest`.
 - `pkg/conformance`: `FakePlatform.Heartbeats()` returns the heartbeat
   bodies received, and the suite checks the report on v1 and v2.
+- **Scanner content versions** (api RFC-031). `core.ToolInfo.Content` lists
+  the content a tool scans with (`core.ContentInfo`: name, version,
+  `updated_at`, `fetched_at`, source, digest, managed, last refresh error):
+  the trivy database, the nuclei templates, the semgrep rules. The platform
+  shows it per sensor and reports stale content. The member is absent when
+  a tool reports none.
+- The `refresh_content` command (`core.CommandTypeRefreshContent`): its
+  payload `core.RefreshContentRequest` (content names, force, and the
+  tenant's `core.ContentPolicy`: refresh interval, and per content a maximum
+  age, a pinned version, semgrep rulesets) is decoded and checked by
+  `core.ParseRefreshContentRequest`. The policy never names a content
+  source: registries, mirrors and local directories stay the sensor host's
+  configuration. Content names: `core.ContentTrivyDB`,
+  `core.ContentTrivyJavaDB`, `core.ContentNucleiTemplates`,
+  `core.ContentSemgrepRules`.
+- `nuclei.Scanner.DisableUpdateCheck` (`-disable-update-check`) and
+  `nuclei.Scanner.DisableUnsignedTemplates` (`-disable-unsigned-templates`,
+  not applied to a scan with platform-provided templates), for scans that
+  run a managed template set; `nuclei.ValidateOptions.TemplatesDir` makes a
+  re-verification look its template up in that set.
 
 ## v0.9.0 — 2026-10-02
 

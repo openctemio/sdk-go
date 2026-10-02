@@ -13,7 +13,7 @@ func TestCapabilityReportApply(t *testing.T) {
 
 	st := &SensorStatus{MaxConcurrentJobs: 9}
 	r.Apply(st)
-	if len(st.Tools) != 1 || st.Tools[0] != tools[0] || len(st.Capabilities) != 1 || st.MaxConcurrentJobs != 4 {
+	if len(st.Tools) != 1 || st.Tools[0].Name != tools[0].Name || st.Tools[0].Version != tools[0].Version || !st.Tools[0].Installed || len(st.Capabilities) != 1 || st.MaxConcurrentJobs != 4 {
 		t.Fatalf("apply: %+v", st)
 	}
 	// The status owns copies: the reporter may reuse its slices.

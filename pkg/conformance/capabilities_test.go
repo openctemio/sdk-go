@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -36,10 +37,17 @@ func lastHeartbeat(t *testing.T, f *FakePlatform) reportedHeartbeat {
 	return hb
 }
 
+var trivyDBBuilt = time.Date(2026, 10, 2, 1, 5, 41, 0, time.UTC)
+
 var testReport = core.CapabilityReport{
 	Tools: []core.ToolInfo{
 		{Name: "semgrep", Version: "1.90.0", Installed: true},
 		{Name: "nuclei", Installed: false},
+		// Scanner content (api RFC-031) rides on the tool it belongs to.
+		{Name: "trivy", Version: "0.69.3", Installed: true, Content: []core.ContentInfo{{
+			Name: core.ContentTrivyDB, Version: "2026-10-02T01:05:41Z", UpdatedAt: &trivyDBBuilt,
+			Source: "mirror.gcr.io/aquasec/trivy-db:2", Digest: "sha256:3b16", Managed: true,
+		}}},
 	},
 	Capabilities:      []string{"semgrep", "sast", "validate"},
 	MaxConcurrentJobs: 3,
