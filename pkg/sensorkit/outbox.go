@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -234,6 +235,21 @@ func OutboxCommand(p OutboxPlan, requeueDead bool, w, errw io.Writer) int {
 	if p.Config.Dir == "" {
 		_, _ = fmt.Fprintf(errw, "Error: the outbox is off; set %s=on or %s\n", EnvOutbox, EnvOutboxDir)
 		return ExitError
+	}
+	// The status command never creates a key: with no key file, opening the
+	// outbox would write one, and a new key cannot read items sealed with
+	// the old one. Report from the directory alone instead.
+	keyFile := p.Config.KeyFile
+	if keyFile == "" {
+		keyFile = outbox.DefaultKeyFile(p.Config.Dir)
+	}
+	if _, serr := os.Stat(keyFile); errors.Is(serr, fs.ErrNotExist) {
+		if err := outbox.CheckKey(p.Config.Dir, keyFile); err != nil {
+			_, _ = fmt.Fprintf(errw, "Error: %v\n", err)
+			return ExitError
+		}
+		_, _ = fmt.Fprintf(w, "Outbox %s\n  empty: no results waiting and no key file yet (%s is created on the sensor's first start)\n", p.Config.Dir, keyFile)
+		return 0
 	}
 	ob, err := outbox.Open(outbox.Config{Dir: p.Config.Dir, KeyFile: p.Config.KeyFile, MaxBytes: p.Config.MaxBytes, MaxAge: p.Config.MaxAge})
 	if errors.Is(err, outbox.ErrLocked) {
