@@ -61,14 +61,8 @@ func (f *FakePlatform) control(w http.ResponseWriter, r *http.Request, rest stri
 }
 
 func (f *FakePlatform) heartbeatV2(w http.ResponseWriter, body []byte) {
-	var hb struct {
-		Outbox json.RawMessage `json:"outbox"`
-	}
-	_ = json.Unmarshal(body, &hb)
 	f.mu.Lock()
-	if len(hb.Outbox) > 0 {
-		f.outbox = append(f.outbox, hb.Outbox)
-	}
+	f.recordHeartbeat(body)
 	paused := f.Paused
 	pending := 0
 	for _, id := range f.cmdQueue {

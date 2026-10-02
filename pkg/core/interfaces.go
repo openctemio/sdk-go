@@ -437,6 +437,18 @@ type SensorStatus struct {
 	// on the Sensors page). Both are sent with every heartbeat.
 	Version  string `json:"version,omitempty"`
 	Hostname string `json:"hostname,omitempty"`
+
+	// What the sensor reports it can do (see CapabilityReport): its tool
+	// inventory, the capabilities it serves and how many jobs it runs at
+	// once. nil / 0 report nothing. BaseSensor fills them from its
+	// CapabilityReporter (SetCapabilityReporter).
+	Tools             []ToolInfo `json:"tools,omitzero"`
+	Capabilities      []string   `json:"capabilities,omitzero"`
+	MaxConcurrentJobs int        `json:"max_concurrent_jobs,omitempty"`
+	// OS and Arch are the sensor's platform (runtime.GOOS, runtime.GOARCH);
+	// BaseSensor sets them.
+	OS   string `json:"os,omitempty"`
+	Arch string `json:"arch,omitempty"`
 }
 
 // =============================================================================
