@@ -57,6 +57,12 @@ type Command struct {
 	Payload   json.RawMessage `json:"payload"`
 	CreatedAt time.Time       `json:"created_at"`
 	ExpiresAt time.Time       `json:"expires_at"`
+	// LeaseEpoch and LeaseExpiresAt are the command's lease as the poll
+	// saw it (protocol v2, api RFC-035 D6): the claim that follows starts
+	// a new epoch, which the client keeps and echoes on complete and fail.
+	// Zero on protocol v1 and from a platform without leases.
+	LeaseEpoch     int       `json:"lease_epoch,omitempty"`
+	LeaseExpiresAt time.Time `json:"lease_expires_at,omitzero"`
 }
 
 // CommandResult represents the result of command execution.

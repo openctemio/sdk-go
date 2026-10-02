@@ -76,6 +76,12 @@ const (
 	HeaderProtocolAdvert = "X-OpenCTEM-Protocol"
 	HeaderContentDigest  = "Content-Digest"
 	HeaderRetryAfter     = "Retry-After"
+	// HeaderLeaseEpoch is the lease epoch (Command.LeaseEpoch) a sensor
+	// holds a command under, sent on complete and fail: the platform
+	// refuses the change when the command was claimed again since (api
+	// RFC-035 D6). Optional; without it the platform fences by sensor and
+	// state.
+	HeaderLeaseEpoch = "X-OpenCTEM-Lease-Epoch"
 )
 
 // FeatureResultsV2 is the feature a sensor names in the v1
