@@ -81,3 +81,22 @@ func TestIsIPBlocked_Ranges(t *testing.T) {
 		}
 	}
 }
+
+// TestIsIPBlocked_IPv6MetadataAlwaysBlocked: the AWS (fd00:ec2::254) and GCP
+// (fd20:ce::254) metadata services over IPv6 are inside the ULA range
+// (fc00::/7) that the allow-private opt-in opens. They must stay blocked
+// in every mode, like 169.254.169.254.
+func TestIsIPBlocked_IPv6MetadataAlwaysBlocked(t *testing.T) {
+	for _, s := range []string{"fd00:ec2::254", "fd20:ce::254"} {
+		ip := net.ParseIP(s)
+		for _, allowPriv := range []bool{false, true} {
+			if !IsIPBlockedWith(ip, allowPriv, false) {
+				t.Errorf("IsIPBlockedWith(%s, allowPrivate=%v) = false, want true", s, allowPriv)
+			}
+		}
+	}
+	// The rest of the ULA range still follows the opt-in.
+	if IsIPBlockedWith(net.ParseIP("fd00:ec2::253"), true, false) {
+		t.Error("fd00:ec2::253 blocked with allow-private; only the metadata address should be")
+	}
+}
