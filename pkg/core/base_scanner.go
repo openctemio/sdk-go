@@ -150,6 +150,7 @@ func (s *BaseScanner) Scan(ctx context.Context, target string, opts *ScanOptions
 
 	// Execute
 	err := cmd.Run()
+	RecordProcessState(ctx, cmd.ProcessState)
 	result.FinishedAt = time.Now().Unix()
 	result.DurationMs = time.Since(startTime).Milliseconds()
 	result.RawOutput = stdout.Bytes()

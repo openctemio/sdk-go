@@ -108,6 +108,9 @@ func (a *BaseSensor) withCapabilities(ctx context.Context, status *SensorStatus)
 		if status.MaxConcurrentJobs == 0 {
 			status.MaxConcurrentJobs = lr.MaxJobs()
 		}
+		if sr, ok := lr.(StatusReporter); ok {
+			sr.ReportStatus(status)
+		}
 	}
 	return status
 }

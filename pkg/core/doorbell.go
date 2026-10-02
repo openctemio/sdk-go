@@ -43,6 +43,9 @@ const (
 	// HeartbeatActionUpdate: a newer sensor build is available. Only logged:
 	// the SDK never downloads or executes anything because of it.
 	HeartbeatActionUpdate HeartbeatAction = "update"
+	// HeartbeatActionCancel: stop the commands listed in cancel_command_ids
+	// (the poller cancels and releases them).
+	HeartbeatActionCancel HeartbeatAction = "cancel"
 )
 
 // Client-side bounds on the heartbeat delay the platform advises. The server
@@ -62,6 +65,9 @@ const (
 	// maxUnknownActionsLogged bounds the memory used to log each unknown
 	// action only once.
 	maxUnknownActionsLogged = 32
+	// maxCancelIDs and maxCancelIDLen bound cancel_command_ids.
+	maxCancelIDs   = 256
+	maxCancelIDLen = 64
 )
 
 // HeartbeatHints is the doorbell part of a heartbeat response. A server
@@ -83,6 +89,10 @@ type HeartbeatHints struct {
 	// ConfigVersion is the opaque version of what the platform governs about
 	// this sensor, or "" when absent or malformed.
 	ConfigVersion string
+	// CancelCommandIDs are commands the platform canceled that this sensor
+	// may hold (cancel_command_ids, api RFC-030 §5.4): the poller stops
+	// them and releases them.
+	CancelCommandIDs []string
 }
 
 // heartbeatHintsWire is the JSON shape of the hints in a heartbeat response.
@@ -91,6 +101,7 @@ type heartbeatHintsWire struct {
 	NextHeartbeatSeconds *int     `json:"next_heartbeat_seconds"`
 	Actions              []string `json:"actions"`
 	ConfigVersion        *string  `json:"config_version"`
+	CancelCommandIDs     []string `json:"cancel_command_ids"`
 }
 
 // ParseHeartbeatHints reads the doorbell hints from a heartbeat response
@@ -125,6 +136,11 @@ func ParseHeartbeatHints(body []byte) *HeartbeatHints {
 		h.Present = true
 		if validConfigVersion(*w.ConfigVersion) {
 			h.ConfigVersion = *w.ConfigVersion
+		}
+	}
+	for _, id := range w.CancelCommandIDs {
+		if id != "" && len(id) <= maxCancelIDLen && len(h.CancelCommandIDs) < maxCancelIDs {
+			h.CancelCommandIDs = append(h.CancelCommandIDs, id)
 		}
 	}
 	return h
@@ -170,9 +186,12 @@ type Doorbell struct {
 	cfg  DoorbellConfig
 	logf func(format string, args ...any)
 
-	mu            sync.Mutex
-	hintsActive   bool
-	paused        bool
+	mu          sync.Mutex
+	hintsActive bool
+	paused      bool
+	// onCancel stops held commands the platform canceled (set by the
+	// poller that shares this doorbell).
+	onCancel      func(ids []string)
 	draining      bool
 	configVersion string
 	pendingJobs   int
@@ -228,6 +247,8 @@ func (d *Doorbell) Handle(h *HeartbeatHints) {
 			rotate = true
 		case HeartbeatActionUpdate:
 			update = true
+		case HeartbeatActionCancel:
+			// acted on through CancelCommandIDs below
 		default:
 			unknown = append(unknown, string(a))
 		}
@@ -289,7 +310,12 @@ func (d *Doorbell) Handle(h *HeartbeatHints) {
 
 	takingJobs := !d.paused && !d.draining
 	d.pendingJobs = h.PendingJobs
+	onCancel := d.onCancel
 	d.mu.Unlock()
+
+	if len(h.CancelCommandIDs) > 0 && onCancel != nil {
+		onCancel(h.CancelCommandIDs)
+	}
 
 	if h.PendingJobs > 0 && takingJobs {
 		d.ring()
@@ -302,6 +328,12 @@ func (d *Doorbell) Handle(h *HeartbeatHints) {
 			d.logf("platform asks for key rotation, but key renewal is not enabled on this sensor")
 		}
 	}
+}
+
+func (d *Doorbell) setCancelHandler(f func(ids []string)) {
+	d.mu.Lock()
+	d.onCancel = f
+	d.mu.Unlock()
 }
 
 // HeartbeatFailed records that a heartbeat got no answer. The doorbell can

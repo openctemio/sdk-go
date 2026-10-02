@@ -102,6 +102,38 @@ func main() {
 }
 ```
 
+## Writing a sensor: you implement executors; the SDK owns queue, slots, leases and reporting
+
+The platform's queue is authoritative (api RFC-030). A sensor only says what
+it can run; `core.CommandPoller` does the rest:
+
+| The SDK does | How |
+|---|---|
+| **Slots** | `resource.Manager` sizes them from what the sensor may use: CPU cores and memory read from cgroup v2/v1 (quota, cpuset, memory limit) or the host, divided by the learned per-job cost of the sensor's tools (defaults per tool, refined from finished jobs, saved to a small JSON file). An AIMD window halves them after an OOM kill, a timeout or CPU throttling and grows back one slot per window of successes. A configured cap (`ManagerConfig.Cap`) is an upper bound, never a fixed number. |
+| **Claiming** | Takes a free slot first, polls with `limit` = free slots, claims nothing while all are busy: no prefetch, so the platform keeps work for sensors that can run it now. |
+| **Local queue** | Orders a batch by class (`verify > interactive > scheduled > background`) then priority (`critical > high > normal > low`); at most `limits.per_host_concurrency` (default 1) held commands touch one host (`core.HostKey`); a command over it is left pending, not claimed. |
+| **Leases** | Every heartbeat lists the held command ids (`running`) for the platform to renew. |
+| **Cancel** | A heartbeat's `cancel_command_ids` cancels those commands' contexts; they are released, not reported. |
+| **Drain** | `Stop` or a canceled context stops claiming, gives running commands `DrainGrace` (30 s) and then cancels them; unstarted and aborted commands are **released** (`POST …/commands/{id}/release`; failed with "released: …" on a platform without it) so the platform re-queues them at once. A refused `start` is never executed. |
+| **Reporting** | The heartbeat carries `active_jobs`, `max_concurrent_jobs` (the cap), `resources`, `capacity` (slots and per-tool cost) and `queue`. |
+
+```go
+poller := core.NewCommandPoller(apiClient, executor, &core.CommandPollerConfig{PollInterval: 30 * time.Second})
+poller.SetResourceManager(resource.NewManager(resource.ManagerConfig{
+	Cap:       0, // no operator cap: slots follow the resources (up to 64)
+	Tools:     []string{"nuclei", "trivy"},
+	StateFile: "/var/lib/openctem/tool-costs.json",
+	Prober:    &resource.Prober{WorkDir: "/var/lib/openctem"},
+}))
+poller.SetDoorbell(doorbell)
+sensor.SetLoadReporter(poller) // heartbeat: load, resources, capacity, queue, running
+go poller.Start(ctx)
+```
+
+An executor that starts processes itself calls `core.RecordProcessState(ctx,
+cmd.ProcessState)` after `Wait` so its CPU time and peak memory teach the
+cost history (the SDK's exec helpers already do).
+
 ## Packages
 
 | Package | Description |

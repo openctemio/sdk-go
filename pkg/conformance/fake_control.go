@@ -29,7 +29,7 @@ func (f *FakePlatform) control(w http.ResponseWriter, r *http.Request, rest stri
 	case strings.HasPrefix(rest, protov2.CommandsPath+"/") && r.Method == http.MethodPost && strings.Count(rest, "/") == 3:
 		parts := strings.Split(strings.TrimPrefix(rest, protov2.CommandsPath+"/"), "/")
 		switch parts[1] {
-		case protov2.ClaimAction, protov2.StartAction, protov2.CompleteAction, protov2.FailAction:
+		case protov2.ClaimAction, protov2.StartAction, protov2.CompleteAction, protov2.FailAction, protov2.ReleaseAction:
 			f.transitionV2(w, parts[0], parts[1], body)
 		default:
 			return false
@@ -111,14 +111,32 @@ func (f *FakePlatform) transitionV2(w http.ResponseWriter, id, action string, bo
 		return
 	}
 	target := map[string]string{protov2.ClaimAction: "acknowledged", protov2.StartAction: "running",
-		protov2.CompleteAction: "completed", protov2.FailAction: "failed"}[action]
+		protov2.CompleteAction: "completed", protov2.FailAction: "failed", protov2.ReleaseAction: "pending"}[action]
 	from := map[string][]string{protov2.ClaimAction: {"pending"}, protov2.StartAction: {"acknowledged"},
-		protov2.CompleteAction: {"running"}, protov2.FailAction: {"acknowledged", "running"}}[action]
+		protov2.CompleteAction: {"running"}, protov2.FailAction: {"acknowledged", "running"},
+		protov2.ReleaseAction: {"acknowledged", "running"}}[action]
+	if target == "" {
+		f.problem(w, http.StatusNotFound, protov2.ProblemCommandNotFound)
+		return
+	}
 	var req struct {
 		Result       json.RawMessage `json:"result"`
 		ErrorMessage string          `json:"error_message"`
+		Reason       string          `json:"reason"`
 	}
 	_ = json.Unmarshal(body, &req)
+	if action == protov2.ReleaseAction {
+		// Release returns the command to pending (api RFC-030); it is
+		// never "the same state again" for a sensor that still holds it.
+		if !contains(from, state) {
+			f.problemState(w, http.StatusConflict, protov2.ProblemInvalidTransition, state)
+			return
+		}
+		f.commands[id] = "pending"
+		f.released = append(f.released, Release{CommandID: id, Reason: req.Reason})
+		writeJSON(w, http.StatusOK, protov2.Command{ID: id, Status: "pending"})
+		return
+	}
 
 	if state == target {
 		same := true
