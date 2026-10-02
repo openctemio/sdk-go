@@ -1,5 +1,9 @@
 // Package handler provides lifecycle management for security scanning workflows.
 // It follows the Handler pattern: OnStart -> HandleFindings -> OnCompleted/OnError.
+//
+// Deprecated: moved to github.com/openctemio/sensor/internal/handler; removed
+// in v0.17.0. sdk-go keeps the runtime and safety layer the wrappers use
+// (core.ExecuteScanner, core.ValidateExtraArgs, the scanner environment).
 package handler
 
 import (

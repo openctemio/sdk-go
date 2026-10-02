@@ -1,4 +1,8 @@
 // Package katana provides a scanner implementation for the katana web crawler.
+//
+// Deprecated: moved to github.com/openctemio/sensor/internal/scanners/recon/katana; removed
+// in v0.17.0. sdk-go keeps the runtime and safety layer the wrappers use
+// (core.ExecuteScanner, core.ValidateExtraArgs, the scanner environment).
 package katana
 
 import (

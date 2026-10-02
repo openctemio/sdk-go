@@ -9,6 +9,10 @@
 // and returns the CTIS report as its raw output, which the generic CTIS JSON
 // parser reads. Discovered hosts, IPs, services and URLs then reach the
 // platform as assets through normal ingest.
+//
+// Deprecated: moved to github.com/openctemio/sensor/internal/scanners/recon; removed
+// in v0.17.0. sdk-go keeps the runtime and safety layer the wrappers use
+// (core.ExecuteScanner, core.ValidateExtraArgs, the scanner environment).
 package recon
 
 import (

@@ -2,6 +2,10 @@
 // secret detection tool (https://github.com/betterleaks/betterleaks), the
 // successor to gitleaks. Betterleaks v1 writes the gitleaks JSON report
 // format, so this package also parses reports from gitleaks itself.
+//
+// Deprecated: moved to github.com/openctemio/sensor/internal/scanners/betterleaks; removed
+// in v0.17.0. sdk-go keeps the runtime and safety layer the wrappers use
+// (core.ExecuteScanner, core.ValidateExtraArgs, the scanner environment).
 package betterleaks
 
 import (
