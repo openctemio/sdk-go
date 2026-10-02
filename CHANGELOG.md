@@ -63,8 +63,11 @@ know it ignore it.
     `KeyRenewConfig.OnRotated` that saves each renewed key atomically, 0600
     (directory 0700), with its expiry, whether it never expires
     (`SensorCredentials.NeverExpires`) and the fingerprint of the
-    configured key (`SensorCredentials.ConfiguredKeySHA256`, never the key
-    itself).
+    configured key (`SensorCredentials.ConfiguredKeyFingerprint`, a salted
+    PBKDF2-SHA256 fingerprint, never the key itself).
+  - `KeyFingerprint(key)` / `KeyFingerprintMatches(fp, key)`: that
+    fingerprint (`pbkdf2-sha256$<iterations>$<salt>$<hash>`) and its
+    constant-time check.
   - `CheckStatePersistence(dir)` and `DecideKeyAutoRenew(setting, p)`:
     renew automatically only when the state survives the container being
     recreated (outside a container, always; inside, only on a mounted

@@ -83,12 +83,12 @@ type SensorCredentials struct {
 	// to KeyRenewConfig.CurrentKeyExpiresAt on startup so the renewer does
 	// not rotate a still-valid key immediately.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	// ConfiguredKeySHA256 is the fingerprint (KeyFingerprint) of the
-	// configured key APIKey was renewed from. When the configured key no
-	// longer matches it, an administrator issued a new key and the operator
-	// configured it: ChooseAPIKey then uses the configured key. Empty in
-	// files written before it existed.
-	ConfiguredKeySHA256 string `json:"configured_key_sha256,omitempty"`
+	// ConfiguredKeyFingerprint is the salted PBKDF2 fingerprint
+	// (KeyFingerprint) of the configured key APIKey was renewed from. When
+	// the configured key no longer matches it, an administrator issued a new
+	// key and the operator configured it: ChooseAPIKey then uses the
+	// configured key. Empty in files written before it existed.
+	ConfiguredKeyFingerprint string `json:"configured_key_fingerprint,omitempty"`
 	// NeverExpires records that the server issued APIKey without an expiry
 	// (its key TTL is off), as opposed to an expiry that is not known. Pass it
 	// to KeyRenewConfig.CurrentKeyNeverExpires so a restart does not rotate
