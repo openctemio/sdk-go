@@ -376,6 +376,11 @@ func (c *Client) deliverCommandResult(ctx context.Context, d *outbox.Delivery) e
 		// not look like a clean, complete scan.
 		res.Status = "failed"
 		res.Error = "the platform refused the command's results: " + dl.Reason
+	} else if d.State.LostResults != "" && res.Status != "failed" {
+		// Results of the command were dropped before delivery (the outbox's
+		// caps): what the platform has of the run is incomplete.
+		res.Status = "failed"
+		res.Error = "results of the command were lost before delivery: " + d.State.LostResults
 	}
 	if err := c.reportCommandResultOnce(ctx, it.CommandID, &res); err != nil {
 		return classify(err)

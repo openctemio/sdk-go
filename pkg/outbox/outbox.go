@@ -77,6 +77,9 @@ const (
 	maxReasonFile = 1 << 20
 	// maxCorruptKept bounds the quarantine.
 	maxCorruptKept = 200
+	// maxLostCommands bounds the commands remembered as having lost a
+	// result before their command result was queued.
+	maxLostCommands = 1024
 )
 
 // Errors.
@@ -129,6 +132,11 @@ type State struct {
 	// Progress is owned by the deliverer (for example the v2 segments the
 	// server already acknowledged); see Delivery.SaveProgress.
 	Progress json.RawMessage `json:"progress,omitempty"`
+	// LostResults is set on a KindCommandResult item when a result of the
+	// same command was dropped before delivery (evicted by the caps, or
+	// quarantined as unreadable): the command must not be reported as a
+	// clean, complete run. It says why.
+	LostResults string `json:"lost_results,omitempty"`
 }
 
 // DeadLetter is an item the platform refused for good.
@@ -275,6 +283,9 @@ type Outbox struct {
 	watchers map[string]chan Result
 	changed  chan struct{} // closed and replaced on every state change
 	closed   bool
+	// lost remembers, per command, why a result of it was dropped while its
+	// command result was not queued yet (the command still running).
+	lost map[string]string
 
 	// delivery control
 	authPaused      bool
@@ -308,6 +319,7 @@ func Open(cfg Config) (*Outbox, error) {
 		entries:    map[string]*entry{},
 		watchers:   map[string]chan Result{},
 		changed:    make(chan struct{}),
+		lost:       map[string]string{},
 	}
 	if err := os.MkdirAll(c.Dir, dirMode); err != nil {
 		return nil, fmt.Errorf("outbox: create %s: %w", c.Dir, err)
@@ -576,6 +588,12 @@ func (o *Outbox) Enqueue(m Meta, payload []byte) (*Ticket, error) {
 		o.mu.Unlock()
 		return nil, ErrClosed
 	}
+	if m.Kind == KindCommandResult && m.CommandID != "" {
+		if why, ok := o.lost[m.CommandID]; ok {
+			e.state.LostResults = why
+			delete(o.lost, m.CommandID)
+		}
+	}
 	limit := o.capBytesLocked()
 	if e.itemSize > limit {
 		o.mu.Unlock()
@@ -627,8 +645,8 @@ func (o *Outbox) usedBytesLocked() int64 {
 }
 
 // enforceCapsLocked evicts by age, then oldest-first until extra more bytes
-// fit under the cap. Dead letters go before pending items; items being
-// delivered are skipped. It returns what was evicted for notifyEvicted.
+// fit under the cap. Dead letters go before pending items, command results
+// last; items being delivered are skipped. It returns what was evicted for notifyEvicted.
 func (o *Outbox) enforceCapsLocked(extra int64) ([]Meta, string) {
 	var evicted []Meta
 	reasons := map[string]bool{}
@@ -644,9 +662,13 @@ func (o *Outbox) enforceCapsLocked(extra int64) ([]Meta, string) {
 	limit := o.capBytesLocked()
 	used := o.usedBytesLocked()
 	if used+extra > limit {
-		// Dead letters first, then pending; each oldest first.
+		// Dead letters first, then pending results, then command results;
+		// each oldest first. A command result is a few hundred bytes:
+		// evicting it frees almost nothing and leaves its command running
+		// on the platform until it times out.
 		order := o.sortedLocked(func(e *entry) bool { return e.dead != nil })
-		order = append(order, o.sortedLocked(func(e *entry) bool { return e.dead == nil })...)
+		order = append(order, o.sortedLocked(func(e *entry) bool { return e.dead == nil && e.meta.Kind != KindCommandResult })...)
+		order = append(order, o.sortedLocked(func(e *entry) bool { return e.dead == nil && e.meta.Kind == KindCommandResult })...)
 		for _, e := range order {
 			if used+extra <= limit {
 				break
@@ -678,7 +700,39 @@ func (o *Outbox) evictLocked(e *entry) {
 	o.evicted++
 	o.lastEvictAt = o.cfg.now()
 	o.finishLocked(e.meta.ID, Result{Evicted: true})
+	if e.dead == nil {
+		o.noteLostLocked(e.meta, "evicted from the outbox before delivery (size or age cap)")
+	}
 	o.signalLocked()
+}
+
+// noteLostLocked records that m, a pending result, was dropped undelivered:
+// the command result of its command (queued now or later) carries the
+// reason, so the command is not reported as a clean, complete run.
+func (o *Outbox) noteLostLocked(m Meta, why string) {
+	if m.CommandID == "" || m.Kind == KindCommandResult {
+		return
+	}
+	why = fmt.Sprintf("%s %s %s", m.Kind, m.ID, why)
+	found := false
+	for _, e := range o.entries {
+		if e.dead != nil || e.meta.Kind != KindCommandResult || e.meta.CommandID != m.CommandID {
+			continue
+		}
+		found = true
+		if e.state.LostResults != "" {
+			continue
+		}
+		e.state.LostResults = why
+		if err := o.writeState(o.pendingDir, e); err != nil {
+			o.cfg.Logf("item %s: state not written: %v", e.meta.ID, err)
+		}
+	}
+	if !found {
+		if _, ok := o.lost[m.CommandID]; !ok && len(o.lost) < maxLostCommands {
+			o.lost[m.CommandID] = why
+		}
+	}
 }
 
 func (o *Outbox) notifyEvicted(evicted []Meta, reason string) {

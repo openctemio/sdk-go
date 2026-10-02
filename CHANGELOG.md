@@ -11,6 +11,15 @@ All notable changes to `github.com/openctemio/sdk-go`.
   platform's 16 MiB) now splits the report into smaller segments, as the
   platform's own 413 does. Before, the report was refused for good and the
   outbox moved it to the dead-letter folder.
+- Outbox: when the byte or age cap evicts a result of a command (or the
+  result becomes unreadable), the command's result now reports the command
+  `failed` ("results of the command were lost before delivery: ...")
+  instead of `completed`. Before, the platform saw a clean, complete run
+  that was missing its findings. The mark is persisted in the command
+  result's state (`outbox.State.LostResults`), so it survives a restart.
+- Outbox: the byte cap evicts command results after every other pending
+  item. A command result is a few hundred bytes, and evicting it left its
+  command running on the platform until the command timed out.
 
 ## v0.15.0 — 2026-10-02
 

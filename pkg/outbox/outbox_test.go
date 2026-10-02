@@ -592,3 +592,82 @@ func TestWaitReturnsWhenDrainedOrBackingOff(t *testing.T) {
 		t.Fatalf("stats = %+v", st)
 	}
 }
+
+// A result of a command dropped by the caps marks the command's result, so
+// the deliverer can report the command failed instead of complete. The mark
+// is persisted (a restart keeps it), and it also reaches a command result
+// queued after the eviction (the command was still running).
+func TestEvictedResultMarksItsCommandResult(t *testing.T) {
+	now := time.Now()
+	clock := func() time.Time { return now }
+	dir := t.TempDir()
+	mod := func(c *Config) { c.now = clock; c.MaxAge = time.Hour }
+	o := openTest(t, dir, mod)
+	if _, err := o.Enqueue(Meta{Kind: KindReport, CommandID: "queued"}, []byte("r1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.Enqueue(Meta{Kind: KindReport, CommandID: "running"}, []byte("r2")); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(50 * time.Minute)
+	if _, err := o.Enqueue(Meta{Kind: KindCommandResult, CommandID: "queued"}, []byte("res1")); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(20 * time.Minute) // the reports are now older than MaxAge
+	if _, err := o.Enqueue(Meta{Kind: KindReport}, []byte("other")); err != nil {
+		t.Fatal(err)
+	}
+	if st := o.Stats(); st.Evicted != 2 {
+		t.Fatalf("evicted %d, want the 2 old reports", st.Evicted)
+	}
+	if _, err := o.Enqueue(Meta{Kind: KindCommandResult, CommandID: "running"}, []byte("res2")); err != nil {
+		t.Fatal(err)
+	}
+	_ = o.Close()
+
+	o2 := openTest(t, dir, mod)
+	var mu sync.Mutex
+	lost := map[string]string{}
+	r := &recorder{errs: func(d *Delivery) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if d.Meta.Kind == KindCommandResult {
+			lost[d.Meta.CommandID] = d.State.LostResults
+		}
+		return nil
+	}}
+	stop := runFor(t, o2, r)
+	defer stop()
+	waitFor(t, func() bool { return o2.Stats().PendingCount == 0 })
+	mu.Lock()
+	defer mu.Unlock()
+	for _, cmd := range []string{"queued", "running"} {
+		if !strings.Contains(lost[cmd], "evicted") {
+			t.Errorf("command %s: LostResults = %q", cmd, lost[cmd])
+		}
+	}
+}
+
+// Under the byte cap a command result is evicted after every other pending
+// item: it is tiny, and without it the command stays running on the platform.
+func TestByteCapEvictsCommandResultsLast(t *testing.T) {
+	o := openTest(t, t.TempDir(), func(c *Config) { c.MaxBytes = 3000; c.MaxDiskFraction = -1 })
+	res, err := o.Enqueue(Meta{Kind: KindCommandResult, CommandID: "c"}, []byte("result"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 40 {
+		if _, err := o.Enqueue(Meta{Kind: KindReport}, []byte(strings.Repeat("x", 50)+fmt.Sprint(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if o.Stats().Evicted == 0 {
+		t.Fatal("nothing evicted")
+	}
+	for _, m := range o.Pending() {
+		if m.ID == res.Meta.ID {
+			return
+		}
+	}
+	t.Fatal("the command result was evicted before the reports")
+}
