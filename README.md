@@ -287,9 +287,8 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Related Projects
 
-- [openctemio/api](https://github.com/openctemio/api) - Backend API
-- [openctemio/ui](https://github.com/openctemio/ui) - Web UI
-- [openctemio/agent](https://github.com/openctemio/agent) - the OpenCTEM sensor (binary `openctemio-sensor`, image `ghcr.io/openctemio/sensor`)
+- [openctemio/openctem](https://github.com/openctemio/openctem) - the platform: API (`api/`) and web console (`web/`), formerly openctemio/api and openctemio/ui
+- [openctemio/sensor](https://github.com/openctemio/sensor) - the OpenCTEM sensor (binary `openctemio-sensor`, image `ghcr.io/openctemio/sensor`)
 
 ## Enterprise Edition
 
