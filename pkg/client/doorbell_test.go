@@ -15,7 +15,7 @@ import (
 func TestClient_SendHeartbeatWithHints(t *testing.T) {
 	var gotFeatures []string
 	var body string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(v1Only(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != legacyv1.PathHeartbeat {
 			t.Errorf("path %s", r.URL.Path)
 		}
