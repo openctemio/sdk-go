@@ -249,6 +249,8 @@ func (d *Doorbell) Handle(h *HeartbeatHints) {
 			update = true
 		case HeartbeatActionCancel:
 			// acted on through CancelCommandIDs below
+		case HeartbeatActionSendManifest:
+			// acted on by BaseSensor (it registers the manifest again)
 		default:
 			unknown = append(unknown, string(a))
 		}

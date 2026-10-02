@@ -47,12 +47,16 @@ func (f *FakePlatform) control(w http.ResponseWriter, r *http.Request, rest stri
 			{RuleID: "r1", ToolName: "betterleaks", PathPattern: "testdata/**"}}})
 	case (rest == protov2.FingerprintsCheckPath || rest == protov2.BaselineDiffPath) && r.Method == http.MethodPost:
 		f.fingerprintsV2(w, rest, body)
-	case rest == protov2.ManifestPath && r.Method == http.MethodPut:
+	case rest == protov2.ManifestPath && (r.Method == http.MethodPut || r.Method == http.MethodGet):
 		f.mu.Lock()
 		on := f.Manifest
 		f.mu.Unlock()
 		if !on {
 			return false
+		}
+		if r.Method == http.MethodGet {
+			f.manifestStateV2(w)
+			return true
 		}
 		f.manifestV2(w, body)
 	case rest == protov2.KeysPath && r.Method == http.MethodPost:
@@ -120,17 +124,43 @@ func (f *FakePlatform) manifestV2(w http.ResponseWriter, body []byte) {
 	_ = enc.Encode(v)
 	sum := sha256.Sum256(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))
 	digest := "sha256:" + hex.EncodeToString(sum[:])
+	var names []string
+	for _, t := range m.Tools {
+		names = append(names, t.Name)
+	}
 	f.mu.Lock()
 	changed := digest != f.digest
 	f.digest = digest
 	f.manifests = append(f.manifests, append(json.RawMessage(nil), body...))
+	f.manifestTools = names
+	policy, slim := f.policyLocked(), f.slim
 	f.mu.Unlock()
-	resp := protov2.ManifestResponse{ManifestDigest: digest, Changed: changed, Ignored: []protov2.ManifestIgnored{}}
+	resp := protov2.ManifestResponse{ManifestDigest: digest, Changed: changed, Ignored: []protov2.ManifestIgnored{},
+		Policy: policy, Heartbeat: protov2.ManifestHeartbeat{OmitInventory: slim}}
 	resp.Accepted.Capabilities = []string{}
-	for _, t := range m.Tools {
-		resp.Accepted.Tools = append(resp.Accepted.Tools, t.Name)
-	}
+	resp.Accepted.Tools = names
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// manifestStateV2 answers GET /manifest: the stored digest and the policy.
+func (f *FakePlatform) manifestStateV2(w http.ResponseWriter) {
+	f.mu.Lock()
+	digest, policy, slim := f.digest, f.policyLocked(), f.slim
+	f.mu.Unlock()
+	if digest == "" {
+		f.problem(w, http.StatusNotFound, protov2.ProblemManifestNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, protov2.ManifestStateResponse{ManifestDigest: digest, Policy: policy,
+		Heartbeat: protov2.ManifestHeartbeat{OmitInventory: slim}})
+}
+
+func (f *FakePlatform) policyLocked() *protov2.ManifestPolicy {
+	tools := f.policyTools
+	if tools == nil {
+		tools = append([]string{}, f.manifestTools...)
+	}
+	return &protov2.ManifestPolicy{AllowedTools: tools, AllowedCapabilities: []string{}}
 }
 
 func (f *FakePlatform) pollV2(w http.ResponseWriter, r *http.Request) {

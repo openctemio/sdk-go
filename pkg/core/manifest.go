@@ -110,6 +110,46 @@ type ManifestAck struct {
 	AcceptedCapabilities []string
 	// Ignored lists what it dropped and why.
 	Ignored []ManifestIgnored
+	// Policy is what the platform lets the sensor run (api RFC-033 §6.12);
+	// nil from a platform that does not say. The BaseSensor refuses
+	// commands for tools outside it (CommandToolGate).
+	Policy *ManifestPolicy
+	// OmitInventory: heartbeats that echo Digest may leave the tool
+	// inventory out and carry only each tool's content freshness.
+	OmitInventory bool
+}
+
+// ManifestPolicy is the sensor's effective tools, capabilities and
+// capacity as the platform computes them (the sensor's report narrowed by
+// the administrator's settings).
+type ManifestPolicy struct {
+	AllowedTools        []string
+	AllowedCapabilities []string
+	MaxJobs             int
+}
+
+// ManifestStateReader is implemented by a Pusher that can re-read the
+// platform's view of the registered manifest (GET /manifest): the digest,
+// the policy as it stands now and the heartbeat form. The BaseSensor calls
+// it when the heartbeat's config_version changes. ErrManifestNotRegistered
+// means the platform has no manifest for the sensor.
+type ManifestStateReader interface {
+	GetManifestState(ctx context.Context) (*ManifestAck, error)
+}
+
+// ErrManifestNotRegistered: the platform has no manifest for this sensor.
+var ErrManifestNotRegistered = errors.New("the platform has no manifest for this sensor")
+
+// ErrToolNotAllowed is the error of a command refused because its tool is
+// outside the platform's policy (api RFC-033 §6.12). The command is reported
+// failed with it, never run.
+var ErrToolNotAllowed = errors.New("tool-not-allowed")
+
+// ToolContent is one piece of a tool's content on a slim heartbeat's
+// "content" (api RFC-033 §6.12): ContentInfo with the tool it belongs to.
+type ToolContent struct {
+	Tool string `json:"tool"`
+	ContentInfo
 }
 
 // ManifestIgnored is one manifest item the platform dropped.

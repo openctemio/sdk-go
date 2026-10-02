@@ -475,6 +475,11 @@ type SensorStatus struct {
 	// registered. "" sends none, and the platform derives the manifest
 	// from this heartbeat.
 	ManifestDigest string `json:"manifest_digest,omitempty"`
+	// Content is a slim heartbeat's content freshness (api RFC-033 §6.12):
+	// BaseSensor sets it, and leaves Tools, Capabilities and
+	// MaxConcurrentJobs out, once the platform acknowledged the manifest
+	// with omit_inventory.
+	Content []ToolContent `json:"content,omitzero"`
 
 	Resources       *resource.HostResources `json:"resources,omitempty"`
 	Capacity        *resource.Capacity      `json:"capacity,omitempty"`

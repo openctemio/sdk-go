@@ -62,3 +62,47 @@ func TestManifest_RegisteredWhereServed(t *testing.T) {
 		t.Fatalf("lost digest: %+v %v", hints, err)
 	}
 }
+
+// api RFC-033 §6.12: the answer and GET /manifest carry the policy and the
+// heartbeat form; GET before a registration is ErrManifestNotRegistered.
+func TestManifest_PolicyAndState(t *testing.T) {
+	ctx := context.Background()
+	f := newControlFake(t)
+	f.SetManifest(true)
+	f.SetManifestPolicy([]string{"nuclei"}, true)
+	c := client.New(&client.Config{BaseURL: f.URL(), APIKey: f.APIKey, MaxRetries: 1})
+	t.Cleanup(func() { _ = c.Close() })
+
+	if _, err := c.GetManifestState(ctx); !errors.Is(err, core.ErrManifestNotRegistered) {
+		t.Fatalf("before registration: %v", err)
+	}
+	m := &core.Manifest{Schema: core.ManifestSchema, Tools: []core.ManifestTool{{Name: "nuclei", Installed: true}, {Name: "semgrep", Installed: true}}}
+	ack, err := c.PutManifest(ctx, m)
+	if err != nil || ack.Policy == nil || len(ack.Policy.AllowedTools) != 1 || !ack.OmitInventory {
+		t.Fatalf("ack %+v %v", ack, err)
+	}
+	f.SetManifestPolicy(nil, false)
+	st, err := c.GetManifestState(ctx)
+	if err != nil || st.Digest != ack.Digest || len(st.Policy.AllowedTools) != 2 || st.OmitInventory {
+		t.Fatalf("state %+v %v", st, err)
+	}
+
+	// The slim heartbeat body: no tools, the content block.
+	hb := status()
+	hb.ManifestDigest = ack.Digest
+	hb.Content = []core.ToolContent{{Tool: "nuclei", ContentInfo: core.ContentInfo{Name: "nuclei-templates", Version: "v10.4.9"}}}
+	if _, err := c.SendHeartbeatWithHints(ctx, hb); err != nil {
+		t.Fatal(err)
+	}
+	beats := f.Heartbeats()
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(beats[len(beats)-1], &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["tools"]; ok {
+		t.Fatalf("slim heartbeat carried tools: %s", beats[len(beats)-1])
+	}
+	if string(body["content"]) != `[{"tool":"nuclei","name":"nuclei-templates","version":"v10.4.9","managed":false}]` {
+		t.Fatalf("content %s", body["content"])
+	}
+}

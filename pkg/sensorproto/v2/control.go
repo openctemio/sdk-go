@@ -72,6 +72,34 @@ type ManifestResponse struct {
 	Changed        bool              `json:"changed"`
 	Accepted       ManifestAccepted  `json:"accepted"`
 	Ignored        []ManifestIgnored `json:"ignored"`
+	// Policy is what the platform lets the sensor run (api RFC-033 §6.12);
+	// nil from a platform before Phase 2.
+	Policy *ManifestPolicy `json:"policy,omitempty"`
+	// Heartbeat says how heartbeats that echo the digest may look.
+	Heartbeat ManifestHeartbeat `json:"heartbeat"`
+}
+
+// ManifestStateResponse answers GET /manifest: the current digest and the
+// policy as it stands now.
+type ManifestStateResponse struct {
+	ManifestDigest string            `json:"manifest_digest"`
+	Policy         *ManifestPolicy   `json:"policy,omitempty"`
+	Heartbeat      ManifestHeartbeat `json:"heartbeat"`
+}
+
+// ManifestPolicy is the sensor's effective tools, capabilities and
+// capacity: its report narrowed by the administrator's settings.
+type ManifestPolicy struct {
+	AllowedTools        []string `json:"allowed_tools"`
+	AllowedCapabilities []string `json:"allowed_capabilities"`
+	MaxJobs             int      `json:"max_jobs"`
+}
+
+// ManifestHeartbeat is how heartbeats that echo the digest may look:
+// OmitInventory lets them leave tools, capabilities and
+// max_concurrent_jobs out.
+type ManifestHeartbeat struct {
+	OmitInventory bool `json:"omit_inventory"`
 }
 
 // ManifestAccepted is what the platform kept of a manifest.
@@ -117,6 +145,9 @@ const (
 	// ProblemManifestSchemaUnsupported: the platform does not read the
 	// manifest's schema version.
 	ProblemManifestSchemaUnsupported ProblemType = "manifest-schema-unsupported"
+	// ProblemManifestNotFound: GET /manifest for a sensor that registered
+	// none.
+	ProblemManifestNotFound ProblemType = "manifest-not-found"
 )
 
 // ProblemInvalidRequest (ProblemTypeBase): a malformed request body, on the

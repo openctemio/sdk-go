@@ -728,6 +728,9 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	poller.SetAuthGate(k.sensor.AuthGate())
 	// Heartbeats report the commands running now and the slot count.
 	k.sensor.SetLoadReporter(poller)
+	// Commands for tools outside the platform's policy fail instead of
+	// running (api RFC-033 §6.12, a second line behind the platform's gates).
+	poller.SetCommandGate(k.sensor.CommandToolGate())
 
 	if p := k.opts.ScanTargetPolicy; p != nil && len(p.AllowedRoots) > 0 {
 		_, _ = fmt.Fprintf(out, "  Scan workspace: %s\n", strings.Join(p.AllowedRoots, string(filepath.ListSeparator)))

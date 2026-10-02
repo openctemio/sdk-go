@@ -382,13 +382,15 @@ type HeartbeatRequest struct {
 	// RFC-032 Phase 0). Platforms that do not know it ignore it.
 	InstanceID string `json:"instance_id,omitempty"`
 	// ManifestDigest is the registered manifest's digest (api RFC-033).
-	ManifestDigest string   `json:"manifest_digest,omitempty"`
-	Message        string   `json:"message,omitempty"`
-	Scanners       []string `json:"scanners,omitempty"`
-	Collectors     []string `json:"collectors,omitempty"`
-	Uptime         int64    `json:"uptime_seconds,omitempty"`
-	TotalScans     int64    `json:"total_scans,omitempty"`
-	Errors         int64    `json:"errors,omitempty"`
+	ManifestDigest string `json:"manifest_digest,omitempty"`
+	// Content is a slim heartbeat's content freshness (api RFC-033 §6.12).
+	Content    []core.ToolContent `json:"content,omitzero"`
+	Message    string             `json:"message,omitempty"`
+	Scanners   []string           `json:"scanners,omitempty"`
+	Collectors []string           `json:"collectors,omitempty"`
+	Uptime     int64              `json:"uptime_seconds,omitempty"`
+	TotalScans int64              `json:"total_scans,omitempty"`
+	Errors     int64              `json:"errors,omitempty"`
 
 	// System Metrics
 	CPUPercent    float64 `json:"cpu_percent,omitempty"`
@@ -644,6 +646,7 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		InstanceID: cmp.Or(status.InstanceID, core.ProcessInstanceID()),
 		// The manifest is a v2 feature; v1 ignores the member.
 		ManifestDigest: status.ManifestDigest,
+		Content:        status.Content,
 		// What the sensor reports it can do (nil: nothing reported).
 		Tools:             status.Tools,
 		Capabilities:      status.Capabilities,
