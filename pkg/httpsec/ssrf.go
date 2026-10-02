@@ -352,6 +352,8 @@ func RefuseRedirects(req *http.Request, _ []*http.Request) error {
 func NewAPIClient(timeout time.Duration) *http.Client {
 	tr := guardedTransport(isAPIDestinationBlocked)
 	tr.Proxy = http.ProxyFromEnvironment
+	// A private platform CA set with SetAPIRootCAs; nil keeps Go's defaults.
+	tr.TLSClientConfig = apiTLSConfig()
 	return &http.Client{
 		Timeout:       timeout,
 		Transport:     tr,
