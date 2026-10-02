@@ -202,7 +202,7 @@ func TestManager_SlotsAndCongestion(t *testing.T) {
 // Running jobs' memory counts as budget: slots do not shrink because the
 // sensor is busy.
 func TestManager_RunningJobsMemoryIsBudget(t *testing.T) {
-	m := NewManager(ManagerConfig{Cap: 10, Tools: []string{"trivy"}})
+	m := NewManager(ManagerConfig{Cap: 10, Tools: []string{"trivy"}, ReservedMemBytes: -1})
 	r := ProbeResult{Resources: HostResources{CPUCores: 16, MemTotalBytes: 8 * gib, MemAvailableBytes: 2 * gib}}
 	if got := m.slots(r, 0); got != 2 {
 		t.Fatalf("idle %d, want 2", got)
@@ -212,6 +212,36 @@ func TestManager_RunningJobsMemoryIsBudget(t *testing.T) {
 	}
 	if got := m.slots(r, 100); got != 8 { // capped by total memory
 		t.Fatalf("budget not capped by total: %d", got)
+	}
+}
+
+// The slots leave memory for the sensor itself (api RFC-035 §5.2): by
+// default a tenth of what it may use, 256 MiB to 1 GiB.
+func TestManager_ReservesMemoryForTheSensor(t *testing.T) {
+	r := ProbeResult{Resources: HostResources{CPUCores: 16, MemTotalBytes: 8 * gib, MemAvailableBytes: 2 * gib}}
+	m := NewManager(ManagerConfig{Cap: 10, Tools: []string{"trivy"}}) // trivy: 1 GiB a job
+	if got := m.slots(r, 0); got != 1 {                               // 2 GiB - 819 MiB reserved
+		t.Fatalf("idle %d, want 1", got)
+	}
+	if got := m.slots(r, 4); got != 5 { // 2 GiB + 4 x 1 GiB held - 819 MiB
+		t.Fatalf("with 4 running %d, want 5", got)
+	}
+	// Less free than the reserve: still one slot.
+	low := ProbeResult{Resources: HostResources{CPUCores: 16, MemTotalBytes: 8 * gib, MemAvailableBytes: 100 << 20}}
+	if got := m.slots(low, 0); got != 1 {
+		t.Fatalf("below the reserve %d, want 1", got)
+	}
+	// An explicit reserve.
+	m = NewManager(ManagerConfig{Cap: 10, Tools: []string{"trivy"}, ReservedMemBytes: gib})
+	if got := m.slots(r, 4); got != 5 {
+		t.Fatalf("1 GiB reserved, 4 running: %d, want 5", got)
+	}
+	for _, c := range []struct{ total, want int64 }{
+		{0, MinReservedMem}, {gib, MinReservedMem}, {4 * gib, 4 * gib / 10}, {64 * gib, MaxReservedMem},
+	} {
+		if got := DefaultReservedMem(c.total); got != c.want {
+			t.Errorf("DefaultReservedMem(%d) = %d, want %d", c.total, got, c.want)
+		}
 	}
 }
 

@@ -40,9 +40,14 @@ type Client struct {
 	apiKey     string
 	sensorID   string // Sensor ID for tracking which sensor is pushing
 	httpClient *http.Client
-	maxRetries int
-	retryDelay time.Duration
-	verbose    bool
+	// ctl is the control client (heartbeats), built from httpClient on first
+	// use; controlTimeout bounds its requests (control_channel.go).
+	ctl            *http.Client
+	ctlOnce        sync.Once
+	controlTimeout time.Duration
+	maxRetries     int
+	retryDelay     time.Duration
+	verbose        bool
 	// userAgent is the product token (Config.UserAgent); empty: the
 	// process-wide one (useragent.SetProduct).
 	userAgent string
@@ -96,13 +101,17 @@ var _ core.Pusher = (*Client)(nil)
 
 // Config holds client configuration.
 type Config struct {
-	BaseURL    string        `yaml:"base_url" json:"base_url"`
-	APIKey     string        `yaml:"api_key" json:"api_key"`
-	SensorID   string        `yaml:"sensor_id" json:"sensor_id"` // Registered sensor ID for audit trail; the pre-rename key agent_id is still read (config_compat.go)
-	Timeout    time.Duration `yaml:"timeout" json:"timeout"`
-	MaxRetries int           `yaml:"max_retries" json:"max_retries"`
-	RetryDelay time.Duration `yaml:"retry_delay" json:"retry_delay"`
-	Verbose    bool          `yaml:"verbose" json:"verbose"`
+	BaseURL  string        `yaml:"base_url" json:"base_url"`
+	APIKey   string        `yaml:"api_key" json:"api_key"`
+	SensorID string        `yaml:"sensor_id" json:"sensor_id"` // Registered sensor ID for audit trail; the pre-rename key agent_id is still read (config_compat.go)
+	Timeout  time.Duration `yaml:"timeout" json:"timeout"`
+	// ControlTimeout bounds one heartbeat, which goes on a connection pool
+	// of its own and is not retried with its stale report (default
+	// DefaultControlTimeout, never above Timeout; api RFC-035).
+	ControlTimeout time.Duration `yaml:"control_timeout" json:"control_timeout"`
+	MaxRetries     int           `yaml:"max_retries" json:"max_retries"`
+	RetryDelay     time.Duration `yaml:"retry_delay" json:"retry_delay"`
+	Verbose        bool          `yaml:"verbose" json:"verbose"`
 
 	// UserAgent is this client's product token, "name/version" (for example
 	// "openctemio-sensor/0.3.1"), sent before the SDK's own token:
@@ -196,6 +205,7 @@ func New(cfg *Config) *Client {
 		// link-local (cloud metadata) destinations and every redirect, so
 		// the bearer key never follows one. See httpsec.NewAPIClient.
 		httpClient:       httpsec.NewAPIClient(cfg.Timeout),
+		controlTimeout:   cfg.ControlTimeout,
 		verbose:          cfg.Verbose,
 		userAgent:        cfg.UserAgent,
 		compressor:       compressor,
@@ -418,6 +428,8 @@ type HeartbeatRequest struct {
 	Capacity        *resource.Capacity      `json:"capacity,omitempty"`
 	Queue           *core.QueueStats        `json:"queue,omitempty"`
 	RunningCommands []string                `json:"running,omitzero"`
+	// Control is the control channel's own stats (api RFC-035).
+	Control *core.ControlStats `json:"control,omitempty"`
 
 	// SDK and Sensor name the SDK and the sensor binary. Every heartbeat
 	// sends both: what the status carries, else the SDK linked into this
@@ -621,6 +633,9 @@ var _ core.DoorbellPusher = (*Client)(nil)
 // feature header; v2 always has the doorbell). paused is true when v2 told a
 // disabled sensor to pause.
 func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, extra http.Header) ([]byte, bool, error) {
+	// Heartbeats are control traffic: the control client, no retries of a
+	// stale report beyond controlRetries (control_channel.go).
+	ctx = withControl(ctx)
 	url := c.baseURL + legacyv1.PathHeartbeat
 
 	req := HeartbeatRequest{
@@ -658,6 +673,7 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		Capacity:        status.Capacity,
 		Queue:           status.Queue,
 		RunningCommands: status.RunningCommands,
+		Control:         status.Control,
 
 		SDK:    status.SDK,
 		Sensor: status.Sensor,
@@ -718,7 +734,7 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		extra = h
 	}
 
-	data, hdr, err := c.doRequestFull(ctx, "POST", url, body, extra, c.maxRetries)
+	data, hdr, err := c.doRequestFull(ctx, "POST", url, body, extra, min(c.maxRetries, controlRetries))
 	if err != nil {
 		return nil, false, err
 	}
@@ -1003,7 +1019,7 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 		}
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpFor(ctx).Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("http request: %w", err)
 	}

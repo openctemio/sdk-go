@@ -150,8 +150,13 @@ func (s *BaseScanner) Scan(ctx context.Context, target string, opts *ScanOptions
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	// Execute
-	err := cmd.Run()
+	// Execute (the scanner yields to the sensor once started, see
+	// ApplyScannerPriority)
+	err := cmd.Start()
+	if err == nil {
+		ApplyScannerPriority(cmd)
+		err = cmd.Wait()
+	}
 	ReapScannerProcess(cmd)
 	RecordProcessState(ctx, cmd.ProcessState)
 	result.FinishedAt = time.Now().Unix()

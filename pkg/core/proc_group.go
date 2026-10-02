@@ -12,9 +12,9 @@ const scannerWaitDelay = 5 * time.Second
 // ConfigureScannerProcess makes a scanner command safe to cancel: it runs in
 // its own process group, a canceled context kills the WHOLE group (a
 // wrapper script's children too, not only the direct child), and on Linux
-// the scanner is killed if the sensor dies. Call before Start; after Wait,
-// call ReapScannerProcess. The SDK's exec helpers do both. No-op on systems
-// without process groups.
+// the scanner is killed if the sensor dies. Call before Start; right after
+// Start, call ApplyScannerPriority; after Wait, call ReapScannerProcess. The
+// SDK's exec helpers do all three. No-op on systems without process groups.
 func ConfigureScannerProcess(cmd *exec.Cmd) {
 	if cmd == nil {
 		return

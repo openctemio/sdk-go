@@ -81,6 +81,9 @@ type Options struct {
 	// MaxJobs caps the commands run at once, 1-100 (SENSOR_MAX_JOBS; default
 	// no cap: the slots follow the CPU, memory and tools' learned cost).
 	MaxJobs int
+	// ScannerPriority is the priority of scanner processes: "low" (default)
+	// or "normal" (SENSOR_SCANNER_PRIORITY; see ResolveScannerPriority).
+	ScannerPriority string
 	// Tools is an operator allowlist of tool names (SENSOR_TOOLS): scanners
 	// whose name (or As name) is not in it are neither run nor reported. nil
 	// reads SENSOR_TOOLS; an empty non-nil slice sets no allowlist.
@@ -187,6 +190,7 @@ type settings struct {
 	drainGrace                               time.Duration
 	pollInterval                             time.Duration
 	allow                                    []string // nil: no allowlist
+	scannerPriority                          *core.ScannerPriority
 	outbox                                   OutboxPlan
 	stateDir                                 string
 	key                                      startKey
@@ -332,6 +336,10 @@ func New(opts Options) (*Kit, error) {
 		s.maxJobs, err = ResolveMaxJobs(MaxJobsSetting{}, MaxJobsSetting{})
 	}
 	if err != nil {
+		k.closeClient()
+		return nil, err
+	}
+	if s.scannerPriority, err = ResolveScannerPriority(opts.ScannerPriority); err != nil {
 		k.closeClient()
 		return nil, err
 	}
@@ -520,6 +528,19 @@ func (k *Kit) Run(ctx context.Context) error {
 		}
 	}
 	reg.SetMaxConcurrentJobs(k.s.maxJobs)
+	// A tool's version check runs in the background after the first one: on
+	// a saturated sensor it takes seconds, and the heartbeat must not wait
+	// for it (api RFC-035 §5.1).
+	reg.SetBackgroundRefresh(true)
+	// Scanner processes yield the CPU and the disk to the sensor and are
+	// OOM-killed before it (api RFC-035 §5.3).
+	core.SetScannerPriority(k.s.scannerPriority)
+	if p := k.s.scannerPriority; p != nil {
+		_, _ = fmt.Fprintf(out, "  Scanner priority: low (nice +%d, I/O best-effort %d, oom_score_adj %d; %s=normal turns it off)\n",
+			p.Nice, p.IOLevel, p.OOMScoreAdj, EnvScannerPriority)
+	} else {
+		_, _ = fmt.Fprintf(out, "  Scanner priority: normal (the sensor's own)\n")
+	}
 
 	// Scheduled scans: the scanners installed now.
 	for _, e := range scanners {

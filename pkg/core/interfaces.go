@@ -485,6 +485,10 @@ type SensorStatus struct {
 	Capacity        *resource.Capacity      `json:"capacity,omitempty"`
 	Queue           *QueueStats             `json:"queue,omitempty"`
 	RunningCommands []string                `json:"running,omitzero"`
+
+	// Control is the control channel's own stats (api RFC-035): BaseSensor
+	// sets it on every heartbeat.
+	Control *ControlStats `json:"control,omitempty"`
 }
 
 // =============================================================================

@@ -127,7 +127,7 @@ func isRouteMissing(err error) bool {
 // hint members have their v1 names, so core.ParseHeartbeatHints reads it.
 func (c *Client) heartbeatV2(ctx context.Context, req *HeartbeatRequest) ([]byte, *protov2.HeartbeatResponse, error) {
 	var raw json.RawMessage
-	if _, err := c.v2JSON(ctx, http.MethodPost, protov2.PathPrefix+protov2.HeartbeatPath, req, &raw, nil, c.maxRetries); err != nil {
+	if _, err := c.v2JSON(ctx, http.MethodPost, protov2.PathPrefix+protov2.HeartbeatPath, req, &raw, nil, min(c.maxRetries, controlRetries)); err != nil {
 		return nil, nil, err
 	}
 	var resp protov2.HeartbeatResponse

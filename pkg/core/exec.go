@@ -71,6 +71,7 @@ func ExecuteScanner(ctx context.Context, cfg *ExecConfig) (*ExecResult, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start scanner: %w", err)
 	}
+	ApplyScannerPriority(cmd)
 
 	// Capture output with optional streaming
 	var wg sync.WaitGroup
@@ -171,6 +172,7 @@ func StreamScanner(ctx context.Context, cfg *ExecConfig, handler OutputHandler) 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start scanner: %w", err)
 	}
+	ApplyScannerPriority(cmd)
 
 	// Stream output with handler
 	var wg sync.WaitGroup

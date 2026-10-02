@@ -40,6 +40,14 @@ type ManagerConfig struct {
 	Prober *Prober
 	// ProbeInterval is the longest a probe is reused (default 10s).
 	ProbeInterval time.Duration
+	// ReservedMemBytes is memory the slots leave free for the sensor itself
+	// and the kernel, like a kubelet's system-reserved: what the sensor
+	// needs to parse and upload results, heartbeat and poll while its
+	// scanners run (api RFC-035 §5.2). 0 is DefaultReservedMem of the
+	// memory the sensor may use; negative reserves nothing. CPU is not
+	// reserved: it is compressible, and scanners yield it to the sensor
+	// (core.ScannerPriority).
+	ReservedMemBytes int64
 	// OnError receives non-fatal errors (loading or saving the history).
 	OnError func(error)
 }
@@ -185,6 +193,9 @@ func (m *Manager) slots(r ProbeResult, active int) int {
 		if res.MemTotalBytes > 0 {
 			budget = min(budget, res.MemTotalBytes)
 		}
+		// The sensor's own headroom; with less left than that, one slot
+		// (ComputeSlots never gives fewer).
+		budget = max(budget-m.reserved(res.MemTotalBytes), 1)
 	}
 	n := ComputeSlots(m.cfg.Cap, m.cfg.HardMax, res.CPUCores, budget, cores, mem)
 	n = max(min(n, m.aimd.Limit()), 1)
@@ -192,6 +203,31 @@ func (m *Manager) slots(r ProbeResult, active int) int {
 	m.lastSlots = n
 	m.mu.Unlock()
 	return n
+}
+
+// reserved is the memory the slots leave free (ReservedMemBytes).
+func (m *Manager) reserved(total int64) int64 {
+	switch r := m.cfg.ReservedMemBytes; {
+	case r < 0:
+		return 0
+	case r > 0:
+		return r
+	default:
+		return DefaultReservedMem(total)
+	}
+}
+
+// Default sensor memory reserve (DefaultReservedMem).
+const (
+	MinReservedMem = int64(256) << 20
+	MaxReservedMem = int64(1) << 30
+)
+
+// DefaultReservedMem is the memory reserved for the sensor by default: a
+// tenth of total, at least MinReservedMem and at most MaxReservedMem
+// (MinReservedMem when total is unknown).
+func DefaultReservedMem(total int64) int64 {
+	return min(max(total/10, MinReservedMem), MaxReservedMem)
 }
 
 // Slots is how many jobs the sensor may hold now, with active running.
