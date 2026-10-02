@@ -266,6 +266,20 @@ variables set explicitly in the scanner config or scan options.
 | `core.SetScannerEnvAllowlist([]string{...})` | Same, programmatically |
 | `OPENCTEM_SDK_SCANNER_INHERIT_ENV=1` / `core.SetScannerInheritEnv(true)` | Restore full inheritance (not recommended) |
 
+Every process the SDK starts gets it: scanners (`core.ExecuteScanner`,
+`core.StreamScanner`, `BaseScanner.Scan`, every `pkg/scanners/*`), version
+probes (`core.VersionOutput`, `core.CheckBinaryInstalled`,
+`BaseScanner.IsInstalled`), content downloads (`core.ContentEnviron`) and
+the `git diff` of `pkg/strategy` (which also keeps the `GIT_DIR`,
+`GIT_WORK_TREE`, `GIT_CEILING_DIRECTORIES` and `GIT_CONFIG_*` variables
+that locate the repository). The sensor's key (`API_KEY`, `SENSOR_*`,
+`OPENCTEM_*`), the outbox key, tokens and passwords are not on the list.
+Two things on it can carry a secret by the operator's choice: the proxy
+variables, which may hold `user:password` (scanners stop getting them with
+`SENSOR_SCAN_PROXY=direct` / `core.ScannerProxyDirect`; content downloads
+follow `SENSOR_CONTENT_PROXY`), and the tools' own namespaces, such as
+`TRIVY_PASSWORD` or `PDCP_API_KEY`, which are that tool's credentials.
+
 ### 7. API Client Transport
 
 - API clients (`pkg/client`, `pkg/platform`) refuse HTTP redirects; the API
