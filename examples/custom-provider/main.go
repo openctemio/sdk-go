@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -50,7 +51,7 @@ func main() {
 		fmt.Printf("\n✓ Collected %d repositories\n", result.TotalItems)
 		for _, report := range result.Reports {
 			for _, asset := range report.Assets {
-				fmt.Printf("  - %s\n", asset.Value)
+				fmt.Printf("  - %s\n", sanitize(asset.Value))
 			}
 		}
 	}
@@ -67,9 +68,9 @@ func main() {
 		for _, report := range csResult.Reports {
 			for _, finding := range report.Findings {
 				fmt.Printf("  - [%s] %s (%s:%d)\n",
-					finding.Severity,
-					finding.Title,
-					finding.Location.Path,
+					sanitize(string(finding.Severity)),
+					sanitize(finding.Title),
+					sanitize(finding.Location.Path),
 					finding.Location.StartLine,
 				)
 			}
@@ -96,4 +97,12 @@ func main() {
 
 	// Clean up
 	provider.Close()
+}
+
+// sanitize strips CR/LF from values that come from the remote API before
+// printing them, so a crafted repository name or alert title cannot forge
+// extra output lines.
+func sanitize(s string) string {
+	s = strings.ReplaceAll(s, "\n", "")
+	return strings.ReplaceAll(s, "\r", "")
 }
