@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -254,10 +255,18 @@ func (c *BaseConnector) Do(ctx context.Context, req *http.Request) (*http.Respon
 	}
 
 	if c.verbose {
-		fmt.Printf("[%s] %s %s\n", c.name, req.Method, req.URL.Path)
+		fmt.Printf("[%s] %s %s\n", c.name, req.Method, sanitizeLogValue(req.URL.Path))
 	}
 
 	return c.httpClient.Do(req)
+}
+
+// sanitizeLogValue strips CR/LF so a request path (which can carry
+// attacker-influenced segments, e.g. a repository name returned by the
+// remote API) cannot forge extra lines in verbose output.
+func sanitizeLogValue(s string) string {
+	s = strings.ReplaceAll(s, "\n", "")
+	return strings.ReplaceAll(s, "\r", "")
 }
 
 // Ensure BaseConnector implements core.Connector interface
