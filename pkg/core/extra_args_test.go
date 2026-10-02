@@ -12,6 +12,9 @@ func TestValidateExtraArgs(t *testing.T) {
 		{"-severity", "critical,high"},
 		{"-rate-limit", "50", "-timeout=10"},
 		{"--exclude-tags", "dos"},
+		{"-", "--"},
+		{"-tags", "cve"},
+		{"-rl", "150"}, // nuclei/dnsx rate limit, not subfinder's -rL list
 	}
 	for _, args := range allowed {
 		if err := ValidateExtraArgs(args); err != nil {
@@ -32,6 +35,21 @@ func TestValidateExtraArgs(t *testing.T) {
 		{"-r", "1.2.3.4"},
 		{"-o", "/etc/cron.d/x"},
 		{"-severity", "high", "--config=/tmp/rules.yml"},
+		// Dash count does not matter to Go's flag package.
+		{"--o", "/etc/cron.d/x"},
+		{"---proxy", "http://attacker:8080"},
+		{"-config", "/tmp/evil.yaml"},
+		{"-headless"},
+		{"-interactsh-url=oast.attacker"},
+		{"--il", "/etc/targets"},
+		// naabu runs -nmap-cli as a command.
+		{"-nmap-cli", "sh -c id"},
+		{"--nmap-cli=sh -c id"},
+		// Remote templates, code protocol, file exports.
+		{"-tu", "https://attacker/evil.yaml"},
+		{"-code"},
+		{"-je", "/tmp/out.json"},
+		{"--sarif-output=/etc/x"},
 	}
 	for _, args := range rejected {
 		if err := ValidateExtraArgs(args); err == nil {
