@@ -2,11 +2,14 @@ package core
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
@@ -369,16 +372,29 @@ func mapGitHubConfidence(level string) int {
 // WebhookCollector receives data via HTTP webhooks.
 type WebhookCollector struct {
 	*BaseCollector
-	listenAddr string
-	server     *http.Server
-	dataChan   chan []byte
+	listenAddr   string
+	secret       string
+	maxBodyBytes int64
+	server       *http.Server
+	dataChan     chan []byte
 }
+
+// DefaultWebhookMaxBodyBytes bounds one webhook delivery when
+// WebhookCollectorConfig.MaxBodyBytes is not set.
+const DefaultWebhookMaxBodyBytes = 32 << 20
 
 // WebhookCollectorConfig configures a webhook collector.
 type WebhookCollectorConfig struct {
 	ListenAddr string `yaml:"listen_addr" json:"listen_addr"`
-	Secret     string `yaml:"secret" json:"secret"`
-	Verbose    bool   `yaml:"verbose" json:"verbose"`
+	// Secret, when set, must accompany every delivery, as
+	// "Authorization: Bearer <secret>" or "X-Webhook-Secret: <secret>";
+	// other deliveries get 401. Without it the endpoint accepts anyone who
+	// can reach it.
+	Secret string `yaml:"secret" json:"secret"`
+	// MaxBodyBytes bounds one delivery (0: DefaultWebhookMaxBodyBytes);
+	// larger bodies get 413.
+	MaxBodyBytes int64 `yaml:"max_body_bytes" json:"max_body_bytes"`
+	Verbose      bool  `yaml:"verbose" json:"verbose"`
 }
 
 // NewWebhookCollector creates a new webhook collector.
@@ -387,6 +403,10 @@ func NewWebhookCollector(cfg *WebhookCollectorConfig) *WebhookCollector {
 	if addr == "" {
 		addr = ":8080"
 	}
+	maxBody := cfg.MaxBodyBytes
+	if maxBody <= 0 {
+		maxBody = DefaultWebhookMaxBodyBytes
+	}
 
 	return &WebhookCollector{
 		BaseCollector: NewBaseCollector(&BaseCollectorConfig{
@@ -394,8 +414,10 @@ func NewWebhookCollector(cfg *WebhookCollectorConfig) *WebhookCollector {
 			SourceType: "webhook",
 			Verbose:    cfg.Verbose,
 		}),
-		listenAddr: addr,
-		dataChan:   make(chan []byte, 100),
+		listenAddr:   addr,
+		secret:       cfg.Secret,
+		maxBodyBytes: maxBody,
+		dataChan:     make(chan []byte, 100),
 	}
 }
 
@@ -460,8 +482,18 @@ func (c *WebhookCollector) handleWebhook(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	if c.secret != "" && !c.authorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, c.maxBodyBytes))
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
@@ -477,6 +509,18 @@ func (c *WebhookCollector) handleWebhook(w http.ResponseWriter, r *http.Request)
 	default:
 		http.Error(w, "Queue full", http.StatusServiceUnavailable)
 	}
+}
+
+// authorized reports whether r carries the configured secret, compared in
+// constant time.
+func (c *WebhookCollector) authorized(r *http.Request) bool {
+	got := r.Header.Get("X-Webhook-Secret")
+	if got == "" {
+		if v, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+			got = v
+		}
+	}
+	return got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(c.secret)) == 1
 }
 
 func (c *WebhookCollector) handleHealth(w http.ResponseWriter, r *http.Request) {
