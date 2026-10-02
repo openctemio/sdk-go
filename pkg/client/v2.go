@@ -688,7 +688,7 @@ func (c *Client) v2DoWith(ctx context.Context, method, path string, body []byte,
 		}
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpFor(ctx).Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("http request: %w", err)
 	}

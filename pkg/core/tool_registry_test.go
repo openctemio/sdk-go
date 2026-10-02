@@ -289,6 +289,61 @@ func TestToolRegistryCachesProbes(t *testing.T) {
 	}
 }
 
+// With background refresh a stale probe does not hold the report (the
+// heartbeat): the report keeps the previous result and the tool is probed
+// again in the background, once, whatever the number of reports meanwhile.
+func TestToolRegistryBackgroundRefresh(t *testing.T) {
+	r := NewToolRegistry()
+	r.SetBackgroundRefresh(true)
+	var mu sync.Mutex
+	now := time.Unix(1_000_000, 0)
+	r.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	r.SetProbeTTL(time.Minute)
+	var calls atomic.Int32
+	version := "1.0"
+	release := make(chan struct{})
+	if err := r.Register(ToolSpec{Name: "slow", Probe: func(context.Context) (bool, string, error) {
+		if calls.Add(1) > 1 {
+			<-release // the version check under a saturated CPU
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return true, version, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// The first probe is part of the first report.
+	if rep := r.CapabilityReport(ctx); len(rep.Tools) != 1 || rep.Tools[0].Version != "1.0" || calls.Load() != 1 {
+		t.Fatalf("first report %+v after %d probes", rep.Tools, calls.Load())
+	}
+	mu.Lock()
+	now, version = now.Add(time.Minute), "2.0"
+	mu.Unlock()
+	start := time.Now()
+	for range 3 {
+		if rep := r.CapabilityReport(ctx); rep.Tools[0].Version != "1.0" {
+			t.Fatalf("stale report = %+v, want the previous result while probing", rep.Tools)
+		}
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("a stale probe held the report")
+	}
+	close(release)
+	r.refreshes.Wait()
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("%d probes, want 2 (one background refresh for three stale reports)", n)
+	}
+	if rep := r.CapabilityReport(ctx); rep.Tools[0].Version != "2.0" {
+		t.Fatalf("after the refresh = %+v, want the new version", rep.Tools)
+	}
+	// Refresh still probes in the report.
+	r.Refresh()
+	if rep := r.CapabilityReport(ctx); calls.Load() != 3 || rep.Tools[0].Version != "2.0" {
+		t.Fatalf("Refresh: %d probes, %+v", calls.Load(), rep.Tools)
+	}
+}
+
 func TestToolRegistryProbeTimeout(t *testing.T) {
 	r := NewToolRegistry()
 	r.SetProbeTimeout(20 * time.Millisecond)

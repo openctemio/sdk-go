@@ -36,6 +36,10 @@ const (
 	EnvStateDir     = "SENSOR_STATE_DIR"   // local state: the renewed API key, the tool cost history
 	EnvCACertFile   = "SENSOR_CA_CERT_FILE"
 	EnvKeyAutoRenew = "PLATFORM_KEY_AUTORENEW" // true | false; unset: on when the state directory persists
+	// EnvScannerPriority is the priority of scanner processes: low (the
+	// default: nice +10, lowest best-effort I/O, OOM-killed before the
+	// sensor) or normal (the sensor's own).
+	EnvScannerPriority = "SENSOR_SCANNER_PRIORITY"
 
 	EnvOutbox         = "SENSOR_OUTBOX"           // on | off (default: on for a daemon)
 	EnvOutboxDir      = "SENSOR_OUTBOX_DIR"       // default DefaultOutboxDir
@@ -183,6 +187,31 @@ func ResolveDrainGrace() (time.Duration, error) {
 		return 0, usageError(fmt.Errorf("%s=%s: between 1s and 1h", EnvDrainGrace, d))
 	}
 	return d, nil
+}
+
+// Scanner priorities (SENSOR_SCANNER_PRIORITY).
+const (
+	ScannerPriorityLow    = "low"
+	ScannerPriorityNormal = "normal"
+)
+
+// ResolveScannerPriority returns the priority scanner processes run at:
+// explicit when set, else SENSOR_SCANNER_PRIORITY, else low. low is
+// core.DefaultScannerPriority (a scanner yields the CPU and the disk to the
+// sensor and is OOM-killed before it, api RFC-035 §5.3); normal is nil
+// (scanners run at the sensor's own priority). Anything else is an error
+// (ExitUsage).
+func ResolveScannerPriority(explicit string) (*core.ScannerPriority, error) {
+	v := strings.ToLower(strings.TrimSpace(firstNonEmpty(explicit, os.Getenv(EnvScannerPriority))))
+	switch v {
+	case "", ScannerPriorityLow:
+		p := core.DefaultScannerPriority
+		return &p, nil
+	case ScannerPriorityNormal:
+		return nil, nil
+	default:
+		return nil, usageError(fmt.Errorf("%s=%q: low or normal", EnvScannerPriority, v))
+	}
 }
 
 // ResolveProtocol returns the sensor protocol: explicit (a flag), else
