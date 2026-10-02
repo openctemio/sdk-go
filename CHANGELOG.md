@@ -6,6 +6,18 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **Recon tools as scanners** (api RFC-036 P0). `pkg/scanners/recon`
+  runs subfinder, dnsx, naabu, httpx and katana as `core.Scanner` (and
+  `core.MultiTargetScanner`): `recon.New(name)` runs the tool on each target,
+  converts the results with `ctis.ConvertReconToCTIS` and returns the CTIS
+  report as raw output, which the generic CTIS parser reads, so discovered
+  hosts, IPs, services and URLs reach the platform as assets through normal
+  ingest. It advertises the platform catalog's capabilities for each tool
+  (`recon.Capabilities`). A target the tool fails on (exits non-zero) is
+  listed in the report's `failed_targets` property while the other targets'
+  results are kept; a job where every target failed fails instead of
+  reporting 0 assets.
+
 - **Command lease epoch** (api RFC-035 D6). Protocol v2 commands carry
   `lease_epoch` and `lease_expires_at` (`protov2.Command.LeaseEpoch`,
   `LeaseExpiresAt`; `client.Command` and `core.Command` have them too, as of
@@ -22,6 +34,37 @@ All notable changes to `github.com/openctemio/sdk-go`.
   the epoch on commands and refuses a complete or fail under another epoch
   with `invalid-transition`, as the platform does. `FakePlatform.ReclaimCommand`
   simulates a lease loss; `FakePlatform.LeaseEpoch` reads a command's epoch.
+
+### Fixed
+
+- Recon tool command lines, checked against each tool's own `-h` output
+  (vendored in `pkg/scanners/recon/testdata`; a test fails on any flag the
+  pinned version does not define): **dnsx** used `-d` (its brute-force input,
+  which exits "missing wordlist") for a single target and the undefined
+  `-rw`; it now uses `-l` and `-auto-wildcard`. **naabu** passed the scan
+  type as a bare `-c`/`-s`; `-c` is the worker count and took `-silent` as
+  its value, so every default naabu run failed; it is now `-s c`, and
+  `-sv` is `-sV`. **katana** passed the undefined `-output-all` on every run
+  (every run failed), the dn/rdn/fqdn scope as the regex flag `-cs` instead
+  of `-fs`, `-form-fill` instead of `-aff`, and `-rd` in milliseconds where
+  katana reads seconds. **httpx** passed the undefined
+  `-no-follow-redirects`. Every tool now gets `-duc`, so no run calls
+  ProjectDiscovery's update check.
+- httpx results were all dropped: `a` and `cname` are arrays in httpx's
+  JSON and decoding them into strings failed every line, which the parser
+  skipped as "not JSON". The JARM and TLS fields used names httpx does not
+  write (`jarm_hash`, `subject_an`, `subject_cn`, `issuer_cn`). The arrays are `HTTPXOutput.A`/`AAAA`/`CNAMEs` and
+  `HostIP`; the string fields `IP` and `CNAME` are kept, deprecated, and
+  filled from them.
+- katana results were garbage: `request` is an object, so every line was
+  taken for a plain URL holding the whole JSON text. `KatanaOutput` gains
+  `Request`/`Response`/`Error`; its flat fields (`URL`, `Endpoint`, `Method`,
+  `Source`, `Tag`, `Depth`, `Status`) are kept, deprecated, and filled by
+  `Flatten`. Requests that got no
+  response are no longer reported as discovered URLs. katana 1.7's version
+  ("Current version:") parses.
+- The subfinder parser typed every host as `domain`; a host below its root
+  is now `subdomain`, as `ctis.ConvertReconToCTIS` types it.
 
 ### Security
 
