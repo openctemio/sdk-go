@@ -475,3 +475,40 @@ func TestReportStatus_JSON(t *testing.T) {
 	close(e.release)
 	p.activeCmds.Wait()
 }
+
+// The heartbeat's max_concurrent_jobs is the operator's ceiling: with a
+// resource manager and no cap, the manager's HardMax (64) is a safety bound,
+// not a capacity, and is not reported; the platform goes by the slots.
+// Live: a 4-core sensor reported 64 next to slots_total 4.
+func TestReportStatus_CeilingNotHardMax(t *testing.T) {
+	prober := &resource.Prober{Root: t.TempDir(), NumCPU: func() int { return 4 }}
+	for _, tt := range []struct {
+		name          string
+		maxConcurrent int
+		cap           int
+		want          int
+	}{
+		{"no operator cap (sensorkit default)", 0, 0, 0},
+		{"poller bound is the manager's HardMax", resource.DefaultHardMaxSlots, 0, 0},
+		{"operator cap", 0, 3, 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := resource.NewManager(resource.ManagerConfig{Cap: tt.cap, Prober: prober})
+			maxC := tt.maxConcurrent
+			if maxC == 0 {
+				maxC = m.MaxSlots()
+			}
+			p := NewCommandPoller(newQueueClient(), newCtxExecutor(), &CommandPollerConfig{MaxConcurrent: maxC})
+			p.SetResourceManager(m)
+			s := NewBaseSensor(&BaseSensorConfig{Name: "s"}, nil)
+			s.SetLoadReporter(p)
+			st := s.withCapabilities(context.Background(), &SensorStatus{Name: "s"})
+			if st.MaxConcurrentJobs != tt.want {
+				t.Fatalf("max_concurrent_jobs = %d, want %d", st.MaxConcurrentJobs, tt.want)
+			}
+			if st.Capacity == nil || st.Capacity.SlotsTotal < 1 || st.Capacity.SlotsTotal > 4 {
+				t.Fatalf("capacity = %+v, want 1..4 slots on 4 cores", st.Capacity)
+			}
+		})
+	}
+}

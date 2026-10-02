@@ -156,7 +156,7 @@ func (s *Scanner) IsInstalled(ctx context.Context) (bool, string, error) {
 		binary = DefaultBinary
 	}
 
-	installed, version, err := core.CheckBinaryInstalled(ctx, binary, "-version")
+	installed, version, err := core.VersionOutput(ctx, binary, "-version")
 	if err != nil {
 		return false, "", err
 	}
@@ -170,6 +170,10 @@ func (s *Scanner) IsInstalled(ctx context.Context) (bool, string, error) {
 
 // parseVersion extracts version from katana output.
 func parseVersion(output string) string {
+	// Current releases print "[INF] Current Version: vX.Y.Z" to stderr.
+	if v := core.VersionAfterLabel(output, "Current Version:"); v != "" {
+		return v
+	}
 	// katana version output: "katana v1.x.x"
 	output = strings.TrimSpace(output)
 	lines := strings.Split(output, "\n")

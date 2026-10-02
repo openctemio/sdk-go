@@ -2,10 +2,13 @@ package core
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -224,33 +227,71 @@ func streamWithHandler(r io.ReadCloser, handler OutputHandler, isError bool) []b
 // Scanner Installation Check
 // =============================================================================
 
-// CheckBinaryInstalled checks if a binary is installed and returns its version.
+// CheckBinaryInstalled checks if a binary is installed and returns its
+// version line: the first non-empty line of VersionOutput. Scanners whose
+// version command prints several lines (nuclei, the ProjectDiscovery tools)
+// should call VersionOutput and parse the whole text instead.
 func CheckBinaryInstalled(ctx context.Context, binary string, versionArgs ...string) (bool, string, error) {
+	installed, output, err := VersionOutput(ctx, binary, versionArgs...)
+	if !installed || err != nil {
+		return installed, "", err
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return true, line, nil
+		}
+	}
+	return true, "", nil
+}
+
+// VersionOutput runs `binary versionArgs...` (default "--version") and
+// returns its whole output with ANSI color sequences removed. It reads
+// stdout, and stderr when stdout is empty: several scanners (nuclei and the
+// other ProjectDiscovery tools) print their version banner only to stderr,
+// in color. A binary that cannot be started or exits non-zero is reported as
+// not installed.
+func VersionOutput(ctx context.Context, binary string, versionArgs ...string) (bool, string, error) {
 	if len(versionArgs) == 0 {
 		versionArgs = []string{"--version"}
 	}
 
+	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, binary, versionArgs...)
 	cmd.Env = ScannerEnviron()
-	output, err := cmd.Output()
-	if err != nil {
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
 		return false, "", nil // Not installed
 	}
 
-	version := string(output)
-	// Try to extract first line as version
-	if idx := indexNewline(version); idx > 0 {
-		version = version[:idx]
+	output := stdout.String()
+	if strings.TrimSpace(output) == "" {
+		output = stderr.String()
 	}
-
-	return true, version, nil
+	return true, StripANSI(output), nil
 }
 
-func indexNewline(s string) int {
-	for i, c := range s {
-		if c == '\n' || c == '\r' {
-			return i
+// ansiEscape matches terminal control sequences (CSI: colors, cursor moves).
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+
+// StripANSI removes terminal escape sequences (colors) from s.
+func StripANSI(s string) string {
+	return ansiEscape.ReplaceAllString(s, "")
+}
+
+// VersionAfterLabel returns the first word after `label` on the first line
+// of output that contains it, or "" when no line does. For example
+// VersionAfterLabel("[INF] Nuclei Engine Version: v3.11.1", "Engine Version:")
+// returns "v3.11.1".
+func VersionAfterLabel(output, label string) string {
+	for _, line := range strings.Split(output, "\n") {
+		idx := strings.Index(line, label)
+		if idx < 0 {
+			continue
+		}
+		if fields := strings.Fields(line[idx+len(label):]); len(fields) > 0 {
+			return fields[0]
 		}
 	}
-	return -1
+	return ""
 }
