@@ -40,6 +40,10 @@ const (
 	// default: nice +10, lowest best-effort I/O, OOM-killed before the
 	// sensor) or normal (the sensor's own).
 	EnvScannerPriority = "SENSOR_SCANNER_PRIORITY"
+	// EnvProtectFromOOM protects the sensor itself from the OOM killer:
+	// true writes SensorOOMScoreAdj to its oom_score_adj at start (Linux;
+	// needs CAP_SYS_RESOURCE). false, the default, leaves it.
+	EnvProtectFromOOM = "SENSOR_PROTECT_FROM_OOM"
 
 	EnvOutbox         = "SENSOR_OUTBOX"           // on | off (default: on for a daemon)
 	EnvOutboxDir      = "SENSOR_OUTBOX_DIR"       // default DefaultOutboxDir
@@ -212,6 +216,30 @@ func ResolveScannerPriority(explicit string) (*core.ScannerPriority, error) {
 	default:
 		return nil, usageError(fmt.Errorf("%s=%q: low or normal", EnvScannerPriority, v))
 	}
+}
+
+// SensorOOMScoreAdj is the oom_score_adj a sensor protected from the OOM
+// killer (SENSOR_PROTECT_FROM_OOM) gives itself: low enough that the kernel
+// kills almost any other process first, but not -1000, which would exempt the
+// sensor entirely. Scanners never inherit it (core.ApplyScannerPriority).
+const SensorOOMScoreAdj = -500
+
+// ResolveProtectFromOOM reports whether the sensor protects itself from the
+// OOM killer: true when explicit is, else SENSOR_PROTECT_FROM_OOM (true or
+// false; unset is false). Any other value is an error (ExitUsage).
+func ResolveProtectFromOOM(explicit bool) (bool, error) {
+	if explicit {
+		return true, nil
+	}
+	v := strings.TrimSpace(os.Getenv(EnvProtectFromOOM))
+	if v == "" {
+		return false, nil
+	}
+	on, err := parseOnOff(v)
+	if err != nil {
+		return false, usageError(fmt.Errorf("%s=%q: true or false", EnvProtectFromOOM, v))
+	}
+	return on, nil
 }
 
 // ResolveProtocol returns the sensor protocol: explicit (a flag), else

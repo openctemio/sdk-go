@@ -4,6 +4,23 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Added
+
+- **Sensor OOM protection** (api RFC-035 §5.3, opt-in). A new sensorkit
+  setting `SENSOR_PROTECT_FROM_OOM=true` (`Options.ProtectFromOOM`,
+  `ResolveProtectFromOOM`; default off) makes `Run` set the sensor's own
+  `oom_score_adj` to `sensorkit.SensorOOMScoreAdj` (-500), so the kernel
+  kills almost anything else before the sensor when memory runs out. Linux
+  only. Lowering the score needs `CAP_SYS_RESOURCE`, which Docker does not
+  grant by default (`docker run --cap-add SYS_RESOURCE`; root under
+  systemd has it). Without it the sensor prints one warning and runs
+  unprotected; startup never fails for it. The banner shows the outcome.
+  - **Scanners never inherit the protection.** A child inherits
+    `oom_score_adj` at fork. `core.ApplyScannerPriority` now raises a
+    scanner whose sensor has a negative score to at least 0, also with
+    `SENSOR_SCANNER_PRIORITY=normal` (the low priority already sets 500).
+    This also covers a sensor protected by systemd's `OOMScoreAdjust`.
+
 ### Fixed
 
 - Protocol v2 results: a 413 without a problem document (a reverse proxy's
