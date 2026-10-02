@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -28,5 +29,21 @@ func TestParseOutput_Real(t *testing.T) {
 	}
 	if len(techs) == 0 {
 		t.Fatal("no technologies")
+	}
+}
+
+// The deprecated IP and CNAME strings stay filled for callers built against
+// them.
+func TestHTTPXOutput_DeprecatedFields(t *testing.T) {
+	var o HTTPXOutput
+	if err := json.Unmarshal([]byte(`{"url":"https://example.com","host_ip":"192.0.2.1","a":["192.0.2.1"],"cname":["x.example.net","y.example.net"]}`), &o); err != nil {
+		t.Fatal(err)
+	}
+	if len(o.CNAMEs) != 2 || o.HostIP != "192.0.2.1" {
+		t.Fatalf("decoded = %+v", o)
+	}
+	hosts, _, err := NewScanner().parseOutput([]byte(`{"url":"https://example.com","host":"example.com","a":["192.0.2.7"],"cname":["x.example.net"]}` + "\n"))
+	if err != nil || len(hosts) != 1 || hosts[0].IP != "192.0.2.7" {
+		t.Fatalf("hosts = %+v err = %v", hosts, err)
 	}
 }

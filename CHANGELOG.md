@@ -53,9 +53,14 @@ All notable changes to `github.com/openctemio/sdk-go`.
 - httpx results were all dropped: `a` and `cname` are arrays in httpx's
   JSON and decoding them into strings failed every line, which the parser
   skipped as "not JSON". The JARM and TLS fields used names httpx does not
-  write (`jarm_hash`, `subject_an`, `subject_cn`, `issuer_cn`).
+  write (`jarm_hash`, `subject_an`, `subject_cn`, `issuer_cn`). The arrays are `HTTPXOutput.A`/`AAAA`/`CNAMEs` and
+  `HostIP`; the string fields `IP` and `CNAME` are kept, deprecated, and
+  filled from them.
 - katana results were garbage: `request` is an object, so every line was
-  taken for a plain URL holding the whole JSON text. Requests that got no
+  taken for a plain URL holding the whole JSON text. `KatanaOutput` gains
+  `Request`/`Response`/`Error`; its flat fields (`URL`, `Endpoint`, `Method`,
+  `Source`, `Tag`, `Depth`, `Status`) are kept, deprecated, and filled by
+  `Flatten`. Requests that got no
   response are no longer reported as discovered URLs. katana 1.7's version
   ("Current version:") parses.
 - The subfinder parser typed every host as `domain`; a host below its root

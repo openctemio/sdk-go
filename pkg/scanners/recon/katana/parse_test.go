@@ -33,3 +33,16 @@ func TestParseOutput_Real(t *testing.T) {
 		}
 	}
 }
+
+// The deprecated flat fields stay filled for callers built against them.
+func TestKatanaOutput_FlattenKeepsDeprecatedFields(t *testing.T) {
+	o := KatanaOutput{
+		Request:  KatanaRequest{Method: "GET", Endpoint: "https://example.com/a", Tag: "a", Source: "https://example.com", Depth: 2},
+		Response: &KatanaResponse{StatusCode: 200},
+	}
+	o.Flatten()
+	if o.URL != "https://example.com/a" || o.Endpoint != o.URL || o.Method != "GET" || o.Tag != "a" ||
+		o.Source != "https://example.com" || o.Depth != 2 || o.Status != 200 {
+		t.Fatalf("flattened = %+v", o)
+	}
+}

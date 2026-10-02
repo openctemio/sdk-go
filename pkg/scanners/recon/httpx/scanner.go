@@ -436,7 +436,7 @@ type HTTPXOutput struct {
 	HostIP       string   `json:"host_ip,omitempty"`
 	A            []string `json:"a,omitempty"`
 	AAAA         []string `json:"aaaa,omitempty"`
-	CNAME        []string `json:"cname,omitempty"`
+	CNAMEs       []string `json:"cname,omitempty"`
 	FaviconHash  string   `json:"favicon,omitempty"`
 	Jarm         string   `json:"jarm_hash,omitempty"`
 	ASN          *ASNInfo `json:"asn,omitempty"`
@@ -446,6 +446,11 @@ type HTTPXOutput struct {
 	ResponseTime string   `json:"time,omitempty"`
 	Words        int      `json:"words,omitempty"`
 	Lines        int      `json:"lines,omitempty"`
+
+	// Deprecated: use HostIP or A. The parser sets it to the host's IP.
+	IP string `json:"-"`
+	// Deprecated: use CNAMEs. The parser sets it to the first CNAME.
+	CNAME string `json:"-"`
 }
 
 // ASNInfo represents ASN information.
@@ -534,6 +539,10 @@ func (s *Scanner) parseOutput(data []byte) ([]core.LiveHost, []core.Technology, 
 		ip := output.HostIP
 		if ip == "" && len(output.A) > 0 {
 			ip = output.A[0]
+		}
+		output.IP = ip
+		if len(output.CNAMEs) > 0 {
+			output.CNAME = output.CNAMEs[0]
 		}
 
 		liveHost := core.LiveHost{

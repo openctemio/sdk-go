@@ -413,6 +413,35 @@ type KatanaOutput struct {
 	Request  KatanaRequest   `json:"request"`
 	Response *KatanaResponse `json:"response,omitempty"`
 	Error    string          `json:"error,omitempty"`
+
+	// Deprecated: use Request.Endpoint. The flat fields below are filled
+	// from Request and Response by Flatten (the parser calls it).
+	URL string `json:"-"`
+	// Deprecated: use Request.Endpoint.
+	Endpoint string `json:"-"`
+	// Deprecated: use Request.Source.
+	Source string `json:"-"`
+	// Deprecated: use Request.Method.
+	Method string `json:"-"`
+	// Deprecated: use Request.Depth.
+	Depth int `json:"-"`
+	// Deprecated: use Request.Tag.
+	Tag string `json:"-"`
+	// Deprecated: use Response.StatusCode.
+	Status int `json:"-"`
+}
+
+// Flatten fills the deprecated flat fields from Request and Response.
+func (o *KatanaOutput) Flatten() {
+	o.URL = o.Request.Endpoint
+	o.Endpoint = o.Request.Endpoint
+	o.Source = o.Request.Source
+	o.Method = o.Request.Method
+	o.Depth = o.Request.Depth
+	o.Tag = o.Request.Tag
+	if o.Response != nil {
+		o.Status = o.Response.StatusCode
+	}
 }
 
 // KatanaRequest is the request katana made for a discovered endpoint.
@@ -458,6 +487,7 @@ func (s *Scanner) parseOutput(data []byte) ([]core.DiscoveredURL, error) {
 			continue
 		}
 
+		output.Flatten()
 		url := output.Request.Endpoint
 		if url == "" {
 			continue
