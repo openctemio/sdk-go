@@ -37,6 +37,20 @@ All notable changes to `github.com/openctemio/sdk-go`.
 - Outbox: the byte cap evicts command results after every other pending
   item. A command result is a few hundred bytes, and evicting it left its
   command running on the platform until the command timed out.
+- **Scanner output is bounded.** `ExecuteScanner`, `StreamScanner` and
+  `BaseScanner.Scan` kept all of a scanner's stdout and stderr in memory,
+  however much it wrote; a scanner pointed at a hostile target, or one that
+  loops, could exhaust the sensor's memory. Stdout is now bounded (512 MiB by
+  default, `ExecConfig.MaxOutputBytes` / `BaseScannerConfig.MaxOutputBytes`
+  to change it): past the bound the scanner's process group is killed and
+  the call returns `ErrScannerOutputTooLarge`, so the scan fails visibly
+  instead of reporting partial results. Stderr keeps its first 4 MiB and is
+  marked as cut.
+- **`StreamScanner` stalled on long lines.** It read with `bufio.Scanner`,
+  whose 64 KiB line limit stopped the reader at the first longer line (a
+  nuclei finding carrying a response body): the scanner then blocked on a
+  full pipe until its timeout and the rest of its output was lost. Lines of
+  any length are now delivered.
 
 ## v0.15.0 — 2026-10-02
 
