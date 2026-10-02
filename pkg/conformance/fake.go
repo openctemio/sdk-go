@@ -104,6 +104,7 @@ type FakePlatform struct {
 	cmdResult map[string]json.RawMessage
 	cmdQueue  []string // pending commands in poll order
 	outbox    []json.RawMessage
+	beats     []json.RawMessage
 	keys      int
 }
 
@@ -229,6 +230,26 @@ func (f *FakePlatform) HeartbeatOutbox() []json.RawMessage {
 	return append([]json.RawMessage(nil), f.outbox...)
 }
 
+// Heartbeats returns the heartbeat bodies received, v1 and v2, in order.
+func (f *FakePlatform) Heartbeats() []json.RawMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]json.RawMessage(nil), f.beats...)
+}
+
+// recordHeartbeat keeps a heartbeat body and its outbox block. The caller
+// holds f.mu.
+func (f *FakePlatform) recordHeartbeat(body []byte) {
+	var hb struct {
+		Outbox json.RawMessage `json:"outbox"`
+	}
+	_ = json.Unmarshal(body, &hb)
+	if len(hb.Outbox) > 0 {
+		f.outbox = append(f.outbox, hb.Outbox)
+	}
+	f.beats = append(f.beats, append(json.RawMessage(nil), body...))
+}
+
 // AcceptedFindings counts the findings of committed v2 reports plus v1
 // reports.
 func (f *FakePlatform) AcceptedFindings() int {
@@ -349,14 +370,8 @@ func (f *FakePlatform) v1(w http.ResponseWriter, r *http.Request, body []byte) {
 	p := strings.TrimPrefix(r.URL.Path, legacyv1.PathPrefix)
 	switch {
 	case p == "/heartbeat":
-		var hb struct {
-			Outbox json.RawMessage `json:"outbox"`
-		}
-		_ = json.Unmarshal(body, &hb)
 		f.mu.Lock()
-		if len(hb.Outbox) > 0 {
-			f.outbox = append(f.outbox, hb.Outbox)
-		}
+		f.recordHeartbeat(body)
 		v2 := f.V2
 		f.mu.Unlock()
 		if v2 && protov2HasFeature(r.Header.Values(legacyv1.HeaderSensorFeatures), protov2.FeatureResultsV2) {

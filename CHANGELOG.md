@@ -6,6 +6,48 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Upgrade notes
 
+None. Only additions (checked by `api-compat` against v0.9.0). A sensor that
+does nothing keeps behaving as before, except that its heartbeat now carries
+`os` and `arch`. To let the platform dispatch by what the sensor really has,
+give the `BaseSensor` a reporter:
+
+```go
+s := core.NewBaseSensor(cfg, apiClient)
+s.SetCapabilityReporter(core.CapabilityReporterFunc(func(ctx context.Context) core.CapabilityReport {
+	return core.CapabilityReport{
+		Tools:             []core.ToolInfo{{Name: "semgrep", Version: "1.90.0", Installed: true}},
+		Capabilities:      []string{"semgrep", "sast", "validate"},
+		MaxConcurrentJobs: 5,
+	}
+}))
+```
+
+The reporter is called on every heartbeat: cache tool probes. A sensor that
+sends its own heartbeats sets the same fields on `core.SensorStatus`.
+
+### Added
+
+- **Sensor-reported capabilities** (api RFC-029 §4.3.1). The heartbeat (v1 and
+  v2) carries the sensor's tool inventory (`tools`: name, version,
+  installed), the capabilities it serves (`capabilities`), its concurrency
+  (`max_concurrent_jobs`) and its platform (`os`, `arch`). The platform
+  dispatches by what the sensor reports, and its administrator can only
+  narrow it. All members are optional: a platform that does not know them
+  ignores them, and a sensor that reports nothing keeps the administrator's
+  settings. `tools: []` (reported, nothing available) differs from no
+  `tools` member (not reported).
+- `core.ToolInfo`, `core.CapabilityReport`, `core.CapabilityReporter`,
+  `core.CapabilityReporterFunc`, `core.StaticCapabilities`, `core.HostOS`,
+  `core.HostArch`, `(*core.BaseSensor).SetCapabilityReporter`; the fields
+  `Tools`, `Capabilities`, `MaxConcurrentJobs`, `OS`, `Arch` on
+  `core.SensorStatus` and `client.HeartbeatRequest`.
+- `pkg/conformance`: `FakePlatform.Heartbeats()` returns the heartbeat
+  bodies received, and the suite checks the report on v1 and v2.
+
+## v0.9.0 — 2026-10-02
+
+### Upgrade notes
+
 None. No exported identifier was removed, renamed or changed signature
 (checked by the new `api-compat` CI job against v0.8.1). Bump the module
 version: a sensor gets protocol v2 for everything the platform offers with no
