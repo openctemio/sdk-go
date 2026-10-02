@@ -148,6 +148,11 @@ func (s *Scanner) Scan(ctx context.Context, target string, opts *core.ScanOption
 	defer cleanupReport()
 
 	// Build semgrep arguments
+	if opts != nil {
+		if err := core.ValidateExtraArgs(opts.ExtraArgs); err != nil {
+			return nil, err
+		}
+	}
 	args := s.buildArgs(absTarget, outputFile, opts)
 
 	if s.Verbose {

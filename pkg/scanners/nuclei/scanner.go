@@ -231,6 +231,11 @@ func (s *Scanner) SetVerbose(v bool) {
 
 // Scan implements core.Scanner interface - returns raw JSON Lines output.
 func (s *Scanner) Scan(ctx context.Context, target string, opts *core.ScanOptions) (*core.ScanResult, error) {
+	if opts != nil {
+		if err := core.ValidateExtraArgs(opts.ExtraArgs); err != nil {
+			return nil, err
+		}
+	}
 	return s.run(ctx, s.buildArgs(target, opts), target)
 }
 
@@ -282,6 +287,11 @@ func (s *Scanner) ScanTargets(ctx context.Context, targets []string, opts *core.
 		return nil, fmt.Errorf("write target list: %w", err)
 	}
 
+	if opts != nil {
+		if err := core.ValidateExtraArgs(opts.ExtraArgs); err != nil {
+			return nil, err
+		}
+	}
 	return s.run(ctx, s.buildArgsFor("", listFile, opts), fmt.Sprintf("%d targets", len(targets)))
 }
 

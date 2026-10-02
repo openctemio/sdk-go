@@ -118,6 +118,11 @@ func (s *BaseScanner) Scan(ctx context.Context, target string, opts *ScanOptions
 	}
 
 	// Build command arguments
+	if opts != nil {
+		if err := ValidateExtraArgs(opts.ExtraArgs); err != nil {
+			return nil, err
+		}
+	}
 	args := s.BuildArgs(target, opts)
 
 	if s.verbose || (opts != nil && opts.Verbose) {

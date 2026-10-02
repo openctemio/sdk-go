@@ -200,6 +200,11 @@ func (s *Scanner) Scan(ctx context.Context, target string, opts *core.ReconOptio
 	start := time.Now()
 
 	// Build katana arguments
+	if opts != nil {
+		if err := core.ValidateExtraArgs(opts.ExtraArgs); err != nil {
+			return nil, err
+		}
+	}
 	args := s.buildArgs(target, opts)
 
 	if s.Verbose {
