@@ -4,6 +4,42 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Added
+
+- **Platform policy and slim heartbeats** (api RFC-033 §6.12, owner decisions
+  O2 and O3).
+  - **Manifest answer.** It now carries the platform's policy (allowed
+    tools, capabilities and capacity, after the administrator's narrowing)
+    and `heartbeat.omit_inventory`.
+  - **Policy refresh.** The `BaseSensor` keeps the policy
+    (`BaseSensor.ManifestPolicy`). It re-reads it with
+    `GET /api/v2/sensor/manifest` (`client.GetManifestState`) when the
+    heartbeat's `config_version` moves.
+  - **Command refusal.** `BaseSensor.CommandToolGate` refuses a command
+    whose tool (payload `scanner`, else `preferred_tool`, canonical) is
+    outside the policy. sensorkit wires it with the new
+    `CommandPoller.SetCommandGate`. The command is reported failed with
+    `ErrToolNotAllowed` and is never run.
+  - **Slim heartbeats.** While a heartbeat echoes a digest the platform
+    acknowledged with `omit_inventory`, it leaves `tools`, `capabilities`
+    and `max_concurrent_jobs` out. It carries each tool's content freshness
+    as `content` (`core.ToolContent`, `SensorStatus.Content`).
+  - **Compatibility.** A platform that does not say `omit_inventory`
+    (before Phase 2, or with its kill switch) keeps getting full
+    heartbeats.
+  - **New API.** `core.ManifestPolicy`, `core.ManifestStateReader`,
+    `core.ErrManifestNotRegistered`, `core.ErrToolNotAllowed`, and
+    `ManifestAck.Policy` / `OmitInventory`. In `sensorproto/v2`:
+    `ManifestPolicy`, `ManifestHeartbeat`, `ManifestStateResponse` and
+    `ProblemManifestNotFound`.
+  - **Conformance fake.** New `SetManifestPolicy`; `GET /manifest` is now
+    served.
+
+### Fixed
+
+- The doorbell logged `send_manifest` (api RFC-033) as an unknown heartbeat
+  action, although the BaseSensor acts on it.
+
 ## v0.14.0 — 2026-10-02
 
 ### Added

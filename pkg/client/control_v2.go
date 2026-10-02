@@ -155,6 +155,8 @@ func (c *Client) PutManifest(ctx context.Context, m *core.Manifest) (*core.Manif
 		Changed:              resp.Changed,
 		AcceptedTools:        resp.Accepted.Tools,
 		AcceptedCapabilities: resp.Accepted.Capabilities,
+		Policy:               policyOf(resp.Policy),
+		OmitInventory:        resp.Heartbeat.OmitInventory,
 	}
 	for _, i := range resp.Ignored {
 		ack.Ignored = append(ack.Ignored, core.ManifestIgnored{Path: i.Path, Value: i.Value, Reason: i.Reason})
@@ -163,6 +165,40 @@ func (c *Client) PutManifest(ctx context.Context, m *core.Manifest) (*core.Manif
 }
 
 var _ core.ManifestPusher = (*Client)(nil)
+
+// GetManifestState re-reads the platform's view of the registered manifest
+// (GET /manifest, api RFC-033 §6.12): its digest, the policy as it stands
+// now and the heartbeat form. core.ErrManifestNotRegistered when the
+// platform has none, core.ErrManifestUnsupported when it does not serve
+// manifests. It implements core.ManifestStateReader.
+func (c *Client) GetManifestState(ctx context.Context) (*core.ManifestAck, error) {
+	if ok, _ := c.controlV2(ctx, protov2.FeatureManifest); !ok {
+		return nil, core.ErrManifestUnsupported
+	}
+	var resp protov2.ManifestStateResponse
+	if _, err := c.v2JSON(ctx, http.MethodGet, protov2.PathPrefix+protov2.ManifestPath, nil, &resp, nil, c.maxRetries); err != nil {
+		var ve *V2Error
+		if errors.As(err, &ve) && ve.Problem != nil && ve.ProblemName() == protov2.ProblemManifestNotFound {
+			return nil, core.ErrManifestNotRegistered
+		}
+		if isRouteMissing(err) {
+			// A platform from before api RFC-033 Phase 2 serves PUT only.
+			return nil, core.ErrManifestUnsupported
+		}
+		return nil, err
+	}
+	return &core.ManifestAck{Digest: resp.ManifestDigest, Policy: policyOf(resp.Policy),
+		OmitInventory: resp.Heartbeat.OmitInventory}, nil
+}
+
+var _ core.ManifestStateReader = (*Client)(nil)
+
+func policyOf(p *protov2.ManifestPolicy) *core.ManifestPolicy {
+	if p == nil {
+		return nil
+	}
+	return &core.ManifestPolicy{AllowedTools: p.AllowedTools, AllowedCapabilities: p.AllowedCapabilities, MaxJobs: p.MaxJobs}
+}
 
 // errPausedHeartbeat is what SendHeartbeat (which does not act on the
 // doorbell) returns for a disabled sensor on v2: v2 answers a disabled

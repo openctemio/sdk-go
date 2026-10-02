@@ -3,7 +3,9 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -78,6 +80,23 @@ type manifestPusher struct {
 	puts        []Manifest
 	beats       []string // manifest_digest of each heartbeat
 	ask         bool     // answer the next heartbeat with send_manifest
+	// Phase 2 (api RFC-033 §6.12).
+	policy   *ManifestPolicy
+	omit     bool
+	cv       string // config_version every heartbeat answers
+	gets     int
+	statuses []SensorStatus
+}
+
+func (p *manifestPusher) GetManifestState(context.Context) (*ManifestAck, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.gets++
+	if len(p.puts) == 0 {
+		return nil, ErrManifestNotRegistered
+	}
+	d, _ := p.puts[len(p.puts)-1].Digest()
+	return &ManifestAck{Digest: "platform:" + d, Policy: p.policy, OmitInventory: p.omit}, nil
 }
 
 func (p *manifestPusher) PutManifest(_ context.Context, m *Manifest) (*ManifestAck, error) {
@@ -91,14 +110,15 @@ func (p *manifestPusher) PutManifest(_ context.Context, m *Manifest) (*ManifestA
 	}
 	p.puts = append(p.puts, *m)
 	d, _ := m.Digest()
-	return &ManifestAck{Digest: "platform:" + d, Changed: true}, nil
+	return &ManifestAck{Digest: "platform:" + d, Changed: true, Policy: p.policy, OmitInventory: p.omit}, nil
 }
 
 func (p *manifestPusher) SendHeartbeatWithHints(_ context.Context, s *SensorStatus) (*HeartbeatHints, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.beats = append(p.beats, s.ManifestDigest)
-	h := &HeartbeatHints{Present: true}
+	p.statuses = append(p.statuses, *s)
+	h := &HeartbeatHints{Present: true, ConfigVersion: p.cv}
 	if p.ask {
 		p.ask = false
 		h.Actions = []HeartbeatAction{HeartbeatActionSendManifest}
@@ -216,3 +236,185 @@ func TestBaseSensor_ManifestUnsupportedAndFailing(t *testing.T) {
 // manifestDigestPinned is the digest the api computes for the same document
 // (api pkg/domain/sensor TestManifestDigestMatchesSDK).
 const manifestDigestPinned = "sha256:053d2bb0ced8606d7b0278818bb6dc30e49116b36d6e6380d228de3e82fe4d51"
+
+// O3: once the platform acknowledged with omit_inventory, heartbeats leave
+// the inventory out and carry each tool's content freshness.
+func TestBaseSensor_SlimHeartbeat(t *testing.T) {
+	ctx := context.Background()
+	p := &manifestPusher{omit: true}
+	s := newManifestSensor(t, p)
+	s.Tools().SetMaxConcurrentJobs(3)
+	if err := s.Tools().Register(ToolSpec{Name: "trivy", Version: "0.75.0"}); err != nil {
+		t.Fatal(err)
+	}
+	s.SetCapabilityReporter(CapabilityReporterFunc(func(ctx context.Context) CapabilityReport {
+		rep := s.Tools().CapabilityReport(ctx)
+		rep.Tools[1].Content = []ContentInfo{{Name: "trivy-db", Version: "2026-10-02", Managed: true, Error: "rate limited"}}
+		return rep
+	}))
+	if _, err := s.FirstHeartbeat(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.sendHeartbeat(ctx)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.puts) != 1 || len(p.puts[0].Tools) != 2 {
+		t.Fatalf("manifest %+v", p.puts)
+	}
+	for i, st := range p.statuses {
+		if st.Tools != nil || st.Capabilities != nil || st.MaxConcurrentJobs != 0 || st.ManifestDigest == "" {
+			t.Fatalf("heartbeat %d not slim: %+v", i, st)
+		}
+		if len(st.Content) != 1 || st.Content[0].Tool != "trivy" || st.Content[0].Error != "rate limited" {
+			t.Fatalf("heartbeat %d content %+v", i, st.Content)
+		}
+	}
+}
+
+// Without omit_inventory (a platform before Phase 2, or the kill switch)
+// heartbeats stay full.
+func TestBaseSensor_FullHeartbeatWithoutOmit(t *testing.T) {
+	p := &manifestPusher{}
+	s := newManifestSensor(t, p)
+	if _, err := s.FirstHeartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if st := p.statuses[0]; st.Tools == nil || st.Content != nil || st.ManifestDigest == "" {
+		t.Fatalf("heartbeat %+v", st)
+	}
+}
+
+// O2: the policy comes with the acknowledgement and is read again when the
+// platform's config_version moves.
+func TestBaseSensor_PolicyFollowsConfigVersion(t *testing.T) {
+	ctx := context.Background()
+	p := &manifestPusher{policy: &ManifestPolicy{AllowedTools: []string{"nuclei"}}, cv: "aaaaaaaaaaaaaaaa"}
+	s := newManifestSensor(t, p)
+	if got := s.ManifestPolicy(); got != nil {
+		t.Fatalf("policy before the first registration: %+v", got)
+	}
+	if _, err := s.FirstHeartbeat(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.ManifestPolicy(); got == nil || !reflect.DeepEqual(got.AllowedTools, []string{"nuclei"}) {
+		t.Fatalf("policy %+v", got)
+	}
+	s.sendHeartbeat(ctx) // same config_version: no GET
+	p.mu.Lock()
+	if p.gets != 0 {
+		t.Fatalf("%d GETs without a config_version change", p.gets)
+	}
+	p.cv = "bbbbbbbbbbbbbbbb"
+	p.policy = &ManifestPolicy{AllowedTools: []string{"nuclei", "semgrep"}}
+	p.mu.Unlock()
+	s.sendHeartbeat(ctx) // answered with the new version
+	s.sendHeartbeat(ctx) // reads the policy again
+	p.mu.Lock()
+	gets, puts := p.gets, len(p.puts)
+	p.mu.Unlock()
+	if gets != 1 || puts != 1 {
+		t.Fatalf("after the change: %d GETs, %d PUTs", gets, puts)
+	}
+	if got := s.ManifestPolicy(); !reflect.DeepEqual(got.AllowedTools, []string{"nuclei", "semgrep"}) {
+		t.Fatalf("policy not re-read: %+v", got)
+	}
+}
+
+func TestCommandToolGate(t *testing.T) {
+	p := &manifestPusher{policy: &ManifestPolicy{AllowedTools: []string{"nuclei", "betterleaks"}}}
+	s := newManifestSensor(t, p)
+	gate := s.CommandToolGate()
+	cmd := func(payload string) *Command { return &Command{ID: "c", Type: "scan", Payload: []byte(payload)} }
+	if err := gate(cmd(`{"scanner":"semgrep"}`)); err != nil {
+		t.Fatalf("no policy yet must pass: %v", err)
+	}
+	if _, err := s.FirstHeartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for payload, allowed := range map[string]bool{
+		`{"scanner":"nuclei"}`:         true,
+		`{"scanner":"NUCLEI "}`:        true,
+		`{"scanner":"gitleaks"}`:       true, // the retired name of betterleaks
+		`{"preferred_tool":"nuclei"}`:  true,
+		`{"target":"x"}`:               true, // names no tool
+		`{"scanner":"semgrep"}`:        false,
+		`{"preferred_tool":"semgrep"}`: false,
+	} {
+		err := gate(cmd(payload))
+		if allowed != (err == nil) {
+			t.Errorf("%s: err %v, allowed %v", payload, err, allowed)
+		}
+		if err != nil && (!errors.Is(err, ErrToolNotAllowed) || !strings.Contains(err.Error(), "tool-not-allowed: semgrep")) {
+			t.Errorf("%s: error %q", payload, err)
+		}
+	}
+}
+
+// The poller reports a refused command failed and never runs it.
+func TestCommandPoller_GateRefuses(t *testing.T) {
+	c := newQueueClient(scanCmd("refused", "normal", map[string]any{"scanner": "semgrep"}),
+		scanCmd("ok", "normal", map[string]any{"scanner": "nuclei"}))
+	e := newCtxExecutor()
+	p := NewCommandPoller(c, e, &CommandPollerConfig{MaxConcurrent: 4})
+	p.SetCommandGate(func(cmd *Command) error {
+		if commandTool(cmd) == "semgrep" {
+			return fmt.Errorf("%w: semgrep", ErrToolNotAllowed)
+		}
+		return nil
+	})
+	p.pollAndExecute(context.Background())
+	select {
+	case id := <-e.started:
+		if id != "ok" {
+			t.Fatalf("ran %s", id)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the allowed command did not run")
+	}
+	close(e.release)
+	p.activeCmds.Wait()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.results["refused"] != "failed" {
+		t.Fatalf("refused command result %q", c.results["refused"])
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.runs["refused"] != 0 {
+		t.Fatal("the refused command ran")
+	}
+}
+
+// A command for a tool the administrator just allowed is not refused: the
+// policy is stale (a newer config_version was announced) and is read again
+// before the refusal.
+func TestCommandToolGate_RereadsStalePolicy(t *testing.T) {
+	ctx := context.Background()
+	p := &manifestPusher{policy: &ManifestPolicy{AllowedTools: []string{"nuclei"}}, cv: "aaaaaaaaaaaaaaaa"}
+	s := newManifestSensor(t, p)
+	if _, err := s.FirstHeartbeat(ctx); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.cv = "bbbbbbbbbbbbbbbb"
+	p.policy = &ManifestPolicy{AllowedTools: []string{"nuclei", "semgrep"}}
+	p.mu.Unlock()
+	s.sendHeartbeat(ctx) // announces the new version (and would ring the doorbell)
+	if err := s.CommandToolGate()(&Command{ID: "c", Type: "scan", Payload: []byte(`{"scanner":"semgrep"}`)}); err != nil {
+		t.Fatalf("refused under a stale policy: %v", err)
+	}
+	if err := s.CommandToolGate()(&Command{ID: "c", Type: "scan", Payload: []byte(`{"scanner":"trivy"}`)}); !errors.Is(err, ErrToolNotAllowed) {
+		t.Fatalf("trivy: %v", err)
+	}
+}
+
+// send_manifest is a known action: the doorbell does not log it as unknown.
+func TestDoorbell_SendManifestIsKnown(t *testing.T) {
+	d, logs := newTestDoorbell(t, nil)
+	d.Handle(&HeartbeatHints{Present: true, Actions: []HeartbeatAction{HeartbeatActionSendManifest}})
+	if strings.Contains(logs.String(), "unknown heartbeat action") {
+		t.Fatalf("logged as unknown: %s", logs.String())
+	}
+}

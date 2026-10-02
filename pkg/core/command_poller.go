@@ -200,7 +200,9 @@ type CommandPoller struct {
 	executor      CommandExecutor
 	interval      time.Duration
 	maxConcurrent int
-	allowedTypes  map[string]bool
+	// gate refuses commands before they run (SetCommandGate).
+	gate         atomic.Pointer[func(*Command) error]
+	allowedTypes map[string]bool
 
 	running    bool
 	stopCh     chan struct{}
@@ -418,6 +420,18 @@ func (p *CommandPoller) SetResourceManager(m *resource.Manager) {
 		p.maxConcurrent = m.MaxSlots()
 		p.sem = make(chan struct{}, p.maxConcurrent)
 	}
+}
+
+// SetCommandGate sets a check every command passes before it runs: a
+// non-nil error reports the command failed with it and never executes it.
+// A BaseSensor's CommandToolGate refuses tools outside the platform's
+// policy (api RFC-033 §6.12). nil removes the check. Safe at any time.
+func (p *CommandPoller) SetCommandGate(gate func(*Command) error) {
+	if gate == nil {
+		p.gate.Store(nil)
+		return
+	}
+	p.gate.Store(&gate)
 }
 
 // CancelCommands cancels held commands (the platform's cancel_command_ids):
@@ -791,6 +805,18 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 		return
 	}
 	p.queue.markStarted(cmd.ID)
+
+	if g := p.gate.Load(); g != nil {
+		if err := (*g)(cmd); err != nil {
+			fmt.Printf("[command-poller] Refusing command %s: %v\n", cmd.ID, err)
+			if rerr := p.client.ReportCommandResult(ctx, cmd.ID, &CommandResult{
+				Status: "failed", Error: err.Error(), CompletedAt: time.Now(),
+			}); rerr != nil && p.verbose.Load() {
+				fmt.Printf("[command-poller] Failed to report refused command %s: %v\n", cmd.ID, rerr)
+			}
+			return
+		}
+	}
 
 	// Run the executor with panic recovery — a panic in a tool or parser would
 	// otherwise take down the whole sensor process, and the server would wait for
