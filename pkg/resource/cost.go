@@ -159,7 +159,9 @@ func defaultFor(tool string) toolDefault {
 // kill raises the memory estimate (half again), since it was most likely
 // the OOM killer.
 func (b *CostBook) Observe(s JobSample) {
-	if s.Tool == "" {
+	// A failed or timed-out job teaches no cost (and must not add a tool
+	// the sensor may not even have, e.g. "scanner not found").
+	if s.Tool == "" || (s.Outcome != OutcomeSuccess && s.Outcome != OutcomeKilled) {
 		return
 	}
 	b.mu.Lock()

@@ -127,6 +127,15 @@ func TestCostBook_LearnAndPersist(t *testing.T) {
 	}
 }
 
+func TestCostBook_FailureAddsNoTool(t *testing.T) {
+	b, _ := NewCostBook("")
+	b.Observe(JobSample{Tool: "fake", Outcome: OutcomeFailed})
+	b.Observe(JobSample{Tool: "fake2", Outcome: OutcomeTimeout})
+	if len(b.Tools()) != 0 {
+		t.Fatalf("tools %v", b.Tools())
+	}
+}
+
 func TestCostBook_CorruptFileStartsOver(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tool-costs.json")
 	_ = os.WriteFile(path, []byte("{not json"), 0o600)
