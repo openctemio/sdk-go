@@ -318,6 +318,22 @@ func (c *Client) ProtocolFeatures() []string {
 	return append([]string(nil), s.hello.Features...)
 }
 
+// PlatformSupports reports whether the platform lists feature on its hello
+// (GET /api/v2/sensor/hello): one of the protov2.Feature* names, or a name
+// a newer platform announces that this SDK has no constant for. The answer
+// is the cached negotiation, asked again when stale. A platform without
+// protocol v2, one that cannot be asked right now, or a client set to
+// protocol v1 supports nothing. This is how a sensor lights up an optional
+// behavior for a newer platform without an SDK release, and keeps the old
+// behavior against an older one (docs/STABILITY.md).
+func (c *Client) PlatformSupports(ctx context.Context, feature string) bool {
+	h, err := c.negotiate(ctx)
+	if err != nil {
+		return false
+	}
+	return h.Supports(feature)
+}
+
 // noteProtocolAdvert records what a v1 heartbeat answer said about v2: a
 // change makes the next call ask hello again.
 func (c *Client) noteProtocolAdvert(advertised bool) {

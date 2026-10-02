@@ -240,6 +240,9 @@ s.Tools().Limit(strings.Split(os.Getenv("MY_TOOLS"), ",")...) // optional operat
 
 ## Packages
 
+What the SDK promises, what is stable, what is moving to the sensor, and how
+it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
+
 | Package | Description |
 |---------|-------------|
 | `pkg/client` | API client for OpenCTEM API |

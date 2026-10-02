@@ -6,6 +6,15 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **`docs/STABILITY.md`**: the stable surface, how tools, flags, formats and
+  platform features are added without an SDK release, protocol
+  compatibility (unknown members ignored on the control plane; CTIS is
+  strict and receiver-first), the versioning and deprecation policy with a
+  path to v1.0.0, the safety every sensor gets, and conformance.
+- `Client.PlatformSupports(ctx, feature)`: whether the platform's hello lists
+  a feature, including names newer than this SDK. False against a platform
+  without protocol v2, one that cannot be asked right now, or with protocol
+  v1 set. A sensor gates an optional behavior on it.
 - **Recon tools as scanners** (api RFC-036 P0). `pkg/scanners/recon`
   runs subfinder, dnsx, naabu, httpx and katana as `core.Scanner` (and
   `core.MultiTargetScanner`): `recon.New(name)` runs the tool on each target,
