@@ -278,8 +278,34 @@ func (a *BaseSensor) CommandToolGate() func(*Command) error {
 		if p == nil || slices.Contains(p.AllowedTools, tool) {
 			return nil
 		}
+		// The administrator may just have allowed it: the heartbeat that
+		// announced the new config_version also rang the doorbell for this
+		// command, before the policy was read again. Read it now.
+		if a.refreshStalePolicy() {
+			if p = a.ManifestPolicy(); p == nil || slices.Contains(p.AllowedTools, tool) {
+				return nil
+			}
+		}
 		return fmt.Errorf("%w: %s is not allowed on this sensor by the platform's policy", ErrToolNotAllowed, tool)
 	}
+}
+
+// policyRefreshTimeout bounds the policy read a refused command waits for.
+const policyRefreshTimeout = 10 * time.Second
+
+// refreshStalePolicy reads the policy again when a heartbeat announced a
+// config_version it was not read under, and reports whether it did.
+func (a *BaseSensor) refreshStalePolicy() bool {
+	st := &a.manifest
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.seenVersion == "" || st.seenVersion == st.policyVersion {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), policyRefreshTimeout)
+	defer cancel()
+	a.refreshPolicyLocked(ctx)
+	return st.seenVersion == st.policyVersion
 }
 
 // commandTool is the tool a command names, canonical and lower case; "" for

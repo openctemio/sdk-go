@@ -386,3 +386,26 @@ func TestCommandPoller_GateRefuses(t *testing.T) {
 		t.Fatal("the refused command ran")
 	}
 }
+
+// A command for a tool the administrator just allowed is not refused: the
+// policy is stale (a newer config_version was announced) and is read again
+// before the refusal.
+func TestCommandToolGate_RereadsStalePolicy(t *testing.T) {
+	ctx := context.Background()
+	p := &manifestPusher{policy: &ManifestPolicy{AllowedTools: []string{"nuclei"}}, cv: "aaaaaaaaaaaaaaaa"}
+	s := newManifestSensor(t, p)
+	if _, err := s.FirstHeartbeat(ctx); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.cv = "bbbbbbbbbbbbbbbb"
+	p.policy = &ManifestPolicy{AllowedTools: []string{"nuclei", "semgrep"}}
+	p.mu.Unlock()
+	s.sendHeartbeat(ctx) // announces the new version (and would ring the doorbell)
+	if err := s.CommandToolGate()(&Command{ID: "c", Type: "scan", Payload: []byte(`{"scanner":"semgrep"}`)}); err != nil {
+		t.Fatalf("refused under a stale policy: %v", err)
+	}
+	if err := s.CommandToolGate()(&Command{ID: "c", Type: "scan", Payload: []byte(`{"scanner":"trivy"}`)}); !errors.Is(err, ErrToolNotAllowed) {
+		t.Fatalf("trivy: %v", err)
+	}
+}
