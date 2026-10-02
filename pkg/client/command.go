@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"time"
 
@@ -31,6 +32,10 @@ type Command struct {
 	StartedAt      *time.Time      `json:"started_at,omitempty"`
 	CompletedAt    *time.Time      `json:"completed_at,omitempty"`
 	Result         json.RawMessage `json:"result,omitempty"`
+	// LeaseEpoch and LeaseExpiresAt are the command's lease (protocol v2,
+	// api RFC-035 D6) as of this answer. Zero and nil on protocol v1.
+	LeaseEpoch     int        `json:"lease_epoch,omitempty"`
+	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
 }
 
 // PollCommands retrieves pending commands for this sensor.
@@ -101,6 +106,10 @@ func (c *Client) GetCommandsLimit(ctx context.Context, limit int) (*core.GetComm
 		// command (e.g. one queued while the sensor was offline) run.
 		if cmd.ExpiresAt != nil {
 			cc.ExpiresAt = *cmd.ExpiresAt
+		}
+		cc.LeaseEpoch = cmd.LeaseEpoch
+		if cmd.LeaseExpiresAt != nil {
+			cc.LeaseExpiresAt = *cmd.LeaseExpiresAt
 		}
 		coreCommands[i] = cc
 	}
@@ -200,8 +209,11 @@ func (c *Client) ReleaseCommand(ctx context.Context, cmdID, reason string) error
 		reason = reason[:protov2.MaxReleaseReasonLen]
 	}
 	if useV2, _ := c.controlV2(ctx, protov2.FeatureCommands); useV2 {
-		err := c.transitionV2(ctx, cmdID, protov2.ReleaseAction, protov2.ReleaseRequest{Reason: reason}, c.maxRetries)
+		err := c.transitionV2(ctx, cmdID, protov2.ReleaseAction, protov2.ReleaseRequest{Reason: reason}, nil, nil, c.maxRetries)
 		if err == nil || !isRouteMissing(err) {
+			if err == nil || IsCommandGone(err) {
+				c.leases.forget(cmdID)
+			}
 			return err
 		}
 	}
@@ -220,10 +232,33 @@ func (c *Client) commandV2(ctx context.Context, cmdID, action string, body any, 
 	if c.verbose {
 		fmt.Printf("[openctem] Command %s: %s (v2)\n", cmdID, action)
 	}
-	err = c.transitionV2(ctx, cmdID, action, body, retries)
+	// Claim and start answer the command with the lease epoch it is now
+	// held under; complete and fail echo it (api RFC-035 D6).
+	var answer protov2.Command
+	var extra http.Header
+	epoch := 0
+	switch action {
+	case protov2.CompleteAction, protov2.FailAction:
+		epoch = c.leases.epoch(cmdID)
+		extra = leaseHeader(epoch)
+	}
+	err = c.transitionV2(ctx, cmdID, action, body, &answer, extra, retries)
 	if err != nil && isRouteMissing(err) {
 		c.renegotiate()
 		return false, nil
+	}
+	switch action {
+	case protov2.ClaimAction, protov2.StartAction:
+		if err == nil {
+			c.leases.record(cmdID, answer.LeaseEpoch)
+		} else if IsCommandGone(err) {
+			c.leases.forget(cmdID)
+		}
+	case protov2.CompleteAction, protov2.FailAction:
+		if err == nil || IsCommandGone(err) {
+			c.leases.forget(cmdID)
+		}
+		err = leaseLost(action, epoch, err)
 	}
 	return true, err
 }

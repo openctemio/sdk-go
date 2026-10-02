@@ -4,6 +4,34 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Added
+
+- **Command lease epoch** (api RFC-035 D6). Protocol v2 commands carry
+  `lease_epoch` and `lease_expires_at` (`protov2.Command.LeaseEpoch`,
+  `LeaseExpiresAt`; `client.Command` and `core.Command` have them too, as of
+  the poll). The client keeps the epoch of the latest claim or start answer
+  of each command it holds and sends it in `X-OpenCTEM-Lease-Epoch`
+  (`protov2.HeaderLeaseEpoch`) on complete and fail, so a sensor whose
+  command was re-queued and claimed again cannot finish the new holder's
+  run. No header when the epoch is unknown (a platform from before leases,
+  or a result delivered by the outbox after a restart): the platform then
+  fences by sensor and state as before. Never sent on protocol v1. A refusal
+  still reads as a gone command (`client.IsCommandGone`) and is dropped as
+  before; its error now says that the lease was lost.
+- The conformance fake platform (`pkg/conformance`) numbers claims, returns
+  the epoch on commands and refuses a complete or fail under another epoch
+  with `invalid-transition`, as the platform does. `FakePlatform.ReclaimCommand`
+  simulates a lease loss; `FakePlatform.LeaseEpoch` reads a command's epoch.
+
+### Security
+
+- `strategy.GetChangedFiles` ran `git diff` in the scanned repository with
+  the sensor's whole environment (its API key included). It now gets the
+  scanner environment (`core.ScannerEnviron`) plus the git variables that
+  locate the repository. Tests now prove that no SDK-started process
+  (scanners, version probes, content downloads, git) sees `API_KEY`,
+  `SENSOR_*` keys, the outbox key, tokens or passwords.
+
 ## v0.15.0 — 2026-10-02
 
 ### Added

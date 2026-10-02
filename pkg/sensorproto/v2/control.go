@@ -196,6 +196,12 @@ type Command struct {
 	CompletedAt    *time.Time      `json:"completed_at"`
 	ErrorMessage   string          `json:"error_message"`
 	Result         json.RawMessage `json:"result"`
+	// LeaseEpoch counts the command's claims and LeaseExpiresAt is when the
+	// holder's lease runs out unless renewed (api RFC-035 D6). A sensor
+	// echoes the epoch of its claim in HeaderLeaseEpoch on complete and
+	// fail. Zero and nil from a platform that predates leases.
+	LeaseEpoch     int        `json:"lease_epoch"`
+	LeaseExpiresAt *time.Time `json:"lease_expires_at"`
 }
 
 // CommandList is the answer of GET /commands.

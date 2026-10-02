@@ -32,7 +32,7 @@ func (f *FakePlatform) control(w http.ResponseWriter, r *http.Request, rest stri
 		parts := strings.Split(strings.TrimPrefix(rest, protov2.CommandsPath+"/"), "/")
 		switch parts[1] {
 		case protov2.ClaimAction, protov2.StartAction, protov2.CompleteAction, protov2.FailAction, protov2.ReleaseAction:
-			f.transitionV2(w, parts[0], parts[1], body)
+			f.transitionV2(w, parts[0], parts[1], body, r.Header.Get(protov2.HeaderLeaseEpoch))
 		default:
 			return false
 		}
@@ -176,15 +176,18 @@ func (f *FakePlatform) pollV2(w http.ResponseWriter, r *http.Request) {
 		}
 		exp := time.Now().Add(time.Hour).UTC()
 		out.Commands = append(out.Commands, protov2.Command{ID: id, Type: "scan", Priority: "normal", Status: "pending",
-			Payload: json.RawMessage(`{"scanner":"fake"}`), CreatedAt: time.Now().UTC(), ExpiresAt: &exp, Result: json.RawMessage("null")})
+			Payload: json.RawMessage(`{"scanner":"fake"}`), CreatedAt: time.Now().UTC(), ExpiresAt: &exp, Result: json.RawMessage("null"),
+			LeaseEpoch: f.cmdEpoch[id]})
 	}
 	f.mu.Unlock()
 	writeJSON(w, http.StatusOK, out)
 }
 
 // transitionV2 applies RFC-029 §4.4 for a sensor that owns every command it
-// claimed (the fake has one sensor).
-func (f *FakePlatform) transitionV2(w http.ResponseWriter, id, action string, body []byte) {
+// claimed (the fake has one sensor). leaseHdr is the X-OpenCTEM-Lease-Epoch
+// the sensor sent: on complete and fail a number other than the command's
+// epoch is refused as the platform refuses it (api RFC-035 D6).
+func (f *FakePlatform) transitionV2(w http.ResponseWriter, id, action string, body []byte, leaseHdr string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	state, ok := f.commands[id]
@@ -216,7 +219,7 @@ func (f *FakePlatform) transitionV2(w http.ResponseWriter, id, action string, bo
 		}
 		f.commands[id] = "pending"
 		f.released = append(f.released, Release{CommandID: id, Reason: req.Reason})
-		writeJSON(w, http.StatusOK, protov2.Command{ID: id, Status: "pending"})
+		writeJSON(w, http.StatusOK, f.commandLocked(id, "pending"))
 		return
 	}
 
@@ -232,12 +235,21 @@ func (f *FakePlatform) transitionV2(w http.ResponseWriter, id, action string, bo
 			f.problem(w, http.StatusConflict, protov2.ProblemTransitionConflict)
 			return
 		}
-		writeJSON(w, http.StatusOK, protov2.Command{ID: id, Status: state})
+		writeJSON(w, http.StatusOK, f.commandLocked(id, state))
 		return
 	}
 	if !contains(from, state) {
 		f.problemState(w, http.StatusConflict, protov2.ProblemInvalidTransition, state)
 		return
+	}
+	if action == protov2.CompleteAction || action == protov2.FailAction {
+		if n, err := strconv.Atoi(strings.TrimSpace(leaseHdr)); err == nil && n >= 0 && n != f.cmdEpoch[id] {
+			f.problemState(w, http.StatusConflict, protov2.ProblemInvalidTransition, state)
+			return
+		}
+	}
+	if action == protov2.ClaimAction {
+		f.cmdEpoch[id]++
 	}
 	f.commands[id] = target
 	switch action {
@@ -246,7 +258,17 @@ func (f *FakePlatform) transitionV2(w http.ResponseWriter, id, action string, bo
 	case protov2.FailAction:
 		f.cmdErrors[id] = req.ErrorMessage
 	}
-	writeJSON(w, http.StatusOK, protov2.Command{ID: id, Status: target})
+	writeJSON(w, http.StatusOK, f.commandLocked(id, target))
+}
+
+// commandLocked is the answer of a transition: the command with its lease.
+func (f *FakePlatform) commandLocked(id, state string) protov2.Command {
+	out := protov2.Command{ID: id, Status: state, LeaseEpoch: f.cmdEpoch[id]}
+	if state == "acknowledged" || state == "running" {
+		exp := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)
+		out.LeaseExpiresAt = &exp
+	}
+	return out
 }
 
 func sameJSON(a, b json.RawMessage) bool {

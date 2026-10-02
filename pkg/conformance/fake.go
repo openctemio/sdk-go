@@ -107,6 +107,9 @@ type FakePlatform struct {
 	cmdErrors map[string]string
 	cmdResult map[string]json.RawMessage
 	cmdQueue  []string // pending commands in poll order
+	// cmdEpoch is each command's lease epoch: its number of claims (api
+	// RFC-035 D6).
+	cmdEpoch  map[string]int
 	outbox    []json.RawMessage
 	beats     []json.RawMessage
 	keys      int
@@ -177,6 +180,7 @@ func NewFakePlatform(v2 bool) *FakePlatform {
 		commands:  map[string]string{},
 		cmdErrors: map[string]string{},
 		cmdResult: map[string]json.RawMessage{},
+		cmdEpoch:  map[string]int{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	return f
@@ -229,6 +233,23 @@ func (f *FakePlatform) QueueCommand(id string) {
 	defer f.mu.Unlock()
 	f.commands[id] = "pending"
 	f.cmdQueue = append(f.cmdQueue, id)
+}
+
+// ReclaimCommand simulates a lease loss (api RFC-035 D6): the command was
+// re-queued and claimed again, so its lease epoch moves on while its state
+// stays. A complete or fail that echoes the old epoch is refused with
+// invalid-transition, as the platform answers it.
+func (f *FakePlatform) ReclaimCommand(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cmdEpoch[id]++
+}
+
+// LeaseEpoch returns the command's lease epoch (0 before its first claim).
+func (f *FakePlatform) LeaseEpoch(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cmdEpoch[id]
 }
 
 // CommandResult returns the result a completed command stored.
