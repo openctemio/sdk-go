@@ -365,3 +365,52 @@ func TestHeartbeat_WorkBlocks(t *testing.T) {
 		})
 	}
 }
+
+// With the outbox (the daemon default) a command's complete reaches the
+// platform BEFORE the slot it held is reused: the platform counts the
+// command as held until then, so an earlier poll was refused (no free
+// capacity) or over-filled the sensor (api RFC-030 E2E finding F1).
+func TestSlots_CompleteBeforeNextPollWithOutbox(t *testing.T) {
+	f := newControlFake(t)
+	const total = 4
+	for i := 1; i <= total; i++ {
+		f.QueueCommand(cmdID(i))
+	}
+	c := client.New(&client.Config{BaseURL: f.URL(), APIKey: f.APIKey, MaxRetries: 1})
+	if err := c.EnableOutbox(client.OutboxConfig{Dir: t.TempDir(), LegacyRetryQueueDir: "-"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	exec := newBlockingExecutor()
+	close(exec.release)
+	p := core.NewCommandPoller(c, exec, &core.CommandPollerConfig{PollInterval: time.Hour, MaxConcurrent: 1})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = p.Start(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	deadline := time.Now().Add(10 * time.Second)
+	for states(f, total)["completed"] != total {
+		if time.Now().After(deadline) {
+			t.Fatalf("not all completed: %v", states(f, total))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Request log: every claim after the first must follow the complete of
+	// the command before it (1 slot: never two held at once).
+	held := 0
+	for _, r := range f.Requests() {
+		if r.Method != http.MethodPost {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(r.Path, "/"+protov2.ClaimAction):
+			held++
+			if held > 1 {
+				t.Fatalf("claimed %s while another command was still held (complete not yet sent)", r.Path)
+			}
+		case strings.HasSuffix(r.Path, "/"+protov2.CompleteAction), strings.HasSuffix(r.Path, "/"+protov2.FailAction):
+			held--
+		}
+	}
+}
