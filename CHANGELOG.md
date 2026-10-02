@@ -63,15 +63,32 @@ know it ignore it.
     `KeyRenewConfig.OnRotated` that saves each renewed key atomically, 0600
     (directory 0700), with its expiry, whether it never expires
     (`SensorCredentials.NeverExpires`) and the fingerprint of the
-    configured key (`SensorCredentials.ConfiguredKeySHA256`, never the key
-    itself).
+    configured key (`SensorCredentials.ConfiguredKeyFingerprint`, a salted
+    PBKDF2-SHA256 fingerprint, never the key itself).
+  - `KeyFingerprint(key)` / `KeyFingerprintMatches(fp, key)`: that
+    fingerprint (`pbkdf2-sha256$<iterations>$<salt>$<hash>`) and its
+    constant-time check.
   - `CheckStatePersistence(dir)` and `DecideKeyAutoRenew(setting, p)`:
     renew automatically only when the state survives the container being
     recreated (outside a container, always; inside, only on a mounted
     volume that is not a tmpfs), unless the setting forces it on or off.
 
+- **`sensorkit` keeps the renewed key in the state directory** (api RFC-032
+  Phase 0), through the `pkg/platform` functions above:
+  `Options.StateDir` / `SENSOR_STATE_DIR` default to
+  `/var/lib/openctem/state` when writable (else `~/.openctem`) and hold the
+  renewed key and the tool cost history; the key is chosen with
+  `ChooseAPIKey` on every start (renewal on or not), saved with
+  `RotatedKeySaver`, and a `~/.openctem` file is moved in. Key renewal is
+  on when the state directory persists, off otherwise;
+  `Options.KeyAutoRenew` / `NoKeyAutoRenew` or `PLATFORM_KEY_AUTORENEW=true|false`
+  force it. The kit's heartbeats carry `instance_id`.
+
 ### Changed
 
+- `sensorkit.ResolveStateDir(explicit)` resolves the state directory
+  (`platform.ResolveStateDir`) instead of using the outbox directory's
+  parent; the tool cost history moves with it.
 - `platform.Bootstrapper` and `platform.EnsureRegistered` document that no
   OpenCTEM API serves `POST /api/v1/platform/register` (bootstrap tokens
   were never built; enrollment tokens replace them in api RFC-032 Phase 2).

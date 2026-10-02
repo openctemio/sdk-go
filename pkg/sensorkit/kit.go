@@ -92,15 +92,23 @@ type Options struct {
 	// OutboxOverrides beat those. On by default.
 	Outbox          OutboxSettings
 	OutboxOverrides OutboxOverrides
-	// StateDir keeps the sensor's local state (SENSOR_STATE_DIR; default the
-	// outbox directory's parent, else ~/.openctem).
+	// StateDir keeps the sensor's local state: the API key it renews and the
+	// tool cost history (SENSOR_STATE_DIR; default /var/lib/openctem/state
+	// when writable, else ~/.openctem; platform.ResolveStateDir). Mount a
+	// persistent volume there.
 	StateDir string
 
-	// KeyAutoRenew renews the API key before it expires and when the
-	// platform asks (PLATFORM_KEY_AUTORENEW=true). The renewed key is kept in
-	// CredentialsFile (default ~/.openctem/sensor-credentials.json) and used
-	// by the next start.
+	// Key auto-renewal (api RFC-032 Phase 0): the API key is renewed before
+	// it expires and when the platform asks, kept in CredentialsFile
+	// (default sensor-credentials.json in StateDir; one an earlier version
+	// kept in ~/.openctem is moved there) and preferred over the configured
+	// key on the next start, unless the configured key changed since.
+	// KeyAutoRenew forces renewal on, NoKeyAutoRenew forces it off; with
+	// neither, PLATFORM_KEY_AUTORENEW=true|false decides, and unset it is on
+	// only when StateDir survives the sensor being recreated (outside a
+	// container always; inside, on a mounted, non-tmpfs volume).
 	KeyAutoRenew    bool
+	NoKeyAutoRenew  bool
 	CredentialsFile string
 
 	// Content is the sensor's scanner content, when it manages any (see
@@ -172,9 +180,7 @@ type settings struct {
 	allow                                    []string // nil: no allowlist
 	outbox                                   OutboxPlan
 	stateDir                                 string
-	keyAutoRenew                             bool
-	credentialsFile                          string
-	keyExpiresAt                             *time.Time
+	key                                      startKey
 }
 
 // scannerEntry is an added scanner.
@@ -257,22 +263,27 @@ func New(opts Options) (*Kit, error) {
 		httpsec.SetAPIRootCAs(pool)
 	}
 
-	// Key auto-renewal: a key renewed by an earlier run is in the
-	// credentials file (the configured one was revoked by that renewal).
-	if !opts.Standalone && (opts.KeyAutoRenew || os.Getenv(EnvKeyAutoRenew) == "true") {
-		rk, err := loadRenewedKey(opts.CredentialsFile, s.sensorID)
+	s.stateDir = ResolveStateDir(opts.StateDir)
+
+	// The API key: a key renewed by an earlier run is in the state
+	// directory (the renewal retired the configured one), whether or not
+	// this run renews.
+	if !opts.Standalone {
+		renewSetting := os.Getenv(EnvKeyAutoRenew)
+		switch {
+		case opts.KeyAutoRenew:
+			renewSetting = "true"
+		case opts.NoKeyAutoRenew:
+			renewSetting = "false"
+		}
+		sk, err := resolveStartKey(opts.CredentialsFile, s.stateDir, s.apiKey, s.sensorID, renewSetting)
 		if err != nil {
 			return nil, fmt.Errorf("credentials file: %w", err)
 		}
-		if rk.key != "" && rk.key != s.apiKey {
-			_, _ = fmt.Fprintf(k.errw, "Using the renewed API key from %s\n", rk.file)
-			s.apiKey = rk.key
+		if sk.fromStateFile {
+			_, _ = fmt.Fprintf(k.errw, "Using the renewed API key from %s\n", sk.file)
 		}
-		s.keyAutoRenew, s.credentialsFile, s.keyExpiresAt = true, rk.file, rk.expiresAt
-	}
-	s.stateDir = opts.StateDir
-	if s.stateDir == "" {
-		s.stateDir = ResolveStateDir(s.outbox.Config.Dir)
+		s.apiKey, s.key = sk.key, sk
 	}
 
 	if !opts.Standalone && s.apiURL != "" && s.apiKey != "" {
@@ -517,14 +528,16 @@ func (k *Kit) Run(ctx context.Context) error {
 	// API-key auto-renewal: on schedule, and at once when the platform's
 	// heartbeat says rotate_key.
 	var renewal *platform.KeyRenewManager
-	if k.s.keyAutoRenew && k.client != nil {
+	if k.s.key.autoRenew && k.client != nil {
 		m, err := startKeyRenewal(ctx, &k.s, k.client, out)
 		if err != nil {
 			_, _ = fmt.Fprintf(errw, "Warning: key auto-renew failed to start: %v\n", err)
 		} else {
 			renewal = m
-			_, _ = fmt.Fprintf(out, "  Key auto-renew: enabled (credentials: %s)\n", k.s.credentialsFile)
+			_, _ = fmt.Fprintf(out, "  Key auto-renew: enabled, %s (credentials: %s)\n", k.s.key.why, k.s.key.file)
 		}
+	} else if k.client != nil && k.s.key.why != "" {
+		_, _ = fmt.Fprintf(out, "  Key auto-renew: %s\n", k.s.key.why)
 	}
 	defer func() {
 		if renewal != nil {

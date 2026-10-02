@@ -131,8 +131,8 @@ func TestCheckCredentials(t *testing.T) {
 
 func TestResolveStateDir(t *testing.T) {
 	t.Setenv(EnvStateDir, "")
-	if got := ResolveStateDir("/var/lib/openctem/outbox"); got != "/var/lib/openctem" {
-		t.Fatalf("from outbox: %q", got)
+	if got := ResolveStateDir("/explicit/state"); got != "/explicit/state" {
+		t.Fatalf("explicit: %q", got)
 	}
 	t.Setenv(EnvStateDir, "/data/state")
 	if got := ResolveStateDir(""); got != "/data/state" {
