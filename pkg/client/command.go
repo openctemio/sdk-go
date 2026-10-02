@@ -66,9 +66,22 @@ func (c *Client) PollCommands(ctx context.Context, limit int) ([]Command, error)
 	return commands, nil
 }
 
+// DefaultCommandPollLimit is how many commands GetCommands asks for.
+const DefaultCommandPollLimit = 10
+
 // GetCommands retrieves pending commands from the server (implements core.CommandClient).
 func (c *Client) GetCommands(ctx context.Context) (*core.GetCommandsResponse, error) {
-	commands, err := c.PollCommands(ctx, 10)
+	return c.GetCommandsLimit(ctx, DefaultCommandPollLimit)
+}
+
+// GetCommandsLimit retrieves at most limit pending commands (implements
+// core.LimitedCommandClient). The CommandPoller passes its free slots, so the
+// platform keeps the rest for sensors that can run them now. limit < 1 is 1.
+func (c *Client) GetCommandsLimit(ctx context.Context, limit int) (*core.GetCommandsResponse, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	commands, err := c.PollCommands(ctx, limit)
 	if err != nil {
 		return nil, err
 	}

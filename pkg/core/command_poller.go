@@ -28,6 +28,24 @@ type CommandClient interface {
 	ReportCommandProgress(ctx context.Context, cmdID string, progress int, message string) error
 }
 
+// LimitedCommandClient is a CommandClient that can poll for at most limit
+// commands. The CommandPoller uses it, when the client implements it, to ask
+// for no more commands than it has free slots (api RFC-030 §5.9), so the
+// platform keeps the rest for sensors that can run them now. *client.Client
+// implements it.
+type LimitedCommandClient interface {
+	GetCommandsLimit(ctx context.Context, limit int) (*GetCommandsResponse, error)
+}
+
+// LoadReporter reports how busy a sensor is: the commands it runs now and
+// how many it runs at once. A BaseSensor with a LoadReporter
+// (BaseSensor.SetLoadReporter) puts both on every heartbeat. *CommandPoller
+// implements it.
+type LoadReporter interface {
+	ActiveJobs() int
+	MaxJobs() int
+}
+
 // Command represents a server command.
 type Command struct {
 	ID        string          `json:"id"`
@@ -187,8 +205,18 @@ type CommandPoller struct {
 	activeCmds sync.WaitGroup
 	// sem bounds the number of commands executing concurrently to
 	// maxConcurrent. Without it a large command batch spawned an
-	// unbounded number of goroutines/scans.
+	// unbounded number of goroutines/scans. A slot is taken BEFORE a command
+	// is claimed (acknowledged) and released when it ends, so the sensor
+	// never holds a claimed command it is not running: such a command was
+	// re-queued by the platform's acknowledged-command reaper while this
+	// sensor still held it, and then ran twice (api RFC-030 B6).
 	sem chan struct{}
+
+	// slotFreed is signaled when a command ends while the platform may
+	// still have work for this sensor (backlog), so the poller claims it
+	// without waiting for the next tick or doorbell ring.
+	slotFreed chan struct{}
+	backlog   atomic.Bool
 
 	// verbose is atomic: SetVerbose may be called concurrently with the
 	// poll/execute goroutines that read it.
@@ -263,6 +291,7 @@ func NewCommandPoller(client CommandClient, executor CommandExecutor, cfg *Comma
 		allowedTypes:  allowedTypes,
 		stopCh:        make(chan struct{}),
 		sem:           make(chan struct{}, maxConcurrent),
+		slotFreed:     make(chan struct{}, 1),
 		safetyPoll:    cfg.DoorbellSafetyPoll,
 		ownGate:       NewAuthGate(nil),
 	}
@@ -318,7 +347,12 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 			p.waitForActiveCommands()
 			return nil
 		case <-wake:
-			// The platform reported claimable work: poll now.
+			// The platform reported claimable work: poll now (a no-op
+			// without a free slot; the next slot that frees polls).
+			p.pollAndExecute(ctx)
+			lastPoll = time.Now()
+		case <-p.slotFreed:
+			// A command ended and the last poll suggested more work.
 			p.pollAndExecute(ctx)
 			lastPoll = time.Now()
 		case <-ticker.C:
@@ -387,6 +421,32 @@ func (p *CommandPoller) Stop() {
 	close(p.stopCh)
 }
 
+// ActiveJobs is the number of commands this poller holds now (claimed and
+// running). It implements LoadReporter.
+func (p *CommandPoller) ActiveJobs() int {
+	return len(p.sem)
+}
+
+// MaxJobs is how many commands this poller runs at once
+// (CommandPollerConfig.MaxConcurrent). It implements LoadReporter.
+func (p *CommandPoller) MaxJobs() int {
+	return p.maxConcurrent
+}
+
+// freeSlots is the number of commands the poller can start now.
+func (p *CommandPoller) freeSlots() int {
+	return cap(p.sem) - len(p.sem)
+}
+
+// getCommands polls for at most limit commands when the client supports a
+// limit, else for whatever the client returns.
+func (p *CommandPoller) getCommands(ctx context.Context, limit int) (*GetCommandsResponse, error) {
+	if lc, ok := p.client.(LimitedCommandClient); ok {
+		return lc.GetCommandsLimit(ctx, limit)
+	}
+	return p.client.GetCommands(ctx)
+}
+
 // waitForActiveCommands waits for all active commands to complete.
 func (p *CommandPoller) waitForActiveCommands() {
 	if p.verbose.Load() {
@@ -416,10 +476,22 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 	if gate == nil && time.Now().Before(p.ownNext) {
 		return
 	}
-	if p.verbose.Load() && p.doorbell != nil {
-		fmt.Printf("[command-poller] %s Polling for commands\n", time.Now().Format("15:04:05.000"))
+	// No free slot: claim nothing. Claiming now would only park the command
+	// here, acknowledged and not running, until the platform's reaper hands
+	// it to another sensor while this one still holds it. Poll again when a
+	// slot frees.
+	free := p.freeSlots()
+	if free <= 0 {
+		p.backlog.Store(true)
+		if p.verbose.Load() {
+			fmt.Printf("[command-poller] Not polling: all %d slots busy\n", p.maxConcurrent)
+		}
+		return
 	}
-	resp, err := p.client.GetCommands(ctx)
+	if p.verbose.Load() && p.doorbell != nil {
+		fmt.Printf("[command-poller] %s Polling for commands (%d free slots)\n", time.Now().Format("15:04:05.000"), free)
+	}
+	resp, err := p.getCommands(ctx, free)
 	if gate != nil {
 		gate.MarkRejected(err, p.keyHint())
 	} else if backoff := p.ownGate.Observe(err, p.keyHint()); backoff > 0 {
@@ -434,6 +506,9 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		return
 	}
 
+	// A full page means the platform may hold more for us: poll again as
+	// soon as a slot frees.
+	p.backlog.Store(len(resp.Commands) >= free)
 	if len(resp.Commands) == 0 {
 		return
 	}
@@ -464,23 +539,29 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			continue
 		}
 
-		// Acknowledge receipt
-		if err := p.client.AcknowledgeCommand(ctx, cmd.ID); err != nil {
+		// Take a slot BEFORE claiming, so at most maxConcurrent commands
+		// are claimed or running (and at most that many goroutines exist).
+		// Only this loop takes slots, so the free slots counted above are
+		// still free; a client that ignores the limit and returns more is
+		// answered by leaving the extra commands pending (unclaimed) for
+		// later or for another sensor.
+		select {
+		case p.sem <- struct{}{}:
+		default:
+			p.backlog.Store(true)
 			if p.verbose.Load() {
-				fmt.Printf("[command-poller] Failed to acknowledge command %s: %v\n", cmd.ID, err)
+				fmt.Printf("[command-poller] No free slot: leaving command %s pending\n", cmd.ID)
 			}
 			continue
 		}
 
-		// Acquire a concurrency slot before spawning so at most
-		// maxConcurrent commands execute (and at most that many
-		// goroutines exist) at once. Respect cancellation/stop while waiting.
-		select {
-		case p.sem <- struct{}{}:
-		case <-ctx.Done():
-			return
-		case <-p.stopCh:
-			return
+		// Claim (acknowledge) it now that a slot is held.
+		if err := p.client.AcknowledgeCommand(ctx, cmd.ID); err != nil {
+			<-p.sem
+			if p.verbose.Load() {
+				fmt.Printf("[command-poller] Failed to acknowledge command %s: %v\n", cmd.ID, err)
+			}
+			continue
 		}
 
 		// Execute asynchronously
@@ -493,6 +574,12 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 	defer func() {
 		<-p.sem
+		if p.backlog.Load() {
+			select {
+			case p.slotFreed <- struct{}{}:
+			default:
+			}
+		}
 		p.activeCmds.Done()
 	}()
 
@@ -510,10 +597,17 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 	// machine is pending -> acknowledged -> running -> completed, and it rejects
 	// a completion from any state other than running ("command must be running to
 	// complete"). Without this call the command executes but its result is never
-	// recorded. Best-effort: a failed start is logged, not fatal — the executor
-	// still runs and the completion attempt (and its error, if any) is surfaced.
-	if err := p.client.StartCommand(ctx, cmd.ID); err != nil && p.verbose.Load() {
-		fmt.Printf("[command-poller] Failed to mark command %s running: %v\n", cmd.ID, err)
+	// recorded.
+	//
+	// A failed start means the command is not this sensor's to run: the
+	// platform re-queued it (the acknowledged-command reaper), handed it to
+	// another sensor, canceled it, or could not record the start. Running it
+	// anyway risks scanning the customer's assets twice (api RFC-030 B6),
+	// so the command is not executed; if it is still pending the platform
+	// re-queues it.
+	if err := p.client.StartCommand(ctx, cmd.ID); err != nil {
+		fmt.Printf("[command-poller] Not running command %s: the platform did not accept its start: %v\n", cmd.ID, err)
+		return
 	}
 
 	// Run the executor with panic recovery — a panic in a tool or parser would
