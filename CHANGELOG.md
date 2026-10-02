@@ -90,7 +90,6 @@ All notable changes to `github.com/openctemio/sdk-go`.
   hard-codes. When local DNS cannot resolve such a name, it may still go
   through a proxy, which resolves it. The KEV and EPSS enrichers register
   their default hosts.
-||||||| parent of 8fcd393 (feat(sensor): control plane under load (api RFC-035 Phase 1))
 
 - **Platform policy and slim heartbeats** (api RFC-033 §6.12, owner decisions
   O2 and O3).
@@ -417,7 +416,6 @@ sends its own heartbeats sets the same fields on `core.SensorStatus`.
   `core.SensorStatus` and `client.HeartbeatRequest`.
 - `pkg/conformance`: `FakePlatform.Heartbeats()` returns the heartbeat
   bodies received, and the suite checks the report on v1 and v2.
-<<<<<<< Updated upstream
 - **Scanner content versions** (api RFC-031). `core.ToolInfo.Content` lists
   the content a tool scans with (`core.ContentInfo`: name, version,
   `updated_at`, `fetched_at`, source, digest, managed, last refresh error):
@@ -443,8 +441,6 @@ sends its own heartbeats sets the same fields on `core.SensorStatus`.
   not applied to a scan with platform-provided templates), for scans that
   run a managed template set; `nuclei.ValidateOptions.TemplatesDir` makes a
   re-verification look its template up in that set.
-||||||| Stash base
-=======
 - **Load on the heartbeat** (api RFC-030 Phase 0). `core.LoadReporter`
   (implemented by `*core.CommandPoller`) and
   `(*core.BaseSensor).SetLoadReporter`: every heartbeat carries the
@@ -517,7 +513,6 @@ sends its own heartbeats sets the same fields on `core.SensorStatus`.
   command's `start` (409: re-queued, reassigned or canceled; or any other
   error) the poller releases the slot and does not run it. Before, a
   failed start was only logged and the scan ran anyway.
->>>>>>> Stashed changes
 
 ## v0.9.0 — 2026-10-02
 
