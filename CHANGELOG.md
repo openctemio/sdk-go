@@ -4,6 +4,8 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+## v0.13.0 — 2026-10-02
+
 ### Upgrade notes
 
 Only additions. A heartbeat's `max_concurrent_jobs` is now only the
