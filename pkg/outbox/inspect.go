@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -125,3 +126,49 @@ func inspectCreated(seal *sealer, statePath, id string) (time.Time, bool) {
 	}
 	return sf.Meta.CreatedAt, true
 }
+
+// CheckKey reports whether the outbox in dir can be opened with keyFile
+// (default <dir>/outbox.key) without losing items. It returns nil when the
+// key file exists or when the outbox holds no sealed items (a new key is
+// then harmless), and an error wrapping ErrKeyMissing when the key file is
+// missing while sealed items exist: a new key could not read them, so they
+// would all be quarantined. It never creates or changes anything.
+func CheckKey(dir, keyFile string) error {
+	if keyFile == "" {
+		keyFile = DefaultKeyFile(dir)
+	}
+	if _, err := os.Stat(keyFile); err == nil || !errors.Is(err, fs.ErrNotExist) {
+		// Present, or unreadable for another reason: opening the key
+		// reports that, and never replaces an existing file.
+		return nil
+	}
+	n := SealedItems(dir)
+	if n == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s does not exist and %s holds %d sealed item(s) that only the original key can read. "+
+		"Restore the key file (or mount the secret that holds it) and start again; "+
+		"to give up those results instead, move %s and %s aside so a new key is created",
+		ErrKeyMissing, keyFile, dir, n, filepath.Join(dir, dirPending), filepath.Join(dir, dirDead))
+}
+
+// SealedItems counts the items (pending and dead letters) in the outbox in
+// dir; each is sealed with the outbox key. A missing directory counts 0.
+func SealedItems(dir string) int {
+	n := 0
+	for _, sub := range []string{dirPending, dirDead} {
+		names, err := os.ReadDir(filepath.Join(dir, sub))
+		if err != nil {
+			continue
+		}
+		for _, e := range names {
+			if id, ok := strings.CutSuffix(e.Name(), itemExt); ok && validID(id) {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// DefaultKeyFile is the key file used when Config.KeyFile is empty.
+func DefaultKeyFile(dir string) string { return filepath.Join(dir, keyName) }

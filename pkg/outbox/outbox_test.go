@@ -509,18 +509,109 @@ func TestTooLargeItemIsRefused(t *testing.T) {
 	}
 }
 
-func TestLostKeyQuarantinesInsteadOfCrashing(t *testing.T) {
+func TestNewOutboxCreatesKey(t *testing.T) {
+	dir := t.TempDir()
+	_ = openTest(t, dir, nil)
+	if _, err := os.Stat(filepath.Join(dir, keyName)); err != nil {
+		t.Fatalf("key not created on an empty outbox: %v", err)
+	}
+}
+
+// A missing key with sealed items left behind (a secret that failed to
+// mount, a key file deleted by hand) must stop Open: creating a new key
+// would make every one of those items unreadable.
+func TestMissingKeyWithSealedItemsRefusesToOpen(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		keyFile func(dir string) string
+		dead    bool
+	}{
+		{"default key, pending item", func(string) string { return "" }, false},
+		{"default key, dead letter", func(string) string { return "" }, true},
+		{"external key file", func(string) string { return filepath.Join(t.TempDir(), "secret", "outbox.key") }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfgKey := tc.keyFile(dir)
+			o := openTest(t, dir, func(c *Config) { c.KeyFile = cfgKey })
+			tk, err := o.Enqueue(Meta{Kind: KindReport}, []byte("x"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.dead {
+				r := &recorder{errs: func(*Delivery) error { return Permanent(400, "refused", nil, nil) }}
+				stop := runFor(t, o, r)
+				waitFor(t, func() bool { return o.Stats().DeadLetterCount == 1 })
+				stop()
+			}
+			_ = o.Close()
+			keyFile := cfgKey
+			if keyFile == "" {
+				keyFile = DefaultKeyFile(dir)
+			}
+			if err := os.Remove(keyFile); err != nil {
+				t.Fatal(err)
+			}
+			before := listTree(t, dir)
+
+			_, err = Open(Config{Dir: dir, KeyFile: cfgKey, Logf: quietLog(t)})
+			if !errors.Is(err, ErrKeyMissing) {
+				t.Fatalf("Open err = %v, want ErrKeyMissing", err)
+			}
+			for _, want := range []string{keyFile, "1 sealed item", "Restore the key file"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q lacks %q", err, want)
+				}
+			}
+			if _, serr := os.Stat(keyFile); !errors.Is(serr, os.ErrNotExist) {
+				t.Fatalf("a key file was written: %v", serr)
+			}
+			if after := listTree(t, dir); after != before {
+				t.Fatalf("outbox changed:\nbefore %s\nafter  %s", before, after)
+			}
+			if CheckKey(dir, keyFile) == nil {
+				t.Fatal("CheckKey accepted the missing key")
+			}
+			if tk.Meta.ID == "" {
+				t.Fatal("no item id")
+			}
+		})
+	}
+}
+
+// Moving the sealed items aside, as the error says, lets the outbox start
+// again with a new key.
+func TestMissingKeyAfterItemsMovedAsideOpens(t *testing.T) {
 	dir := t.TempDir()
 	o := openTest(t, dir, nil)
 	_, _ = o.Enqueue(Meta{Kind: KindReport}, []byte("x"))
 	_ = o.Close()
-	if err := os.Remove(filepath.Join(dir, keyName)); err != nil {
+	_ = os.Remove(DefaultKeyFile(dir))
+	if err := os.Rename(filepath.Join(dir, dirPending), filepath.Join(t.TempDir(), "aside")); err != nil {
 		t.Fatal(err)
 	}
 	o2 := openTest(t, dir, nil)
-	if st := o2.Stats(); st.PendingCount != 0 || st.Corrupt == 0 {
+	if st := o2.Stats(); st.PendingCount != 0 {
 		t.Fatalf("stats = %+v", st)
 	}
+}
+
+func listTree(t *testing.T, dir string) string {
+	t.Helper()
+	var b strings.Builder
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.Name() == lockName {
+			return nil
+		}
+		fi, _ := d.Info()
+		size := int64(0)
+		if fi != nil && !d.IsDir() {
+			size = fi.Size()
+		}
+		fmt.Fprintf(&b, "%s:%d ", strings.TrimPrefix(p, dir), size)
+		return nil
+	})
+	return b.String()
 }
 
 func TestSaveProgressSurvivesRestart(t *testing.T) {

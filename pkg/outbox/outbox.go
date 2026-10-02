@@ -90,6 +90,10 @@ var (
 	ErrClosed = errors.New("outbox: closed")
 	// ErrTooLarge: one item is larger than the outbox may ever hold.
 	ErrTooLarge = errors.New("outbox: item larger than the outbox byte cap")
+	// ErrKeyMissing: the key file is missing while the outbox holds items
+	// sealed with a key. Open refuses rather than create a new key, which
+	// would make every one of those items unreadable (see CheckKey).
+	ErrKeyMissing = errors.New("outbox: encryption key file is missing but sealed items exist")
 )
 
 // Kind is what an item carries.
@@ -354,6 +358,9 @@ func Open(cfg Config) (*Outbox, error) {
 		for _, n := range names {
 			_ = os.Remove(filepath.Join(o.tmpDir, n.Name()))
 		}
+	}
+	if err := CheckKey(c.Dir, c.KeyFile); err != nil {
+		return nil, err
 	}
 	key, created, err := loadOrCreateKey(c.KeyFile, o.tmpDir)
 	if err != nil {
