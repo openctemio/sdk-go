@@ -6,6 +6,8 @@ package conformance
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"reflect"
@@ -45,6 +47,14 @@ func (f *FakePlatform) control(w http.ResponseWriter, r *http.Request, rest stri
 			{RuleID: "r1", ToolName: "betterleaks", PathPattern: "testdata/**"}}})
 	case (rest == protov2.FingerprintsCheckPath || rest == protov2.BaselineDiffPath) && r.Method == http.MethodPost:
 		f.fingerprintsV2(w, rest, body)
+	case rest == protov2.ManifestPath && r.Method == http.MethodPut:
+		f.mu.Lock()
+		on := f.Manifest
+		f.mu.Unlock()
+		if !on {
+			return false
+		}
+		f.manifestV2(w, body)
 	case rest == protov2.KeysPath && r.Method == http.MethodPost:
 		f.mu.Lock()
 		f.keys++
@@ -64,6 +74,11 @@ func (f *FakePlatform) heartbeatV2(w http.ResponseWriter, body []byte) {
 	f.mu.Lock()
 	f.recordHeartbeat(body)
 	paused := f.Paused
+	var hb struct {
+		ManifestDigest string `json:"manifest_digest"`
+	}
+	_ = json.Unmarshal(body, &hb)
+	askManifest := f.Manifest && hb.ManifestDigest != "" && hb.ManifestDigest != f.digest
 	pending := 0
 	for _, id := range f.cmdQueue {
 		if f.commands[id] == "pending" {
@@ -77,6 +92,43 @@ func (f *FakePlatform) heartbeatV2(w http.ResponseWriter, body []byte) {
 		resp.Status, resp.Actions, resp.PendingJobs = protov2.HeartbeatStatusPaused, []string{"pause"}, 0
 	} else if pending > 0 {
 		resp.NextHeartbeatSeconds = 5
+	}
+	if askManifest && !paused {
+		resp.Actions = append(resp.Actions, "send_manifest")
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// manifestV2 stores a manifest (api RFC-033): its digest over the canonical
+// JSON, and an answer that accepts every tool.
+func (f *FakePlatform) manifestV2(w http.ResponseWriter, body []byte) {
+	var m struct {
+		Schema int `json:"schema"`
+		Tools  []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if json.Unmarshal(body, &m) != nil || m.Schema != 1 {
+		f.problem(w, http.StatusUnprocessableEntity, protov2.ProblemManifestInvalid)
+		return
+	}
+	var v any
+	_ = json.Unmarshal(body, &v)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(v)
+	sum := sha256.Sum256(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+	f.mu.Lock()
+	changed := digest != f.digest
+	f.digest = digest
+	f.manifests = append(f.manifests, append(json.RawMessage(nil), body...))
+	f.mu.Unlock()
+	resp := protov2.ManifestResponse{ManifestDigest: digest, Changed: changed, Ignored: []protov2.ManifestIgnored{}}
+	resp.Accepted.Capabilities = []string{}
+	for _, t := range m.Tools {
+		resp.Accepted.Tools = append(resp.Accepted.Tools, t.Name)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

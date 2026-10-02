@@ -19,6 +19,8 @@ const (
 	FingerprintsCheckPath = "/fingerprints/check"
 	BaselineDiffPath      = "/fingerprints/baseline-diff"
 	KeysPath              = "/keys"
+	// ManifestPath registers the sensor manifest (api RFC-033).
+	ManifestPath = "/manifest"
 )
 
 // Command transitions (POST CommandsPath/{command_id}/<action>).
@@ -57,7 +59,33 @@ const (
 	FeatureSuppressions = "suppressions"
 	FeatureFingerprints = "fingerprints"
 	FeatureKeys         = "keys"
+	// FeatureManifest: PUT /manifest and the heartbeat's manifest_digest
+	// (api RFC-033).
+	FeatureManifest = "manifest"
 )
+
+// ManifestResponse answers PUT /manifest: the digest the platform stored
+// (echo it as the heartbeat's manifest_digest), whether it was new, and
+// what was accepted and ignored.
+type ManifestResponse struct {
+	ManifestDigest string            `json:"manifest_digest"`
+	Changed        bool              `json:"changed"`
+	Accepted       ManifestAccepted  `json:"accepted"`
+	Ignored        []ManifestIgnored `json:"ignored"`
+}
+
+// ManifestAccepted is what the platform kept of a manifest.
+type ManifestAccepted struct {
+	Tools        []string `json:"tools"`
+	Capabilities []string `json:"capabilities"`
+}
+
+// ManifestIgnored is one manifest item the platform dropped.
+type ManifestIgnored struct {
+	Path   string `json:"path"`
+	Value  string `json:"value,omitempty"`
+	Reason string `json:"reason"`
+}
 
 // Control-plane limit defaults (api RFC-029 §4.1, §4.6).
 const (
@@ -83,6 +111,12 @@ const (
 	ProblemRenewalRefused ProblemType = "renewal-refused"
 	// ProblemTooManyItems: more items than the limit (Problem.Limit).
 	ProblemTooManyItems ProblemType = "too-many-items"
+	// ProblemManifestInvalid: the manifest is not a JSON object with a
+	// schema member of the documented shape (api RFC-033).
+	ProblemManifestInvalid ProblemType = "manifest-invalid"
+	// ProblemManifestSchemaUnsupported: the platform does not read the
+	// manifest's schema version.
+	ProblemManifestSchemaUnsupported ProblemType = "manifest-schema-unsupported"
 )
 
 // ProblemInvalidRequest (ProblemTypeBase): a malformed request body, on the

@@ -4,6 +4,31 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Added
+
+- **Sensor manifest** (api RFC-033). A `BaseSensor` builds its manifest from
+  the capability report: build, platform, resources, the operator's ceiling,
+  the sensor-wide capabilities, and each tool's kind, version, capabilities
+  and content versions. On a platform that lists `manifest` on hello, the
+  sensor registers the manifest before its first heartbeat, again when its
+  own digest changes, and again when a heartbeat answer carries
+  `send_manifest`. Every heartbeat then sends `manifest_digest`, the digest
+  the platform returned.
+  - A platform without the feature changes nothing: heartbeats still carry
+    the full inventory, as before.
+  - A failed registration retries after a minute and never fails the
+    heartbeat.
+  - The ignored items the platform reports are logged.
+  - New API:
+    - `core.Manifest`, `core.BuildManifest`, `Manifest.Digest` (the
+      platform's canonical form, pinned by a test on both sides)
+    - `core.ManifestPusher`, `core.ManifestAck`, `core.ErrManifestUnsupported`,
+      `core.HeartbeatActionSendManifest`
+    - `client.(*Client).PutManifest`, `SensorStatus.ManifestDigest`
+    - `sensorproto/v2`: `ManifestPath`, `FeatureManifest`,
+      `ManifestResponse`, and the two manifest problem types
+  - `conformance.FakePlatform`: `SetManifest`, `Manifests`, `ForgetManifest`.
+
 ## v0.13.0 — 2026-10-02
 
 ### Upgrade notes
