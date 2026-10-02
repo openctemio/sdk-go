@@ -35,6 +35,11 @@ All notable changes to `github.com/openctemio/sdk-go`.
   - **Conformance fake.** New `SetManifestPolicy`; `GET /manifest` is now
     served.
 
+### Fixed
+
+- The doorbell logged `send_manifest` (api RFC-033) as an unknown heartbeat
+  action, although the BaseSensor acts on it.
+
 ## v0.14.0 — 2026-10-02
 
 ### Added

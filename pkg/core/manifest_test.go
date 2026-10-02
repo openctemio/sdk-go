@@ -409,3 +409,12 @@ func TestCommandToolGate_RereadsStalePolicy(t *testing.T) {
 		t.Fatalf("trivy: %v", err)
 	}
 }
+
+// send_manifest is a known action: the doorbell does not log it as unknown.
+func TestDoorbell_SendManifestIsKnown(t *testing.T) {
+	d, logs := newTestDoorbell(t, nil)
+	d.Handle(&HeartbeatHints{Present: true, Actions: []HeartbeatAction{HeartbeatActionSendManifest}})
+	if strings.Contains(logs.String(), "unknown heartbeat action") {
+		t.Fatalf("logged as unknown: %s", logs.String())
+	}
+}
