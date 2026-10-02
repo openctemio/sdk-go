@@ -51,6 +51,17 @@ All notable changes to `github.com/openctemio/sdk-go`.
   nuclei finding carrying a response body): the scanner then blocked on a
   full pipe until its timeout and the rest of its output was lost. Lines of
   any length are now delivered.
+- **The outbox no longer replaces a missing key while sealed items exist.**
+  When the key file was missing (a secret that failed to mount, a key
+  deleted by hand) `outbox.Open` created a new key, and every pending result
+  and dead letter, sealed with the old key, was quarantined: lost. `Open` now
+  refuses with `outbox.ErrKeyMissing`; the error names the key path and the
+  number of sealed items, and says how to recover (restore the key, or move
+  `pending/` and `dead/` aside to start fresh). An empty outbox still gets a
+  new key. The sensor exits with that message instead of starting. The
+  outbox status command (`sensorkit.OutboxCommand`) never creates a key: it
+  reports the same error, or an empty outbox. New: `outbox.ErrKeyMissing`,
+  `outbox.CheckKey`, `outbox.SealedItems`, `outbox.DefaultKeyFile`.
 
 ## v0.15.0 — 2026-10-02
 

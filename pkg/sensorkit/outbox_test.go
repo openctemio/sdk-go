@@ -2,10 +2,14 @@ package sensorkit
 
 import (
 	"bytes"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/outbox"
 )
 
 func TestResolveOutbox_Defaults(t *testing.T) {
@@ -98,14 +102,71 @@ func TestOutboxCommand(t *testing.T) {
 	if code := OutboxCommand(OutboxPlan{}, false, &out, &errw); code != ExitError || !strings.Contains(errw.String(), "the outbox is off") {
 		t.Fatalf("off: %d %q", code, errw.String())
 	}
+	// A fresh directory: reported empty, and no key is written.
 	dir := t.TempDir()
+	out.Reset()
+	if code := OutboxCommand(OutboxPlan{Enabled: true, Config: clientOutbox(dir)}, true, &out, &errw); code != 0 {
+		t.Fatalf("fresh: %d %s", code, errw.String())
+	}
+	if !strings.Contains(out.String(), "empty") {
+		t.Errorf("fresh output %q", out.String())
+	}
+	if _, err := os.Stat(outbox.DefaultKeyFile(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the status command wrote a key: %v", err)
+	}
+
+	// An outbox with its key: the full status.
+	ob, err := outbox.Open(outbox.Config{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ob.Enqueue(outbox.Meta{Kind: outbox.KindReport}, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	_ = ob.Close()
 	out.Reset()
 	if code := OutboxCommand(OutboxPlan{Enabled: true, Config: clientOutbox(dir)}, true, &out, &errw); code != 0 {
 		t.Fatalf("status: %d %s", code, errw.String())
 	}
-	for _, want := range []string{"Requeued 0 dead letter(s)", "Outbox " + dir, "pending:      0", "dead letters: 0"} {
+	for _, want := range []string{"Requeued 0 dead letter(s)", "Outbox " + dir, "pending:      1", "dead letters: 0"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output %q lacks %q", out.String(), want)
 		}
+	}
+}
+
+// The key is gone while a sealed item waits (a secret that failed to
+// mount): the status command says so and never writes a new key.
+func TestOutboxCommandMissingKey(t *testing.T) {
+	clearEnv(t)
+	dir := t.TempDir()
+	keyFile := filepath.Join(t.TempDir(), "outbox.key")
+	ob, err := outbox.Open(outbox.Config{Dir: dir, KeyFile: keyFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ob.Enqueue(outbox.Meta{Kind: outbox.KindReport}, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	_ = ob.Close()
+	if err := os.Remove(keyFile); err != nil {
+		t.Fatal(err)
+	}
+	var out, errw bytes.Buffer
+	cfg := clientOutbox(dir)
+	cfg.KeyFile = keyFile
+	if code := OutboxCommand(OutboxPlan{Enabled: true, Config: cfg}, false, &out, &errw); code != ExitError {
+		t.Fatalf("code = %d, out %q", code, out.String())
+	}
+	for _, want := range []string{keyFile, "1 sealed item", "Restore the key file"} {
+		if !strings.Contains(errw.String(), want) {
+			t.Errorf("error %q lacks %q", errw.String(), want)
+		}
+	}
+	if _, err := os.Stat(keyFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the status command wrote a key: %v", err)
+	}
+	if outbox.SealedItems(dir) != 1 {
+		t.Fatal("the sealed item was touched")
 	}
 }
