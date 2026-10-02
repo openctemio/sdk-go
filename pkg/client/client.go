@@ -25,6 +25,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/outbox"
+	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/retry"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
@@ -400,6 +401,13 @@ type HeartbeatRequest struct {
 	MaxConcurrentJobs int             `json:"max_concurrent_jobs,omitempty"`
 	OS                string          `json:"os,omitempty"`
 	Arch              string          `json:"arch,omitempty"`
+
+	// The sensor's work now (core.SensorStatus; api RFC-030): absent when
+	// not reported.
+	Resources       *resource.HostResources `json:"resources,omitempty"`
+	Capacity        *resource.Capacity      `json:"capacity,omitempty"`
+	Queue           *core.QueueStats        `json:"queue,omitempty"`
+	RunningCommands []string                `json:"running,omitzero"`
 }
 
 // MarshalJSON encodes the heartbeat. active_jobs is sent even when it is 0
@@ -625,6 +633,11 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		MaxConcurrentJobs: status.MaxConcurrentJobs,
 		OS:                status.OS,
 		Arch:              status.Arch,
+
+		Resources:       status.Resources,
+		Capacity:        status.Capacity,
+		Queue:           status.Queue,
+		RunningCommands: status.RunningCommands,
 	}
 	ob := c.Outbox()
 	if ob != nil {

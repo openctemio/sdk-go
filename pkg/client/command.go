@@ -189,6 +189,27 @@ func (c *Client) failCommand(ctx context.Context, cmdID string, errorMsg string,
 	return err
 }
 
+// ReleaseCommand hands a claimed command back to the platform, which
+// returns it to pending (unpinned) so any sensor can run it at once
+// (implements core.ReleasingCommandClient). On a platform without the
+// release transition (protocol v1, or a v2 platform from before it) the
+// command is failed with "released: <reason>" instead, so it does not wait
+// for a timeout.
+func (c *Client) ReleaseCommand(ctx context.Context, cmdID, reason string) error {
+	if len(reason) > protov2.MaxReleaseReasonLen {
+		reason = reason[:protov2.MaxReleaseReasonLen]
+	}
+	if useV2, _ := c.controlV2(ctx, protov2.FeatureCommands); useV2 {
+		err := c.transitionV2(ctx, cmdID, protov2.ReleaseAction, protov2.ReleaseRequest{Reason: reason}, c.maxRetries)
+		if err == nil || !isRouteMissing(err) {
+			return err
+		}
+	}
+	return c.failCommand(ctx, cmdID, "released: "+reason, c.maxRetries)
+}
+
+var _ core.ReleasingCommandClient = (*Client)(nil)
+
 // commandV2 applies a command transition on protocol v2 when the platform
 // offers commands there. done is false when the caller must use v1 (not
 // offered, or the route is missing).

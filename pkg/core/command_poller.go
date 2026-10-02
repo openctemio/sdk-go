@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/resource"
 )
 
 // CommandClient interface for command-related API operations.
@@ -234,6 +236,19 @@ type CommandPoller struct {
 	// when no heartbeat gate is shared with it.
 	ownGate *AuthGate
 	ownNext time.Time
+
+	// resources, when set, sizes the slots from the sensor's CPU, memory
+	// and learned tool costs (SetResourceManager); without it the slots
+	// are MaxConcurrent.
+	resources *resource.Manager
+	// queue holds the commands this sensor claimed and has not finished:
+	// per-host politeness, cancellation, the heartbeat's lease list.
+	queue *localQueue
+	// cmdBase is the parent of every command's context: the Start context
+	// without its cancellation, so stopping drains instead of killing.
+	cmdBase    context.Context
+	draining   atomic.Bool
+	drainGrace time.Duration
 }
 
 // CommandPollerConfig configures a CommandPoller.
@@ -245,6 +260,9 @@ type CommandPollerConfig struct {
 	// DoorbellSafetyPoll is how often the poller still polls on its own
 	// while the heartbeat doorbell is active. Default 5m.
 	DoorbellSafetyPoll time.Duration `yaml:"doorbell_safety_poll" json:"doorbell_safety_poll"`
+	// DrainGrace is how long a stopping poller lets running commands finish
+	// before it cancels them and releases them to the platform. Default 30s.
+	DrainGrace time.Duration `yaml:"drain_grace" json:"drain_grace"`
 }
 
 // DefaultCommandPollerConfig returns default config.
@@ -294,6 +312,12 @@ func NewCommandPoller(client CommandClient, executor CommandExecutor, cfg *Comma
 		slotFreed:     make(chan struct{}, 1),
 		safetyPoll:    cfg.DoorbellSafetyPoll,
 		ownGate:       NewAuthGate(nil),
+		queue:         newLocalQueue(),
+		cmdBase:       context.Background(),
+		drainGrace:    cfg.DrainGrace,
+	}
+	if p.drainGrace <= 0 {
+		p.drainGrace = DefaultDrainGrace
 	}
 	if p.safetyPoll <= 0 {
 		p.safetyPoll = DefaultDoorbellSafetyPoll
@@ -311,6 +335,8 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 	}
 	p.running = true
 	p.stopCh = make(chan struct{})
+	p.cmdBase = context.WithoutCancel(ctx)
+	p.draining.Store(false)
 	p.mu.Unlock()
 	// Start runs the poll loop synchronously; reset running on EVERY return
 	// (incl. ctx cancellation) so a later Start() isn't rejected with
@@ -341,10 +367,10 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			p.waitForActiveCommands()
+			p.drain()
 			return ctx.Err()
 		case <-p.stopCh:
-			p.waitForActiveCommands()
+			p.drain()
 			return nil
 		case <-wake:
 			// The platform reported claimable work: poll now (a no-op
@@ -375,6 +401,97 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 // Share d with the heartbeat (BaseSensor.SetDoorbell). Call before Start.
 func (p *CommandPoller) SetDoorbell(d *Doorbell) {
 	p.doorbell = d
+	if d != nil {
+		d.setCancelHandler(func(ids []string) { p.CancelCommands(ids...) })
+	}
+}
+
+// SetResourceManager sizes the poller's slots from m: the jobs that fit the
+// sensor's CPU and memory for its tools' learned cost, at most m's cap,
+// narrowed after OOM kills, timeouts and throttling. Every finished command
+// teaches m its cost. The heartbeat then reports resources and capacity.
+// Call before Start.
+func (p *CommandPoller) SetResourceManager(m *resource.Manager) {
+	p.resources = m
+	if m != nil && m.MaxSlots() != p.maxConcurrent {
+		p.maxConcurrent = m.MaxSlots()
+		p.sem = make(chan struct{}, p.maxConcurrent)
+	}
+}
+
+// CancelCommands cancels held commands (the platform's cancel_command_ids):
+// a running one is stopped (its context is canceled), and each is released
+// back to the platform instead of reported. Ids not held are ignored.
+func (p *CommandPoller) CancelCommands(ids ...string) {
+	for _, id := range ids {
+		if p.queue.cancel(id, errCanceledByPlatform) && p.verbose.Load() {
+			fmt.Printf("[command-poller] Canceling command %s (platform)\n", id)
+		}
+	}
+}
+
+// QueueStats is the local queue now.
+func (p *CommandPoller) QueueStats() QueueStats {
+	st, _ := p.queue.snapshot(time.Now())
+	return st
+}
+
+// HeldCommandIDs are the commands this sensor holds (claimed, not
+// finished), sorted: the lease list a heartbeat carries as "running".
+func (p *CommandPoller) HeldCommandIDs() []string {
+	_, ids := p.queue.snapshot(time.Now())
+	return ids
+}
+
+// ReportStatus fills a heartbeat with the poller's work: active jobs, the
+// local queue, the held ids and, with a resource manager, resources and
+// capacity. It implements StatusReporter.
+func (p *CommandPoller) ReportStatus(status *SensorStatus) {
+	if status == nil {
+		return
+	}
+	st, ids := p.queue.snapshot(time.Now())
+	active := len(p.sem)
+	status.ActiveJobs = active
+	status.ActiveJobsReported = true
+	status.Queue = &st
+	status.RunningCommands = ids
+	if p.resources != nil {
+		res, capacity := p.resources.Snapshot(active)
+		status.Resources = &res
+		status.Capacity = &capacity
+	}
+}
+
+// drain stops claiming, lets running commands finish for the drain grace,
+// then cancels the rest; canceled commands are released to the platform.
+func (p *CommandPoller) drain() {
+	p.draining.Store(true)
+	done := make(chan struct{})
+	go func() { p.activeCmds.Wait(); close(done) }()
+	select {
+	case <-done:
+		return
+	case <-time.After(p.drainGrace):
+	}
+	fmt.Printf("[command-poller] Drain grace (%s) over: releasing %d unfinished commands to the platform\n", p.drainGrace, p.ActiveJobs())
+	p.queue.cancelAll(errDrained)
+	<-done
+}
+
+// release hands a command back to the platform (best-effort).
+func (p *CommandPoller) release(id, reason string) {
+	rc, ok := p.client.(ReleasingCommandClient)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(p.cmdBase), 15*time.Second)
+	defer cancel()
+	if err := rc.ReleaseCommand(ctx, id, reason); err != nil {
+		fmt.Printf("[command-poller] Could not release command %s (%s): %v\n", id, reason, err)
+	} else if p.verbose.Load() {
+		fmt.Printf("[command-poller] Released command %s (%s)\n", id, reason)
+	}
 }
 
 // SetAuthGate shares the heartbeat's AuthGate (BaseSensor.AuthGate) with the
@@ -427,15 +544,26 @@ func (p *CommandPoller) ActiveJobs() int {
 	return len(p.sem)
 }
 
-// MaxJobs is how many commands this poller runs at once
-// (CommandPollerConfig.MaxConcurrent). It implements LoadReporter.
+// MaxJobs is the most commands this poller runs at once: the configured
+// cap (CommandPollerConfig.MaxConcurrent, or the resource manager's). The
+// live slot count is at most this. It implements LoadReporter.
 func (p *CommandPoller) MaxJobs() int {
 	return p.maxConcurrent
 }
 
+// slotLimit is the live slot count: MaxConcurrent, or the resource
+// manager's dynamic slots.
+func (p *CommandPoller) slotLimit() int {
+	limit := cap(p.sem)
+	if p.resources != nil {
+		limit = min(limit, p.resources.Slots(len(p.sem)))
+	}
+	return max(limit, 1)
+}
+
 // freeSlots is the number of commands the poller can start now.
 func (p *CommandPoller) freeSlots() int {
-	return cap(p.sem) - len(p.sem)
+	return max(p.slotLimit()-len(p.sem), 0)
 }
 
 // getCommands polls for at most limit commands when the client supports a
@@ -457,6 +585,10 @@ func (p *CommandPoller) waitForActiveCommands() {
 
 // pollAndExecute polls for commands and executes them.
 func (p *CommandPoller) pollAndExecute(ctx context.Context) {
+	// Stopping: claim nothing more.
+	if p.draining.Load() {
+		return
+	}
 	// Paused by the platform: claim nothing. Running commands finish.
 	if p.paused() {
 		if p.verbose.Load() {
@@ -517,6 +649,11 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		fmt.Printf("[command-poller] Received %d commands\n", len(resp.Commands))
 	}
 
+	// Local order: priority class, then priority (the platform's order
+	// otherwise).
+	orderCommands(resp.Commands)
+	limit := p.slotLimit()
+
 	for _, cmd := range resp.Commands {
 		// Paused while this batch was being claimed: leave the rest pending
 		// (unacknowledged) for later or for another sensor.
@@ -539,12 +676,16 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			continue
 		}
 
-		// Take a slot BEFORE claiming, so at most maxConcurrent commands
-		// are claimed or running (and at most that many goroutines exist).
-		// Only this loop takes slots, so the free slots counted above are
-		// still free; a client that ignores the limit and returns more is
-		// answered by leaving the extra commands pending (unclaimed) for
-		// later or for another sensor.
+		// Take a slot BEFORE claiming, so at most the live slot count of
+		// commands are claimed or running (and at most that many goroutines
+		// exist). Only this loop takes slots, so the free slots counted
+		// above are still free; a client that ignores the limit and returns
+		// more is answered by leaving the extra commands pending (unclaimed)
+		// for later or for another sensor.
+		if len(p.sem) >= limit {
+			p.backlog.Store(true)
+			continue
+		}
 		select {
 		case p.sem <- struct{}{}:
 		default:
@@ -555,8 +696,26 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			continue
 		}
 
+		// Politeness: at most per_host_concurrency held commands touch one
+		// host. A command over the limit is not claimed at all (it stays
+		// pending on the platform, for later or for another sensor).
+		meta := parseCommandMeta(cmd)
+		perHost := meta.Limits.PerHostConcurrency
+		if perHost <= 0 {
+			perHost = DefaultPerHostConcurrency
+		}
+		if !p.queue.admit(cmd.ID, commandHosts(meta), perHost, time.Now()) {
+			<-p.sem
+			p.backlog.Store(true)
+			if p.verbose.Load() {
+				fmt.Printf("[command-poller] Leaving command %s pending: its hosts are busy here\n", cmd.ID)
+			}
+			continue
+		}
+
 		// Claim (acknowledge) it now that a slot is held.
 		if err := p.client.AcknowledgeCommand(ctx, cmd.ID); err != nil {
+			p.queue.forget(cmd.ID)
 			<-p.sem
 			if p.verbose.Load() {
 				fmt.Printf("[command-poller] Failed to acknowledge command %s: %v\n", cmd.ID, err)
@@ -564,15 +723,20 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			continue
 		}
 
-		// Execute asynchronously
+		// Execute asynchronously, in a context of its own: stopping the
+		// poller drains (DrainGrace) instead of killing it at once.
+		cmdCtx, cancel := context.WithCancelCause(p.cmdBase)
+		p.queue.setCancel(cmd.ID, cancel)
 		p.activeCmds.Add(1)
-		go p.executeCommand(ctx, cmd)
+		go p.executeCommand(cmdCtx, cmd)
 	}
 }
 
 // executeCommand executes a single command.
 func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 	defer func() {
+		p.queue.cancel(cmd.ID, context.Canceled) // free the context
+		p.queue.forget(cmd.ID)
 		<-p.sem
 		if p.backlog.Load() {
 			select {
@@ -588,6 +752,13 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 	// an outbox binds them to it and reports the command only after they
 	// were accepted.
 	ctx = WithCommandID(ctx, cmd.ID)
+	ctx, usage := withUsageRecorder(ctx)
+
+	// Stopping (or canceled) before it started: hand it back unstarted.
+	if p.draining.Load() || ctx.Err() != nil {
+		p.release(cmd.ID, releaseReason(ctx, ReleaseReasonDraining))
+		return
+	}
 
 	if p.verbose.Load() {
 		fmt.Printf("[command-poller] Executing command %s (type: %s)\n", cmd.ID, cmd.Type)
@@ -609,6 +780,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 		fmt.Printf("[command-poller] Not running command %s: the platform did not accept its start: %v\n", cmd.ID, err)
 		return
 	}
+	p.queue.markStarted(cmd.ID)
 
 	// Run the executor with panic recovery — a panic in a tool or parser would
 	// otherwise take down the whole sensor process, and the server would wait for
@@ -623,6 +795,18 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 		}()
 		return p.executor.Execute(ctx, cmd)
 	}()
+
+	// Canceled by the platform or by a drain: release it (the platform
+	// re-queues it at once, or it is already canceled there) instead of
+	// reporting a failure that is not the command's.
+	if cause := context.Cause(ctx); errors.Is(cause, errCanceledByPlatform) || errors.Is(cause, errDrained) {
+		p.release(cmd.ID, releaseReason(ctx, ReleaseReasonShutdown))
+		return
+	}
+
+	if p.resources != nil {
+		p.resources.Observe(jobSample(cmd, parseCommandMeta(cmd), time.Since(startTime), usage, err, ctx))
+	}
 
 	reportResult := &CommandResult{
 		CompletedAt: time.Now(),
@@ -656,6 +840,17 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 			fmt.Printf("[command-poller] Failed to report result for command %s: %v\n", cmd.ID, err)
 		}
 	}
+}
+
+// releaseReason names why a held command is handed back.
+func releaseReason(ctx context.Context, fallback string) string {
+	switch cause := context.Cause(ctx); {
+	case errors.Is(cause, errCanceledByPlatform):
+		return ReleaseReasonCanceled
+	case errors.Is(cause, errDrained):
+		return ReleaseReasonShutdown
+	}
+	return fallback
 }
 
 // SetVerbose sets verbose mode.
