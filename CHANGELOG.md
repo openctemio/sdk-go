@@ -4,15 +4,7 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
-### Upgrade notes
-
-Only additions (checked by `api-compat` against v0.10.0). One behavior
-change: **a `BaseSensor` now reports the scanners and collectors it was
-given** (`AddScanner`, `AddCollector`) on every heartbeat, probed with each
-scanner's `IsInstalled`, unless `SetCapabilityReporter` is set (that
-reporter still wins). A sensor that adds nothing still reports nothing. The
-platform then dispatches by those tools; to keep sending nothing, set
-`s.SetCapabilityReporter(core.StaticCapabilities(core.CapabilityReport{}))`.
+Only additions (checked by `api-compat` against v0.11.0).
 
 ### Added
 
@@ -44,6 +36,21 @@ platform then dispatches by those tools; to keep sending nothing, set
 - `legacyv1.SensorRenamedEnv`, `SensorRenamedFlags`, `ApplyRenamedEnv`,
   `ApplyRenamedFlags`: the sensor binary's renamed settings, migrated in one
   place (moved from the sensor).
+
+## v0.11.0 (2026-10-02)
+
+### Upgrade notes
+
+Only additions (checked by `api-compat` against v0.10.0). One behavior
+change: **a `BaseSensor` now reports the scanners and collectors it was
+given** (`AddScanner`, `AddCollector`) on every heartbeat, probed with each
+scanner's `IsInstalled`, unless `SetCapabilityReporter` is set (that
+reporter still wins). A sensor that adds nothing still reports nothing. The
+platform then dispatches by those tools; to keep sending nothing, set
+`s.SetCapabilityReporter(core.StaticCapabilities(core.CapabilityReport{}))`.
+
+### Added
+
 - **Tool registry: a sensor registers its tools, the SDK reports them**
   (api RFC-029 §4.3.1). Only the sensor knows which tools it has, so the
   platform no longer needs them declared. `core.ToolRegistry` is the
