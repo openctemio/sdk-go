@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -93,6 +94,14 @@ type manifestState struct {
 	requested bool
 	// retryAt delays a registration after a failure.
 	retryAt time.Time
+	// policy is the platform's policy (api RFC-033 §6.12), nil until a
+	// platform says it; omit lets heartbeats leave the inventory out.
+	policy *ManifestPolicy
+	omit   bool
+	// policyVersion is the config_version the policy was read under;
+	// seenVersion the latest one a heartbeat answered. They differ when the
+	// administrator changed something: the policy is read again.
+	policyVersion, seenVersion string
 }
 
 // manifestRetryDelay is how long a failed registration waits; the heartbeat
@@ -100,9 +109,13 @@ type manifestState struct {
 const manifestRetryDelay = time.Minute
 
 // syncManifest registers the sensor's manifest when the platform accepts
-// one and it is new, changed or asked for, and puts the platform's digest on
-// the heartbeat. It never fails the heartbeat: without a registration the
-// platform derives the manifest from the heartbeat itself.
+// one and it is new, changed or asked for, re-reads the policy when the
+// platform's config_version moved, and puts the platform's digest on the
+// heartbeat. Once the platform acknowledged the manifest with
+// omit_inventory the heartbeat is made slim: the tool inventory is left
+// out and only each tool's content freshness is sent (api RFC-033 §6.12). It
+// never fails the heartbeat: without a registration the platform derives
+// the manifest from the heartbeat itself.
 func (a *BaseSensor) syncManifest(ctx context.Context, status *SensorStatus) {
 	mp, ok := a.pusher.(ManifestPusher)
 	if !ok || status == nil || status.Tools == nil {
@@ -124,11 +137,17 @@ func (a *BaseSensor) syncManifest(ctx context.Context, status *SensorStatus) {
 	st := &a.manifest
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	now := time.Now()
 	if local == st.local && !st.requested {
-		status.ManifestDigest = st.platform
-		return
+		a.refreshPolicyLocked(ctx)
+		if !st.requested {
+			status.ManifestDigest = st.platform
+			if st.omit {
+				slimHeartbeat(status)
+			}
+			return
+		}
 	}
+	now := time.Now()
 	if now.Before(st.retryAt) {
 		// Changed but backing off: the old digest would be asked for again
 		// and the platform derives meanwhile, so send none.
@@ -137,7 +156,7 @@ func (a *BaseSensor) syncManifest(ctx context.Context, status *SensorStatus) {
 	ack, err := mp.PutManifest(ctx, &m)
 	switch {
 	case errors.Is(err, ErrManifestUnsupported):
-		st.local, st.platform, st.requested = "", "", false
+		st.local, st.platform, st.requested, st.policy, st.omit = "", "", false, nil, false
 		return
 	case err != nil:
 		st.retryAt = now.Add(manifestRetryDelay)
@@ -147,7 +166,11 @@ func (a *BaseSensor) syncManifest(ctx context.Context, status *SensorStatus) {
 		return
 	}
 	st.local, st.platform, st.requested, st.retryAt = local, ack.Digest, false, time.Time{}
+	st.policy, st.omit, st.policyVersion = ack.Policy, ack.OmitInventory, st.seenVersion
 	status.ManifestDigest = ack.Digest
+	if st.omit {
+		slimHeartbeat(status)
+	}
 	if a.verbose || len(ack.Ignored) > 0 {
 		fmt.Printf("[%s] Manifest registered: %s (%d tools accepted, %d items ignored)\n",
 			a.name, shortDigest(ack.Digest), len(ack.AcceptedTools), len(ack.Ignored))
@@ -157,14 +180,120 @@ func (a *BaseSensor) syncManifest(ctx context.Context, status *SensorStatus) {
 	}
 }
 
-// manifestAsked notes a heartbeat answer that asks for the manifest.
+// refreshPolicyLocked re-reads the policy (GET /manifest) when the
+// platform's config_version moved since it was read. A platform that lost
+// the manifest gets it again (requested). Errors keep the old policy and
+// retry on the next heartbeat.
+func (a *BaseSensor) refreshPolicyLocked(ctx context.Context) {
+	st := &a.manifest
+	if st.seenVersion == "" || st.seenVersion == st.policyVersion {
+		return
+	}
+	r, ok := a.pusher.(ManifestStateReader)
+	if !ok {
+		st.policyVersion = st.seenVersion
+		return
+	}
+	ack, err := r.GetManifestState(ctx)
+	switch {
+	case errors.Is(err, ErrManifestNotRegistered):
+		st.requested = true
+		return
+	case errors.Is(err, ErrManifestUnsupported):
+		st.policyVersion = st.seenVersion // a platform before Phase 2: keep what PUT said
+		return
+	case err != nil:
+		return
+	}
+	st.policyVersion = st.seenVersion
+	st.policy, st.omit = ack.Policy, ack.OmitInventory
+	if ack.Digest != st.platform {
+		st.requested = true // the platform holds another manifest: send ours
+	}
+	if a.verbose && ack.Policy != nil {
+		fmt.Printf("[%s] Platform policy: tools %v\n", a.name, ack.Policy.AllowedTools)
+	}
+}
+
+// slimHeartbeat leaves the tool inventory out of a heartbeat and keeps each
+// tool's content freshness (api RFC-033 §6.12).
+func slimHeartbeat(status *SensorStatus) {
+	var content []ToolContent
+	for _, t := range status.Tools {
+		for _, c := range t.Content {
+			content = append(content, ToolContent{Tool: t.Name, ContentInfo: c})
+		}
+	}
+	status.Content = content
+	status.Tools, status.Capabilities, status.MaxConcurrentJobs = nil, nil, 0
+}
+
+// manifestAsked notes what a heartbeat answer says about the manifest: a
+// request to send it again, and the platform's config_version (a change
+// makes the next heartbeat re-read the policy).
 func (a *BaseSensor) manifestAsked(hints *HeartbeatHints) {
-	if hints == nil || !slices.Contains(hints.Actions, HeartbeatActionSendManifest) {
+	if hints == nil {
 		return
 	}
 	a.manifest.mu.Lock()
-	a.manifest.requested = true
-	a.manifest.mu.Unlock()
+	defer a.manifest.mu.Unlock()
+	if slices.Contains(hints.Actions, HeartbeatActionSendManifest) {
+		a.manifest.requested = true
+	}
+	if hints.ConfigVersion != "" {
+		a.manifest.seenVersion = hints.ConfigVersion
+		if a.manifest.policyVersion == "" {
+			a.manifest.policyVersion = hints.ConfigVersion // read under the first one seen
+		}
+	}
+}
+
+// ManifestPolicy returns the platform's policy for this sensor (api RFC-033
+// §6.12), nil until the platform said it.
+func (a *BaseSensor) ManifestPolicy() *ManifestPolicy {
+	a.manifest.mu.Lock()
+	defer a.manifest.mu.Unlock()
+	if a.manifest.policy == nil {
+		return nil
+	}
+	p := *a.manifest.policy
+	p.AllowedTools = slices.Clone(p.AllowedTools)
+	p.AllowedCapabilities = slices.Clone(p.AllowedCapabilities)
+	return &p
+}
+
+// CommandToolGate returns the check the command poller runs before it
+// executes a command (CommandPoller.SetCommandGate): a command that names a
+// tool (payload "scanner", else "preferred_tool", as the platform's tool
+// gate reads it) outside the platform's policy is refused with
+// ErrToolNotAllowed (owner decision O2). Commands that name no tool, and
+// any command before the platform said a policy, pass.
+func (a *BaseSensor) CommandToolGate() func(*Command) error {
+	return func(cmd *Command) error {
+		tool := commandTool(cmd)
+		if tool == "" {
+			return nil
+		}
+		p := a.ManifestPolicy()
+		if p == nil || slices.Contains(p.AllowedTools, tool) {
+			return nil
+		}
+		return fmt.Errorf("%w: %s is not allowed on this sensor by the platform's policy", ErrToolNotAllowed, tool)
+	}
+}
+
+// commandTool is the tool a command names, canonical and lower case; "" for
+// none.
+func commandTool(cmd *Command) string {
+	if cmd == nil {
+		return ""
+	}
+	m := parseCommandMeta(cmd)
+	name := m.Scanner
+	if name == "" {
+		name = m.PreferredTool
+	}
+	return strings.ToLower(strings.TrimSpace(CanonicalScannerName(strings.TrimSpace(name))))
 }
 
 func shortDigest(d string) string {

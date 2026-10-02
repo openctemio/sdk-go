@@ -113,6 +113,24 @@ type FakePlatform struct {
 	released  []Release
 	manifests []json.RawMessage
 	digest    string
+	// policyTools, when set, is the policy's allowed_tools (else every
+	// tool of the manifest); slim answers omit_inventory (api RFC-033 §6.12).
+	policyTools   []string
+	slim          bool
+	manifestTools []string
+}
+
+// SetManifestPolicy sets what the manifest answers say from now on (api
+// RFC-033 §6.12): the allowed tools (nil: every tool of the manifest) and
+// whether heartbeats may leave the inventory out.
+func (f *FakePlatform) SetManifestPolicy(allowedTools []string, omitInventory bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.policyTools = append([]string(nil), allowedTools...)
+	if allowedTools == nil {
+		f.policyTools = nil
+	}
+	f.slim = omitInventory
 }
 
 // SetManifest serves or stops serving the sensor manifest (api RFC-033).
@@ -519,7 +537,7 @@ func (f *FakePlatform) problem(w http.ResponseWriter, status int, t protov2.Prob
 var sensorProblems = map[protov2.ProblemType]bool{
 	protov2.ProblemInvalidTransition: true, protov2.ProblemCommandClaimed: true,
 	protov2.ProblemTransitionConflict: true, protov2.ProblemRenewalRefused: true, protov2.ProblemTooManyItems: true,
-	protov2.ProblemManifestInvalid: true, protov2.ProblemManifestSchemaUnsupported: true,
+	protov2.ProblemManifestInvalid: true, protov2.ProblemManifestSchemaUnsupported: true, protov2.ProblemManifestNotFound: true,
 }
 
 func (f *FakePlatform) problemState(w http.ResponseWriter, status int, t protov2.ProblemType, state string) {

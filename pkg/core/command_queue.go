@@ -207,13 +207,16 @@ func (q *localQueue) snapshot(now time.Time) (QueueStats, []string) {
 
 // commandMeta is what the poller reads from a command's payload.
 type commandMeta struct {
-	Scanner   string   `json:"scanner"`
-	Collector string   `json:"collector"`
-	Target    string   `json:"target"`
-	Targets   []string `json:"targets"`
-	Class     string   `json:"class"`
-	Priority  string   `json:"priority"`
-	Limits    struct {
+	Scanner   string `json:"scanner"`
+	Collector string `json:"collector"`
+	// PreferredTool is the tool a command asks for when it names no
+	// scanner (the platform's tool gate reads the same two members).
+	PreferredTool string   `json:"preferred_tool"`
+	Target        string   `json:"target"`
+	Targets       []string `json:"targets"`
+	Class         string   `json:"class"`
+	Priority      string   `json:"priority"`
+	Limits        struct {
 		PerHostConcurrency int `json:"per_host_concurrency"`
 	} `json:"limits"`
 }
