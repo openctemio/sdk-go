@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "checkov",
+          "version": "3.2.255",
+          "informationUri": "https://www.checkov.io/",
+          "rules": [
+            {"id": "CKV_AWS_20", "name": "S3 Bucket has an ACL defined which allows public READ access.", "defaultConfiguration": {"level": "error"}},
+            {"id": "CKV_AWS_18", "name": "Ensure the S3 bucket has access logging enabled", "defaultConfiguration": {"level": "warning"}},
+            {"id": "CKV_AWS_144", "name": "Ensure that S3 bucket has cross-region replication enabled", "defaultConfiguration": {"level": "note"}}
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "CKV_AWS_20",
+          "ruleIndex": 0,
+          "kind": "fail",
+          "level": "error",
+          "baselineState": "new",
+          "message": {"text": "S3 Bucket has an ACL defined which allows public READ access."},
+          "locations": [{"physicalLocation": {"artifactLocation": {"uri": "terraform/s3.tf"}, "region": {"startLine": 1, "endLine": 8}}}]
+        },
+        {
+          "ruleId": "CKV_AWS_18",
+          "ruleIndex": 1,
+          "kind": "review",
+          "level": "warning",
+          "baselineState": "unchanged",
+          "message": {"text": "Ensure the S3 bucket has access logging enabled"},
+          "locations": [{"physicalLocation": {"artifactLocation": {"uri": "terraform/s3.tf"}, "region": {"startLine": 1, "endLine": 8}}}]
+        },
+        {
+          "ruleId": "CKV_AWS_144",
+          "ruleIndex": 2,
+          "kind": "notApplicable",
+          "level": "none",
+          "message": {"text": "Replication is not applicable to this bucket"},
+          "locations": [{"physicalLocation": {"artifactLocation": {"uri": "terraform/s3.tf"}, "region": {"startLine": 1, "endLine": 8}}}]
+        },
+        {
+          "ruleId": "CKV_AWS_20",
+          "ruleIndex": 0,
+          "kind": "pass",
+          "level": "none",
+          "baselineState": "absent",
+          "message": {"text": "Bucket logs-archive has no public ACL"},
+          "locations": [{"physicalLocation": {"artifactLocation": {"uri": "terraform/logs.tf"}, "region": {"startLine": 3, "endLine": 9}}}]
+        }
+      ]
+    },
+    {
+      "tool": {"driver": {"name": "custom-linter", "rules": [{"id": "X1"}]}},
+      "results": [
+        {"ruleId": "X1", "kind": "open", "message": {"text": "open question"}},
+        {"ruleId": "X1", "kind": "informational", "baselineState": "updated", "message": {"text": "fyi"}},
+        {"ruleId": "X1", "kind": "warning", "baselineState": "modified", "message": {"text": "not a SARIF kind or baselineState"}},
+        {"ruleId": "X1", "message": {"text": "no kind: SARIF default is fail, left unset"}}
+      ]
+    }
+  ]
+}

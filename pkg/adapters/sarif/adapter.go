@@ -241,8 +241,10 @@ func (a *Adapter) convertResult(result SARIFResult, ruleIndex map[string]*SARIFR
 	}
 
 	// Map SARIF 2.1.0 extended fields
-	finding.Kind = result.Kind
-	finding.BaselineState = result.BaselineState
+	// Send the CTIS vocabulary ("not_applicable"), not the SARIF spelling
+	// ("notApplicable"), which the CTIS schema rejects; unknown values unset.
+	finding.Kind = ctis.NormalizeSARIFKind(result.Kind)
+	finding.BaselineState = ctis.NormalizeSARIFBaselineState(result.BaselineState)
 	finding.Rank = result.Rank
 	finding.OccurrenceCount = result.OccurrenceCount
 	finding.CorrelationID = result.CorrelationGuid
