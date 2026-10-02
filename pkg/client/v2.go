@@ -65,6 +65,10 @@ var ErrV2Unsupported = errors.New("the platform does not offer protocol v2 resul
 // ErrV2NoTool: v2 requires the report's tool (RFC-026 §3.3 step 8).
 var ErrV2NoTool = errors.New("protocol v2 requires report.tool.name")
 
+// errTooManySegments marks the 413 the SDK makes up for a report that needs
+// more segments than the platform accepts: splitting further cannot help.
+var errTooManySegments = errors.New("too many segments")
+
 // V2Error is a non-2xx answer of a v2 resource.
 type V2Error struct {
 	Status     int
@@ -449,18 +453,25 @@ func (c *Client) PushResultsV2(ctx context.Context, report *ctis.Report, opts *V
 			return nil, err
 		}
 		switch {
-		case ve.Status == http.StatusRequestEntityTooLarge && ve.Problem != nil:
+		case ve.Status == http.StatusRequestEntityTooLarge && !errors.Is(err, errTooManySegments):
 			// Halve the segment that was refused and send smaller ones.
 			// Nothing of a refused request is stored, so the report id is
 			// kept unless acknowledged segments would no longer line up.
+			// A 413 without a problem document is a reverse proxy's body
+			// limit (an ingress below the platform's own limit): smaller
+			// segments pass it just the same.
 			if p.lastFindings <= 1 && p.lastBytes <= 1024 {
 				return nil, err // one finding is already too large
 			}
 			p.SegFindings = max(1, p.lastFindings/2)
 			p.SegBytes = max(1024, p.lastBytes/2)
 			p.Split = true
+			why := "a proxy's body limit"
+			if ve.Problem != nil {
+				why = string(ve.Problem.Name())
+			}
 			logf("report %s: a %d-finding, %d-byte request was too large (%s); splitting into segments of at most %d findings",
-				p.ReportID, p.lastFindings, p.lastBytes, ve.Problem.Name(), p.SegFindings)
+				p.ReportID, p.lastFindings, p.lastBytes, why, p.SegFindings)
 			if len(p.Acked) > 0 {
 				if rerr := restart("re-split after 413"); rerr != nil {
 					return nil, errors.Join(err, rerr)
@@ -533,8 +544,8 @@ func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits pro
 		return nil, err
 	}
 	if limits.MaxSegmentsPerReport > 0 && len(segs) > limits.MaxSegmentsPerReport {
-		return nil, &V2Error{Status: http.StatusRequestEntityTooLarge, Body: fmt.Sprintf(
-			"the report needs %d segments; the platform accepts %d", len(segs), limits.MaxSegmentsPerReport)}
+		return nil, errors.Join(&V2Error{Status: http.StatusRequestEntityTooLarge, Body: fmt.Sprintf(
+			"the report needs %d segments; the platform accepts %d", len(segs), limits.MaxSegmentsPerReport)}, errTooManySegments)
 	}
 	if p.Segments != 0 && p.Segments != len(segs) {
 		// The plan changed (other limits after an upgrade): acknowledged
