@@ -6,6 +6,61 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Upgrade notes
 
+Only additions (checked by `api-compat` against v0.10.0). One behavior
+change: **a `BaseSensor` now reports the scanners and collectors it was
+given** (`AddScanner`, `AddCollector`) on every heartbeat, probed with each
+scanner's `IsInstalled`, unless `SetCapabilityReporter` is set (that
+reporter still wins). A sensor that adds nothing still reports nothing. The
+platform then dispatches by those tools; to keep sending nothing, set
+`s.SetCapabilityReporter(core.StaticCapabilities(core.CapabilityReport{}))`.
+
+### Added
+
+- **Tool registry: a sensor registers its tools, the SDK reports them**
+  (api RFC-029 §4.3.1). Only the sensor knows which tools it has, so the
+  platform no longer needs them declared. `core.ToolRegistry` is the
+  default source of the heartbeat's `tools`, `capabilities` and
+  `max_concurrent_jobs`; no hand-written `CapabilityReporter` is needed.
+  - `BaseSensor.Tools()` returns the sensor's registry. `AddScanner` /
+    `AddCollector` register into it and `RemoveScanner` /
+    `RemoveCollector` take the tool out.
+  - `ToolRegistry.Register(core.ToolSpec{Name, Kind, Version,
+    Capabilities, Probe, Cost})` registers any tool. `RegisterScanner(s,
+    extraCaps...)` and `RegisterCollector(c, caps...)` register a
+    scanner or a collector.
+  - `Probe` (the `Scanner.IsInstalled` signature) says whether the tool is
+    usable here and its version. A tool without a probe runs in process
+    and is always usable. Results are reused for 10 minutes
+    (`SetProbeTTL`, `Refresh`), and each probe is bounded by 30 s
+    (`SetProbeTimeout`). A tool that is missing, fails its probe or times
+    out is reported with `installed: false` and serves nothing.
+  - Capabilities: an installed tool serves its name and its capabilities.
+    A scanner's descriptive words are mapped to the platform's capability
+    registry (`secret_detection` becomes `secrets`), and words the platform
+    does not know are left out. Explicit capabilities are kept as given.
+    `AddCapabilities` adds what the sensor serves whatever its tools
+    (`validate`), and `SetMaxConcurrentJobs` sets its cap.
+  - Two registrations of one name (two modes of one tool) merge their
+    capabilities. Names are validated (lowercase `[a-z0-9._-]`, at most 64
+    characters).
+  - `Limit(names...)` is an operator allowlist: only those tools are
+    reported and served, and no names lifts it. A limit that leaves no tool
+    reports an empty inventory ("none"), not "nothing reported".
+  - `DefaultCommandExecutor.SetToolRegistry(s.Tools())` registers the
+    executor's scanners and collectors too, for a sensor that runs its
+    tools only through the command executor.
+  - Heartbeat tools carry `kind` (`scanner` or `collector`; the
+    `ToolInfo.Kind` field, additive and ignored by older platforms).
+- **Per-tool cost hints:** `ToolSpec.Cost` (`resource.ToolCostHint`:
+  cores, memory, seconds per target) is used as the slot sizer's prior for
+  a tool without history: `resource.ManagerConfig.CostHints`
+  (`registry.CostHints()`) and `CostBook.SetPrior`. The learned history
+  still replaces it.
+
+## v0.10.0 — 2026-10-02
+
+### Upgrade notes
+
 None. Only additions (checked by `api-compat` against v0.9.0). A sensor that
 does nothing keeps behaving as before, except that its heartbeat now carries
 `os` and `arch`. To let the platform dispatch by what the sensor really has,

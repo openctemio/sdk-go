@@ -16,6 +16,9 @@ import (
 type ToolInfo struct {
 	// Name is the tool's catalog name ("semgrep", "nuclei", "trivy").
 	Name string `json:"name"`
+	// Kind is what the tool does (scanner or collector); empty when the
+	// sensor does not say.
+	Kind ToolKind `json:"kind,omitempty"`
 	// Version is the installed version, when known.
 	Version string `json:"version,omitempty"`
 	// Installed is false for a tool the sensor is configured to run but
