@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os/exec"
@@ -29,6 +28,7 @@ type BaseScanner struct {
 	okExitCodes []int
 	workDir     string
 	env         map[string]string
+	maxOutput   int64
 
 	// Verbose output
 	verbose bool
@@ -46,6 +46,10 @@ type BaseScannerConfig struct {
 	WorkDir      string            `yaml:"work_dir" json:"work_dir"`
 	Env          map[string]string `yaml:"env" json:"env"`
 	Verbose      bool              `yaml:"verbose" json:"verbose"`
+	// MaxOutputBytes bounds the captured stdout; 0 means
+	// DefaultMaxScannerOutput. A scanner that writes more is stopped and
+	// Scan returns ErrScannerOutputTooLarge.
+	MaxOutputBytes int64 `yaml:"max_output_bytes" json:"max_output_bytes"`
 }
 
 // NewBaseScanner creates a new base scanner with the given config.
@@ -71,6 +75,7 @@ func NewBaseScanner(cfg *BaseScannerConfig) *BaseScanner {
 		okExitCodes:  cfg.OKExitCodes,
 		workDir:      cfg.WorkDir,
 		env:          cfg.Env,
+		maxOutput:    cfg.MaxOutputBytes,
 		verbose:      cfg.Verbose,
 	}
 }
@@ -145,10 +150,11 @@ func (s *BaseScanner) Scan(ctx context.Context, target string, opts *ScanOptions
 
 	ConfigureScannerProcess(cmd)
 
-	// Capture output
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Capture bounded output: past the stdout bound the scanner is stopped.
+	stdout := newOutputCapture(s.maxOutput, nil, cancel)
+	stderr := newOutputCapture(maxScannerStderr, nil, nil)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	// Execute (the scanner yields to the sensor once started, see
 	// ApplyScannerPriority)
@@ -162,7 +168,17 @@ func (s *BaseScanner) Scan(ctx context.Context, target string, opts *ScanOptions
 	result.FinishedAt = time.Now().Unix()
 	result.DurationMs = time.Since(startTime).Milliseconds()
 	result.RawOutput = stdout.Bytes()
-	result.Stderr = stderr.String()
+	result.Stderr = string(stderr.stderrBytes())
+
+	if stdout.Overflowed() {
+		limit := s.maxOutput
+		if limit <= 0 {
+			limit = DefaultMaxScannerOutput
+		}
+		result.ExitCode = -1
+		result.Error = fmt.Sprintf("%s wrote more than %d bytes of output and was stopped", s.name, limit)
+		return result, fmt.Errorf("%w: %s", ErrScannerOutputTooLarge, result.Error)
+	}
 
 	// Get exit code
 	if exitErr, ok := err.(*exec.ExitError); ok {
@@ -171,7 +187,7 @@ func (s *BaseScanner) Scan(ctx context.Context, target string, opts *ScanOptions
 
 	// Check if exit code is acceptable
 	if !s.isOKExitCode(result.ExitCode) && err != nil {
-		result.Error = fmt.Sprintf("scanner failed (exit %d): %s", result.ExitCode, stderr.String())
+		result.Error = fmt.Sprintf("scanner failed (exit %d): %s", result.ExitCode, result.Stderr)
 		return result, fmt.Errorf("%s", result.Error)
 	}
 

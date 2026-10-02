@@ -1,15 +1,13 @@
 package core
 
 import (
-	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"os/exec"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -25,6 +23,10 @@ type ExecConfig struct {
 	Env     map[string]string // Extra environment variables (added to the allowlisted base, see ScannerEnviron)
 	Timeout time.Duration     // Execution timeout
 	Verbose bool              // Stream output to logs
+	// MaxOutputBytes bounds the captured stdout; 0 means
+	// DefaultMaxScannerOutput. A scanner that writes more is stopped and the
+	// call returns ErrScannerOutputTooLarge.
+	MaxOutputBytes int64
 }
 
 // ExecResult holds the result of scanner execution.
@@ -37,14 +39,47 @@ type ExecResult struct {
 }
 
 // ExecuteScanner runs a scanner binary with real-time output streaming.
+// Its stdout is bounded by cfg.MaxOutputBytes (see ErrScannerOutputTooLarge)
+// and its stderr by a fixed bound past which it is cut.
 func ExecuteScanner(ctx context.Context, cfg *ExecConfig) (*ExecResult, error) {
+	var stdoutLine, stderrLine func(string)
+	if cfg.Verbose {
+		stdoutLine = func(line string) { fmt.Printf("[stdout] %s\n", line) }
+		stderrLine = func(line string) { fmt.Printf("[stderr] %s\n", line) }
+	}
+	return runScanner(ctx, cfg, stdoutLine, stderrLine)
+}
+
+// OutputHandler processes scanner output in real-time.
+type OutputHandler func(line string, isError bool)
+
+// StreamScanner runs a scanner with real-time output handling: handler gets
+// every line of stdout and stderr, without its line ending, whatever its
+// length. Output is bounded as for ExecuteScanner.
+func StreamScanner(ctx context.Context, cfg *ExecConfig, handler OutputHandler) (*ExecResult, error) {
+	var stdoutLine, stderrLine func(string)
+	if handler != nil {
+		stdoutLine = func(line string) { handler(line, false) }
+		stderrLine = func(line string) { handler(line, true) }
+	}
+	return runScanner(ctx, cfg, stdoutLine, stderrLine)
+}
+
+// runScanner runs cfg's command with the scanner environment and process
+// group, capturing bounded stdout and stderr (each line also handed to the
+// matching callback, when set).
+func runScanner(ctx context.Context, cfg *ExecConfig, stdoutLine, stderrLine func(string)) (*ExecResult, error) {
 	if cfg.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, cfg.Timeout)
 		defer cancel()
 	}
+	// runCtx is canceled when the output bound is hit, which kills the
+	// scanner's process group; ctx stays the caller's (for RecordProcessState).
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
 
-	cmd := exec.CommandContext(ctx, cfg.Binary, cfg.Args...) //nolint:gosec // Scanner binary is configured, not user input
+	cmd := exec.CommandContext(runCtx, cfg.Binary, cfg.Args...) //nolint:gosec // Scanner binary is configured, not user input
 
 	if cfg.WorkDir != "" {
 		cmd.Dir = cfg.WorkDir
@@ -55,16 +90,13 @@ func ExecuteScanner(ctx context.Context, cfg *ExecConfig) (*ExecResult, error) {
 	cmd.Env = ScannerEnviron(cfg.Env)
 	ConfigureScannerProcess(cmd)
 
-	// Create pipes for stdout/stderr
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
-	}
+	// Writers, not pipes read by our own goroutines: exec copies the output
+	// and Wait (with the WaitDelay ConfigureScannerProcess set) never waits
+	// on a pipe forever.
+	stdout := newOutputCapture(cfg.MaxOutputBytes, stdoutLine, stop)
+	stderr := newOutputCapture(maxScannerStderr, stderrLine, nil)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	start := time.Now()
 
@@ -73,36 +105,31 @@ func ExecuteScanner(ctx context.Context, cfg *ExecConfig) (*ExecResult, error) {
 	}
 	ApplyScannerPriority(cmd)
 
-	// Capture output with optional streaming
-	var wg sync.WaitGroup
-	var stdoutBuf, stderrBuf []byte
-
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		stdoutBuf = captureOutput(stdout, cfg.Verbose, "stdout")
-	}()
-	go func() {
-		defer wg.Done()
-		stderrBuf = captureOutput(stderr, cfg.Verbose, "stderr")
-	}()
-
-	// Wait for output capture to complete
-	wg.Wait()
-
-	// Wait for process to exit
-	err = cmd.Wait()
+	err := cmd.Wait()
 	ReapScannerProcess(cmd)
 	RecordProcessState(ctx, cmd.ProcessState)
+	stdout.finish()
+	stderr.finish()
 
 	result := &ExecResult{
-		Stdout:     stdoutBuf,
-		Stderr:     stderrBuf,
+		Stdout:     stdout.Bytes(),
+		Stderr:     stderr.stderrBytes(),
 		DurationMs: time.Since(start).Milliseconds(),
 	}
 
+	if stdout.Overflowed() {
+		limit := cfg.MaxOutputBytes
+		if limit <= 0 {
+			limit = DefaultMaxScannerOutput
+		}
+		result.ExitCode = -1
+		result.Error = fmt.Errorf("%w: %s wrote more than %d bytes and was stopped", ErrScannerOutputTooLarge, cfg.Binary, limit)
+		return result, result.Error
+	}
+
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			result.ExitCode = exitErr.ExitCode()
 		} else {
 			result.Error = err
@@ -110,119 +137,6 @@ func ExecuteScanner(ctx context.Context, cfg *ExecConfig) (*ExecResult, error) {
 	}
 
 	return result, nil
-}
-
-// captureOutput reads from a pipe and optionally streams to logs.
-func captureOutput(r io.ReadCloser, stream bool, prefix string) []byte {
-	var buf []byte
-	reader := bufio.NewReader(r)
-
-	for {
-		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			buf = append(buf, line...)
-			if stream {
-				fmt.Printf("[%s] %s", prefix, string(line))
-			}
-		}
-		if err != nil {
-			break
-		}
-	}
-
-	return buf
-}
-
-// =============================================================================
-// Scanner Output Streaming
-// =============================================================================
-
-// OutputHandler processes scanner output in real-time.
-type OutputHandler func(line string, isError bool)
-
-// StreamScanner runs a scanner with real-time output handling.
-func StreamScanner(ctx context.Context, cfg *ExecConfig, handler OutputHandler) (*ExecResult, error) {
-	if cfg.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, cfg.Timeout)
-		defer cancel()
-	}
-
-	cmd := exec.CommandContext(ctx, cfg.Binary, cfg.Args...) //nolint:gosec // Scanner binary is configured, not user input
-
-	if cfg.WorkDir != "" {
-		cmd.Dir = cfg.WorkDir
-	}
-
-	cmd.Env = ScannerEnviron(cfg.Env)
-	ConfigureScannerProcess(cmd)
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
-	}
-
-	start := time.Now()
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start scanner: %w", err)
-	}
-	ApplyScannerPriority(cmd)
-
-	// Stream output with handler
-	var wg sync.WaitGroup
-	var stdoutBuf, stderrBuf []byte
-
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		stdoutBuf = streamWithHandler(stdout, handler, false)
-	}()
-	go func() {
-		defer wg.Done()
-		stderrBuf = streamWithHandler(stderr, handler, true)
-	}()
-
-	wg.Wait()
-	err = cmd.Wait()
-	ReapScannerProcess(cmd)
-	RecordProcessState(ctx, cmd.ProcessState)
-
-	result := &ExecResult{
-		Stdout:     stdoutBuf,
-		Stderr:     stderrBuf,
-		DurationMs: time.Since(start).Milliseconds(),
-	}
-
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			result.ExitCode = exitErr.ExitCode()
-		} else {
-			result.Error = err
-		}
-	}
-
-	return result, nil
-}
-
-func streamWithHandler(r io.ReadCloser, handler OutputHandler, isError bool) []byte {
-	var buf []byte
-	scanner := bufio.NewScanner(r)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		buf = append(buf, []byte(line+"\n")...)
-		if handler != nil {
-			handler(line, isError)
-		}
-	}
-
-	return buf
 }
 
 // =============================================================================
