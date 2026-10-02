@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
+
+	"github.com/openctemio/sdk-go/pkg/resource"
 )
 
 // =============================================================================
@@ -453,6 +455,16 @@ type SensorStatus struct {
 	// BaseSensor sets them.
 	OS   string `json:"os,omitempty"`
 	Arch string `json:"arch,omitempty"`
+
+	// What the sensor's work looks like now (api RFC-030); nil reports
+	// nothing. A CommandPoller fills them (StatusReporter): the resources
+	// it may use, its slots and per-tool costs, its local queue, and the
+	// ids of the commands it holds (the lease list: a platform with leases
+	// renews exactly these).
+	Resources       *resource.HostResources `json:"resources,omitempty"`
+	Capacity        *resource.Capacity      `json:"capacity,omitempty"`
+	Queue           *QueueStats             `json:"queue,omitempty"`
+	RunningCommands []string                `json:"running,omitzero"`
 }
 
 // =============================================================================
