@@ -1085,6 +1085,11 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 
 	// Add config options if provided
 	if payload.Config != nil {
+		// Out-of-band callbacks only when the command says so, as a boolean:
+		// anything else ("true", 1) leaves them off.
+		if allow, ok := payload.Config["allow_interactsh"].(bool); ok && allow {
+			opts.AllowInteractsh = true
+		}
 		if exclude, ok := payload.Config["exclude"].([]interface{}); ok {
 			for _, ex := range exclude {
 				if s, ok := ex.(string); ok {
