@@ -158,6 +158,8 @@ one, the new key wins. Every heartbeat also carries the process's
 | Concurrency cap | `SENSOR_MAX_JOBS` (1-100) | none: slots follow CPU, memory and tool cost |
 | Tool allowlist | `SENSOR_TOOLS` (comma-separated) | none |
 | Drain grace | `SENSOR_DRAIN_GRACE` (1s-1h) | 30s |
+| Scanner priority | `SENSOR_SCANNER_PRIORITY` = `low`, `normal` | `low`: scanners at nice +10, lowest best-effort I/O, `oom_score_adj` 500 (Linux) |
+| Sensor OOM protection | `SENSOR_PROTECT_FROM_OOM=true\|false`: the sensor sets its own `oom_score_adj` to -500 (Linux; needs `CAP_SYS_RESOURCE`, e.g. `docker run --cap-add SYS_RESOURCE`; without it, one warning and the sensor runs unprotected). Scanners never inherit it | off |
 | Outbox | `SENSOR_OUTBOX`, `SENSOR_OUTBOX_DIR`, `_MAX_BYTES`, `_MAX_AGE`, `_KEY_FILE` | on, `/var/lib/openctem/outbox` |
 | State (the renewed API key, tool cost history) | `SENSOR_STATE_DIR` | `/var/lib/openctem/state` when writable, else `~/.openctem`: **mount a persistent volume there** |
 | Private CA | `SENSOR_CA_CERT_FILE` (PEM, added to the system roots; trusted for the platform and content downloads, so a TLS-inspecting proxy works) | system roots |
