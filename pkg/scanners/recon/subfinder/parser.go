@@ -66,8 +66,14 @@ func (p *Parser) Parse(ctx context.Context, data []byte, opts *core.ParseOptions
 	// Create assets from subdomains
 	var assets []ctis.Asset
 	for _, sub := range subdomains {
+		// A host below its root is a subdomain, as ctis.ConvertReconToCTIS
+		// types it; only the root itself is a domain.
+		assetType := ctis.AssetTypeSubdomain
+		if sub.Domain == "" || strings.EqualFold(strings.TrimSuffix(sub.Host, "."), strings.TrimSuffix(sub.Domain, ".")) {
+			assetType = ctis.AssetTypeDomain
+		}
 		asset := ctis.Asset{
-			Type:  ctis.AssetTypeDomain,
+			Type:  assetType,
 			Value: sub.Host,
 			Properties: ctis.Properties{
 				"root_domain": sub.Domain,

@@ -68,7 +68,7 @@ type Scanner struct {
 	// Output options
 	OutputFile       string // Output file path
 	OutputJSON       bool   // JSON output
-	OutputAll        bool   // Include all endpoint types
+	OutputAll        bool   // Deprecated: katana has no -output-all flag; ignored
 	Silent           bool   // Silent mode
 	StoreResponse    bool   // Store HTTP response
 	StoreResponseDir string // Directory to store responses
@@ -101,7 +101,6 @@ func NewScanner() *Scanner {
 		JSCrawl:     true,
 		Scope:       ScopeRDN,
 		OutputJSON:  true,
-		OutputAll:   true,
 	}
 }
 
@@ -171,8 +170,11 @@ func (s *Scanner) IsInstalled(ctx context.Context) (bool, string, error) {
 // parseVersion extracts version from katana output.
 func parseVersion(output string) string {
 	// Current releases print "[INF] Current Version: vX.Y.Z" to stderr.
-	if v := core.VersionAfterLabel(output, "Current Version:"); v != "" {
-		return v
+	// katana 1.7 spells it "Current version:".
+	for _, label := range []string{"Current Version:", "Current version:"} {
+		if v := core.VersionAfterLabel(output, label); v != "" {
+			return v
+		}
 	}
 	// katana version output: "katana v1.x.x"
 	output = strings.TrimSpace(output)
@@ -284,6 +286,9 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 		args = append(args, "-u", target)
 	}
 
+	// No update check: it calls ProjectDiscovery's servers on every run.
+	args = append(args, "-duc")
+
 	// Output format - JSON for structured parsing
 	if s.OutputJSON {
 		args = append(args, "-jsonl")
@@ -315,7 +320,9 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 		args = append(args, "-rlm", fmt.Sprintf("%d", s.RateLimitMinute))
 	}
 	if s.Delay > 0 {
-		args = append(args, "-rd", fmt.Sprintf("%d", int(s.Delay.Milliseconds())))
+		// -rd is in seconds (katana's -delay); milliseconds made a 1s
+		// delay 1000s. Round up so a sub-second delay is not dropped.
+		args = append(args, "-rd", fmt.Sprintf("%d", int((s.Delay+time.Second-1)/time.Second)))
 	}
 
 	// JavaScript crawling
@@ -324,11 +331,14 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 	}
 
 	// Scope
-	if s.Scope != "" {
-		args = append(args, "-cs", string(s.Scope))
-	}
-	if s.FieldScope != "" {
+	// dn/rdn/fqdn are -fs (field-scope) values. -cs is a crawl-scope
+	// regex: "-cs rdn" kept only URLs containing the text "rdn". A custom
+	// FieldScope (field name or regex) replaces the preset.
+	switch {
+	case s.FieldScope != "":
 		args = append(args, "-fs", s.FieldScope)
+	case s.Scope != "":
+		args = append(args, "-fs", string(s.Scope))
 	}
 
 	// Discovery options
@@ -336,7 +346,7 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 		args = append(args, "-kf", s.KnownFiles)
 	}
 	if s.FormFill {
-		args = append(args, "-form-fill")
+		args = append(args, "-aff") // -automatic-form-fill; there is no -form-fill
 	}
 
 	// Filter extensions
@@ -376,11 +386,6 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 		}
 	}
 
-	// Output all types
-	if s.OutputAll {
-		args = append(args, "-output-all")
-	}
-
 	// Output file
 	if s.OutputFile != "" {
 		args = append(args, "-o", s.OutputFile)
@@ -400,14 +405,29 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 }
 
 // KatanaOutput represents the JSON output from katana.
+//
+// katana -jsonl writes the request and the response as objects. Decoding
+// "request" into a string failed, so every line was taken for a plain URL
+// and the whole JSON text was reported as the discovered URL.
 type KatanaOutput struct {
-	URL      string `json:"request,omitempty"`
-	Endpoint string `json:"endpoint,omitempty"`
-	Source   string `json:"source,omitempty"`
-	Method   string `json:"method,omitempty"`
-	Depth    int    `json:"depth,omitempty"`
-	Tag      string `json:"tag,omitempty"`
-	Status   int    `json:"status_code,omitempty"`
+	Request  KatanaRequest   `json:"request"`
+	Response *KatanaResponse `json:"response,omitempty"`
+	Error    string          `json:"error,omitempty"`
+}
+
+// KatanaRequest is the request katana made for a discovered endpoint.
+type KatanaRequest struct {
+	Method    string `json:"method,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	Tag       string `json:"tag,omitempty"`
+	Attribute string `json:"attribute,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Depth     int    `json:"depth,omitempty"`
+}
+
+// KatanaResponse is the response katana received.
+type KatanaResponse struct {
+	StatusCode int `json:"status_code,omitempty"`
 }
 
 // parseOutput parses katana JSON output.
@@ -438,13 +458,18 @@ func (s *Scanner) parseOutput(data []byte) ([]core.DiscoveredURL, error) {
 			continue
 		}
 
-		// Get URL from output
-		url := output.URL
-		if url == "" {
-			url = output.Endpoint
-		}
+		url := output.Request.Endpoint
 		if url == "" {
 			continue
+		}
+		// A request that got no response (refused, timed out) is not a
+		// discovered endpoint.
+		if output.Response == nil && output.Error != "" {
+			continue
+		}
+		status := 0
+		if output.Response != nil {
+			status = output.Response.StatusCode
 		}
 
 		// Deduplicate
@@ -454,14 +479,14 @@ func (s *Scanner) parseOutput(data []byte) ([]core.DiscoveredURL, error) {
 		seen[url] = true
 
 		// Determine URL type
-		urlType := determineURLType(url, output.Tag)
+		urlType := determineURLType(url, output.Request.Tag)
 
 		urls = append(urls, core.DiscoveredURL{
 			URL:        url,
-			Method:     output.Method,
-			Source:     output.Source,
-			StatusCode: output.Status,
-			Depth:      output.Depth,
+			Method:     output.Request.Method,
+			Source:     output.Request.Source,
+			StatusCode: status,
+			Depth:      output.Request.Depth,
 			Type:       urlType,
 			Extension:  getExtension(url),
 		})

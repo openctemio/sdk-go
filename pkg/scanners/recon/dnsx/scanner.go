@@ -44,7 +44,7 @@ type Scanner struct {
 	RecordTypes     []string // DNS record types to query (A, AAAA, CNAME, MX, NS, TXT, SOA, PTR, CAA)
 	QueryAll        bool     // Query all record types
 	ResponseOnly    bool     // Output only response values
-	RespectWildcard bool     // Respect wildcard responses
+	RespectWildcard bool     // Filter hosts that resolve only through a wildcard zone (-auto-wildcard)
 
 	// Output options
 	OutputFile string // Output file path
@@ -233,9 +233,14 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 	if opts != nil && opts.InputFile != "" {
 		args = append(args, "-l", opts.InputFile)
 	} else if target != "" {
-		// For single target, use stdin or domain flag
-		args = append(args, "-d", target)
+		// -l takes a file or a comma-separated host list. -d is dnsx's
+		// brute-force domain input: it requires a wordlist (-w) and exits
+		// with "missing wordlist" without one.
+		args = append(args, "-l", target)
 	}
+
+	// No update check: it calls ProjectDiscovery's servers on every run.
+	args = append(args, "-duc")
 
 	// Output format - JSON for structured parsing
 	if s.OutputJSON {
@@ -288,7 +293,9 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 		args = append(args, "-resp-only")
 	}
 	if s.RespectWildcard {
-		args = append(args, "-rw")
+		// dnsx has no -rw; -auto-wildcard detects wildcard zones and drops
+		// the hosts that only resolve because of them.
+		args = append(args, "-auto-wildcard")
 	}
 
 	// Output enrichment

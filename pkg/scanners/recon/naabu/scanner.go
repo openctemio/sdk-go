@@ -267,6 +267,9 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 		args = append(args, "-host", target)
 	}
 
+	// No update check: it calls ProjectDiscovery's servers on every run.
+	args = append(args, "-duc")
+
 	// Output format - JSON for structured parsing
 	if s.OutputJSON {
 		args = append(args, "-json")
@@ -308,7 +311,10 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 
 	// Scan type
 	if s.ScanType != "" {
-		args = append(args, "-"+string(s.ScanType))
+		// -s (-scan-type) takes the type as its value. A bare "-c" is
+		// naabu's worker-count flag: it swallowed the next argument and
+		// every scan failed with `invalid value "-silent" for flag -c`.
+		args = append(args, "-s", string(s.ScanType))
 	}
 
 	// Network options
@@ -338,7 +344,7 @@ func (s *Scanner) buildArgs(target string, opts *core.ReconOptions) []string {
 
 	// Service version detection
 	if s.ServiceVersion {
-		args = append(args, "-sv")
+		args = append(args, "-sV") // flags are case-sensitive; -sv is not defined
 	}
 
 	// Output file
