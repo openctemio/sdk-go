@@ -389,6 +389,14 @@ type HeartbeatRequest struct {
 
 	// Outbox is the durable outbox's state (absent without an outbox).
 	Outbox *HeartbeatOutbox `json:"outbox,omitempty"`
+
+	// The sensor-reported capabilities (core.CapabilityReport): absent when
+	// the sensor reports nothing, and an empty list when it reports none.
+	Tools             []core.ToolInfo `json:"tools,omitzero"`
+	Capabilities      []string        `json:"capabilities,omitzero"`
+	MaxConcurrentJobs int             `json:"max_concurrent_jobs,omitempty"`
+	OS                string          `json:"os,omitempty"`
+	Arch              string          `json:"arch,omitempty"`
 }
 
 // HeartbeatOutbox is the outbox state a heartbeat reports (additive to the
@@ -591,6 +599,12 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		// every sensor showed "No host info" on the platform.
 		Version:  status.Version,
 		Hostname: status.Hostname,
+		// What the sensor reports it can do (nil: nothing reported).
+		Tools:             status.Tools,
+		Capabilities:      status.Capabilities,
+		MaxConcurrentJobs: status.MaxConcurrentJobs,
+		OS:                status.OS,
+		Arch:              status.Arch,
 	}
 	ob := c.Outbox()
 	if ob != nil {

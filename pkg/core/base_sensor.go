@@ -62,6 +62,32 @@ type BaseSensor struct {
 	// assetResolver names the asset a scheduled scan's findings belong to
 	// (see SetAssetResolver).
 	assetResolver AssetResolver
+
+	// capReporter supplies the capability report on every heartbeat (see
+	// SetCapabilityReporter).
+	capReporter CapabilityReporter
+}
+
+// SetCapabilityReporter makes every heartbeat carry r's report: the tools
+// the sensor actually has, the capabilities it serves and its concurrency.
+// The platform dispatches by it (an administrator can only narrow it).
+// Without a reporter heartbeats report nothing and the platform keeps using
+// its administrator's settings. Call before Start.
+func (a *BaseSensor) SetCapabilityReporter(r CapabilityReporter) {
+	a.statusMu.Lock()
+	a.capReporter = r
+	a.statusMu.Unlock()
+}
+
+// withCapabilities applies the reporter's report to a heartbeat status.
+func (a *BaseSensor) withCapabilities(ctx context.Context, status *SensorStatus) *SensorStatus {
+	a.statusMu.RLock()
+	r := a.capReporter
+	a.statusMu.RUnlock()
+	if r != nil && status != nil {
+		r.CapabilityReport(ctx).Apply(status)
+	}
+	return status
 }
 
 // BaseSensorConfig configures a BaseSensor.
@@ -140,6 +166,8 @@ func NewBaseSensor(cfg *BaseSensorConfig, pusher Pusher) *BaseSensor {
 			Region:     region,
 			Version:    cfg.Version,
 			Hostname:   hostname,
+			OS:         HostOS(),
+			Arch:       HostArch(),
 		},
 		stopCh:   make(chan struct{}),
 		verbose:  cfg.Verbose,
@@ -331,7 +359,7 @@ func (a *BaseSensor) Stop(ctx context.Context) error {
 	// A final heartbeat with a rejected key would only be another 401.
 	if a.pusher != nil && !a.authGate.Rejected() {
 		ctx2, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := a.pusher.SendHeartbeat(ctx2, a.Status()); err != nil {
+		if err := a.pusher.SendHeartbeat(ctx2, a.withCapabilities(ctx2, a.Status())); err != nil {
 			if a.verbose {
 				fmt.Printf("[%s] Final heartbeat error: %v\n", a.name, err)
 			}
@@ -435,6 +463,7 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 	if a.pusher == nil {
 		return next, nil
 	}
+	status = a.withCapabilities(ctx, status)
 	dp, doorbell := a.pusher.(DoorbellPusher)
 	if a.doorbell == nil || !doorbell {
 		err := a.pusher.SendHeartbeat(ctx, status)
