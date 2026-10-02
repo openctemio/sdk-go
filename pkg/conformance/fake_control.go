@@ -175,8 +175,15 @@ func (f *FakePlatform) pollV2(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		exp := time.Now().Add(time.Hour).UTC()
-		out.Commands = append(out.Commands, protov2.Command{ID: id, Type: "scan", Priority: "normal", Status: "pending",
-			Payload: json.RawMessage(`{"scanner":"fake"}`), CreatedAt: time.Now().UTC(), ExpiresAt: &exp, Result: json.RawMessage("null"),
+		typ, payload := "scan", json.RawMessage(`{"scanner":"fake"}`)
+		if t := f.cmdType[id]; t != "" {
+			typ = t
+		}
+		if p := f.cmdPayload[id]; len(p) > 0 {
+			payload = p
+		}
+		out.Commands = append(out.Commands, protov2.Command{ID: id, Type: typ, Priority: "normal", Status: "pending",
+			Payload: payload, CreatedAt: time.Now().UTC(), ExpiresAt: &exp, Result: json.RawMessage("null"),
 			LeaseEpoch: f.cmdEpoch[id]})
 	}
 	f.mu.Unlock()

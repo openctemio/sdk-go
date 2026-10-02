@@ -22,6 +22,20 @@ All notable changes to `github.com/openctemio/sdk-go`.
   the epoch on commands and refuses a complete or fail under another epoch
   with `invalid-transition`, as the platform does. `FakePlatform.ReclaimCommand`
   simulates a lease loss; `FakePlatform.LeaseEpoch` reads a command's epoch.
+- **Sensor conformance suite for any sensor** (`conformance.RunSensorSuite`).
+  A sensor built on the SDK (or any sensor that speaks the protocol) runs it
+  from its own tests with a function that starts it against a
+  `SensorEndpoint`. Each check gets a fresh fake platform: the sensor
+  heartbeats and names its SDK; it registers its manifest when asked; a
+  command of a type it does not handle is left pending for another sensor
+  (or failed), never claimed and abandoned; it keeps working when every
+  answer carries a JSON member no SDK knows (forward compatibility); and,
+  given `SuiteOptions.ScanPayload`, its command completes with every
+  report committed first. The kit passes it (`pkg/sensorkit` test).
+- `FakePlatform.QueueCommandPayload` queues a command with its own type and
+  payload. `FakePlatform.FutureFields` / `SetFutureFields` make every JSON
+  answer (problem documents included) carry `FutureMember`, as a newer
+  platform's would.
 
 ### Security
 
