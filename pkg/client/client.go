@@ -408,6 +408,12 @@ type HeartbeatRequest struct {
 	Capacity        *resource.Capacity      `json:"capacity,omitempty"`
 	Queue           *core.QueueStats        `json:"queue,omitempty"`
 	RunningCommands []string                `json:"running,omitzero"`
+
+	// SDK and Sensor name the SDK and the sensor binary. Every heartbeat
+	// sends both: what the status carries, else the SDK linked into this
+	// binary and a sensor block built from the status's version.
+	SDK    *core.SDKInfo     `json:"sdk,omitempty"`
+	Sensor *core.SensorBuild `json:"sensor,omitempty"`
 }
 
 // MarshalJSON encodes the heartbeat. active_jobs is sent even when it is 0
@@ -638,6 +644,17 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		Capacity:        status.Capacity,
 		Queue:           status.Queue,
 		RunningCommands: status.RunningCommands,
+
+		SDK:    status.SDK,
+		Sensor: status.Sensor,
+	}
+	if req.SDK == nil {
+		info := core.CurrentSDKInfo()
+		req.SDK = &info
+	}
+	if req.Sensor == nil {
+		b := core.NewSensorBuild("", status.Version, "", "")
+		req.Sensor = &b
 	}
 	ob := c.Outbox()
 	if ob != nil {
