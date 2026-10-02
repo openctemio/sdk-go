@@ -84,6 +84,13 @@ func ResolveCredentialsFile(explicit string) (string, error) {
 // and a warning names both files. When from does not exist there is nothing
 // to do. It reports whether a file was moved.
 func MigrateCredentialsFile(from, to string) (moved bool, err error) {
+	return migrateCredentialsFile(from, to, true)
+}
+
+// migrateCredentialsFile is MigrateCredentialsFile; requireSensorID refuses
+// a file without a sensor id (a daemon that renews its key may not know its
+// id, so the move into the state directory does not require one).
+func migrateCredentialsFile(from, to string, requireSensorID bool) (moved bool, err error) {
 	if _, err := os.Lstat(from); errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	} else if err != nil {
@@ -102,7 +109,7 @@ func MigrateCredentialsFile(from, to string) (moved bool, err error) {
 	if err != nil {
 		return false, fmt.Errorf("migrate credentials from %s: %w", from, err)
 	}
-	if creds.SensorID == "" || creds.APIKey == "" {
+	if (requireSensorID && creds.SensorID == "") || creds.APIKey == "" {
 		return false, fmt.Errorf("migrate credentials from %s: the file has no sensor id or API key", from)
 	}
 
@@ -130,7 +137,8 @@ func MigrateCredentialsFile(from, to string) (moved bool, err error) {
 }
 
 func sameCredentials(a, b *SensorCredentials) bool {
-	if a.SensorID != b.SensorID || a.APIKey != b.APIKey || a.APIPrefix != b.APIPrefix {
+	if a.SensorID != b.SensorID || a.APIKey != b.APIKey || a.APIPrefix != b.APIPrefix ||
+		a.ConfiguredKeySHA256 != b.ConfiguredKeySHA256 || a.NeverExpires != b.NeverExpires {
 		return false
 	}
 	if (a.ExpiresAt == nil) != (b.ExpiresAt == nil) {

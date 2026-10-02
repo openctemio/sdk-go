@@ -6,12 +6,12 @@
       "path": "/api/v1/agent/heartbeat",
       "headers": {
         "Authorization": "Bearer rda_test",
-        "Content-Length": "208",
+        "Content-Length": "233",
         "Content-Type": "application/json",
         "User-Agent": "openctem-sdk-go/VERSION",
         "X-Agent-Id": "11111111-1111-1111-1111-111111111111"
       },
-      "body": "{\"name\":\"s1\",\"status\":\"running\",\"message\":\"ok\",\"scanners\":[\"nuclei\"],\"uptime_seconds\":10,\"total_scans\":2,\"region\":\"r1\",\"sdk\":{\"name\":\"openctem-sdk-go\",\"version\":\"VERSION\"},\"sensor\":{\"name\":\"goldentest.test\"}}"
+      "body": "{\"name\":\"s1\",\"status\":\"running\",\"instance_id\":\"INSTANCE\",\"message\":\"ok\",\"scanners\":[\"nuclei\"],\"uptime_seconds\":10,\"total_scans\":2,\"region\":\"r1\",\"sdk\":{\"name\":\"openctem-sdk-go\",\"version\":\"VERSION\"},\"sensor\":{\"name\":\"goldentest.test\"}}"
     },
     {
       "call": "client.PushFindings",

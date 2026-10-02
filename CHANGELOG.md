@@ -4,11 +4,13 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
-### Added after v0.11.0
+### Upgrade notes
 
-Only additions (checked by `api-compat` against v0.11.0). v0.11.0 was
-tagged from the entries below this section, which still need their
-`## v0.11.0` heading (with `sdk.Version` bumped in the same release PR).
+Only additions (checked by `api-compat` against v0.11.0). Every heartbeat
+now carries `instance_id` (a random id per process); platforms that do not
+know it ignore it.
+
+### Added
 
 - **`pkg/sensorkit`: everything a sensor needs to work with the platform, in
   one call.** A sensor implements its tools; `sensorkit.New(Options)` +
@@ -38,8 +40,44 @@ tagged from the entries below this section, which still need their
 - `legacyv1.SensorRenamedEnv`, `SensorRenamedFlags`, `ApplyRenamedEnv`,
   `ApplyRenamedFlags`: the sensor binary's renamed settings, migrated in one
   place (moved from the sensor).
+- **Per-process instance id on every heartbeat** (api RFC-032 Phase 0):
+  `core.ProcessInstanceID()` (32 hex characters, stable for the life of
+  the process), `core.SensorStatus.InstanceID` and
+  `client.HeartbeatRequest.InstanceID` (`instance_id`, defaulting to the
+  process id). A restart changes it once; one key running in two places
+  makes two ids alternate, which the platform flags as a cloned identity.
+- **The renewed API key survives a restart** (api RFC-032 Phase 0). A key
+  renewal retires the key a sensor was installed with, so a recreated
+  container must find the renewed key again. In `pkg/platform`:
+  - `ResolveStateDir(explicit)`: `explicit`, `$SENSOR_STATE_DIR`,
+    `DefaultStateDir` (`/var/lib/openctem/state`) when writable, else
+    `~/.openctem`.
+  - `ResolveStateCredentialsFile(explicit, stateDir)`: the credentials file
+    in the state directory (`StateCredentialsFile`), moving one an earlier
+    version kept in `~/.openctem` there first.
+  - `ChooseAPIKey(store, configuredKey, sensorID)`: the renewed key from
+    the file wins over the configured one, unless the configured key is
+    not the one it was renewed from (an administrator regenerated the key
+    and the operator configured the new one).
+  - `RotatedKeySaver(store, configuredKey, sensorID)`: a
+    `KeyRenewConfig.OnRotated` that saves each renewed key atomically, 0600
+    (directory 0700), with its expiry, whether it never expires
+    (`SensorCredentials.NeverExpires`) and the fingerprint of the
+    configured key (`SensorCredentials.ConfiguredKeySHA256`, never the key
+    itself).
+  - `CheckStatePersistence(dir)` and `DecideKeyAutoRenew(setting, p)`:
+    renew automatically only when the state survives the container being
+    recreated (outside a container, always; inside, only on a mounted
+    volume that is not a tmpfs), unless the setting forces it on or off.
 
-### v0.11.0 (released 2026-10-02)
+### Changed
+
+- `platform.Bootstrapper` and `platform.EnsureRegistered` document that no
+  OpenCTEM API serves `POST /api/v1/platform/register` (bootstrap tokens
+  were never built; enrollment tokens replace them in api RFC-032 Phase 2).
+  Nothing is removed.
+
+## v0.11.0 — 2026-10-02
 
 ### Upgrade notes
 
@@ -93,6 +131,11 @@ platform then dispatches by those tools; to keep sending nothing, set
   a tool without history: `resource.ManagerConfig.CostHints`
   (`registry.CostHints()`) and `CostBook.SetPrior`. The learned history
   still replaces it.
+
+### Fixed
+
+- `TestQueue_DrainReleasesUnfinished` no longer races the poller's claim
+  of the next command (test only; #100).
 
 ## v0.10.0 — 2026-10-02
 
