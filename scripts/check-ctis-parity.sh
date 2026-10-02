@@ -19,7 +19,10 @@
 # the canonical ref/source with CTIS_REF / CTIS_TYPES_URL if needed.
 set -euo pipefail
 
-CTIS_REF="${CTIS_REF:-main}"
+# Pinned to the ctis commit this copy mirrors, so a change on ctis main does
+# not turn every sdk-go PR red before the copy is synced. Bump it together with
+# pkg/ctis (to the release tag once one exists, e.g. v1.3.0).
+CTIS_REF="${CTIS_REF:-1af1b6a7c34a45388bb2d28e49b8cbd43c991b11}"
 CTIS_TYPES_URL="${CTIS_TYPES_URL:-https://raw.githubusercontent.com/openctemio/ctis/${CTIS_REF}/types.go}"
 LOCAL_TYPES="$(cd "$(dirname "$0")/.." && pwd)/pkg/ctis/types.go"
 

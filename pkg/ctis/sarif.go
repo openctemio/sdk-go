@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -237,11 +238,21 @@ func FromSARIF(data []byte, opts *ConvertOptions) (*Report, error) {
 	findingType := detectFindingType(run.Tool.Driver.Name, opts.ToolType)
 
 	for i, result := range run.Results {
+		// Severity: prefer the result-level SARIF level, but fall back to the
+		// rule's defaultConfiguration.level when the result omits it (per the
+		// SARIF spec — many tools set severity only at the rule level).
+		// Without this, rule-level-only severities all collapsed to medium.
+		level := result.Level
+		if level == "" {
+			if rule, ok := ruleMap[result.RuleID]; ok && rule.DefaultConfiguration != nil {
+				level = rule.DefaultConfiguration.Level
+			}
+		}
 		finding := Finding{
 			ID:         fmt.Sprintf("finding-%d", i+1),
 			Type:       findingType,
 			Title:      result.Message.Text,
-			Severity:   mapSARIFLevel(result.Level),
+			Severity:   mapSARIFLevel(level),
 			Confidence: opts.DefaultConfidence,
 			RuleID:     result.RuleID,
 		}
@@ -301,22 +312,35 @@ func FromSARIF(data []byte, opts *ConvertOptions) (*Report, error) {
 			}
 		}
 
-		// Add fingerprint (hash if too long to fit VARCHAR(64))
-		for _, fp := range result.Fingerprints {
-			if len(fp) > 64 {
-				// Hash long fingerprints to fit database constraint
-				hash := sha256.Sum256([]byte(fp))
-				finding.Fingerprint = hex.EncodeToString(hash[:])
-			} else {
-				finding.Fingerprint = fp
-			}
-			break
-		}
+		finding.Fingerprint = sarifFingerprint(result.Fingerprints)
 
 		report.Findings = append(report.Findings, finding)
 	}
 
 	return report, nil
+}
+
+// sarifFingerprint picks the result fingerprint with the lowest key, so the
+// same log always yields the same value (ranging over the map picked a random
+// key, and the finding's dedup identity changed between runs). Values longer
+// than 64 characters are SHA-256 hashed to fit receivers that store 64.
+func sarifFingerprint(fps map[string]string) string {
+	keys := make([]string, 0, len(fps))
+	for k, v := range fps {
+		if v != "" {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	fp := fps[keys[0]]
+	if len(fp) > 64 {
+		hash := sha256.Sum256([]byte(fp))
+		return hex.EncodeToString(hash[:])
+	}
+	return fp
 }
 
 // sarifAsset returns the asset a SARIF run's findings belong to, and false

@@ -44,6 +44,9 @@ type Dependency struct {
 
 	// All locations where this dependency is defined
 	Locations []DependencyLocation `json:"locations,omitempty"`
+
+	// Custom properties
+	Properties Properties `json:"properties,omitempty"`
 }
 
 // DependencyLocation represents a location where a dependency is defined.

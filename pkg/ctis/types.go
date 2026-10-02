@@ -1304,6 +1304,17 @@ const (
 	DataFlowLocationTransform DataFlowLocationType = "transform"
 )
 
+// AllDataFlowLocationTypes returns every valid data flow location type.
+func AllDataFlowLocationTypes() []DataFlowLocationType {
+	return []DataFlowLocationType{
+		DataFlowLocationSource,
+		DataFlowLocationSink,
+		DataFlowLocationPropagator,
+		DataFlowLocationSanitizer,
+		DataFlowLocationTransform,
+	}
+}
+
 // StackTrace represents a call stack trace (SARIF stack).
 type StackTrace struct {
 	// Stack description/message
@@ -1360,6 +1371,10 @@ type Suppression struct {
 	// Suppression status: accepted, under_review, rejected
 	Status string `json:"status,omitempty"`
 
+	// Short reason code or phrase, e.g. "false_positive", "test_code",
+	// "risk_accepted".
+	Reason string `json:"reason,omitempty"`
+
 	// Justification for suppression
 	Justification string `json:"justification,omitempty"`
 
@@ -1368,6 +1383,9 @@ type Suppression struct {
 
 	// When the finding was suppressed
 	SuppressedAt *time.Time `json:"suppressed_at,omitempty"`
+
+	// When the suppression stops applying. Empty means it does not expire.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // FindingLocation contains location information for code-based findings.
@@ -2457,13 +2475,20 @@ func itoa(i int) string {
 	if i == 0 {
 		return "0"
 	}
-	if i < 0 {
-		return "-" + itoa(-i)
+	neg := i < 0
+	// Work in unsigned to avoid overflow when negating math.MinInt
+	// (-MinInt is not representable as int; unsigned negation is well-defined).
+	u := uint(i)
+	if neg {
+		u = -u
 	}
 	digits := ""
-	for i > 0 {
-		digits = string(rune('0'+i%10)) + digits
-		i /= 10
+	for u > 0 {
+		digits = string(rune('0'+u%10)) + digits
+		u /= 10
+	}
+	if neg {
+		return "-" + digits
 	}
 	return digits
 }
