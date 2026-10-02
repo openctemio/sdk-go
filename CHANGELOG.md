@@ -4,6 +4,8 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+## v0.15.0 — 2026-10-02
+
 ### Added
 
 - **Proxy settings per outbound path** (api RFC-034 Phase 0).
