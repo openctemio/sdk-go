@@ -11,7 +11,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/platform"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
@@ -33,9 +33,9 @@ const (
 	EnvMaxJobs      = "SENSOR_MAX_JOBS"    // 1-100; unset: the slots follow the resources
 	EnvDrainGrace   = "SENSOR_DRAIN_GRACE" // e.g. 45s, 2m (1s-1h; default 30s)
 	EnvTools        = "SENSOR_TOOLS"       // comma-separated allowlist
-	EnvStateDir     = "SENSOR_STATE_DIR"   // local state (tool cost history)
+	EnvStateDir     = "SENSOR_STATE_DIR"   // local state: the renewed API key, the tool cost history
 	EnvCACertFile   = "SENSOR_CA_CERT_FILE"
-	EnvKeyAutoRenew = "PLATFORM_KEY_AUTORENEW" // "true" turns key auto-renewal on
+	EnvKeyAutoRenew = "PLATFORM_KEY_AUTORENEW" // true | false; unset: on when the state directory persists
 
 	EnvOutbox         = "SENSOR_OUTBOX"           // on | off (default: on for a daemon)
 	EnvOutboxDir      = "SENSOR_OUTBOX_DIR"       // default DefaultOutboxDir
@@ -255,20 +255,12 @@ func CheckCredentials(apiURL, apiKey string, help CredentialsHelp) error {
 	return usageError(e)
 }
 
-// ResolveStateDir is where the sensor keeps local state (the tool cost
-// history): SENSOR_STATE_DIR, else the outbox directory's parent
-// (/var/lib/openctem in the images), else ~/.openctem.
-func ResolveStateDir(outboxDir string) string {
-	if d := strings.TrimSpace(os.Getenv(EnvStateDir)); d != "" {
-		return d
-	}
-	if outboxDir != "" {
-		return filepath.Dir(outboxDir)
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".openctem")
-	}
-	return ""
+// ResolveStateDir is where the sensor keeps local state (the API key it
+// renews, the tool cost history): explicit, else SENSOR_STATE_DIR, else
+// /var/lib/openctem/state when writable (the images create it; mount a
+// volume there), else ~/.openctem (platform.ResolveStateDir).
+func ResolveStateDir(explicit string) string {
+	return platform.ResolveStateDir(explicit)
 }
 
 // ParseToolList splits a comma-separated tool list ("semgrep, trivy,,nuclei")

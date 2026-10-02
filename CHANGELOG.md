@@ -70,8 +70,22 @@ know it ignore it.
     recreated (outside a container, always; inside, only on a mounted
     volume that is not a tmpfs), unless the setting forces it on or off.
 
+- **`sensorkit` keeps the renewed key in the state directory** (api RFC-032
+  Phase 0), through the `pkg/platform` functions above:
+  `Options.StateDir` / `SENSOR_STATE_DIR` default to
+  `/var/lib/openctem/state` when writable (else `~/.openctem`) and hold the
+  renewed key and the tool cost history; the key is chosen with
+  `ChooseAPIKey` on every start (renewal on or not), saved with
+  `RotatedKeySaver`, and a `~/.openctem` file is moved in. Key renewal is
+  on when the state directory persists, off otherwise;
+  `Options.KeyAutoRenew` / `NoKeyAutoRenew` or `PLATFORM_KEY_AUTORENEW=true|false`
+  force it. The kit's heartbeats carry `instance_id`.
+
 ### Changed
 
+- `sensorkit.ResolveStateDir(explicit)` resolves the state directory
+  (`platform.ResolveStateDir`) instead of using the outbox directory's
+  parent; the tool cost history moves with it.
 - `platform.Bootstrapper` and `platform.EnsureRegistered` document that no
   OpenCTEM API serves `POST /api/v1/platform/register` (bootstrap tokens
   were never built; enrollment tokens replace them in api RFC-032 Phase 2).
