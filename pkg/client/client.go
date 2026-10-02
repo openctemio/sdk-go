@@ -64,6 +64,8 @@ type Client struct {
 
 	// supp caches the v2 suppression list and its ETag.
 	supp suppressionCache
+	// leases keeps the lease epoch of each held v2 command (lease.go).
+	leases leaseTable
 
 	// Durable outbox (optional; EnableOutbox).
 	obMu       sync.Mutex

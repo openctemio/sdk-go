@@ -228,6 +228,7 @@ func (c *Client) pollCommandsV2(ctx context.Context, limit int) ([]Command, erro
 			ID: v.ID, Type: v.Type, Priority: v.Priority, Status: v.Status, Payload: v.Payload,
 			ErrorMessage: v.ErrorMessage, CreatedAt: v.CreatedAt, ExpiresAt: v.ExpiresAt,
 			AcknowledgedAt: v.AcknowledgedAt, StartedAt: v.StartedAt, CompletedAt: v.CompletedAt, Result: v.Result,
+			LeaseEpoch: v.LeaseEpoch, LeaseExpiresAt: v.LeaseExpiresAt,
 		}
 		if v.SensorID != nil {
 			cmd.SourceID = *v.SensorID
@@ -239,8 +240,10 @@ func (c *Client) pollCommandsV2(ctx context.Context, limit int) ([]Command, erro
 
 // transitionV2 posts one command transition. A replay of a transition the
 // platform already applied answers 200 (api RFC-029 D5), so retries are safe.
-func (c *Client) transitionV2(ctx context.Context, cmdID, action string, body any, retries int) error {
-	_, err := c.v2JSON(ctx, http.MethodPost, protov2.CommandActionPath(url.PathEscape(cmdID), action), body, nil, nil, retries)
+// out (nil: ignore) receives the command as the answer returns it and
+// extra adds request headers.
+func (c *Client) transitionV2(ctx context.Context, cmdID, action string, body, out any, extra http.Header, retries int) error {
+	_, err := c.v2JSON(ctx, http.MethodPost, protov2.CommandActionPath(url.PathEscape(cmdID), action), body, out, extra, retries)
 	return err
 }
 

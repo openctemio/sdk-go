@@ -5,9 +5,11 @@ package strategy
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/gitenv"
 )
 
@@ -144,6 +146,11 @@ func GetChangedFiles(repoPath, currentSha, baselineSha string) ([]ChangedFile, e
 	if repoPath != "" {
 		cmd.Dir = repoPath
 	}
+	// git runs in the scanned repository, whose configuration can run
+	// commands: it gets the scanner environment (never the sensor's API key
+	// or other credentials), plus the variables that locate the repository
+	// and its configuration.
+	cmd.Env = core.ScannerEnviron(gitLocationEnv(os.Environ()))
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -154,6 +161,27 @@ func GetChangedFiles(repoPath, currentSha, baselineSha string) ([]ChangedFile, e
 	}
 
 	return parseGitDiffOutput(stdout.String()), nil
+}
+
+// gitLocationEnv is the subset of env that tells git where the repository
+// and its configuration are (a CI runner may set them; safe.directory often
+// arrives as GIT_CONFIG_COUNT/KEY/VALUE).
+func gitLocationEnv(env []string) map[string]string {
+	out := map[string]string{}
+	for _, kv := range env {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		switch {
+		case name == "GIT_DIR", name == "GIT_WORK_TREE", name == "GIT_CEILING_DIRECTORIES",
+			name == "GIT_DISCOVERY_ACROSS_FILESYSTEM", name == "GIT_CONFIG_GLOBAL",
+			name == "GIT_CONFIG_SYSTEM", name == "GIT_CONFIG_NOSYSTEM", name == "GIT_CONFIG_COUNT",
+			strings.HasPrefix(name, "GIT_CONFIG_KEY_"), strings.HasPrefix(name, "GIT_CONFIG_VALUE_"):
+			out[name] = value
+		}
+	}
+	return out
 }
 
 // parseGitDiffOutput parses the output of git diff --name-status.
