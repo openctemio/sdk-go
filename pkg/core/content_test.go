@@ -108,3 +108,27 @@ func TestParseRefreshContentRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestContentInfoStale(t *testing.T) {
+	now := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) *time.Time { v := now.Add(-d); return &v }
+	maxAge := 14 * 24 * time.Hour
+	cases := []struct {
+		name string
+		c    ContentInfo
+		max  time.Duration
+		want bool
+	}{
+		{"fresh", ContentInfo{UpdatedAt: at(24 * time.Hour)}, maxAge, false},
+		{"old, never confirmed", ContentInfo{UpdatedAt: at(20 * 24 * time.Hour)}, maxAge, true},
+		{"old, newest release confirmed an hour ago", ContentInfo{UpdatedAt: at(20 * 24 * time.Hour), CheckedAt: at(time.Hour)}, maxAge, false},
+		{"old, last confirmed long ago (refresh failing)", ContentInfo{UpdatedAt: at(20 * 24 * time.Hour), CheckedAt: at(15 * 24 * time.Hour)}, maxAge, true},
+		{"no limit", ContentInfo{UpdatedAt: at(400 * 24 * time.Hour)}, 0, false},
+		{"unknown age", ContentInfo{}, maxAge, false},
+	}
+	for _, tc := range cases {
+		if got := tc.c.Stale(now, tc.max); got != tc.want {
+			t.Errorf("%s: Stale = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

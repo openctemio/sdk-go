@@ -42,6 +42,11 @@ type ContentInfo struct {
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 	// FetchedAt is when this sensor installed it.
 	FetchedAt *time.Time `json:"fetched_at,omitempty"`
+	// CheckedAt is when the sensor last confirmed with its source that this
+	// is still the newest version (or the pinned one). Content that is old
+	// because its publisher has released nothing newer is not stale: see
+	// Stale.
+	CheckedAt *time.Time `json:"checked_at,omitempty"`
 	// Source is where it came from: a registry repository, a URL, "image"
 	// for content baked into the sensor image, or the tool's own fetch.
 	Source string `json:"source,omitempty"`
@@ -68,6 +73,23 @@ func (c ContentInfo) Age(now time.Time) (age time.Duration, ok bool) {
 	default:
 		return 0, false
 	}
+}
+
+// Stale reports whether the content is stale at now under maxAge: older
+// than maxAge (Age) AND not confirmed current (CheckedAt) within maxAge.
+// A template set whose newest release is three weeks old is not stale while
+// the sensor keeps confirming that nothing newer exists; a database whose
+// refresh keeps failing is. maxAge <= 0 never makes content stale; content
+// of unknown age is not stale.
+func (c ContentInfo) Stale(now time.Time, maxAge time.Duration) bool {
+	if maxAge <= 0 {
+		return false
+	}
+	age, ok := c.Age(now)
+	if !ok || age <= maxAge {
+		return false
+	}
+	return c.CheckedAt == nil || now.Sub(*c.CheckedAt) > maxAge
 }
 
 // ContentPolicy is a tenant's policy for scanner content, sent to sensors on
