@@ -4,6 +4,8 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+## v0.14.0 — 2026-10-02
+
 ### Added
 
 - **Sensor manifest** (api RFC-033). A `BaseSensor` builds its manifest from
