@@ -64,8 +64,13 @@ type BaseSensor struct {
 	assetResolver AssetResolver
 
 	// capReporter supplies the capability report on every heartbeat (see
-	// SetCapabilityReporter).
+	// SetCapabilityReporter); nil reports the tool registry.
 	capReporter CapabilityReporter
+
+	// tools is the sensor's tool registry: AddScanner and AddCollector
+	// register into it, and it is the default capability report (see
+	// Tools).
+	tools *ToolRegistry
 
 	// loadReporter supplies the active and maximum jobs on every heartbeat
 	// (see SetLoadReporter).
@@ -82,15 +87,27 @@ func (a *BaseSensor) SetLoadReporter(r LoadReporter) {
 	a.statusMu.Unlock()
 }
 
-// SetCapabilityReporter makes every heartbeat carry r's report: the tools
-// the sensor actually has, the capabilities it serves and its concurrency.
-// The platform dispatches by it (an administrator can only narrow it).
-// Without a reporter heartbeats report nothing and the platform keeps using
-// its administrator's settings. Call before Start.
+// SetCapabilityReporter makes every heartbeat carry r's report instead of
+// the tool registry's (see Tools): the tools the sensor actually has, the
+// capabilities it serves and its concurrency. The platform dispatches by it
+// (an administrator can only narrow it). nil goes back to the registry. A
+// reporter that returns an empty CapabilityReport reports nothing, and the
+// platform keeps using its administrator's settings. Call before Start.
 func (a *BaseSensor) SetCapabilityReporter(r CapabilityReporter) {
 	a.statusMu.Lock()
 	a.capReporter = r
 	a.statusMu.Unlock()
+}
+
+// Tools returns the sensor's tool registry. Every heartbeat reports it
+// (unless SetCapabilityReporter replaced it): the scanners and collectors
+// added with AddScanner and AddCollector are in it already; register any
+// other tool the sensor runs (an executor's scanners:
+// DefaultCommandExecutor.SetToolRegistry), the capabilities it serves
+// whatever the tools (AddCapabilities) and its cap (SetMaxConcurrentJobs).
+// The platform needs no list of a sensor's tools: it learns them here.
+func (a *BaseSensor) Tools() *ToolRegistry {
+	return a.tools
 }
 
 // withCapabilities applies the reporter's report to a heartbeat status.
@@ -99,6 +116,9 @@ func (a *BaseSensor) withCapabilities(ctx context.Context, status *SensorStatus)
 	r := a.capReporter
 	lr := a.loadReporter
 	a.statusMu.RUnlock()
+	if r == nil && a.tools != nil {
+		r = a.tools
+	}
 	if r != nil && status != nil {
 		r.CapabilityReport(ctx).Apply(status)
 	}
@@ -206,6 +226,7 @@ func NewBaseSensor(cfg *BaseSensorConfig, pusher Pusher) *BaseSensor {
 		stopCh:   make(chan struct{}),
 		verbose:  cfg.Verbose,
 		authGate: NewAuthGate(nil),
+		tools:    NewToolRegistry(),
 	}
 }
 
@@ -226,6 +247,9 @@ func (a *BaseSensor) AddScanner(scanner Scanner) error {
 
 	a.scanners[name] = scanner
 	a.status.Scanners = append(a.status.Scanners, name)
+	if err := a.tools.RegisterScanner(scanner); err != nil && a.verbose {
+		fmt.Printf("[%s] Scanner %s is not reported to the platform: %v\n", a.name, name, err)
+	}
 
 	if a.verbose {
 		fmt.Printf("[%s] Added scanner: %s\n", a.name, name)
@@ -246,6 +270,9 @@ func (a *BaseSensor) AddCollector(collector Collector) error {
 
 	a.collectors[name] = collector
 	a.status.Collectors = append(a.status.Collectors, name)
+	if err := a.tools.RegisterCollector(collector); err != nil && a.verbose {
+		fmt.Printf("[%s] Collector %s is not reported to the platform: %v\n", a.name, name, err)
+	}
 
 	if a.verbose {
 		fmt.Printf("[%s] Added collector: %s\n", a.name, name)
@@ -264,6 +291,7 @@ func (a *BaseSensor) RemoveScanner(name string) error {
 	}
 
 	delete(a.scanners, name)
+	a.tools.Unregister(name)
 
 	// Update status
 	newScanners := make([]string, 0)
@@ -287,6 +315,7 @@ func (a *BaseSensor) RemoveCollector(name string) error {
 	}
 
 	delete(a.collectors, name)
+	a.tools.Unregister(name)
 
 	// Update status
 	newCollectors := make([]string, 0)
