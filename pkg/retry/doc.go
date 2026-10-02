@@ -12,7 +12,7 @@
 // (outbox.Outbox.ImportLegacyRetryQueue).
 //
 // What remains here are the types those wrappers return and the back-off
-// helpers. This package will be removed in sdk-go v0.9.0.
+// helpers. This package will be removed in sdk-go v0.10.0.
 package retry
 
 import (

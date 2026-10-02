@@ -38,7 +38,7 @@ func (s *suppressionServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func newSuppressionClient(t *testing.T, s *suppressionServer) *Client {
 	t.Helper()
-	srv := httptest.NewServer(s)
+	srv := httptest.NewServer(v1Only(s.ServeHTTP))
 	t.Cleanup(srv.Close)
 	return New(&Config{BaseURL: srv.URL, APIKey: "rda_test", MaxRetries: 1, RetryDelay: time.Millisecond})
 }

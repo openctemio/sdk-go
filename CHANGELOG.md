@@ -4,6 +4,61 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Upgrade notes
+
+None. No exported identifier was removed, renamed or changed signature
+(checked by the new `api-compat` CI job against v0.8.1). Bump the module
+version: a sensor gets protocol v2 for everything the platform offers with no
+code change.
+
+### Changed
+
+- **Protocol v2 for the whole sensor surface** (api RFC-029). The client asks
+  the platform once (`GET /api/v2/sensor/hello`, cached for an hour) and uses
+  protocol v2 for every feature it lists, protocol v1 for the rest:
+  heartbeat (`POST /api/v2/sensor/heartbeat`), command poll and transitions
+  (`GET /api/v2/sensor/commands`, `POST …/commands/{id}/claim|start|complete|fail`),
+  suppressions (`GET /api/v2/sensor/suppressions`, revalidated with its
+  ETag), fingerprint queries (`POST /api/v2/sensor/fingerprints/check` and
+  `/baseline-diff`, split at the platform's limit) and key renewal
+  (`platform.PlatformClient.RenewKey`: `POST /api/v2/sensor/keys`, v1 only when
+  the platform does not serve it). Results keep using v2 as since v0.8.0.
+  Against api v0.8 (results only on v2) the other calls stay on v1; against an
+  older platform everything is v1, as before.
+- **No `X-Agent-ID` on protocol v2.** The platform identifies a sensor by its
+  key; the header is still sent on v1 requests, byte for byte as before.
+- Command transitions on v2 are idempotent: a completion whose answer was
+  lost is retried and answered `200` (v1 answered `400`). A command that
+  another sensor claimed, or that was canceled, expired or already finished,
+  is reported as such: `client.IsCommandGone(err)`.
+- A disabled sensor's v2 heartbeat is answered `200` with the `pause` action.
+  `SendHeartbeatWithHints` returns it; `SendHeartbeat` and `TestConnection`
+  (which do not act on hints) return a 401-classified error, as v1 did.
+- `SENSOR_PROTOCOL` / `Config.Protocol` keep their meaning: `v1` never
+  touches `/api/v2` and is byte-identical to v0.7; `v2` requires v2 for
+  results (other features use v2 when offered); `auto` is the default.
+- A v1 answer carrying `Deprecation` (api v0.9 deprecates v1) logs one
+  warning per process.
+- `pkg/retry`'s removal moves to v0.10.0, so this release removes nothing.
+
+### Added
+
+- `client.Client.ProtocolFeatures()`: the features negotiated on v2.
+- `client.IsCommandGone(err)`.
+- `platform.RenewError` (the refused-renewal error; its message is unchanged).
+- `pkg/sensorproto/v2`: the control-plane vocabulary (paths, features, the
+  RFC-029 problem types under `https://openctem.io/problems/sensor/`, request
+  and response types, `Hello.Supports`, `Hello.Deprecations`,
+  `Problem.State`, the control-plane limits).
+- `pkg/conformance`: the fake platform serves the RFC-029 control plane
+  (`Control`, `SetControl`, `QueueCommand`, `SetPaused`, `CommandResult`), and
+  the suite proves a sensor speaks only `/api/v2/sensor/*` without
+  `X-Agent-ID` on a full v2 platform, falls back per feature on api v0.8 and
+  on older platforms, and replays lost transitions.
+- CI: `api-compat` (apidiff against the latest release; incompatible changes
+  need the `breaking-change` label and upgrade notes) and `sensor-compat`
+  (`openctemio/sensor` `main` builds and vets against the change).
+
 ### Fixed
 
 - **Sensors report their version and hostname.** `HeartbeatRequest` declared

@@ -18,6 +18,7 @@ func TestPlatformClientSendsUserAgent(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"api_key":"rda_new","api_prefix":"rda_new"}`))
 	}))
 	defer srv.Close()

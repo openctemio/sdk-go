@@ -256,7 +256,7 @@ func TestClient_PushAssets(t *testing.T) {
 }
 
 func TestClient_SendHeartbeat(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(v1Only(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/agent/heartbeat" {
 			t.Errorf("Path = %s, want /api/v1/agent/heartbeat", r.URL.Path)
 		}
@@ -326,7 +326,7 @@ func TestClient_TestConnection(t *testing.T) {
 }
 
 func TestClient_CheckFingerprints(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(v1Only(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/agent/ingest/check" {
 			t.Errorf("Path = %s, want /api/v1/agent/ingest/check", r.URL.Path)
 		}

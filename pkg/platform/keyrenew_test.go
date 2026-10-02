@@ -139,12 +139,49 @@ func TestKeyRenewManager_StartStop(t *testing.T) {
 	}
 }
 
-// PlatformClient.RenewKey parses the API response and sends the current key.
-func TestPlatformClient_RenewKey(t *testing.T) {
+// PlatformClient.RenewKey uses protocol v2 (POST /api/v2/sensor/keys, 201),
+// identifies the sensor by its key alone and parses the answer.
+func TestPlatformClient_RenewKeyV2(t *testing.T) {
 	exp := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
+	var paths []string
 	var gotAuth, gotSensor string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		gotAuth, gotSensor = r.Header.Get("Authorization"), r.Header.Get("X-Agent-ID")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"api_key":"rda_fresh","expires_at":"` + exp.Format(time.RFC3339) + `"}`))
+	}))
+	defer srv.Close()
+
+	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "rda_old", SensorID: "sensor-1"})
+	out, err := c.RenewKey(context.Background())
+	if err != nil {
+		t.Fatalf("RenewKey: %v", err)
+	}
+	if out.APIKey != "rda_fresh" || out.ExpiresAt == nil || !out.ExpiresAt.Equal(exp) {
+		t.Errorf("renewal %+v", out)
+	}
+	if len(paths) != 1 || paths[0] != "POST /api/v2/sensor/keys" {
+		t.Errorf("requests %v, want one POST /api/v2/sensor/keys", paths)
+	}
+	if gotAuth != "Bearer rda_old" || gotSensor != "" {
+		t.Errorf("Authorization %q, X-Agent-ID %q (v2 identifies by the key only)", gotAuth, gotSensor)
+	}
+}
+
+// Against a platform without the v2 route (404, not a problem document) the
+// renewal uses protocol v1, with X-Agent-ID as v1 expects.
+func TestPlatformClient_RenewKeyFallsBackToV1(t *testing.T) {
+	exp := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
+	var paths []string
+	var gotSensor string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path != "/api/v1/agent/renew" {
+			http.NotFound(w, r)
+			return
+		}
 		gotSensor = r.Header.Get("X-Agent-ID")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"api_key":"rda_fresh","expires_at":"` + exp.Format(time.RFC3339) + `"}`))
@@ -159,14 +196,30 @@ func TestPlatformClient_RenewKey(t *testing.T) {
 	if out.APIKey != "rda_fresh" {
 		t.Errorf("expected rda_fresh, got %q", out.APIKey)
 	}
-	if out.ExpiresAt == nil || !out.ExpiresAt.Equal(exp) {
-		t.Errorf("expected expiry %v, got %v", exp, out.ExpiresAt)
-	}
-	if gotAuth != "Bearer rda_old" {
-		t.Errorf("expected the current key in Authorization, got %q", gotAuth)
+	if len(paths) != 2 || paths[0] != "/api/v2/sensor/keys" || paths[1] != "/api/v1/agent/renew" {
+		t.Errorf("requests %v", paths)
 	}
 	if gotSensor != "sensor-1" {
-		t.Errorf("expected X-Agent-ID sensor-1, got %q", gotSensor)
+		t.Errorf("expected X-Agent-ID sensor-1 on v1, got %q", gotSensor)
+	}
+}
+
+// A refused v2 renewal (a problem document) does not fall back: v1 would
+// refuse the same key, and without a TTL a second renewal is never safe.
+func TestPlatformClient_RenewKeyRefusedDoesNotFallBack(t *testing.T) {
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"type":"https://openctem.io/problems/sensor/renewal-refused","status":403}`))
+	}))
+	defer srv.Close()
+	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "rda_old", SensorID: "sensor-1"})
+	_, err := c.RenewKey(context.Background())
+	var re *RenewError
+	if !errors.As(err, &re) || re.HTTPStatusCode() != http.StatusForbidden || n != 1 {
+		t.Fatalf("err %v after %d requests", err, n)
 	}
 }
 

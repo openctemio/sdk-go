@@ -3,7 +3,9 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/pipeline"
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
+	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
 // ClientConfig configures the PlatformClient.
@@ -82,12 +85,28 @@ type RenewKeyResponse struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
-// RenewKey rotates this sensor's API key by presenting the current one to
-// POST /api/v1/agent/renew. It does NOT swap the key in — the caller decides
-// when to call SetAPIKey (and persist), so a failed persist never leaves the
-// running client on a key the sensor can't recover after a restart.
+// RenewKey rotates this sensor's API key by presenting the current one. It
+// uses protocol v2 (POST /api/v2/sensor/keys, api RFC-029 §4.7) and falls
+// back to protocol v1 (POST /api/v1/agent/renew) only when the platform does
+// not serve the v2 route (404/405 without a problem document). It does NOT
+// swap the key in — the caller decides when to call SetAPIKey (and persist),
+// so a failed persist never leaves the running client on a key the sensor
+// can't recover after a restart. It never retries: without a key TTL the
+// platform replaces the presented key, so a repeated renewal after a lost
+// answer would be refused.
 func (c *PlatformClient) RenewKey(ctx context.Context) (*RenewKeyResponse, error) {
-	url, err := apiURL(c.config.BaseURL, legacyv1.PathRenew)
+	out, err := c.renewKey(ctx, protov2.PathPrefix+protov2.KeysPath, false)
+	if errors.Is(err, errRenewRouteMissing) {
+		out, err = c.renewKey(ctx, legacyv1.PathRenew, true)
+	}
+	return out, err
+}
+
+// errRenewRouteMissing: the platform does not serve the v2 renewal route.
+var errRenewRouteMissing = errors.New("v2 key renewal not served")
+
+func (c *PlatformClient) renewKey(ctx context.Context, path string, v1 bool) (*RenewKeyResponse, error) {
+	url, err := apiURL(c.config.BaseURL, path)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +115,10 @@ func (c *PlatformClient) RenewKey(ctx context.Context) (*RenewKeyResponse, error
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.currentAPIKey())
-	req.Header.Set(legacyv1.HeaderSensorID, c.config.SensorID)
+	if v1 {
+		// Protocol v1 only; v2 identifies the sensor by its key alone.
+		req.Header.Set(legacyv1.HeaderSensorID, c.config.SensorID)
+	}
 
 	resp, err := c.renewClient.Do(req)
 	if err != nil {
@@ -104,12 +126,16 @@ func (c *PlatformClient) RenewKey(ctx context.Context) (*RenewKeyResponse, error
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	switch {
+	case !v1 && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) &&
+		!protov2.IsProblemContentType(resp.Header.Get("Content-Type")):
+		return nil, errRenewRouteMissing
+	case v1 && resp.StatusCode != http.StatusOK, !v1 && resp.StatusCode != http.StatusCreated:
+		return nil, &RenewError{StatusCode: resp.StatusCode}
 	}
 
 	var out RenewKeyResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	if out.APIKey == "" {
@@ -117,6 +143,15 @@ func (c *PlatformClient) RenewKey(ctx context.Context) (*RenewKeyResponse, error
 	}
 	return &out, nil
 }
+
+// RenewError is a refused key renewal. It satisfies the HTTPStatusCode
+// interface pkg/core uses to tell a rejected key from other failures.
+type RenewError struct{ StatusCode int }
+
+func (e *RenewError) Error() string { return fmt.Sprintf("unexpected status: %d", e.StatusCode) }
+
+// HTTPStatusCode returns the response status.
+func (e *RenewError) HTTPStatusCode() int { return e.StatusCode }
 
 // SetAPIKey atomically swaps the API key used by all subsequent lease and job
 // requests. Safe to call concurrently with in-flight requests.

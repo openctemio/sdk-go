@@ -161,11 +161,11 @@ const defaultCTISVersion = "1.0"
 // maxV2Restarts bounds report-id restarts in one push.
 const maxV2Restarts = 4
 
-// v2State is the client's protocol decision and the hello it came from.
+// v2State is the client's protocol decision: the hello the platform answered
+// (nil when it offers no protocol v2) and when it was asked.
 type v2State struct {
 	mu        sync.Mutex
 	decidedAt time.Time
-	useV2     bool
 	hello     *protov2.Hello
 	// sticky v1: the platform refused this sensor on v2 (403 scope-denied).
 	refused bool
@@ -213,80 +213,137 @@ func (c *Client) ResultsProtocol(ctx context.Context) (string, error) {
 	return ProtocolV1, nil
 }
 
-// resultsProtocol decides v1 or v2 and returns the hello for v2.
-func (c *Client) resultsProtocol(ctx context.Context) (bool, *protov2.Hello, error) {
+// negotiate returns the platform's hello, or nil when it offers no protocol
+// v2 (an older platform answers 404), asking again once the cached answer is
+// stale. An error means the platform could not be asked (network, 401, 5xx):
+// nothing is decided, the next call asks again.
+func (c *Client) negotiate(ctx context.Context) (*protov2.Hello, error) {
 	if c.protocol == ProtocolV1 {
-		return false, nil, nil
+		return nil, nil
 	}
 	s := &c.v2
 	s.mu.Lock()
 	if c.protocol == ProtocolAuto && s.refused {
 		s.mu.Unlock()
-		return false, nil, nil
+		return nil, nil
 	}
 	if !s.decidedAt.IsZero() {
 		ttl := v1DecisionTTL
-		if s.useV2 {
+		if s.hello != nil {
 			ttl = v2DecisionTTL
 		}
 		if time.Since(s.decidedAt) < ttl {
-			useV2, h := s.useV2, s.hello
+			h := s.hello
 			s.mu.Unlock()
-			if c.protocol == ProtocolV2 && !useV2 {
-				return false, nil, ErrV2Unsupported
-			}
-			return useV2, h, nil
+			return h, nil
 		}
 	}
 	s.mu.Unlock()
 
 	h, err := c.Hello(ctx)
-	useV2 := false
 	if err != nil {
 		var ve *V2Error
 		if !errors.As(err, &ve) || ve.Status == http.StatusUnauthorized || ve.Transient() {
-			return false, nil, err // network, auth or server trouble: decide later
+			return nil, err // network, auth or server trouble: decide later
 		}
-		// Any other answer (404 on an older platform, 403, ...) means no v2.
-	} else {
-		useV2 = h.SupportsResults()
+		h = nil // any other answer (404 on an older platform, 403, ...) means no v2
+	} else if h.Protocol < protov2.ProtocolVersion {
+		h = nil
 	}
 	s.mu.Lock()
-	changed := s.decidedAt.IsZero() || s.useV2 != useV2
-	s.useV2, s.decidedAt = useV2, time.Now()
-	if useV2 {
-		s.hello = h
-	}
+	changed := s.decidedAt.IsZero() || featureSet(s.hello) != featureSet(h)
+	s.hello, s.decidedAt = h, time.Now()
 	s.mu.Unlock()
 	if changed && c.verbose {
-		fmt.Printf("[openctem] results protocol: v%d\n", map[bool]int{false: 1, true: 2}[useV2])
+		if h == nil {
+			fmt.Println("[openctem] sensor protocol: v1 (the platform offers no protocol v2)")
+		} else {
+			fmt.Printf("[openctem] sensor protocol: v2 for %s, v1 for the rest\n", featureSet(h))
+		}
 	}
+	return h, nil
+}
+
+// featureSet is a hello's feature list as one comparable string.
+func featureSet(h *protov2.Hello) string {
+	if h == nil {
+		return ""
+	}
+	return strings.Join(h.Features, ",")
+}
+
+// resultsProtocol decides v1 or v2 for results and returns the hello for v2.
+func (c *Client) resultsProtocol(ctx context.Context) (bool, *protov2.Hello, error) {
+	h, err := c.negotiate(ctx)
+	if err != nil {
+		return false, nil, err
+	}
+	useV2 := h.SupportsResults()
 	if c.protocol == ProtocolV2 && !useV2 {
 		return false, nil, ErrV2Unsupported
+	}
+	if !useV2 {
+		h = nil
 	}
 	return useV2, h, nil
 }
 
-// noteProtocolAdvert records what a heartbeat answer said about v2: a change
-// makes the next push ask hello again.
+// controlV2 decides whether one control-plane call uses protocol v2 (api
+// RFC-029 §6.1): v2 when hello lists feature, v1 otherwise. A platform that
+// cannot be asked right now (network, 401, 5xx) gets this call on v1, which
+// every platform still serves, and is asked again on the next call. The
+// protocol setting v2 requires v2 for results only (as since sdk-go 0.8.0):
+// a platform that lists results but not, say, heartbeat keeps working.
+func (c *Client) controlV2(ctx context.Context, feature string) (bool, *protov2.Hello) {
+	h, err := c.negotiate(ctx)
+	if err != nil || !h.Supports(feature) {
+		return false, nil
+	}
+	return true, h
+}
+
+// ProtocolFeatures returns the features this client uses protocol v2 for,
+// as last negotiated (nil: protocol v1 for everything, or not asked yet).
+func (c *Client) ProtocolFeatures() []string {
+	s := &c.v2
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.hello == nil {
+		return nil
+	}
+	return append([]string(nil), s.hello.Features...)
+}
+
+// noteProtocolAdvert records what a v1 heartbeat answer said about v2: a
+// change makes the next call ask hello again.
 func (c *Client) noteProtocolAdvert(advertised bool) {
 	s := &c.v2
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.decidedAt.IsZero() && s.useV2 != advertised {
+	if !s.decidedAt.IsZero() && s.hello.SupportsResults() != advertised {
 		s.decidedAt = time.Time{}
 	}
 }
 
-// forceV1 makes auto mode use v1 (route missing, or v2 refused).
+// forceV1 makes auto mode use v1 (v2 refused for this sensor, or a results
+// route missing).
 func (c *Client) forceV1(sticky bool) {
 	s := &c.v2
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.useV2, s.decidedAt = false, time.Now()
+	s.hello, s.decidedAt = nil, time.Now()
 	if sticky {
 		s.refused = true
 	}
+}
+
+// renegotiate drops the cached decision: a v2 route the platform listed was
+// missing (the platform was downgraded), so the next call asks hello again.
+func (c *Client) renegotiate() {
+	s := &c.v2
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.decidedAt = time.Time{}
 }
 
 // segmentLimits derives the segment bounds from hello's limits and the caps a
@@ -592,8 +649,13 @@ func (c *Client) AbandonReport(ctx context.Context, reportID string) error {
 }
 
 // v2Do sends one v2 request (no retries). body with a digest is CTIS content;
-// body without one is JSON (commit).
+// body without one is JSON (commit, control plane).
 func (c *Client) v2Do(ctx context.Context, method, path string, body []byte, encoding, digest string) ([]byte, http.Header, error) {
+	return c.v2DoWith(ctx, method, path, body, encoding, digest, nil)
+}
+
+// v2DoWith is v2Do with extra request headers.
+func (c *Client) v2DoWith(ctx context.Context, method, path string, body []byte, encoding, digest string, extra http.Header) ([]byte, http.Header, error) {
 	if err := c.checkBaseURL(); err != nil {
 		return nil, nil, err
 	}
@@ -620,6 +682,11 @@ func (c *Client) v2Do(ctx context.Context, method, path string, body []byte, enc
 	req.Header.Set("Accept", protov2.MediaTypeJSON+", "+protov2.MediaTypeProblem)
 	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
 	req.Header.Set("User-Agent", c.userAgentHeader())
+	for k, vs := range extra {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
+	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
 // Ensure Client implements core.CommandClient
@@ -34,6 +35,14 @@ type Command struct {
 
 // PollCommands retrieves pending commands for this sensor.
 func (c *Client) PollCommands(ctx context.Context, limit int) ([]Command, error) {
+	if useV2, _ := c.controlV2(ctx, protov2.FeatureCommands); useV2 {
+		cmds, err := c.pollCommandsV2(ctx, limit)
+		if err == nil || !isRouteMissing(err) {
+			return cmds, err
+		}
+		c.renegotiate()
+	}
+
 	reqURL := fmt.Sprintf("%s%s?limit=%d", c.baseURL, legacyv1.PathCommands, limit)
 
 	if c.verbose {
@@ -90,6 +99,9 @@ func (c *Client) GetCommands(ctx context.Context) (*core.GetCommandsResponse, er
 
 // AcknowledgeCommand acknowledges receipt of a command.
 func (c *Client) AcknowledgeCommand(ctx context.Context, cmdID string) error {
+	if done, err := c.commandV2(ctx, cmdID, protov2.ClaimAction, nil, c.maxRetries); done {
+		return err
+	}
 	reqURL := c.baseURL + legacyv1.PathCommand(url.PathEscape(cmdID), "acknowledge")
 
 	if c.verbose {
@@ -102,6 +114,9 @@ func (c *Client) AcknowledgeCommand(ctx context.Context, cmdID string) error {
 
 // StartCommand marks a command as started.
 func (c *Client) StartCommand(ctx context.Context, cmdID string) error {
+	if done, err := c.commandV2(ctx, cmdID, protov2.StartAction, nil, c.maxRetries); done {
+		return err
+	}
 	reqURL := c.baseURL + legacyv1.PathCommand(url.PathEscape(cmdID), "start")
 
 	if c.verbose {
@@ -118,6 +133,9 @@ func (c *Client) CompleteCommand(ctx context.Context, cmdID string, result json.
 }
 
 func (c *Client) completeCommand(ctx context.Context, cmdID string, result json.RawMessage, retries int) error {
+	if done, err := c.commandV2(ctx, cmdID, protov2.CompleteAction, protov2.CompleteRequest{Result: result}, retries); done {
+		return err
+	}
 	reqURL := c.baseURL + legacyv1.PathCommand(url.PathEscape(cmdID), "complete")
 
 	if c.verbose {
@@ -140,6 +158,9 @@ func (c *Client) FailCommand(ctx context.Context, cmdID string, errorMsg string)
 }
 
 func (c *Client) failCommand(ctx context.Context, cmdID string, errorMsg string, retries int) error {
+	if done, err := c.commandV2(ctx, cmdID, protov2.FailAction, protov2.FailRequest{ErrorMessage: errorMsg}, retries); done {
+		return err
+	}
 	reqURL := c.baseURL + legacyv1.PathCommand(url.PathEscape(cmdID), "fail")
 
 	if c.verbose {
@@ -153,6 +174,24 @@ func (c *Client) failCommand(ctx context.Context, cmdID string, errorMsg string,
 
 	_, _, err := c.doRequestFull(ctx, "POST", reqURL, body, nil, retries)
 	return err
+}
+
+// commandV2 applies a command transition on protocol v2 when the platform
+// offers commands there. done is false when the caller must use v1 (not
+// offered, or the route is missing).
+func (c *Client) commandV2(ctx context.Context, cmdID, action string, body any, retries int) (done bool, err error) {
+	if useV2, _ := c.controlV2(ctx, protov2.FeatureCommands); !useV2 {
+		return false, nil
+	}
+	if c.verbose {
+		fmt.Printf("[openctem] Command %s: %s (v2)\n", cmdID, action)
+	}
+	err = c.transitionV2(ctx, cmdID, action, body, retries)
+	if err != nil && isRouteMissing(err) {
+		c.renegotiate()
+		return false, nil
+	}
+	return true, err
 }
 
 // ReportCommandResult reports the result of command execution (implements

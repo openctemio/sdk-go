@@ -149,26 +149,30 @@ type ItemError struct {
 // Problem is an RFC 9457 problem details document with the RFC-026 extension
 // members.
 type Problem struct {
-	Type      string      `json:"type"`
-	Title     string      `json:"title"`
-	Status    int         `json:"status"`
-	Detail    string      `json:"detail"`
-	Errors    []ItemError `json:"errors,omitempty"`
-	Limit     *int64      `json:"limit,omitempty"`
-	Retryable bool        `json:"retryable"`
+	Type   string      `json:"type"`
+	Title  string      `json:"title"`
+	Status int         `json:"status"`
+	Detail string      `json:"detail"`
+	Errors []ItemError `json:"errors,omitempty"`
+	Limit  *int64      `json:"limit,omitempty"`
+	// State is the command's current state on an invalid-transition problem
+	// (api RFC-029 §4.4).
+	State     string `json:"state,omitempty"`
+	Retryable bool   `json:"retryable"`
 }
 
-// Name returns the problem type's short name, or "" when the type URI is not
-// an ingest problem type.
+// Name returns the problem type's short name, or "" when the type URI is
+// neither an ingest (RFC-026) nor a sensor (RFC-029) problem type.
 func (p *Problem) Name() ProblemType {
 	if p == nil {
 		return ""
 	}
-	name, ok := strings.CutPrefix(p.Type, ProblemTypeBase)
-	if !ok {
-		return ""
+	for _, base := range []string{ProblemTypeBase, ProblemTypeBaseSensor} {
+		if name, ok := strings.CutPrefix(p.Type, base); ok {
+			return ProblemType(name)
+		}
 	}
-	return ProblemType(name)
+	return ""
 }
 
 // ParseProblem decodes a problem document. It returns nil for a body that is
@@ -250,6 +254,10 @@ type Limits struct {
 	MaxSegmentsInFlight     int     `json:"max_segments_in_flight"`
 	MaxItemErrors           int     `json:"max_item_errors"`
 	UncommittedTTLSeconds   int     `json:"uncommitted_ttl_seconds"`
+	// MaxControlBodyBytes and MaxFingerprintsPerRequest are the control-plane
+	// limits (api RFC-029 §4); zero on a server from before it.
+	MaxControlBodyBytes       int64 `json:"max_control_body_bytes,omitempty"`
+	MaxFingerprintsPerRequest int   `json:"max_fingerprints_per_request,omitempty"`
 }
 
 // DefaultLimits are the RFC-026 §3.6 defaults, used when hello is not
@@ -270,6 +278,9 @@ func DefaultLimits() Limits {
 		MaxSegmentsInFlight:     4,
 		MaxItemErrors:           100,
 		UncommittedTTLSeconds:   3600,
+
+		MaxControlBodyBytes:       DefaultMaxControlBodyBytes,
+		MaxFingerprintsPerRequest: DefaultMaxFingerprintsPerRequest,
 	}
 }
 
@@ -305,6 +316,8 @@ func (l Limits) WithDefaults() Limits {
 	l.MaxSegmentsInFlight = pick(l.MaxSegmentsInFlight, d.MaxSegmentsInFlight)
 	l.MaxItemErrors = pick(l.MaxItemErrors, d.MaxItemErrors)
 	l.UncommittedTTLSeconds = pick(l.UncommittedTTLSeconds, d.UncommittedTTLSeconds)
+	l.MaxControlBodyBytes = pick64(l.MaxControlBodyBytes, d.MaxControlBodyBytes)
+	l.MaxFingerprintsPerRequest = pick(l.MaxFingerprintsPerRequest, d.MaxFingerprintsPerRequest)
 	return l
 }
 
@@ -316,6 +329,24 @@ type Hello struct {
 	Encodings  []string `json:"encodings"`
 	Digests    []string `json:"digests"`
 	Limits     Limits   `json:"limits"`
+	// Deprecations announces deprecated protocols ("protocol_v1"), api
+	// RFC-029 §4.2. Empty on a server from before it.
+	Deprecations map[string]Deprecation `json:"deprecations,omitempty"`
+}
+
+// Supports reports whether the hello document lists feature (one of the
+// Feature* names). Results are better checked with SupportsResults, which
+// also checks the media type.
+func (h *Hello) Supports(feature string) bool {
+	if h == nil || h.Protocol < ProtocolVersion {
+		return false
+	}
+	for _, f := range h.Features {
+		if f == feature {
+			return true
+		}
+	}
+	return false
 }
 
 // SupportsResults reports whether the hello document offers the CTIS results
