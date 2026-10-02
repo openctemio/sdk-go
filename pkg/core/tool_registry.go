@@ -305,8 +305,10 @@ func (r *ToolRegistry) AddCapabilities(caps ...string) {
 	r.mu.Unlock()
 }
 
-// SetMaxConcurrentJobs sets the concurrency the report carries (the
-// sensor's cap); 0 or less reports none.
+// SetMaxConcurrentJobs sets the operator ceiling the report carries (the
+// most jobs the sensor may run at once, SENSOR_MAX_JOBS); 0 or less reports
+// none. What the sensor can run now is its dynamic slot count, reported
+// separately (SensorStatus.Capacity).
 func (r *ToolRegistry) SetMaxConcurrentJobs(n int) {
 	r.mu.Lock()
 	r.maxJobs = max(n, 0)
@@ -416,7 +418,11 @@ func (r *ToolRegistry) CapabilityReport(ctx context.Context) CapabilityReport {
 			t.installed, t.version = r.probeLocked(ctx, t.spec)
 			t.probedAt = now
 		}
-		rep.Tools = append(rep.Tools, ToolInfo{Name: t.spec.Name, Kind: t.spec.Kind, Version: t.version, Installed: t.installed})
+		info := ToolInfo{Name: t.spec.Name, Kind: t.spec.Kind, Version: t.version, Installed: t.installed}
+		if len(t.spec.Capabilities) > 0 {
+			info.Capabilities = slices.Clone(t.spec.Capabilities)
+		}
+		rep.Tools = append(rep.Tools, info)
 		if t.installed {
 			caps = appendUnique(caps, t.spec.Name)
 			caps = appendUnique(caps, t.spec.Capabilities...)

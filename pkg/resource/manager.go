@@ -112,6 +112,11 @@ func (c ManagerConfig) MaxSlots() int {
 // MaxSlots is the most slots this manager hands out.
 func (m *Manager) MaxSlots() int { return m.cfg.MaxSlots() }
 
+// Cap is the operator's limit on concurrent jobs (ManagerConfig.Cap); 0 when
+// the operator set none and the slots follow the resources alone (up to
+// HardMax, which is a safety bound, not a capacity).
+func (m *Manager) Cap() int { return m.cfg.Cap }
+
 // SetTools sets the tools the slots are sized for.
 func (m *Manager) SetTools(tools []string) {
 	m.mu.Lock()

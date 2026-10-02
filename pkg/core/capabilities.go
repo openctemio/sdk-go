@@ -25,6 +25,11 @@ type ToolInfo struct {
 	// cannot find (or cannot run). The platform does not dispatch jobs for
 	// it and shows it as not installed.
 	Installed bool `json:"installed"`
+	// Capabilities are what this tool serves besides its own name ("sast",
+	// "dast", "validate:nuclei"): the per-tool mapping behind the sensor's
+	// flat capability list, so the platform can show (and route by) which
+	// tool provides what. nil reports nothing.
+	Capabilities []string `json:"capabilities,omitzero"`
 	// Content is the data the tool scans with (vulnerability database,
 	// templates, rules) and how fresh it is; see ContentInfo. nil reports
 	// nothing (the platform shows no content for the tool).
@@ -40,8 +45,11 @@ type CapabilityReport struct {
 	// Capabilities are the capability names the sensor serves ("validate",
 	// a tool name, "sast"). nil reports nothing, as for Tools.
 	Capabilities []string
-	// MaxConcurrentJobs is how many jobs the sensor runs at once; 0 reports
-	// nothing.
+	// MaxConcurrentJobs is the operator's ceiling on concurrent jobs
+	// (SENSOR_MAX_JOBS, SetMaxConcurrentJobs); 0 reports none. It is not
+	// what the sensor can run now: a sensor with a resource manager reports
+	// that as its dynamic slots (SensorStatus.Capacity.SlotsTotal), always
+	// at most this ceiling.
 	MaxConcurrentJobs int
 }
 
@@ -76,6 +84,9 @@ func (r CapabilityReport) Apply(status *SensorStatus) {
 		for _, t := range r.Tools {
 			if t.Content != nil {
 				t.Content = append(make([]ContentInfo, 0, len(t.Content)), t.Content...)
+			}
+			if t.Capabilities != nil {
+				t.Capabilities = append(make([]string, 0, len(t.Capabilities)), t.Capabilities...)
 			}
 			status.Tools = append(status.Tools, t)
 		}
