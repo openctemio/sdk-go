@@ -12,7 +12,8 @@ This example demonstrates how to use the OpenCTEM SDK to:
 
 1. **Backend API running** with migration applied:
    ```bash
-   cd api
+   # in a clone of https://github.com/openctemio/openctem
+   cd openctem/api
    make docker-migrate-up
    make docker-dev
    ```
