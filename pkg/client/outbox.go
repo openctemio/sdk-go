@@ -239,13 +239,40 @@ type commandResultItem struct {
 }
 
 // enqueueCommandResult stores a command result behind the command's reports.
-func (c *Client) enqueueCommandResult(ob *outbox.Outbox, cmdID string, result *core.CommandResult) error {
+func (c *Client) enqueueCommandResult(ob *outbox.Outbox, cmdID string, result *core.CommandResult) (*outbox.Ticket, error) {
 	payload, err := json.Marshal(commandResultItem{CommandID: cmdID, Result: *result})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = ob.Enqueue(outbox.Meta{Kind: outbox.KindCommandResult, CommandID: cmdID}, payload)
-	return err
+	return ob.Enqueue(outbox.Meta{Kind: outbox.KindCommandResult, CommandID: cmdID}, payload)
+}
+
+// awaitResultTicket waits for a stored command result to be delivered: up
+// to SyncWait, not at all while the platform is unreachable or rejects the
+// key. A result still queued when the wait ends is not an error (the
+// outbox delivers it later); a refused one is.
+func (c *Client) awaitResultTicket(ctx context.Context, tk *outbox.Ticket) error {
+	if tk == nil || c.obSyncWait < 0 {
+		return nil
+	}
+	if ob := c.Outbox(); ob != nil {
+		if st := ob.Stats(); st.CircuitOpen || st.AuthPaused {
+			return nil
+		}
+	}
+	timer := time.NewTimer(c.obSyncWait)
+	defer timer.Stop()
+	select {
+	case r := <-tk.Done():
+		if r.Dead != nil {
+			return &RefusedError{DeadLetter: *r.Dead}
+		}
+		return nil
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return nil
+	}
 }
 
 var _ outbox.Deliverer = (*Client)(nil)
