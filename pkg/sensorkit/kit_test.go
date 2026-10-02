@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -112,6 +113,9 @@ func baseOptions(t *testing.T, f *conformance.FakePlatform) (Options, *syncBuffe
 	clearEnv(t)
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv(EnvDrainGrace, "1s")
+	// The host's filesystem would count as persistent and turn key renewal
+	// on; tests that want it say so (persistentState after baseOptions).
+	persistentState(t, false)
 	out, errw := &syncBuffer{}, &syncBuffer{}
 	return Options{
 		Name: "kit-test", Version: "1.2.3",
@@ -154,6 +158,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 type heartbeat struct {
 	Name         string          `json:"name"`
+	InstanceID   string          `json:"instance_id"`
 	Version      string          `json:"version"`
 	Tools        []core.ToolInfo `json:"tools"`
 	Capabilities []string        `json:"capabilities"`
@@ -263,6 +268,10 @@ func TestRun_V2Lifecycle(t *testing.T) {
 	hb := lastBeat(t, f)
 	if hb.Name != "kit-test" || hb.Version != "1.2.3" || hb.SDK == nil || hb.Sensor == nil || hb.Sensor.Version != "1.2.3" {
 		t.Fatalf("identity: %+v", hb)
+	}
+	// Every heartbeat names the process (api RFC-032 Phase 0 clone detection).
+	if hb.InstanceID == "" || hb.InstanceID != core.ProcessInstanceID() {
+		t.Fatalf("instance_id = %q, want the process id %q", hb.InstanceID, core.ProcessInstanceID())
 	}
 	if len(hb.Tools) != 2 || hb.Tools[0].Name != "kit-tool" || !hb.Tools[0].Installed || hb.Tools[1].Installed ||
 		len(hb.Tools[0].Content) != 1 {
@@ -496,39 +505,138 @@ func TestNew_ReadsEnvironment(t *testing.T) {
 	}
 }
 
-// A key an earlier run renewed is used at start; each rotation is saved
-// with its expiry for the next start; another sensor's file is ignored.
-func TestKeyRenewal_PersistsAndIsReloaded(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "sensor-credentials.json")
-	exp := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Second)
-	var log bytes.Buffer
-	rc := keyRenewConfig(file, "sensor-1", nil, false, &log)
-	if err := rc.OnRotated("oct_newkey_123456", &exp); err != nil {
-		t.Fatal(err)
+// persistentState makes the kit see its state directory as persistent (or
+// not) whatever the test host is.
+func persistentState(t *testing.T, persistent bool) {
+	t.Helper()
+	prev := statePersistence
+	statePersistence = func(string) platform.StatePersistence {
+		return platform.StatePersistence{Persistent: persistent, Reason: "test"}
 	}
-	if !strings.Contains(log.String(), "rotated key saved to the credentials file") {
-		t.Fatalf("log %q", log.String())
-	}
-	rk, err := loadRenewedKey(file, "sensor-1")
-	if err != nil || rk.file != file || rk.key != "oct_newkey_123456" || rk.expiresAt == nil || !rk.expiresAt.Equal(exp) {
-		t.Fatalf("reloaded %+v, %v", rk, err)
-	}
-	if rk, err := loadRenewedKey(file, "sensor-2"); err != nil || rk.key != "" {
-		t.Fatalf("another sensor's key was used: %+v %v", rk, err)
-	}
+	t.Cleanup(func() { statePersistence = prev })
+}
 
-	// New starts with the renewed key and says so.
+// The renewed key survives a restart: a first run renews (the platform
+// retires the configured key at once), a second kit started with the same
+// configured key and state directory comes back on the renewed key, and the
+// platform accepts its heartbeats.
+func TestRun_RenewedKeySurvivesRestart(t *testing.T) {
 	f := conformance.NewFakePlatform(true)
+	f.SetControl(true)
 	t.Cleanup(f.Close)
-	opts, _, errw := baseOptions(t, f)
-	opts.SensorID, opts.APIKey, opts.KeyAutoRenew, opts.CredentialsFile = "sensor-1", "oct_configured", true, file
+	opts, out, _ := baseOptions(t, f)
+	persistentState(t, true)
+	installed := opts.APIKey
+
 	k, err := New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer k.closeClient()
-	if k.s.apiKey != "oct_newkey_123456" || !strings.Contains(errw.String(), "Using the renewed API key from "+file) {
-		t.Fatalf("key %q stderr %q", k.s.apiKey, errw.String())
+	stop := runKit(t, k)
+	waitFor(t, "a key renewal", func() bool { return len(f.RequestsTo("POST", "/api/v2/sensor/keys")) > 0 })
+	file := platform.StateCredentialsFile(opts.StateDir)
+	waitFor(t, "the renewed key saved in the state directory", func() bool {
+		c, err := platform.NewFileCredentialStore(file).Load()
+		return err == nil && c.APIKey == f.APIKey && c.APIKey != installed
+	})
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Key auto-renew: enabled, state persists") {
+		t.Fatalf("stdout: %s", out.String())
+	}
+	st, err := os.Stat(file)
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("credentials file mode: %v %v", st, err)
+	}
+
+	// Restart: same configured key (now refused by the platform), same state.
+	beats := len(f.Heartbeats())
+	opts2 := opts
+	opts2.Stdout, opts2.Stderr = &syncBuffer{}, &syncBuffer{}
+	k2, err := New(opts2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k2.s.apiKey != f.APIKey || !strings.Contains(opts2.Stderr.(*syncBuffer).String(), "Using the renewed API key from "+file) {
+		t.Fatalf("restart key %q, platform key %q", k2.s.apiKey, f.APIKey)
+	}
+	stop2 := runKit(t, k2)
+	waitFor(t, "a heartbeat with the renewed key", func() bool { return len(f.Heartbeats()) > beats })
+	if err := stop2(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An administrator regenerated the key and the operator configured it: the
+// configured key wins over the file renewed from the old one.
+func TestNew_ChangedConfiguredKeyWins(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	opts, _, _ := baseOptions(t, f)
+	persistentState(t, true)
+	store := platform.NewFileCredentialStore(platform.StateCredentialsFile(opts.StateDir))
+	exp := time.Now().Add(48 * time.Hour)
+	if err := platform.RotatedKeySaver(store, "rda_old_installed", "")("rda_renewed_from_old", &exp); err != nil {
+		t.Fatal(err)
+	}
+
+	opts.APIKey = "rda_old_installed"
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.closeClient()
+	if k.s.apiKey != "rda_renewed_from_old" {
+		t.Fatalf("same configured key: started with %q, want the renewed key", k.s.apiKey)
+	}
+
+	opts.APIKey = "rda_regenerated_by_admin"
+	k, err = New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.closeClient()
+	if k.s.apiKey != "rda_regenerated_by_admin" {
+		t.Fatalf("changed configured key: started with %q, want it", k.s.apiKey)
+	}
+}
+
+// Without persistent state the kit does not renew (a renewed key would be
+// lost with the container), unless renewal is forced; NoKeyAutoRenew and
+// PLATFORM_KEY_AUTORENEW=false turn it off on persistent state too.
+func TestNew_KeyAutoRenewDecision(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	cases := []struct {
+		name       string
+		persistent bool
+		env        string
+		force, off bool
+		want       bool
+	}{
+		{"ephemeral state", false, "", false, false, false},
+		{"ephemeral state, forced by option", false, "", true, false, true},
+		{"ephemeral state, forced by env", false, "true", false, false, true},
+		{"persistent state", true, "", false, false, true},
+		{"persistent state, off by option", true, "", false, true, false},
+		{"persistent state, off by env", true, "false", false, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			opts, _, _ := baseOptions(t, f)
+			persistentState(t, c.persistent)
+			t.Setenv(EnvKeyAutoRenew, c.env)
+			opts.KeyAutoRenew, opts.NoKeyAutoRenew = c.force, c.off
+			k, err := New(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			k.closeClient()
+			if k.s.key.autoRenew != c.want || k.s.key.why == "" {
+				t.Fatalf("autoRenew = %v (%s), want %v", k.s.key.autoRenew, k.s.key.why, c.want)
+			}
+		})
 	}
 }
 
@@ -546,7 +654,7 @@ func TestKeyRenewer_SwapsEveryClient(t *testing.T) {
 }
 
 // Key auto-renewal: a key without a known expiry is renewed at start, saved
-// for the next start, and the new key is used from then on.
+// to an explicit credentials file, and the new key is used from then on.
 func TestRun_KeyAutoRenew(t *testing.T) {
 	f := conformance.NewFakePlatform(true)
 	f.SetControl(true)
@@ -561,13 +669,13 @@ func TestRun_KeyAutoRenew(t *testing.T) {
 	stop := runKit(t, k)
 	waitFor(t, "a key renewal", func() bool { return len(f.RequestsTo("POST", "/api/v2/sensor/keys")) > 0 })
 	waitFor(t, "the renewed key saved", func() bool {
-		rk, _ := loadRenewedKey(opts.CredentialsFile, "")
-		return rk.key != "" && rk.key != opts.APIKey
+		c, err := platform.NewFileCredentialStore(opts.CredentialsFile).Load()
+		return err == nil && c.APIKey != "" && c.APIKey != opts.APIKey
 	})
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Key auto-renew: enabled (credentials: "+opts.CredentialsFile+")") {
+	if !strings.Contains(out.String(), "Key auto-renew: enabled, enabled by configuration (credentials: "+opts.CredentialsFile+")") {
 		t.Fatalf("stdout: %s", out.String())
 	}
 }

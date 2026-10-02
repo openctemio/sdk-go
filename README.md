@@ -140,6 +140,16 @@ Run it with `API_URL` and `API_KEY` (a sensor key from Settings > Sensors).
 [examples/minimal-sensor](examples/minimal-sensor) is a complete one with an
 in-process tool.
 
+**Keep the state directory.** A key renewal retires the key the sensor was
+started with; the renewed key is saved in `sensor-credentials.json` in the
+state directory (0600) and used on the next start instead of `API_KEY`. In a
+container, mount a volume at `/var/lib/openctem/state` (`-v
+my-sensor-state:/var/lib/openctem/state`): without one the kit does not
+renew, because a recreated container would come back with the retired key.
+When an administrator regenerates the key and `API_KEY` is set to the new
+one, the new key wins. Every heartbeat also carries the process's
+`instance_id`, so the platform flags one key running in two places.
+
 | Setting | Environment (an `Options` field wins) | Default |
 |---|---|---|
 | Platform | `API_URL`, `API_KEY`, `SENSOR_ID` | required to run commands (exit 2 with what is missing) |
@@ -149,10 +159,10 @@ in-process tool.
 | Tool allowlist | `SENSOR_TOOLS` (comma-separated) | none |
 | Drain grace | `SENSOR_DRAIN_GRACE` (1s-1h) | 30s |
 | Outbox | `SENSOR_OUTBOX`, `SENSOR_OUTBOX_DIR`, `_MAX_BYTES`, `_MAX_AGE`, `_KEY_FILE` | on, `/var/lib/openctem/outbox` |
-| State | `SENSOR_STATE_DIR` | the outbox's parent |
+| State (the renewed API key, tool cost history) | `SENSOR_STATE_DIR` | `/var/lib/openctem/state` when writable, else `~/.openctem`: **mount a persistent volume there** |
 | Private CA | `SENSOR_CA_CERT_FILE` (PEM, added to the system roots) | system roots |
 | Proxy | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | none |
-| Key renewal | `PLATFORM_KEY_AUTORENEW=true`, `Options.CredentialsFile` | off |
+| Key renewal | `PLATFORM_KEY_AUTORENEW=true\|false`, `Options.KeyAutoRenew` / `NoKeyAutoRenew`, `Options.CredentialsFile` | on when the state directory persists (outside a container; inside one, a mounted, non-tmpfs volume), else off |
 | Pre-rename names | `AGENT_ID`, `AGENT_NAME`, `AGENT_ALLOW_PRIVATE_TARGETS`, `-agent-id` | applied with a warning; both names set differently: exit 2 |
 
 Plug your own parts in: `kit.AddCollector`, `kit.AddParser` (your tool's

@@ -1,70 +1,59 @@
 package sensorkit
 
-// API-key auto-renewal for a daemon (RFC-014 Phase 2): the key is renewed on
-// schedule (half its lifetime) and at once when the heartbeat doorbell says
-// rotate_key, swapped into every client that uses it and kept in the
-// credentials file for the next start (the configured key was revoked by the
-// renewal).
-//
-// SEAM (api RFC-032 P0): the renewed key is kept with the SDK's existing
-// credentials file (platform.ResolveCredentialsFile, FileCredentialStore).
-// RFC-032 moves key persistence into the SDK's state directory with its own
-// store; when that lands, loadRenewedKey and persistRenewedKey call it and
-// nothing else in the kit changes. Do not grow persistence here.
+// API-key auto-renewal for a daemon (RFC-014 Phase 2, api RFC-032 Phase 0):
+// the key is renewed on schedule (half its lifetime) and at once when the
+// heartbeat doorbell says rotate_key, swapped into every client that uses it
+// and saved in the state directory for the next start (the renewal retired
+// the configured key). Persistence is the SDK's (pkg/platform state.go):
+// ResolveStateCredentialsFile, ChooseAPIKey, RotatedKeySaver,
+// CheckStatePersistence, DecideKeyAutoRenew.
 
 import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/platform"
 )
 
-// renewedKey is a key an earlier run renewed and saved.
-type renewedKey struct {
-	file      string
-	key       string // "" when the file holds none for this sensor
-	expiresAt *time.Time
+// statePersistence judges whether the state directory survives the sensor
+// being recreated; replaceable in tests.
+var statePersistence = platform.CheckStatePersistence
+
+// startKey is the key a kit starts with, after the state directory was
+// consulted, and the renewal decision.
+type startKey struct {
+	file          string // credentials file renewed keys are saved to
+	configuredKey string // the key from Options / API_KEY
+	key           string // the key to start with
+	fromStateFile bool
+	expiresAt     *time.Time
+	neverExpires  bool
+	autoRenew     bool
+	why           string // the renewal decision, for the log
 }
 
-// loadRenewedKey picks the credentials file (explicit, else the SDK
-// default; a pre-rename file is moved there) and returns the key it holds
-// for sensorID, if any.
-func loadRenewedKey(explicit, sensorID string) (renewedKey, error) {
-	file, err := platform.ResolveCredentialsFile(explicit)
+// resolveStartKey picks the credentials file in stateDir (explicit wins; a
+// ~/.openctem file from an earlier version is moved there), the key to start
+// with (a renewed key wins unless the configured key changed since,
+// platform.ChooseAPIKey) and whether to renew (renewSetting "true"/"false",
+// else only when the state persists, platform.DecideKeyAutoRenew).
+func resolveStartKey(explicitFile, stateDir, configuredKey, sensorID, renewSetting string) (startKey, error) {
+	file, err := platform.ResolveStateCredentialsFile(explicitFile, stateDir)
 	if err != nil {
-		return renewedKey{}, err
+		return startKey{}, err
 	}
-	rk := renewedKey{file: file}
-	store := platform.NewFileCredentialStore(file)
-	if !store.Exists() {
-		return rk, nil
+	choice := platform.ChooseAPIKey(platform.NewFileCredentialStore(file), configuredKey, sensorID)
+	sk := startKey{
+		file: file, configuredKey: configuredKey, key: choice.APIKey,
+		fromStateFile: choice.FromStateFile && choice.APIKey != configuredKey,
+		expiresAt:     choice.ExpiresAt, neverExpires: choice.NeverExpires,
 	}
-	creds, err := store.Load()
-	if err != nil || creds == nil || creds.APIKey == "" {
-		return rk, nil
-	}
-	if sensorID != "" && creds.SensorID != "" && creds.SensorID != sensorID {
-		return rk, nil // another sensor's file
-	}
-	rk.key, rk.expiresAt = creds.APIKey, creds.ExpiresAt
-	return rk, nil
-}
-
-// persistRenewedKey saves a rotated key with its expiry for the next start.
-func persistRenewedKey(file, sensorID, newKey string, exp *time.Time) error {
-	prefix := newKey
-	if len(prefix) > 12 {
-		prefix = prefix[:12]
-	}
-	return platform.NewFileCredentialStore(file).Save(&platform.SensorCredentials{
-		SensorID:  sensorID,
-		APIKey:    newKey,
-		APIPrefix: prefix,
-		ExpiresAt: exp,
-	})
+	sk.autoRenew, sk.why = platform.DecideKeyAutoRenew(renewSetting, statePersistence(filepath.Dir(file)))
+	return sk, nil
 }
 
 // keyRenewer renews the API key and swaps the new key into every client
@@ -83,16 +72,19 @@ func (r *keyRenewer) SetAPIKey(key string) {
 	r.api.SetAPIKey(key)
 }
 
-// keyRenewConfig persists each rotated key, with its expiry, and logs it.
-func keyRenewConfig(file, sensorID string, expiresAt *time.Time, verbose bool, w io.Writer) *platform.KeyRenewConfig {
+// keyRenewConfig saves each rotated key (platform.RotatedKeySaver: atomic,
+// 0600, with its expiry and the configured key's fingerprint) and logs it.
+func keyRenewConfig(sk startKey, sensorID string, verbose bool, w io.Writer) *platform.KeyRenewConfig {
+	save := platform.RotatedKeySaver(platform.NewFileCredentialStore(sk.file), sk.configuredKey, sensorID)
 	return &platform.KeyRenewConfig{
-		Verbose:             verbose,
-		CurrentKeyExpiresAt: expiresAt,
+		Verbose:                verbose,
+		CurrentKeyExpiresAt:    sk.expiresAt,
+		CurrentKeyNeverExpires: sk.neverExpires,
 		OnRotated: func(newKey string, exp *time.Time) error {
-			if err := persistRenewedKey(file, sensorID, newKey, exp); err != nil {
+			if err := save(newKey, exp); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(w, "[apikey] %s rotated key saved to the credentials file\n", time.Now().Format(time.RFC3339))
+			_, _ = fmt.Fprintf(w, "[apikey] %s rotated key saved to %s\n", time.Now().Format(time.RFC3339), sk.file)
 			return nil
 		},
 	}
@@ -108,7 +100,7 @@ func startKeyRenewal(ctx context.Context, s *settings, api *client.Client, w io.
 		}),
 		api: api,
 	}
-	m := platform.NewKeyRenewManager(renewer, keyRenewConfig(s.credentialsFile, s.sensorID, s.keyExpiresAt, s.verbose, w))
+	m := platform.NewKeyRenewManager(renewer, keyRenewConfig(s.key, s.sensorID, s.verbose, w))
 	if err := m.Start(ctx); err != nil {
 		return nil, err
 	}

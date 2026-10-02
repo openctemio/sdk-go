@@ -117,8 +117,15 @@ func TestRotatedKeySaver_FileIs0600AndHoldsNoConfiguredKey(t *testing.T) {
 	if strings.Contains(string(raw), installedKey) {
 		t.Fatal("the configured key itself must never be written, only its fingerprint")
 	}
-	if !strings.Contains(string(raw), KeyFingerprint(installedKey)) || !strings.Contains(string(raw), renewedKey) {
+	if !strings.Contains(string(raw), renewedKey) || !strings.Contains(string(raw), `"configured_key_fingerprint"`) || !strings.Contains(string(raw), `"pbkdf2-sha256$`) {
 		t.Fatalf("file: %s", raw)
+	}
+	saved, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if match, ok := KeyFingerprintMatches(saved.ConfiguredKeyFingerprint, installedKey); !ok || !match {
+		t.Fatalf("the saved fingerprint does not match the installed key (match %v, ok %v)", match, ok)
 	}
 }
 
@@ -261,5 +268,41 @@ func TestUnescapeMount(t *testing.T) {
 	}
 	if got := unescapeMount(`/plain`); got != "/plain" {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestKeyFingerprint(t *testing.T) {
+	a, b := KeyFingerprint("rda_one"), KeyFingerprint("rda_one")
+	if a == b {
+		t.Fatal("each fingerprint has its own salt")
+	}
+	if !strings.HasPrefix(a, "pbkdf2-sha256$600000$") {
+		t.Fatalf("format %q", a)
+	}
+	if m, ok := KeyFingerprintMatches(a, "rda_one"); !ok || !m {
+		t.Fatalf("same key: match %v ok %v", m, ok)
+	}
+	if m, ok := KeyFingerprintMatches(a, "rda_two"); !ok || m {
+		t.Fatalf("other key: match %v ok %v", m, ok)
+	}
+	// Not a fingerprint this SDK can check: unknown, not "different".
+	for _, fp := range []string{"", "abc", strings.Repeat("a", 64), "pbkdf2-sha256$x$a$b", "md5$1$AA$AA"} {
+		if _, ok := KeyFingerprintMatches(fp, "rda_one"); ok {
+			t.Errorf("%q accepted as a fingerprint", fp)
+		}
+	}
+}
+
+// A changed configured key wins; an unreadable fingerprint keeps the file's key.
+func TestConfiguredKeyChanged(t *testing.T) {
+	fp := KeyFingerprint("rda_installed")
+	if configuredKeyChanged(fp, "rda_installed") {
+		t.Error("same key reported as changed")
+	}
+	if !configuredKeyChanged(fp, "rda_regenerated") {
+		t.Error("regenerated key not detected")
+	}
+	if configuredKeyChanged("", "rda_any") || configuredKeyChanged("deadbeef", "rda_any") {
+		t.Error("an unknown fingerprint must not count as a change")
 	}
 }

@@ -138,7 +138,7 @@ func migrateCredentialsFile(from, to string, requireSensorID bool) (moved bool, 
 
 func sameCredentials(a, b *SensorCredentials) bool {
 	if a.SensorID != b.SensorID || a.APIKey != b.APIKey || a.APIPrefix != b.APIPrefix ||
-		a.ConfiguredKeySHA256 != b.ConfiguredKeySHA256 || a.NeverExpires != b.NeverExpires {
+		a.ConfiguredKeyFingerprint != b.ConfiguredKeyFingerprint || a.NeverExpires != b.NeverExpires {
 		return false
 	}
 	if (a.ExpiresAt == nil) != (b.ExpiresAt == nil) {

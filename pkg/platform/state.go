@@ -13,14 +13,18 @@ package platform
 
 import (
 	"bufio"
+	"crypto/pbkdf2"
+	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
+	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -112,12 +116,57 @@ func ResolveStateCredentialsFile(explicit, stateDir string) (string, error) {
 	return target, nil
 }
 
-// KeyFingerprint is the hex SHA-256 of an API key. The credentials file keeps
-// the fingerprint of the configured key its renewed key descends from, never
-// the configured key itself.
+// keyFingerprintIter is the PBKDF2 work factor (the OWASP 2023 figure for
+// PBKDF2-HMAC-SHA256). The fingerprint is computed once per start and once
+// per renewal, so the cost is paid rarely.
+const keyFingerprintIter = 600_000
+
+const keyFingerprintScheme = "pbkdf2-sha256"
+
+// KeyFingerprint returns a salted PBKDF2-SHA256 fingerprint of an API key,
+// "pbkdf2-sha256$<iterations>$<salt>$<hash>" (base64url, no padding). The
+// credentials file keeps the fingerprint of the configured key its renewed
+// key descends from, never the configured key itself; a fresh salt makes
+// each fingerprint different, so compare with KeyFingerprintMatches.
 func KeyFingerprint(key string) string {
-	sum := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(sum[:])
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		// crypto/rand does not fail on supported platforms; without a salt
+		// there is no fingerprint, and ChooseAPIKey treats that as unknown.
+		return ""
+	}
+	sum, err := pbkdf2.Key(sha256.New, key, salt, keyFingerprintIter, sha256.Size)
+	if err != nil {
+		return ""
+	}
+	enc := base64.RawURLEncoding
+	return fmt.Sprintf("%s$%d$%s$%s", keyFingerprintScheme, keyFingerprintIter, enc.EncodeToString(salt), enc.EncodeToString(sum))
+}
+
+// KeyFingerprintMatches reports whether key has the fingerprint fp
+// (KeyFingerprint). ok is false when fp is not a fingerprint this SDK can
+// check (empty, malformed, another scheme), so the caller can treat it as
+// unknown rather than as a different key.
+func KeyFingerprintMatches(fp, key string) (match, ok bool) {
+	parts := strings.Split(fp, "$")
+	if len(parts) != 4 || parts[0] != keyFingerprintScheme {
+		return false, false
+	}
+	iter, err := strconv.Atoi(parts[1])
+	if err != nil || iter < 1 || iter > 10_000_000 {
+		return false, false
+	}
+	enc := base64.RawURLEncoding
+	salt, err1 := enc.DecodeString(parts[2])
+	want, err2 := enc.DecodeString(parts[3])
+	if err1 != nil || err2 != nil || len(salt) == 0 || len(want) != sha256.Size {
+		return false, false
+	}
+	got, err := pbkdf2.Key(sha256.New, key, salt, iter, sha256.Size)
+	if err != nil {
+		return false, false
+	}
+	return subtle.ConstantTimeCompare(got, want) == 1, true
 }
 
 // KeyChoice is the API key a sensor starts with.
@@ -172,12 +221,20 @@ func ChooseAPIKey(store *FileCredentialStore, configuredKey, sensorID string) Ke
 	case creds.APIKey == configuredKey:
 		configured.ExpiresAt, configured.NeverExpires = creds.ExpiresAt, creds.NeverExpires
 		return configured
-	case creds.ConfiguredKeySHA256 != "" && creds.ConfiguredKeySHA256 != KeyFingerprint(configuredKey):
+	case configuredKeyChanged(creds.ConfiguredKeyFingerprint, configuredKey):
 		configured.Reason = "configured key (it changed since the credentials file was written; the file is replaced on the next renewal)"
 		return configured
 	default:
 		return fromFile
 	}
+}
+
+// configuredKeyChanged reports whether the configured key is not the one the
+// file's key was renewed from. A missing or unreadable fingerprint is unknown,
+// not a change: the file's key wins, as it did before fingerprints existed.
+func configuredKeyChanged(fp, configuredKey string) bool {
+	match, ok := KeyFingerprintMatches(fp, configuredKey)
+	return ok && !match
 }
 
 // RotatedKeySaver returns a KeyRenewConfig.OnRotated that saves each renewed
@@ -195,12 +252,12 @@ func RotatedKeySaver(store *FileCredentialStore, configuredKey, sensorID string)
 			prefix = prefix[:12]
 		}
 		if err := store.Save(&SensorCredentials{
-			SensorID:            sensorID,
-			APIKey:              newKey,
-			APIPrefix:           prefix,
-			ExpiresAt:           expiresAt,
-			NeverExpires:        expiresAt == nil,
-			ConfiguredKeySHA256: seed,
+			SensorID:                 sensorID,
+			APIKey:                   newKey,
+			APIPrefix:                prefix,
+			ExpiresAt:                expiresAt,
+			NeverExpires:             expiresAt == nil,
+			ConfiguredKeyFingerprint: seed,
 		}); err != nil {
 			return fmt.Errorf("save the renewed key: %w", err)
 		}
