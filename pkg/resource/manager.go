@@ -30,6 +30,10 @@ type ManagerConfig struct {
 	// Tools are the tools the sensor runs; the slots are sized for the most
 	// demanding of them. Empty: a generic job (1 core, 512 MiB).
 	Tools []string
+	// CostHints are the sensor's own per-job cost estimates, the prior of a
+	// tool without history (instead of the built-in default); see
+	// core.ToolRegistry.CostHints.
+	CostHints map[string]ToolCostHint
 	// StateFile persists the per-tool cost history ("" keeps it in memory).
 	StateFile string
 	// Prober reads the resources (nil: the running system, no work dir).
@@ -81,6 +85,9 @@ func NewManager(cfg ManagerConfig) *Manager {
 	book, err := NewCostBook(cfg.StateFile)
 	if err != nil && cfg.OnError != nil {
 		cfg.OnError(err)
+	}
+	for tool, h := range cfg.CostHints {
+		book.SetPrior(tool, h)
 	}
 	return &Manager{
 		cfg:    cfg,

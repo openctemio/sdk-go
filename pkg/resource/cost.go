@@ -53,6 +53,24 @@ type JobSample struct {
 	Outcome      Outcome
 }
 
+// ToolCostHint is a sensor author's estimate of what one job of a tool
+// costs, used as the prior for a tool without history (instead of the
+// built-in default). The learned history replaces it after a few jobs.
+type ToolCostHint struct {
+	// Cores is the CPU cores one running job keeps busy.
+	Cores float64
+	// MemBytes is the peak memory of one job.
+	MemBytes int64
+	// SecondsPerTarget is the wall time one target takes.
+	SecondsPerTarget float64
+}
+
+// valid reports whether every member is positive and finite.
+func (h ToolCostHint) valid() bool {
+	return h.Cores > 0 && !math.IsInf(h.Cores, 0) && h.MemBytes > 0 &&
+		h.SecondsPerTarget > 0 && !math.IsInf(h.SecondsPerTarget, 0)
+}
+
 // toolDefault is the prior for a tool without history.
 type toolDefault struct {
 	cores            float64 // CPU cores one job keeps busy
@@ -114,6 +132,32 @@ type CostBook struct {
 	mu    sync.Mutex
 	path  string
 	tools map[string]*toolCost
+	// priors are the sensor's own cost hints (SetPrior); they replace the
+	// built-in defaults.
+	priors map[string]toolDefault
+}
+
+// SetPrior makes h the prior of tool: the cost assumed until the tool has a
+// learned history. An invalid hint (a member not positive) is ignored.
+func (b *CostBook) SetPrior(tool string, h ToolCostHint) {
+	if tool == "" || !h.valid() {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.priors == nil {
+		b.priors = map[string]toolDefault{}
+	}
+	b.priors[tool] = toolDefault{cores: h.Cores, mem: h.MemBytes, secondsPerTarget: h.SecondsPerTarget}
+}
+
+// priorLocked is the prior of tool: the sensor's hint, else the built-in
+// default. b.mu is held.
+func (b *CostBook) priorLocked(tool string) toolDefault {
+	if d, ok := b.priors[tool]; ok {
+		return d
+	}
+	return defaultFor(tool)
 }
 
 // NewCostBook opens the history at path ("" keeps it in memory). A missing
@@ -168,7 +212,7 @@ func (b *CostBook) Observe(s JobSample) {
 	defer b.mu.Unlock()
 	c := b.tools[s.Tool]
 	if c == nil {
-		d := defaultFor(s.Tool)
+		d := b.priorLocked(s.Tool)
 		c = &toolCost{Cores: d.cores, MemBytes: d.mem, SecondsPerTarget: d.secondsPerTarget, CPUSeconds: d.cores * d.secondsPerTarget}
 		b.tools[s.Tool] = c
 	}
@@ -218,7 +262,7 @@ func (b *CostBook) estimateLocked(tool string) ToolEstimate {
 	if c := b.tools[tool]; c != nil {
 		return toEstimate(c.CPUSeconds, c.MemBytes, c.SecondsPerTarget)
 	}
-	d := defaultFor(tool)
+	d := b.priorLocked(tool)
 	return toEstimate(d.cores*d.secondsPerTarget, d.mem, d.secondsPerTarget)
 }
 
@@ -239,7 +283,7 @@ func (b *CostBook) jobDemand(tool string) (cores float64, mem int64) {
 	if c := b.tools[tool]; c != nil && c.Cores > 0 && c.MemBytes > 0 {
 		return c.Cores, c.MemBytes
 	}
-	d := defaultFor(tool)
+	d := b.priorLocked(tool)
 	return d.cores, d.mem
 }
 

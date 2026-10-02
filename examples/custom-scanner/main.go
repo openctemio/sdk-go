@@ -245,7 +245,9 @@ func runDaemon(ctx context.Context, scanner *MyCustomScanner, pusher core.Pusher
 		Verbose:           verbose,
 	}, pusher)
 
-	// Add our custom scanner
+	// Add our custom scanner. It is registered in the sensor's tool
+	// registry, so every heartbeat tells the platform it is here (probed
+	// with its IsInstalled): nothing has to be declared on the platform.
 	if err := sensor.AddScanner(scanner); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to add scanner: %v\n", err)
 		os.Exit(1)

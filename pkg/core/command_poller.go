@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -876,6 +877,9 @@ type DefaultCommandExecutor struct {
 	targetPolicy atomic.Pointer[ScanTargetPolicy]
 	// verbose is atomic: SetVerbose may race with concurrent Execute calls.
 	verbose atomic.Bool
+	// tools, when set, registers every scanner and collector added (see
+	// SetToolRegistry).
+	tools *ToolRegistry
 }
 
 // NewDefaultCommandExecutor creates a new default executor.
@@ -935,14 +939,52 @@ func (e *DefaultCommandExecutor) SetAssetResolver(r AssetResolver) {
 	e.assetResolver = r
 }
 
+// SetToolRegistry registers the executor's scanners and collectors, those
+// added already and those added later, in r, so the sensor reports them to
+// the platform. Pass the sensor's registry (BaseSensor.Tools). Call before
+// the poller starts.
+func (e *DefaultCommandExecutor) SetToolRegistry(r *ToolRegistry) {
+	e.tools = r
+	if r == nil {
+		return
+	}
+	for _, s := range sortedValues(e.scanners) {
+		_ = r.RegisterScanner(s)
+	}
+	for _, c := range sortedValues(e.collectors) {
+		_ = r.RegisterCollector(c)
+	}
+}
+
+// sortedValues returns m's values ordered by key (a stable registration
+// order).
+func sortedValues[T any](m map[string]T) []T {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	out := make([]T, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, m[k])
+	}
+	return out
+}
+
 // AddScanner adds a scanner.
 func (e *DefaultCommandExecutor) AddScanner(scanner Scanner) {
 	e.scanners[scanner.Name()] = scanner
+	if e.tools != nil {
+		_ = e.tools.RegisterScanner(scanner)
+	}
 }
 
 // AddCollector adds a collector.
 func (e *DefaultCommandExecutor) AddCollector(collector Collector) {
 	e.collectors[collector.Name()] = collector
+	if e.tools != nil {
+		_ = e.tools.RegisterCollector(collector)
+	}
 }
 
 // Execute executes a command.

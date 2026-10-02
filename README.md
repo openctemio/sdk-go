@@ -134,6 +134,33 @@ An executor that starts processes itself calls `core.RecordProcessState(ctx,
 cmd.ProcessState)` after `Wait` so its CPU time and peak memory teach the
 cost history (the SDK's exec helpers already do).
 
+### Tools: register them, the SDK reports them
+
+The platform does not need to know a sensor's tools: the sensor registers
+what it runs when it starts, and every heartbeat reports it (api RFC-029
+§4.3.1). The platform dispatches by that report, and its administrator can
+only narrow it.
+
+```go
+s := core.NewBaseSensor(cfg, apiClient)
+s.AddScanner(myScanner)                 // registered: probed with IsInstalled
+executor.SetToolRegistry(s.Tools())     // the executor's scanners and collectors too
+s.Tools().Register(core.ToolSpec{       // any other tool, with an optional probe
+	Name: "zap", Version: "2.15.0", Capabilities: []string{"dast"},
+	Probe: func(ctx context.Context) (bool, string, error) { return zapVersion(ctx) },
+	Cost:  &resource.ToolCostHint{Cores: 2, MemBytes: 2 << 30, SecondsPerTarget: 60},
+})
+s.Tools().AddCapabilities("validate")   // served whatever the tools
+s.Tools().Limit(strings.Split(os.Getenv("MY_TOOLS"), ",")...) // optional operator allowlist
+```
+
+- A tool whose probe fails is reported as not installed and gets no jobs.
+  Installed tools report their version.
+- Probes are cached for 10 minutes (`SetProbeTTL`, `Refresh`).
+- Feed the slot sizer the same list:
+  `resource.ManagerConfig{Tools: s.Tools().Names(), CostHints: s.Tools().CostHints()}`.
+- `SetCapabilityReporter` replaces the registry with your own reporter.
+
 ## Packages
 
 | Package | Description |
