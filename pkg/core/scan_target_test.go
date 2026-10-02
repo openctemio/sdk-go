@@ -35,6 +35,7 @@ var testDNS = map[string][]string{
 	"mixed.attacker.test":  {"93.184.216.34", "10.0.0.7"},
 	"intranet.corp.test":   {"10.1.2.3"},
 	"v6imds.attacker.test": {"fe80::1"},
+	"awsv6.attacker.test":  {"fd00:ec2::254"},
 }
 
 func newTestPolicy(roots ...string) *ScanTargetPolicy {
@@ -65,6 +66,12 @@ func TestScanTargetPolicy_NetworkTargets(t *testing.T) {
 		{"ipv6 link-local", "fe80::1", false, true},
 		{"ipv4-mapped imds", "::ffff:169.254.169.254", false, true},
 		{"cgnat", "100.64.0.1", false, true},
+		// The IPv6 metadata endpoints sit inside the ULA range (fc00::/7),
+		// which the allow-private opt-in opens; they must stay blocked.
+		{"aws imds ipv6 allow-private still blocked", "http://[fd00:ec2::254]/latest/meta-data/", true, true},
+		{"gcp metadata ipv6 allow-private still blocked", "fd20:ce::254", true, true},
+		{"dns to aws imds ipv6 allow-private", "awsv6.attacker.test", true, true},
+		{"cidr containing aws imds ipv6 allow-private", "fd00:ec2::/32", true, true},
 		{"private by default", "10.0.0.5", false, true},
 		{"private url by default", "https://192.168.1.10/", false, true},
 		{"dns to imds", "http://imds.attacker.test/", false, true},
@@ -102,6 +109,7 @@ func TestScanTargetPolicy_NetworkTargets(t *testing.T) {
 		{"private url with opt-in", "https://192.168.1.10/", true, false},
 		{"private dns with opt-in", "intranet.corp.test", true, false},
 		{"private cidr with opt-in", "10.0.0.0/24", true, false},
+		{"ula with opt-in", "fd00:ec2::253", true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
