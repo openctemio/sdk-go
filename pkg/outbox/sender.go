@@ -270,6 +270,7 @@ func (o *Outbox) attempt(ctx context.Context, d Deliverer, e *entry) {
 		o.quarantine(filepath.Join(o.pendingDir, e.meta.ID+stateExt), "")
 		delete(o.entries, e.meta.ID)
 		o.finishLocked(e.meta.ID, Result{Evicted: true})
+		o.noteLostLocked(e.meta, "became unreadable and was quarantined")
 		o.signalLocked()
 		o.mu.Unlock()
 		return

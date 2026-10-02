@@ -630,6 +630,76 @@ func TestOutbox_RefusedResultsFailTheCommand(t *testing.T) {
 	}
 }
 
+// While the platform is down the outbox fills; the byte cap evicts the
+// oldest result, a report of a command whose command result is still queued.
+// The command must then be reported failed, not as a clean, complete run.
+func TestOutbox_EvictedResultsFailTheCommand(t *testing.T) {
+	f := NewFakePlatform(true)
+	defer f.Close()
+	cmd := "0192a3b4-0000-7000-8000-000000000004"
+	f.OpenCommand(cmd)
+	// While "down" the platform rejects the key: the outbox pauses and
+	// attempts nothing, so no item is in flight when the cap evicts.
+	var down atomic.Bool
+	down.Store(true)
+	f.SetFault(func(r *http.Request, _ int) *FaultAnswer {
+		if down.Load() {
+			return &FaultAnswer{Status: http.StatusUnauthorized}
+		}
+		return nil
+	})
+	big := func(tag string) *ctis.Report {
+		r := report("semgrep", 1, 1)
+		var b strings.Builder
+		for i := range 400 {
+			fmt.Fprintf(&b, "%s-%d-%x;", tag, i, i*2654435761)
+		}
+		r.Findings[0].Description = b.String()
+		return r
+	}
+	// The size of one report in the outbox: the cap holds two and a command
+	// result (a few hundred bytes), not three reports.
+	probe := newClient(t, f, client.ProtocolV2)
+	enableOutbox(t, probe, t.TempDir())
+	if _, err := probe.PushFindings(context.Background(), big("probe")); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := probe.OutboxStats()
+	_ = probe.Close()
+
+	c := newClient(t, f, client.ProtocolV2)
+	if err := c.EnableOutbox(client.OutboxConfig{
+		Dir: t.TempDir(), SyncWait: -1, LegacyRetryQueueDir: "-", MaxBytes: st.PendingBytes*2 + 4096,
+		Logf: func(format string, args ...any) { t.Logf("[outbox] "+format, args...) },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := core.WithCommandID(context.Background(), cmd)
+	if _, err := c.PushFindings(ctx, big("cmd")); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, 5*time.Second, func() bool { st, _ := c.OutboxStats(); return st.AuthPaused })
+	if err := c.ReportCommandResult(ctx, cmd, &core.CommandResult{Status: "completed", FindingsCount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	// Two more reports: the cap evicts the oldest item, the command's report.
+	for _, tag := range []string{"a", "b"} {
+		if _, err := c.PushFindings(context.Background(), big(tag)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st, _ := c.OutboxStats(); st.Evicted == 0 {
+		t.Fatalf("nothing evicted: %+v", st)
+	}
+	down.Store(false)
+	c.Outbox().Wake()
+	waitUntil(t, 5*time.Second, func() bool { s, _ := f.CommandState(cmd); return s != "running" })
+	state, msg := f.CommandState(cmd)
+	if state != "failed" || !strings.Contains(msg, "lost") {
+		t.Fatalf("command %s (%q) after its results were evicted", state, msg)
+	}
+}
+
 func TestOutbox_GoneCommandSendsResultsUnsolicited(t *testing.T) {
 	f := NewFakePlatform(true)
 	defer f.Close()
