@@ -239,3 +239,6 @@ trace.out
 .trivy-cache/
 openctemio-sensor
 agent
+
+# Test fixtures are SARIF on purpose; the *.sarif rule above is for scan output.
+!**/testdata/**/*.sarif

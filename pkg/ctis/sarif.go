@@ -91,6 +91,12 @@ type SARIFResult struct {
 	Locations    []SARIFLocation   `json:"locations,omitempty"`
 	Fingerprints map[string]string `json:"fingerprints,omitempty"`
 	Properties   map[string]any    `json:"properties,omitempty"`
+	// BaselineState is the result's state relative to a baseline: new,
+	// unchanged, updated or absent (SARIF 2.1.0 section 3.27.24).
+	BaselineState string `json:"baselineState,omitempty"`
+	// Kind is the evaluation state of the result: notApplicable, pass, fail,
+	// review, open or informational (SARIF 2.1.0 section 3.27.9).
+	Kind string `json:"kind,omitempty"`
 }
 
 // SARIFMessage holds text.
@@ -313,6 +319,8 @@ func FromSARIF(data []byte, opts *ConvertOptions) (*Report, error) {
 		}
 
 		finding.Fingerprint = sarifFingerprint(result.Fingerprints)
+		finding.BaselineState = NormalizeSARIFBaselineState(result.BaselineState)
+		finding.Kind = NormalizeSARIFKind(result.Kind)
 
 		report.Findings = append(report.Findings, finding)
 	}
@@ -461,4 +469,42 @@ func detectCapabilities(toolName string, toolType string) []string {
 	}
 
 	return []string{"vulnerability", "secret"}
+}
+
+// NormalizeSARIFKind maps a SARIF result.kind onto the CTIS finding.kind
+// vocabulary (same rule as github.com/openctemio/ctis FromSARIF). SARIF spells
+// one value in camelCase ("notApplicable"); CTIS uses snake_case
+// ("not_applicable"). Matching ignores case, underscores and surrounding
+// whitespace. Anything outside the six SARIF values returns "" (leave unset):
+// the CTIS schema would reject it, and an absent kind is not defaulted to
+// SARIF's implicit "fail".
+func NormalizeSARIFKind(kind string) string {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(kind), "_", "")) {
+	case "notapplicable":
+		return "not_applicable"
+	case "pass":
+		return "pass"
+	case "fail":
+		return "fail"
+	case "review":
+		return "review"
+	case "open":
+		return "open"
+	case "informational":
+		return "informational"
+	default:
+		return ""
+	}
+}
+
+// NormalizeSARIFBaselineState maps a SARIF result.baselineState onto CTIS
+// finding.baseline_state (the same four values, matched case-insensitively).
+// Unknown values return "" (leave unset).
+func NormalizeSARIFBaselineState(state string) string {
+	switch s := strings.ToLower(strings.TrimSpace(state)); s {
+	case "new", "unchanged", "updated", "absent":
+		return s
+	default:
+		return ""
+	}
 }

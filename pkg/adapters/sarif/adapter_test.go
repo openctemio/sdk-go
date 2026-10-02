@@ -1101,3 +1101,32 @@ func TestConvert_ReferencesFromHelp(t *testing.T) {
 // testRepo names the scanned repository: a code scan's findings are filed
 // on it, and converting them with no repository is an error.
 var testRepo = &core.AdapterOptions{Repository: "github.com/example/app"}
+
+// The adapter used to copy result.kind and result.baselineState verbatim, so a
+// sensor sent "notApplicable" (the SARIF spelling), which the CTIS schema and
+// the platform's findings.kind CHECK reject; the platform only stored it
+// because its ingest normalizes. The adapter now sends the CTIS vocabulary.
+func TestConvert_NormalizesKindAndBaselineState(t *testing.T) {
+	input := []byte(`{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"checkov","rules":[{"id":"R1"}]}},"results":[
+		{"ruleId":"R1","kind":"notApplicable","baselineState":"Unchanged","message":{"text":"a"}},
+		{"ruleId":"R1","kind":"pass","message":{"text":"b"}},
+		{"ruleId":"R1","kind":"warning","baselineState":"modified","message":{"text":"c"}}]}]}`)
+	report, err := NewAdapter().Convert(context.Background(), input, testRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct{ kind, baseline string }{
+		{"not_applicable", "unchanged"},
+		{"pass", ""},
+		{"", ""},
+	}
+	if len(report.Findings) != len(want) {
+		t.Fatalf("got %d findings, want %d", len(report.Findings), len(want))
+	}
+	for i, w := range want {
+		f := report.Findings[i]
+		if f.Kind != w.kind || f.BaselineState != w.baseline {
+			t.Errorf("finding %d: kind=%q baseline_state=%q, want %q/%q", i, f.Kind, f.BaselineState, w.kind, w.baseline)
+		}
+	}
+}
