@@ -4,6 +4,8 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+## v0.12.0 — 2026-10-02
+
 ### Upgrade notes
 
 Only additions (checked by `api-compat` against v0.11.0). Every heartbeat
