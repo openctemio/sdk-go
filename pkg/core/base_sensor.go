@@ -66,6 +66,20 @@ type BaseSensor struct {
 	// capReporter supplies the capability report on every heartbeat (see
 	// SetCapabilityReporter).
 	capReporter CapabilityReporter
+
+	// loadReporter supplies the active and maximum jobs on every heartbeat
+	// (see SetLoadReporter).
+	loadReporter LoadReporter
+}
+
+// SetLoadReporter makes every heartbeat carry r's load: the commands the
+// sensor runs now (active_jobs, sent even when 0) and, when the capability
+// report does not already say it, how many it runs at once
+// (max_concurrent_jobs). Pass the sensor's *CommandPoller. Call before Start.
+func (a *BaseSensor) SetLoadReporter(r LoadReporter) {
+	a.statusMu.Lock()
+	a.loadReporter = r
+	a.statusMu.Unlock()
 }
 
 // SetCapabilityReporter makes every heartbeat carry r's report: the tools
@@ -83,9 +97,17 @@ func (a *BaseSensor) SetCapabilityReporter(r CapabilityReporter) {
 func (a *BaseSensor) withCapabilities(ctx context.Context, status *SensorStatus) *SensorStatus {
 	a.statusMu.RLock()
 	r := a.capReporter
+	lr := a.loadReporter
 	a.statusMu.RUnlock()
 	if r != nil && status != nil {
 		r.CapabilityReport(ctx).Apply(status)
+	}
+	if lr != nil && status != nil {
+		status.ActiveJobs = lr.ActiveJobs()
+		status.ActiveJobsReported = true
+		if status.MaxConcurrentJobs == 0 {
+			status.MaxConcurrentJobs = lr.MaxJobs()
+		}
 	}
 	return status
 }

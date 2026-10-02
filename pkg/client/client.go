@@ -386,6 +386,9 @@ type HeartbeatRequest struct {
 	MemoryPercent float64 `json:"memory_percent,omitempty"`
 	ActiveJobs    int     `json:"active_jobs,omitempty"`
 	Region        string  `json:"region,omitempty"`
+	// ActiveJobsReported sends active_jobs even when it is 0 (the sensor
+	// measured it). Without it a 0 is left out, as before.
+	ActiveJobsReported bool `json:"-"`
 
 	// Outbox is the durable outbox's state (absent without an outbox).
 	Outbox *HeartbeatOutbox `json:"outbox,omitempty"`
@@ -397,6 +400,21 @@ type HeartbeatRequest struct {
 	MaxConcurrentJobs int             `json:"max_concurrent_jobs,omitempty"`
 	OS                string          `json:"os,omitempty"`
 	Arch              string          `json:"arch,omitempty"`
+}
+
+// MarshalJSON encodes the heartbeat. active_jobs is sent even when it is 0
+// if ActiveJobsReported is set: an idle sensor then reports "0 running",
+// which the platform's dispatch can trust, instead of leaving the field out.
+func (r HeartbeatRequest) MarshalJSON() ([]byte, error) {
+	type plain HeartbeatRequest // no MarshalJSON: no recursion
+	if !r.ActiveJobsReported {
+		return json.Marshal(plain(r))
+	}
+	// The outer field shadows the embedded one (shallower depth wins).
+	return json.Marshal(struct {
+		plain
+		ActiveJobs int `json:"active_jobs"`
+	}{plain(r), r.ActiveJobs})
 }
 
 // HeartbeatOutbox is the outbox state a heartbeat reports (additive to the
@@ -595,6 +613,8 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		MemoryPercent: status.MemoryPercent,
 		ActiveJobs:    status.ActiveJobs,
 		Region:        status.Region,
+
+		ActiveJobsReported: status.ActiveJobsReported,
 		// Version and Hostname were declared on the request but never set, so
 		// every sensor showed "No host info" on the platform.
 		Version:  status.Version,
