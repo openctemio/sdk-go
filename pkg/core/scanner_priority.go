@@ -71,10 +71,15 @@ func CurrentScannerPriority() *ScannerPriority {
 // do); a scanner configured with ConfigureScannerProcess leads its own
 // process group, so processes it already forked are covered too. Best
 // effort: a refused change is ignored and the scanner runs as it is.
+//
+// A scanner never keeps a negative OOM score inherited from a sensor that is
+// protected from the OOM killer (sensorkit's SENSOR_PROTECT_FROM_OOM, or
+// systemd's OOMScoreAdjust): with no priority set it is raised to 0, so the
+// kernel still kills a scanner before the sensor. Raising a score needs no
+// privilege.
 func ApplyScannerPriority(cmd *exec.Cmd) {
-	p := CurrentScannerPriority()
-	if p == nil || cmd == nil || cmd.Process == nil {
+	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	applyScannerPriority(cmd, *p)
+	applyScannerPriority(cmd, CurrentScannerPriority())
 }

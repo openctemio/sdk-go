@@ -84,6 +84,13 @@ type Options struct {
 	// ScannerPriority is the priority of scanner processes: "low" (default)
 	// or "normal" (SENSOR_SCANNER_PRIORITY; see ResolveScannerPriority).
 	ScannerPriority string
+	// ProtectFromOOM protects the sensor itself from the OOM killer
+	// (SENSOR_PROTECT_FROM_OOM; default off): Run writes SensorOOMScoreAdj
+	// to its oom_score_adj. Linux only, and it needs CAP_SYS_RESOURCE
+	// (docker run --cap-add SYS_RESOURCE, or root under systemd); without
+	// it the sensor warns and runs unprotected. Scanners never inherit the
+	// protection. true wins over the environment.
+	ProtectFromOOM bool
 	// Tools is an operator allowlist of tool names (SENSOR_TOOLS): scanners
 	// whose name (or As name) is not in it are neither run nor reported. nil
 	// reads SENSOR_TOOLS; an empty non-nil slice sets no allowlist.
@@ -191,6 +198,7 @@ type settings struct {
 	pollInterval                             time.Duration
 	allow                                    []string // nil: no allowlist
 	scannerPriority                          *core.ScannerPriority
+	protectFromOOM                           bool
 	outbox                                   OutboxPlan
 	stateDir                                 string
 	key                                      startKey
@@ -340,6 +348,10 @@ func New(opts Options) (*Kit, error) {
 		return nil, err
 	}
 	if s.scannerPriority, err = ResolveScannerPriority(opts.ScannerPriority); err != nil {
+		k.closeClient()
+		return nil, err
+	}
+	if s.protectFromOOM, err = ResolveProtectFromOOM(opts.ProtectFromOOM); err != nil {
 		k.closeClient()
 		return nil, err
 	}
@@ -540,6 +552,11 @@ func (k *Kit) Run(ctx context.Context) error {
 			p.Nice, p.IOLevel, p.OOMScoreAdj, EnvScannerPriority)
 	} else {
 		_, _ = fmt.Fprintf(out, "  Scanner priority: normal (the sensor's own)\n")
+	}
+	// Opt-in: the sensor itself is the OOM killer's last choice. Before any
+	// scanner starts; ApplyScannerPriority keeps scanners from inheriting it.
+	if k.s.protectFromOOM {
+		protectFromOOM(out, errw, writeSelfOOMScoreAdj)
 	}
 
 	// Scheduled scans: the scanners installed now.

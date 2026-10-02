@@ -4,4 +4,4 @@ package core
 
 import "os/exec"
 
-func applyScannerPriority(*exec.Cmd, ScannerPriority) {}
+func applyScannerPriority(*exec.Cmd, *ScannerPriority) {}

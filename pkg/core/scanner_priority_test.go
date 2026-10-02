@@ -100,3 +100,64 @@ func TestSetScannerPriority_Clamps(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+func TestScannerOOMScoreAdj(t *testing.T) {
+	low := &ScannerPriority{OOMScoreAdj: 500}
+	for _, c := range []struct {
+		name   string
+		p      *ScannerPriority
+		sensor int
+		want   int
+		ok     bool
+	}{
+		{"priority, unprotected sensor", low, 0, 500, true},
+		{"priority, protected sensor", low, -500, 500, true},
+		{"no priority, unprotected sensor", nil, 0, 0, false},
+		{"no priority, sensor above 0", nil, 300, 0, false},
+		{"no priority, protected sensor", nil, -500, 0, true},
+		{"priority without an OOM score, protected sensor", &ScannerPriority{Nice: 10}, -1000, 0, true},
+	} {
+		if got, ok := scannerOOMScoreAdj(c.p, c.sensor); got != c.want || ok != c.ok {
+			t.Errorf("%s: got (%d, %v), want (%d, %v)", c.name, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// A sensor protected from the OOM killer (a negative oom_score_adj) never
+// hands its protection to a scanner, with or without a scanner priority. It
+// needs CAP_SYS_RESOURCE to lower the test process's own score.
+func TestApplyScannerPriority_ScannerDropsSensorProtection(t *testing.T) {
+	orig := selfOOMScoreAdj(t)
+	if err := os.WriteFile("/proc/self/oom_score_adj", []byte("-100"), 0); err != nil {
+		t.Skipf("cannot lower the test's own oom_score_adj (needs CAP_SYS_RESOURCE): %v", err)
+	}
+	t.Cleanup(func() {
+		// Raising back is unprivileged.
+		_ = os.WriteFile("/proc/self/oom_score_adj", []byte(strconv.Itoa(orig)), 0)
+	})
+
+	// $$ is the scanner; cat is a child it forks after the write.
+	script := `sleep 0.3; echo "leader $(cat /proc/$$/oom_score_adj)"; echo "child $(cat /proc/self/oom_score_adj)"`
+	for name, c := range map[string]struct {
+		p    *ScannerPriority
+		want string
+	}{
+		"normal priority": {nil, "0"},
+		"low priority":    {&ScannerPriority{Nice: 10, IOLevel: 7, OOMScoreAdj: 500}, "500"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			SetScannerPriority(c.p)
+			t.Cleanup(func() { SetScannerPriority(nil) })
+			r, err := ExecuteScanner(context.Background(), &ExecConfig{Binary: "/bin/sh", Args: []string{"-c", script}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := string(r.Stdout)
+			for _, who := range []string{"leader", "child"} {
+				if want := who + " " + c.want; !strings.Contains(out, want) {
+					t.Errorf("want %q in output, got %q", want, out)
+				}
+			}
+		})
+	}
+}
