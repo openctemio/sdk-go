@@ -86,6 +86,12 @@ type FakePlatform struct {
 	Limits protov2.Limits
 	// Tools are the sensor's declared tools (empty: any).
 	Tools []string
+	// Control serves the api RFC-029 control plane on v2 (heartbeat,
+	// commands, suppressions, fingerprints, keys) and lists it on hello.
+	// False (with V2) is a platform from api v0.8: v2 results only.
+	Control bool
+	// Paused answers heartbeats as for a disabled sensor (v2: 200 + pause).
+	Paused bool
 
 	mu        sync.Mutex
 	fault     Fault
@@ -93,9 +99,12 @@ type FakePlatform struct {
 	requests  []Request
 	reports   map[string]*StoredReport
 	v1Reports []*ctis.Report
-	commands  map[string]string // id -> "running" | "completed" | "failed"
+	commands  map[string]string // id -> "pending" | "acknowledged" | "running" | "completed" | "failed"
 	cmdErrors map[string]string
+	cmdResult map[string]json.RawMessage
+	cmdQueue  []string // pending commands in poll order
 	outbox    []json.RawMessage
+	keys      int
 }
 
 // NewFakePlatform starts a fake platform. Close it with Close.
@@ -107,6 +116,7 @@ func NewFakePlatform(v2 bool) *FakePlatform {
 		reports:   map[string]*StoredReport{},
 		commands:  map[string]string{},
 		cmdErrors: map[string]string{},
+		cmdResult: map[string]json.RawMessage{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	return f
@@ -137,6 +147,35 @@ func (f *FakePlatform) OpenCommand(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.commands[id] = "running"
+}
+
+// SetControl switches the RFC-029 control plane on v2 on or off.
+func (f *FakePlatform) SetControl(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Control = on
+}
+
+// SetPaused answers heartbeats as for a disabled sensor.
+func (f *FakePlatform) SetPaused(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Paused = on
+}
+
+// QueueCommand adds a pending command a poll offers.
+func (f *FakePlatform) QueueCommand(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commands[id] = "pending"
+	f.cmdQueue = append(f.cmdQueue, id)
+}
+
+// CommandResult returns the result a completed command stored.
+func (f *FakePlatform) CommandResult(id string) json.RawMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cmdResult[id]
 }
 
 // CommandState returns a command's state and its error message.
@@ -391,27 +430,54 @@ func protov2HasFeature(values []string, feature string) bool {
 }
 
 func (f *FakePlatform) problem(w http.ResponseWriter, status int, t protov2.ProblemType) {
+	f.problemState(w, status, t, "")
+}
+
+// sensorProblems are the RFC-029 types (ProblemTypeBaseSensor).
+var sensorProblems = map[protov2.ProblemType]bool{
+	protov2.ProblemInvalidTransition: true, protov2.ProblemCommandClaimed: true,
+	protov2.ProblemTransitionConflict: true, protov2.ProblemRenewalRefused: true, protov2.ProblemTooManyItems: true,
+}
+
+func (f *FakePlatform) problemState(w http.ResponseWriter, status int, t protov2.ProblemType, state string) {
 	w.Header().Set("Content-Type", protov2.MediaTypeProblem)
 	w.Header().Set(protov2.HeaderProtocol, "2")
 	if t == protov2.ProblemUnsupportedMediaType {
 		w.Header().Set("Accept", protov2.MediaTypeCTIS)
 	}
+	base := protov2.ProblemTypeBase
+	if sensorProblems[t] {
+		base = protov2.ProblemTypeBaseSensor
+	}
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(protov2.Problem{
-		Type: protov2.ProblemTypeBase + string(t), Title: string(t), Status: status, Detail: "fake: " + string(t),
-		Retryable: status == 429 || status >= 500,
+		Type: base + string(t), Title: string(t), Status: status, Detail: "fake: " + string(t),
+		State: state, Retryable: status == 429 || status >= 500,
 	})
 }
 
 func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 	rest := strings.TrimPrefix(r.URL.Path, protov2.PathPrefix)
 	if rest == protov2.HelloPath && r.Method == http.MethodGet {
+		features := []string{protov2.FeatureResults}
+		f.mu.Lock()
+		if f.Control {
+			features = append(features, protov2.FeatureHeartbeat, protov2.FeatureCommands,
+				protov2.FeatureSuppressions, protov2.FeatureFingerprints, protov2.FeatureKeys)
+		}
+		f.mu.Unlock()
 		h := protov2.Hello{
-			Protocol: 2, Features: []string{protov2.FeatureResults}, MediaTypes: []string{protov2.MediaTypeCTIS},
+			Protocol: 2, Features: features, MediaTypes: []string{protov2.MediaTypeCTIS},
 			Encodings: []string{"gzip", "zstd"}, Digests: []string{"sha-256"}, Limits: f.Limits,
 		}
 		w.Header().Set("Content-Type", protov2.MediaTypeJSON)
 		_ = json.NewEncoder(w).Encode(h)
+		return
+	}
+	f.mu.Lock()
+	control := f.Control
+	f.mu.Unlock()
+	if control && f.control(w, r, rest, body) {
 		return
 	}
 	commandID := ""

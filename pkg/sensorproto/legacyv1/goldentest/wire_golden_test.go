@@ -73,6 +73,13 @@ var ignoredHeaders = map[string]bool{"Accept-Encoding": true}
 var sdkVersionInUA = regexp.MustCompile(`openctem-sdk-go/\S+`)
 
 func (r *recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	// The recorder is a platform from before protocol v2: a v2 probe (the key
+	// renewal tries POST /api/v2/sensor/keys first) gets the plain 404 such a
+	// platform answers and is not part of the v1 recording.
+	if strings.HasPrefix(req.URL.Path, "/api/v2/") {
+		http.NotFound(w, req)
+		return
+	}
 	body, _ := io.ReadAll(req.Body)
 	h := map[string]string{}
 	for k, v := range req.Header {

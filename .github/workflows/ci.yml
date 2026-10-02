@@ -92,3 +92,66 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+
+  # Exported-API compatibility (api RFC-029 §8.6): a sensor built against the
+  # last release must build against this change. Any incompatible change to an
+  # exported identifier fails unless the PR is labelled breaking-change (and
+  # CHANGELOG.md says how to upgrade under "Upgrade notes").
+  api-compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+
+      - name: Install apidiff
+        run: go install golang.org/x/exp/cmd/apidiff@v0.0.0-20260908205506-85c1c2202aba
+
+      - name: Compare with the latest release
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'breaking-change') }}
+        run: scripts/check-api-compat.sh
+
+      - name: Compare with the latest release (breaking change declared)
+        if: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') }}
+        run: |
+          scripts/check-api-compat.sh || echo "::warning::incompatible API change declared with the breaking-change label"
+          grep -q '^### Upgrade notes' CHANGELOG.md || { echo "::error::breaking-change needs an 'Upgrade notes' section in CHANGELOG.md"; exit 1; }
+
+  # The sensor (github.com/openctemio/sensor, main) must build against this
+  # change without edits: that is what "bump the SDK and done" means for the
+  # one sensor we ship. Both builds (default and -tags platform) and vet.
+  sensor-compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: sdk-go
+
+      - uses: actions/checkout@v7
+        with:
+          repository: openctemio/sensor
+          ref: main
+          path: sensor
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: false
+
+      - name: Build the sensor against this SDK
+        working-directory: sensor
+        env:
+          GOWORK: "off"
+        run: |
+          go mod edit -replace github.com/openctemio/sdk-go=../sdk-go
+          go mod tidy
+          go build ./...
+          go build -tags platform ./...
+          go vet ./...

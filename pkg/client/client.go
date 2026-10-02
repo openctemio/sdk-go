@@ -55,6 +55,9 @@ type Client struct {
 	protocol string
 	v2       v2State
 
+	// supp caches the v2 suppression list and its ETag.
+	supp suppressionCache
+
 	// Durable outbox (optional; EnableOutbox).
 	obMu       sync.Mutex
 	ob         *outbox.Outbox
@@ -535,7 +538,13 @@ func (c *Client) pushReportV1(ctx context.Context, report *ctis.Report, assetsOn
 // heartbeat doorbell and ignores the response body: a caller that acts on the
 // platform's hints uses SendHeartbeatWithHints instead.
 func (c *Client) SendHeartbeat(ctx context.Context, status *core.SensorStatus) error {
-	_, err := c.sendHeartbeat(ctx, status, nil)
+	_, paused, err := c.sendHeartbeat(ctx, status, nil)
+	if err == nil && paused {
+		// Protocol v2 tells a disabled sensor to pause with a 200; a caller
+		// that does not act on hints must still see a refused key, as v1's
+		// 401 told it.
+		return errPausedHeartbeat()
+	}
 	return err
 }
 
@@ -543,9 +552,10 @@ func (c *Client) SendHeartbeat(ctx context.Context, status *core.SensorStatus) e
 // (X-OpenCTEM-Sensor-Features: doorbell) and returns the hints the platform
 // answered with. Against a server without the doorbell the hints have
 // Present=false. Announcing the feature is a promise to act on it: a disabled
-// sensor is then answered 200 with the pause action instead of 401.
+// sensor is then answered 200 with the pause action instead of 401. On
+// protocol v2 the doorbell is always on.
 func (c *Client) SendHeartbeatWithHints(ctx context.Context, status *core.SensorStatus) (*core.HeartbeatHints, error) {
-	data, err := c.sendHeartbeat(ctx, status, http.Header{
+	data, _, err := c.sendHeartbeat(ctx, status, http.Header{
 		legacyv1.HeaderSensorFeatures: []string{legacyv1.FeatureDoorbell},
 	})
 	if err != nil {
@@ -556,7 +566,11 @@ func (c *Client) SendHeartbeatWithHints(ctx context.Context, status *core.Sensor
 
 var _ core.DoorbellPusher = (*Client)(nil)
 
-func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, extra http.Header) ([]byte, error) {
+// sendHeartbeat sends one heartbeat on protocol v2 when the platform offers
+// it (api RFC-029 §4.3) and on v1 otherwise. extra is v1-only (the doorbell
+// feature header; v2 always has the doorbell). paused is true when v2 told a
+// disabled sensor to pause.
+func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, extra http.Header) ([]byte, bool, error) {
 	url := c.baseURL + legacyv1.PathHeartbeat
 
 	req := HeartbeatRequest{
@@ -590,9 +604,26 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		}
 	}
 
+	if useV2, _ := c.controlV2(ctx, protov2.FeatureHeartbeat); useV2 {
+		raw, resp, err := c.heartbeatV2(ctx, &req)
+		if err == nil {
+			if ob != nil {
+				ob.Wake()
+			}
+			if c.verbose {
+				fmt.Printf("[openctem] Heartbeat sent (v2): %s\n", status.Status)
+			}
+			return raw, resp.Status == protov2.HeartbeatStatusPaused, nil
+		}
+		if !isRouteMissing(err) {
+			return nil, false, err
+		}
+		c.renegotiate() // the platform listed v2 heartbeat but does not serve it
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("marshal heartbeat: %w", err)
+		return nil, false, fmt.Errorf("marshal heartbeat: %w", err)
 	}
 
 	// Discovery of protocol v2 results (RFC-026, RFC-023 C3): the answer
@@ -611,7 +642,7 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 
 	data, hdr, err := c.doRequestFull(ctx, "POST", url, body, extra, c.maxRetries)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if announceV2 {
 		c.noteProtocolAdvert(hdr.Get(protov2.HeaderProtocolAdvert) == strconv.Itoa(protov2.ProtocolVersion))
@@ -625,7 +656,7 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		fmt.Printf("[openctem] Heartbeat sent: %s\n", status.Status)
 	}
 
-	return data, nil
+	return data, false, nil
 }
 
 // TestConnection tests the API connection.
@@ -659,6 +690,17 @@ func (c *Client) CheckFingerprints(ctx context.Context, fingerprints []string) (
 			Existing: []string{},
 			Missing:  []string{},
 		}, nil
+	}
+
+	if useV2, h := c.controlV2(ctx, protov2.FeatureFingerprints); useV2 {
+		existing, missing, err := c.checkFingerprintsV2(ctx, fingerprints, h)
+		if err == nil {
+			return &retry.FingerprintCheckResult{Existing: existing, Missing: missing}, nil
+		}
+		if !isRouteMissing(err) {
+			return nil, fmt.Errorf("check fingerprints: %w", err)
+		}
+		c.renegotiate()
 	}
 
 	req := checkFingerprintsRequest{
@@ -720,6 +762,17 @@ func (c *Client) BaselineDiff(ctx context.Context, repository, baseBranch string
 	if len(fingerprints) == 0 {
 		return []string{}, nil
 	}
+	if useV2, h := c.controlV2(ctx, protov2.FeatureFingerprints); useV2 {
+		out, err := c.baselineDiffV2(ctx, repository, baseBranch, fingerprints, h)
+		if err == nil {
+			return out, nil
+		}
+		if !isRouteMissing(err) {
+			return nil, fmt.Errorf("baseline diff: %w", err)
+		}
+		c.renegotiate()
+	}
+
 	reqBody, err := json.Marshal(baselineDiffRequest{
 		Repository:   repository,
 		BaseBranch:   baseBranch,
@@ -877,6 +930,7 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 		return nil, nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
+	c.noteV1Deprecation(resp.Header)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Best effort: a truncated or failed read still yields a useful error.
@@ -1507,6 +1561,20 @@ type SuppressionRule struct {
 func (c *Client) GetSuppressions(ctx context.Context) ([]SuppressionRule, error) {
 	if c.verbose {
 		fmt.Println("[openctem] Fetching suppression rules")
+	}
+
+	if useV2, _ := c.controlV2(ctx, protov2.FeatureSuppressions); useV2 {
+		rules, err := c.suppressionsV2(ctx)
+		if err == nil {
+			if c.verbose {
+				fmt.Printf("[openctem] Fetched %d suppression rules (v2)\n", len(rules))
+			}
+			return rules, nil
+		}
+		if !isRouteMissing(err) {
+			return nil, fmt.Errorf("fetch suppression rules: %w", err)
+		}
+		c.renegotiate()
 	}
 
 	data, err := c.doRequest(ctx, http.MethodGet, c.baseURL+legacyv1.PathSuppressions, nil)
