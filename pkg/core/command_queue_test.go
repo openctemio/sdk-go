@@ -323,6 +323,9 @@ func TestQueue_DrainReleasesUnfinished(t *testing.T) {
 	<-e.started
 	<-e.started
 	waitFor(t, "fast to complete", func() bool { _, st, _ := c.snapshot(); return st["fast"] == "completed" })
+	// "later" is claimed into fast's freed slot; drain only after that, or
+	// the test races the poller and sees two claims.
+	<-e.started
 	cancel()
 	<-done
 
