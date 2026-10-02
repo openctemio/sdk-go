@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -72,6 +73,11 @@ var ignoredHeaders = map[string]bool{"Accept-Encoding": true}
 // server parses it.
 var sdkVersionInUA = regexp.MustCompile(`openctem-sdk-go/\S+`)
 
+// sdkVersionInBody matches the heartbeat's "sdk" block version, which also
+// depends on how the test binary was built; the recording pins the field
+// names, not the version (Content-Length is recomputed after it).
+var sdkVersionInBody = regexp.MustCompile(`("sdk":\{"name":"openctem-sdk-go","version":")[^"]*"`)
+
 func (r *recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// The recorder is a platform from before protocol v2: a v2 probe (the key
 	// renewal tries POST /api/v2/sensor/keys first) gets the plain 404 such a
@@ -81,6 +87,7 @@ func (r *recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	body, _ := io.ReadAll(req.Body)
+	normalized := sdkVersionInBody.ReplaceAll(body, []byte(`${1}VERSION"`))
 	h := map[string]string{}
 	for k, v := range req.Header {
 		if !ignoredHeaders[k] {
@@ -90,10 +97,13 @@ func (r *recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			h[k] = sdkVersionInUA.ReplaceAllString(h[k], "openctem-sdk-go/VERSION")
 		}
 	}
+	if len(normalized) != len(body) {
+		h["Content-Length"] = strconv.Itoa(len(normalized))
+	}
 	r.mu.Lock()
 	r.got = append(r.got, exchange{
 		Call: r.call, Method: req.Method, Path: req.URL.Path, Query: req.URL.RawQuery,
-		Headers: h, Body: string(body),
+		Headers: h, Body: string(normalized),
 	})
 	r.mu.Unlock()
 

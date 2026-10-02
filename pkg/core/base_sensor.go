@@ -117,8 +117,15 @@ func (a *BaseSensor) withCapabilities(ctx context.Context, status *SensorStatus)
 
 // BaseSensorConfig configures a BaseSensor.
 type BaseSensorConfig struct {
-	Name              string        `yaml:"name" json:"name"`
-	Version           string        `yaml:"version" json:"version"`
+	Name    string `yaml:"name" json:"name"`
+	Version string `yaml:"version" json:"version"`
+	// ProductName, Commit and BuildTime describe the sensor binary on every
+	// heartbeat ("sensor"); all optional. ProductName defaults to the name
+	// given to useragent.SetProduct, then to the executable's name;
+	// BuildTime is RFC 3339.
+	ProductName       string        `yaml:"product_name" json:"product_name"`
+	Commit            string        `yaml:"commit" json:"commit"`
+	BuildTime         string        `yaml:"build_time" json:"build_time"`
 	Region            string        `yaml:"region" json:"region"` // Deployment region (e.g., "us-east-1", "ap-southeast-1")
 	ScanInterval      time.Duration `yaml:"scan_interval" json:"scan_interval"`
 	CollectInterval   time.Duration `yaml:"collect_interval" json:"collect_interval"`
@@ -193,6 +200,8 @@ func NewBaseSensor(cfg *BaseSensorConfig, pusher Pusher) *BaseSensor {
 			Hostname:   hostname,
 			OS:         HostOS(),
 			Arch:       HostArch(),
+			SDK:        sdkInfoPtr(),
+			Sensor:     sensorBuildPtr(cfg),
 		},
 		stopCh:   make(chan struct{}),
 		verbose:  cfg.Verbose,
@@ -798,4 +807,14 @@ func (a *BaseSensor) SetVerbose(v bool) {
 // AddParser adds a custom parser to the sensor.
 func (a *BaseSensor) AddParser(parser Parser) {
 	a.parsers.Register(parser)
+}
+
+func sdkInfoPtr() *SDKInfo {
+	i := CurrentSDKInfo()
+	return &i
+}
+
+func sensorBuildPtr(cfg *BaseSensorConfig) *SensorBuild {
+	b := NewSensorBuild(cfg.ProductName, cfg.Version, cfg.Commit, cfg.BuildTime)
+	return &b
 }

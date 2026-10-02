@@ -414,3 +414,43 @@ func TestSlots_CompleteBeforeNextPollWithOutbox(t *testing.T) {
 		}
 	}
 }
+
+// Every heartbeat names the SDK and the sensor binary, on v1 and v2: a
+// BaseSensor from its config, and a bare client.SendHeartbeat by itself.
+func TestHeartbeat_SDKAndSensorBuild(t *testing.T) {
+	for _, v2 := range []bool{false, true} {
+		t.Run(fmt.Sprintf("v2=%v", v2), func(t *testing.T) {
+			f := NewFakePlatform(v2)
+			f.SetControl(v2)
+			t.Cleanup(f.Close)
+			c := client.New(&client.Config{BaseURL: f.URL(), APIKey: f.APIKey, MaxRetries: 1})
+			t.Cleanup(func() { _ = c.Close() })
+
+			s := core.NewBaseSensor(&core.BaseSensorConfig{Name: "s", Version: "v0.6.1", ProductName: "openctemio-sensor",
+				Commit: "deadbeef", BuildTime: "2026-10-02T10:00:00Z", HeartbeatInterval: time.Hour}, c)
+			if _, err := s.FirstHeartbeat(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			// A sensor that builds its own status: the client fills both.
+			if err := c.SendHeartbeat(context.Background(), &core.SensorStatus{Name: "bare", Status: core.SensorStateRunning, Version: "3.0.0"}); err != nil {
+				t.Fatal(err)
+			}
+			b := f.HeartbeatBuilds()
+			if len(b) != 2 {
+				t.Fatalf("%d heartbeats", len(b))
+			}
+			for i, hb := range b {
+				if hb.SDK == nil || hb.SDK.Name != "openctem-sdk-go" || hb.SDK.Version == "" {
+					t.Fatalf("heartbeat %d sdk %+v", i, hb.SDK)
+				}
+			}
+			got := *b[0].Sensor
+			if got.Name != "openctemio-sensor" || got.Version != "0.6.1" || got.Commit != "deadbeef" || got.BuildTime != "2026-10-02T10:00:00Z" {
+				t.Fatalf("base sensor block %+v", got)
+			}
+			if b[1].Sensor == nil || b[1].Sensor.Version != "3.0.0" || b[1].Sensor.Name == "" {
+				t.Fatalf("bare heartbeat sensor block %+v", b[1].Sensor)
+			}
+		})
+	}
+}

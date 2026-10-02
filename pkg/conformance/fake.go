@@ -250,6 +250,32 @@ func (f *FakePlatform) Heartbeats() []json.RawMessage {
 	return append([]json.RawMessage(nil), f.beats...)
 }
 
+// HeartbeatBuild is what a heartbeat says about the SDK and the sensor
+// binary ("sdk" and "sensor"); nil where the heartbeat did not carry it.
+type HeartbeatBuild struct {
+	SDK *struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	} `json:"sdk"`
+	Sensor *struct {
+		Name      string `json:"name"`
+		Version   string `json:"version"`
+		Commit    string `json:"commit"`
+		BuildTime string `json:"build_time"`
+	} `json:"sensor"`
+}
+
+// HeartbeatBuilds returns the "sdk" and "sensor" blocks of every heartbeat
+// received, v1 and v2, in order.
+func (f *FakePlatform) HeartbeatBuilds() []HeartbeatBuild {
+	beats := f.Heartbeats()
+	out := make([]HeartbeatBuild, len(beats))
+	for i, b := range beats {
+		_ = json.Unmarshal(b, &out[i])
+	}
+	return out
+}
+
 // recordHeartbeat keeps a heartbeat body and its outbox block. The caller
 // holds f.mu.
 func (f *FakePlatform) recordHeartbeat(body []byte) {

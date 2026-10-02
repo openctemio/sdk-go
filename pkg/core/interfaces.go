@@ -461,6 +461,11 @@ type SensorStatus struct {
 	// it may use, its slots and per-tool costs, its local queue, and the
 	// ids of the commands it holds (the lease list: a platform with leases
 	// renews exactly these).
+	// SDK and Sensor name the SDK and the sensor binary (every heartbeat;
+	// BaseSensor fills them, and the API client fills what is missing).
+	SDK    *SDKInfo     `json:"sdk,omitempty"`
+	Sensor *SensorBuild `json:"sensor,omitempty"`
+
 	Resources       *resource.HostResources `json:"resources,omitempty"`
 	Capacity        *resource.Capacity      `json:"capacity,omitempty"`
 	Queue           *QueueStats             `json:"queue,omitempty"`

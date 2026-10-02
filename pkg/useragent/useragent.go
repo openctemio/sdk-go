@@ -19,16 +19,18 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/openctemio/sdk-go/pkg/sdk"
 )
 
 const (
 	// sdkModule is the module path whose version is reported.
 	sdkModule = "github.com/openctemio/sdk-go"
 	// sdkToken is the SDK's product name in the User-Agent.
-	sdkToken = "openctem-sdk-go"
-	// develVersion is reported when the build info has no usable version
-	// (go test, go run, a replace directive to a local checkout).
-	develVersion = "devel"
+	sdkToken = sdk.Name
+	// develSuffix marks a build from a local checkout (go test, go run, a
+	// replace directive): "<sdk.Version>-devel".
+	develSuffix = "-devel"
 	// maxProductLen bounds the embedding binary's product token.
 	maxProductLen = 128
 )
@@ -41,8 +43,10 @@ var (
 )
 
 // SDKVersion returns the version of github.com/openctemio/sdk-go linked into
-// this binary, without a leading "v", or "devel" when the build info does not
-// say.
+// this binary, without a leading "v": the module version from the build info
+// (set by the release tag the sensor was built against), "<sdk.Version>-devel"
+// for a build from a local checkout, or sdk.Version when the binary has no
+// build info.
 func SDKVersion() string {
 	sdkVersionOnce.Do(func() {
 		sdkVersion = versionFromBuildInfo(debug.ReadBuildInfo())
@@ -55,30 +59,36 @@ func SDKVersion() string {
 // when it is replaced), the main module's when the SDK itself is being built.
 func versionFromBuildInfo(info *debug.BuildInfo, ok bool) string {
 	if !ok || info == nil {
-		return develVersion
+		return sdk.Version
 	}
 	version := ""
 	if info.Main.Path == sdkModule {
 		version = info.Main.Version
 	}
+	linked := info.Main.Path == sdkModule
 	for _, dep := range info.Deps {
 		if dep.Path != sdkModule {
 			continue
 		}
+		linked = true
 		version = dep.Version
 		if dep.Replace != nil {
 			version = dep.Replace.Version
 		}
 		break
 	}
+	if !linked {
+		return sdk.Version
+	}
 	return cleanVersion(version)
 }
 
-// cleanVersion drops the leading "v" and maps empty and "(devel)" to devel.
+// cleanVersion drops the leading "v" and maps empty and "(devel)" to
+// "<sdk.Version>-devel".
 func cleanVersion(v string) string {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
 	if v == "" || v == "(devel)" {
-		return develVersion
+		return sdk.Version + develSuffix
 	}
 	return sanitize(v)
 }
@@ -109,6 +119,14 @@ func Product(name, version string) string {
 		p = p[:maxProductLen]
 	}
 	return p
+}
+
+// ProductName returns the name and version of the product set with
+// SetProduct ("" when none was set).
+func ProductName() (name, version string) {
+	p, _ := product.Load().(string)
+	name, version, _ = strings.Cut(p, "/")
+	return name, version
 }
 
 // String returns the User-Agent for the product set with SetProduct.
