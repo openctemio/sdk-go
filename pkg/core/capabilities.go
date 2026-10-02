@@ -24,7 +24,9 @@ type ToolInfo struct {
 	Installed bool `json:"installed"`
 }
 
-// CapabilityReport is what a sensor reports it can do.
+// CapabilityReport is what a sensor reports it can do. Its heartbeat
+// member names (tools, capabilities, max_concurrent_jobs, os, arch) are
+// stable protocol.
 type CapabilityReport struct {
 	// Tools is the tool inventory. nil reports nothing (the platform keeps
 	// using its administrator's list); an empty, non-nil slice reports that
@@ -33,8 +35,11 @@ type CapabilityReport struct {
 	// Capabilities are the capability names the sensor serves ("validate",
 	// a tool name, "sast"). nil reports nothing, as for Tools.
 	Capabilities []string
-	// MaxConcurrentJobs is how many jobs the sensor runs at once; 0 reports
-	// nothing.
+	// MaxConcurrentJobs is the sensor's configured cap: the most jobs it
+	// ever runs at once (heartbeat member max_concurrent_jobs); 0 reports
+	// nothing. Live free slots, when reported, are separate and never above
+	// it; the platform dispatches at most min(its limit, this cap, the live
+	// slots).
 	MaxConcurrentJobs int
 }
 
