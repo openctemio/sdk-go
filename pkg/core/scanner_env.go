@@ -112,19 +112,35 @@ func ScannerEnviron(extra ...map[string]string) []string {
 
 func scannerEnviron(base []string, extra ...map[string]string) []string {
 	scannerEnvMu.RLock()
+	proxy := scannerProxy
+	scannerEnvMu.RUnlock()
+	return buildEnviron(base, proxy == ScannerProxyDirect, nil, extra...)
+}
+
+// buildEnviron is the allowlisted subset of base, then extra. With
+// stripProxy the proxy variables (httpsec.ProxyEnvVars) are left out of
+// base; proxyVars, when not nil, are added after base (before extra).
+func buildEnviron(base []string, stripProxy bool, proxyVars map[string]string, extra ...map[string]string) []string {
+	scannerEnvMu.RLock()
 	inherit := scannerInheritEn
 	allowExtra := scannerEnvExtra
 	scannerEnvMu.RUnlock()
 
-	env := make([]string, 0, len(base))
+	env := make([]string, 0, len(base)+len(proxyVars))
 	for _, kv := range base {
 		name, _, ok := strings.Cut(kv, "=")
 		if !ok || name == "" {
 			continue
 		}
+		if stripProxy && isProxyEnvVar(name) {
+			continue
+		}
 		if inherit || scannerEnvAllowed(name, allowExtra) {
 			env = append(env, kv)
 		}
+	}
+	for _, k := range sortedKeys(proxyVars) {
+		env = append(env, k+"="+proxyVars[k])
 	}
 	for _, m := range extra {
 		for k, v := range m {

@@ -11,7 +11,8 @@
 // New reads the standard settings (API_URL, API_KEY, SENSOR_ID, SENSOR_NAME,
 // SENSOR_PROTOCOL, SENSOR_MAX_JOBS, SENSOR_TOOLS, SENSOR_DRAIN_GRACE,
 // SENSOR_OUTBOX*, SENSOR_STATE_DIR, SENSOR_CA_CERT_FILE,
-// PLATFORM_KEY_AUTORENEW, HTTP(S)_PROXY; the pre-rename AGENT_* names with a
+// PLATFORM_KEY_AUTORENEW, SENSOR_CONTROL_PROXY, SENSOR_CONTENT_PROXY,
+// SENSOR_SCAN_PROXY, HTTP(S)_PROXY / NO_PROXY; the pre-rename AGENT_* names with a
 // deprecation warning), refuses settings it would misread with a clear
 // message and exit code (ExitCode), and connects the platform client
 // (protocol v2 negotiated on hello, v1 for what the platform does not offer;

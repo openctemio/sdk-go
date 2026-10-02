@@ -6,6 +6,49 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **Proxy settings per outbound path** (api RFC-034 Phase 0).
+  - **Two new sensorkit settings:**
+    - `SENSOR_CONTROL_PROXY` covers every request to the platform.
+    - `SENSOR_CONTENT_PROXY` covers scanner content and public feeds.
+  - **Values.** Each takes a proxy URL (`http`, `https`, `socks5`,
+    `socks5h`, user:password allowed) or `direct`. With a URL, `NO_PROXY`
+    is the bypass list.
+  - **Precedence.** An option comes first, then the setting. After that,
+    control falls back to `HTTP(S)_PROXY`, and content follows the control
+    setting.
+  - **API.**
+    - sensorkit: `ResolveProxies`, `Proxies`, `ProxyOptions`, and
+      `Options.ControlProxy` / `ContentProxy` / `ScanProxy`.
+    - httpsec: `ProxySetting` (with `ParseProxySetting`),
+      `SetAPIProxy` / `APIProxy`, `SetContentProxy` / `ContentProxy`, and
+      `ProxyFunc`.
+
+    The API client's transport (`NewAPIClient`) uses `APIProxy`. A
+    dedicated platform client can install `httpsec.APIProxy().Func()` as
+    its `Transport.Proxy`.
+  - **CA file.** `SENSOR_CA_CERT_FILE` is now also trusted for content
+    downloads (`SetContentRootCAs`), so a TLS-inspecting egress proxy works
+    for both paths.
+- **Scanner proxy mode** (api RFC-034 G1, owner decision O2).
+  - **Setting.** `SENSOR_SCAN_PROXY` (or `OPENCTEM_SDK_SCANNER_PROXY`):
+    - `inherit` (default, unchanged behavior): scanner processes get the
+      sensor's `HTTP(S)_PROXY` / `ALL_PROXY` / `NO_PROXY`;
+    - `direct`: they get none, apart from variables a caller passes
+      explicitly.
+  - **Start-up log.** The kit logs one line with the three paths. While
+    scanners inherit proxy variables that the operator did not choose
+    explicitly, it also warns, naming the variables with credentials
+    removed.
+  - **Content tools.** `core.ContentEnviron` builds the environment of a
+    content tool (trivy's DB download, template updates). It follows the
+    content proxy.
+  - **API.** `core.ScannerProxyMode`, `ParseScannerProxyMode`,
+    `SetScannerProxyMode`, `ScannerProxy` and `ScannerProxySummary`.
+- **`httpsec.TrustUpstreamHosts`.** It registers host names the program
+  hard-codes. When local DNS cannot resolve such a name, it may still go
+  through a proxy, which resolves it. The KEV and EPSS enrichers register
+  their default hosts.
+
 - **Platform policy and slim heartbeats** (api RFC-033 §6.12, owner decisions
   O2 and O3).
   - **Manifest answer.** It now carries the platform's policy (allowed
@@ -34,6 +77,25 @@ All notable changes to `github.com/openctemio/sdk-go`.
     `ProblemManifestNotFound`.
   - **Conformance fake.** New `SetManifestPolicy`; `GET /manifest` is now
     served.
+
+### Changed
+
+- **`httpsec.SafeHTTPClient` now uses a proxy** (api RFC-034 G2).
+  - **Which proxy.** It uses the content proxy setting, by default the
+    environment's `HTTP(S)_PROXY` / `NO_PROXY`. It used to ignore every
+    proxy, so upstream content, KEV/EPSS and collectors could not connect
+    on a network whose only way out is a proxy.
+  - **Target check moved.** With a proxy, the transport dials the proxy,
+    so the SSRF check now runs on the request's own target before the
+    proxy is used: blocked names, blocked IP literals and every resolved
+    address. This covers redirects too. A name that does not resolve
+    locally is refused (`ErrProxiedTargetBlocked`) unless it was
+    registered with `TrustUpstreamHosts`.
+  - **The proxy itself.** It is dialed under the operator-destination
+    policy: private addresses are allowed; link-local, multicast and
+    reserved addresses are refused.
+  - **Opting out.** `SENSOR_CONTENT_PROXY=direct` (or
+    `SetContentProxy(direct)`) restores direct connections.
 
 ### Fixed
 
