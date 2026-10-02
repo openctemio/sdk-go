@@ -87,6 +87,7 @@ func ExecuteScanner(ctx context.Context, cfg *ExecConfig) (*ExecResult, error) {
 
 	// Wait for process to exit
 	err = cmd.Wait()
+	RecordProcessState(ctx, cmd.ProcessState)
 
 	result := &ExecResult{
 		Stdout:     stdoutBuf,
@@ -181,6 +182,7 @@ func StreamScanner(ctx context.Context, cfg *ExecConfig, handler OutputHandler) 
 
 	wg.Wait()
 	err = cmd.Wait()
+	RecordProcessState(ctx, cmd.ProcessState)
 
 	result := &ExecResult{
 		Stdout:     stdoutBuf,

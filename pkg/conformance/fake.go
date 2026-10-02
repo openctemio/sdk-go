@@ -106,6 +106,19 @@ type FakePlatform struct {
 	outbox    []json.RawMessage
 	beats     []json.RawMessage
 	keys      int
+	released  []Release
+}
+
+// Release is one release a sensor sent (api RFC-030).
+type Release struct {
+	CommandID, Reason string
+}
+
+// Releases returns the releases received, in order.
+func (f *FakePlatform) Releases() []Release {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Release(nil), f.released...)
 }
 
 // NewFakePlatform starts a fake platform. Close it with Close.

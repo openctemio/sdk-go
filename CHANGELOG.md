@@ -76,6 +76,36 @@ sends its own heartbeats sets the same fields on `core.SensorStatus`.
   constant `client.DefaultCommandPollLimit` (10, what `GetCommands` asks
   for).
 
+- **Resource-aware slots** (api RFC-030). Package `resource`: `Prober`
+  (CPU cores, CPU use, memory total/available, load1, disk free; cgroup v2
+  and v1 aware: `cpu.max`/`cfs_quota_us`, cpuset, `memory.max`/
+  `limit_in_bytes`, reclaimable page cache, throttling and OOM-kill
+  counters), `CostBook` (per-tool CPU-seconds, peak memory and wall time
+  per target learned from finished jobs, persisted to a JSON file),
+  `ComputeSlots`, `AIMD`, `Manager`, `Capacity`, `HostResources`,
+  `ToolEstimate`, `JobSample`. `(*core.CommandPoller).SetResourceManager`
+  makes the poller's slots dynamic (at most the cap).
+- **SDK-owned local queue** in `core.CommandPoller`: local order by class
+  then priority, per-host politeness (`limits.per_host_concurrency`,
+  default 1; `core.HostKey`), cancellation from the heartbeat
+  (`cancel_command_ids`, `core.HeartbeatActionCancel`,
+  `HeartbeatHints.CancelCommandIDs`, `(*CommandPoller).CancelCommands`),
+  graceful drain (`CommandPollerConfig.DrainGrace`, default 30 s) that
+  **releases** unstarted and aborted commands. `core.ReleasingCommandClient`,
+  `(*client.Client).ReleaseCommand` (v2 `POST /commands/{id}/release`
+  `{"reason"}`; fails the command with "released: <reason>" where the
+  platform has no release), `protov2.ReleaseAction`, `protov2.ReleaseRequest`.
+- **Heartbeat** (v1 and v2, all optional): `resources`
+  `{cpu_cores, cpu_used_pct, mem_total_bytes, mem_available_bytes, load1,
+  disk_free_bytes}`, `capacity` `{slots_total, slots_free, active_jobs,
+  per_tool: {<tool>: {est_cpu_s, est_mem_bytes, throughput_targets_per_min}}}`,
+  `queue` `{claimed, running, queued_local, oldest_age_seconds}`, and
+  `running` (the held command ids, for leases). `core.StatusReporter`,
+  `core.QueueStats`, `core.RecordProcessState`; the SDK exec helpers
+  record their processes' CPU time and peak memory.
+- `pkg/conformance`: the fake platform serves `release` and lists
+  `Releases()`.
+
 ### Fixed
 
 - **No more claimed-but-waiting commands, no duplicate scans** (api RFC-030

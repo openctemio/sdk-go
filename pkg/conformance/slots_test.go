@@ -20,6 +20,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/resource"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
@@ -240,6 +241,126 @@ func TestSlots_HeartbeatCarriesLoad(t *testing.T) {
 			}
 			if _, ok := without["active_jobs"]; ok {
 				t.Fatalf("active_jobs sent without a load reporter: %s", beats[1])
+			}
+		})
+	}
+}
+
+// Stopping the poller with a scan running: after the drain grace the scan
+// is canceled and RELEASED on v2 (the platform has it pending again at
+// once), never reported failed, and it ran once.
+func TestQueue_DrainReleasesOverV2(t *testing.T) {
+	f := newControlFake(t)
+	f.QueueCommand(cmdID(1))
+	c := client.New(&client.Config{BaseURL: f.URL(), APIKey: f.APIKey, MaxRetries: 1})
+	t.Cleanup(func() { _ = c.Close() })
+	exec := newBlockingExecutor() // never released: runs until canceled
+	p := core.NewCommandPoller(c, exec, &core.CommandPollerConfig{PollInterval: time.Hour, MaxConcurrent: 2, DrainGrace: 100 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = p.Start(ctx); close(done) }()
+	<-exec.started
+	cancel()
+	<-done
+
+	rel := f.Releases()
+	if len(rel) != 1 || rel[0].CommandID != cmdID(1) || rel[0].Reason != core.ReleaseReasonShutdown {
+		t.Fatalf("releases %+v", rel)
+	}
+	if s, _ := f.CommandState(cmdID(1)); s != "pending" {
+		t.Fatalf("state %q, want pending (re-queued)", s)
+	}
+	if n := len(exec.ranIDs()); n != 1 {
+		t.Fatalf("ran %d times", n)
+	}
+}
+
+// A platform without the release transition (404 on v2, or v1): the
+// command is failed with "released: <reason>" instead of waiting for a
+// timeout.
+func TestRelease_FallsBackToFail(t *testing.T) {
+	for _, v2 := range []bool{true, false} {
+		t.Run(fmt.Sprintf("v2=%v", v2), func(t *testing.T) {
+			f := NewFakePlatform(v2)
+			f.SetControl(v2)
+			t.Cleanup(f.Close)
+			f.OpenCommand(cmdID(7))
+			f.SetFault(func(r *http.Request, _ int) *FaultAnswer {
+				if strings.HasSuffix(r.URL.Path, "/"+protov2.ReleaseAction) {
+					return &FaultAnswer{Status: http.StatusNotFound} // route missing
+				}
+				return nil
+			})
+			c := client.New(&client.Config{BaseURL: f.URL(), APIKey: f.APIKey, MaxRetries: 1})
+			t.Cleanup(func() { _ = c.Close() })
+			if err := c.ReleaseCommand(context.Background(), cmdID(7), core.ReleaseReasonDraining); err != nil {
+				t.Fatal(err)
+			}
+			s, msg := f.CommandState(cmdID(7))
+			if s != "failed" || msg != "released: draining" {
+				t.Fatalf("state %q %q", s, msg)
+			}
+		})
+	}
+}
+
+// The heartbeat carries resources, capacity, queue and the held ids with
+// the names the platform reads, on v1 and v2.
+func TestHeartbeat_WorkBlocks(t *testing.T) {
+	for _, v2 := range []bool{false, true} {
+		t.Run(fmt.Sprintf("v2=%v", v2), func(t *testing.T) {
+			f := NewFakePlatform(v2)
+			f.SetControl(v2)
+			t.Cleanup(f.Close)
+			c := client.New(&client.Config{BaseURL: f.URL(), APIKey: f.APIKey, MaxRetries: 1})
+			t.Cleanup(func() { _ = c.Close() })
+			st := status()
+			st.Resources = &resource.HostResources{CPUCores: 2, CPUUsedPct: 10, MemTotalBytes: 4 << 30, MemAvailableBytes: 2 << 30, Load1: 0.5, DiskFreeBytes: 1 << 40}
+			st.Capacity = &resource.Capacity{SlotsTotal: 2, SlotsFree: 1, ActiveJobs: 1, PerTool: map[string]resource.ToolEstimate{"nuclei": {CPUSeconds: 20, MemBytes: 1 << 29, ThroughputTargetsPerMin: 3}}}
+			st.Queue = &core.QueueStats{Claimed: 1, Running: 1, OldestAgeSeconds: 12}
+			st.RunningCommands = []string{cmdID(1)}
+			if err := c.SendHeartbeat(context.Background(), st); err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Resources struct {
+					CPUCores          float64 `json:"cpu_cores"`
+					CPUUsedPct        float64 `json:"cpu_used_pct"`
+					MemTotalBytes     int64   `json:"mem_total_bytes"`
+					MemAvailableBytes int64   `json:"mem_available_bytes"`
+					Load1             float64 `json:"load1"`
+					DiskFreeBytes     int64   `json:"disk_free_bytes"`
+				} `json:"resources"`
+				Capacity struct {
+					SlotsTotal int `json:"slots_total"`
+					SlotsFree  int `json:"slots_free"`
+					ActiveJobs int `json:"active_jobs"`
+					PerTool    map[string]struct {
+						EstCPUS     float64 `json:"est_cpu_s"`
+						EstMemBytes int64   `json:"est_mem_bytes"`
+						Throughput  float64 `json:"throughput_targets_per_min"`
+					} `json:"per_tool"`
+				} `json:"capacity"`
+				Queue struct {
+					Claimed          int   `json:"claimed"`
+					Running          int   `json:"running"`
+					QueuedLocal      int   `json:"queued_local"`
+					OldestAgeSeconds int64 `json:"oldest_age_seconds"`
+				} `json:"queue"`
+				Running []string `json:"running"`
+			}
+			beats := f.Heartbeats()
+			if err := json.Unmarshal(beats[len(beats)-1], &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Resources.CPUCores != 2 || got.Resources.MemAvailableBytes != 2<<30 || got.Resources.DiskFreeBytes != 1<<40 || got.Resources.Load1 != 0.5 || got.Resources.CPUUsedPct != 10 || got.Resources.MemTotalBytes != 4<<30 {
+				t.Fatalf("resources %+v", got.Resources)
+			}
+			if got.Capacity.SlotsTotal != 2 || got.Capacity.SlotsFree != 1 || got.Capacity.ActiveJobs != 1 || got.Capacity.PerTool["nuclei"].EstMemBytes != 1<<29 || got.Capacity.PerTool["nuclei"].Throughput != 3 || got.Capacity.PerTool["nuclei"].EstCPUS != 20 {
+				t.Fatalf("capacity %+v", got.Capacity)
+			}
+			if got.Queue.Claimed != 1 || got.Queue.Running != 1 || got.Queue.OldestAgeSeconds != 12 || len(got.Running) != 1 {
+				t.Fatalf("queue %+v running %v", got.Queue, got.Running)
 			}
 		})
 	}

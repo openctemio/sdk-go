@@ -27,7 +27,20 @@ const (
 	StartAction    = "start"
 	CompleteAction = "complete"
 	FailAction     = "fail"
+	// ReleaseAction hands a claimed (acknowledged or running) command back:
+	// the platform returns it to pending, unpinned (api RFC-030).
+	ReleaseAction = "release"
 )
+
+// ReleaseRequest is the body of a release: why the sensor hands the
+// command back ("draining", "shutdown", "canceled", "politeness", or free
+// text of at most MaxReleaseReasonLen characters).
+type ReleaseRequest struct {
+	Reason string `json:"reason"`
+}
+
+// MaxReleaseReasonLen bounds ReleaseRequest.Reason.
+const MaxReleaseReasonLen = 200
 
 // CommandActionPath is the full path of a transition on one command; id must
 // already be path-escaped.
