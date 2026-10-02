@@ -78,6 +78,10 @@ var sdkVersionInUA = regexp.MustCompile(`openctem-sdk-go/\S+`)
 // names, not the version (Content-Length is recomputed after it).
 var sdkVersionInBody = regexp.MustCompile(`("sdk":\{"name":"openctem-sdk-go","version":")[^"]*"`)
 
+// instanceIDInBody matches the heartbeat's per-process instance id (random
+// on every run; api RFC-032 Phase 0), recorded as INSTANCE.
+var instanceIDInBody = regexp.MustCompile(`("instance_id":")[0-9a-f]{32}"`)
+
 func (r *recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// The recorder is a platform from before protocol v2: a v2 probe (the key
 	// renewal tries POST /api/v2/sensor/keys first) gets the plain 404 such a
@@ -88,6 +92,7 @@ func (r *recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	body, _ := io.ReadAll(req.Body)
 	normalized := sdkVersionInBody.ReplaceAll(body, []byte(`${1}VERSION"`))
+	normalized = instanceIDInBody.ReplaceAll(normalized, []byte(`${1}INSTANCE"`))
 	h := map[string]string{}
 	for k, v := range req.Header {
 		if !ignoredHeaders[k] {

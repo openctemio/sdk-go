@@ -82,6 +82,12 @@ type BootstrapConfig struct {
 //	    Capabilities: []string{"sast", "sca"},
 //	    Region: "us-east-1",
 //	})
+//
+// No server for this flow: no OpenCTEM API serves POST
+// /api/v1/platform/register (bootstrap tokens were never built; api RFC-032
+// §3.4). Sensors authenticate with the API key an administrator issues;
+// enrollment tokens (api RFC-032 Phase 2) replace this flow. Kept so code
+// that compiles against it keeps compiling, until the protocol v1 sunset.
 type Bootstrapper struct {
 	baseURL        string
 	bootstrapToken string
@@ -378,6 +384,12 @@ func (s *FileCredentialStore) Exists() bool {
 // sensor rename (~/.openctem/agent-credentials.json) is moved there first, so
 // the sensor keeps its identity and key and does not register again (see
 // ResolveCredentialsFile). An explicit path is used as is.
+//
+// No server for this flow: no OpenCTEM API serves POST
+// /api/v1/platform/register (bootstrap tokens were never built; api RFC-032
+// §3.4). Sensors authenticate with the API key an administrator issues;
+// enrollment tokens (api RFC-032 Phase 2) replace this flow. Kept so code
+// that compiles against it keeps compiling, until the protocol v1 sunset.
 func EnsureRegistered(ctx context.Context, config *EnsureRegisteredConfig) (*SensorCredentials, error) {
 	path, err := ResolveCredentialsFile(config.CredentialsFile)
 	if err != nil {
