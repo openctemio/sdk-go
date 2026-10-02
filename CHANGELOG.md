@@ -4,6 +4,19 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Security
+
+- **Scanner extra args are checked in the SDK** (`core.ValidateExtraArgs`,
+  `core.DangerousToolFlags`). Every scanner that appends
+  `ScanOptions.ExtraArgs` / `ReconOptions.ExtraArgs` (base scanner, nuclei
+  `Scan` and `ScanTargets`, semgrep, subfinder, httpx, dnsx, naabu, katana)
+  now refuses a scan whose extra args contain a flag that redirects output,
+  sets a proxy, names targets or target files, loads templates or rules, sets
+  an interaction server, enables a headless browser, sets DNS resolvers, or
+  picks an interface or source address, bare or as `flag=value`. The sensor
+  enforced this set in its platform-mode executor until that mode was removed
+  (sensor#107); without this, nothing guarded extra args.
+
 ### Added
 
 - **Sensor OOM protection** (api RFC-035 §5.3, opt-in). A new sensorkit
