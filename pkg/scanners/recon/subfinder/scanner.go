@@ -1,6 +1,6 @@
 // Package subfinder provides a scanner implementation for the subfinder subdomain enumeration tool.
 //
-// Deprecated: moved to github.com/openctemio/sensor/internal/scanners/recon/subfinder; removed
+// Deprecated: moved to github.com/openctemio/sensor/internal/recon/subfinder; removed
 // in v0.17.0. sdk-go keeps the runtime and safety layer the wrappers use
 // (core.ExecuteScanner, core.ValidateExtraArgs, the scanner environment).
 package subfinder
