@@ -23,6 +23,7 @@ type queueClient struct {
 	acks     []string
 	released map[string]string
 	results  map[string]string
+	errs     map[string]string
 	limits   []int
 }
 
@@ -79,6 +80,10 @@ func (c *queueClient) ReportCommandResult(_ context.Context, id string, r *Comma
 	defer c.mu.Unlock()
 	c.state[id] = r.Status
 	c.results[id] = r.Status
+	if c.errs == nil {
+		c.errs = map[string]string{}
+	}
+	c.errs[id] = r.Error
 	return nil
 }
 

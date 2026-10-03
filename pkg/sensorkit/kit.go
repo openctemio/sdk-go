@@ -143,6 +143,19 @@ type Options struct {
 	// SDK default, core.DefaultScanTargetPolicy). Its AllowedRoots are
 	// logged as the scan workspace.
 	ScanTargetPolicy *core.ScanTargetPolicy
+	// LocalPolicy is the sensor-local policy the network owner set at
+	// install time (api RFC-040 §5.7): every dispatched job is checked
+	// against it before any tool runs, and refused jobs are reported failed
+	// with "refused by local policy: <rule>". nil: New loads it from
+	// LocalPolicyPath (core.LoadLocalPolicy); a policy that cannot be loaded
+	// stops New (fail closed). Nothing the platform sends changes it.
+	LocalPolicy *core.LocalPolicy
+	// LocalPolicyPath is the policy file (SENSOR_LOCAL_POLICY; default
+	// core.DefaultLocalPolicyPath when that file exists). Without a file,
+	// SENSOR_ALLOWED_RANGES / SENSOR_ALLOWED_PORTS make a shorthand policy;
+	// without those the policy is absent: the sensor works as before and
+	// reports local_policy "absent".
+	LocalPolicyPath string
 	// WorkDir is where scans write; its free disk is part of the slot
 	// sizing (default StateDir).
 	WorkDir string
@@ -209,6 +222,7 @@ type settings struct {
 	stateDir                                 string
 	key                                      startKey
 	templates                                *core.TemplateVerifier
+	local                                    *core.LocalPolicy
 }
 
 // scannerEntry is an added scanner.
@@ -275,6 +289,14 @@ func New(opts Options) (*Kit, error) {
 	if err := core.CheckEnv(); err != nil {
 		return nil, err
 	}
+	// The sensor-local policy: a policy that cannot be loaded stops the
+	// sensor (fail closed); none at all keeps today's behavior, with a
+	// warning (api RFC-040 Q3 (a)).
+	local, err := k.loadLocalPolicy()
+	if err != nil {
+		return nil, err
+	}
+	s.local = local
 	protocol, err := ResolveProtocol(opts.Protocol, "")
 	if err != nil {
 		return nil, err
@@ -406,7 +428,27 @@ func New(opts Options) (*Kit, error) {
 	}
 	// NewBaseSensor fills the config's defaults (the banner prints them).
 	k.sensor = core.NewBaseSensor(&k.bcfg, pusher)
+	// Every heartbeat and manifest reports the local policy (to a platform
+	// that reads it).
+	k.sensor.SetLocalPolicy(s.local)
 	return k, nil
+}
+
+// loadLocalPolicy is Options.LocalPolicy, else the policy loaded from
+// Options.LocalPolicyPath, and logs it with its warnings.
+func (k *Kit) loadLocalPolicy() (*core.LocalPolicy, error) {
+	lp := k.opts.LocalPolicy
+	if lp == nil {
+		var err error
+		if lp, err = core.LoadLocalPolicy(core.LocalPolicyOptions{Path: k.opts.LocalPolicyPath}); err != nil {
+			return nil, usageError(err)
+		}
+	}
+	_, _ = fmt.Fprintf(k.out, "  Local policy: %s\n", lp.Describe())
+	for _, w := range lp.Warnings() {
+		_, _ = fmt.Fprintf(k.errw, "Warning: %s\n", w)
+	}
+	return lp, nil
 }
 
 func (k *Kit) closeClient() {
@@ -542,17 +584,7 @@ func (k *Kit) Run(ctx context.Context) error {
 	// The tool inventory: every allowed scanner, installed or not, in the
 	// order added; the heartbeat probes them.
 	reg := s.Tools()
-	var scanners []scannerEntry
-	for _, e := range k.scanners {
-		if !k.allowed(e) {
-			_, _ = fmt.Fprintf(errw, "Note: scanner %s is not in %s; it is not run\n", e.label(), EnvTools)
-			continue
-		}
-		scanners = append(scanners, e)
-		if err := reg.RegisterScanner(e.s, e.caps...); err != nil && k.s.verbose {
-			_, _ = fmt.Fprintf(errw, "Warning: scanner %s is not reported to the platform: %v\n", e.label(), err)
-		}
-	}
+	scanners := k.inventory(reg)
 	reg.SetMaxConcurrentJobs(k.s.maxJobs)
 	// A tool's version check runs in the background after the first one: on
 	// a saturated sensor it takes seconds, and the heartbeat must not wait
@@ -711,6 +743,28 @@ func (k *Kit) Run(ctx context.Context) error {
 	return nil
 }
 
+// inventory registers the scanners the sensor runs: those SENSOR_TOOLS and
+// the local policy's tools.allow let through, in the order added. The rest
+// are neither run nor reported, so the platform routes no job for them here.
+func (k *Kit) inventory(reg *core.ToolRegistry) []scannerEntry {
+	var scanners []scannerEntry
+	for _, e := range k.scanners {
+		if !k.allowed(e) {
+			_, _ = fmt.Fprintf(k.errw, "Note: scanner %s is not in %s; it is not run\n", e.label(), EnvTools)
+			continue
+		}
+		if !k.s.local.AllowsTool(e.label()) && !k.s.local.AllowsTool(e.s.Name()) {
+			_, _ = fmt.Fprintf(k.errw, "Note: scanner %s is not in the local policy's tools.allow; it is not run\n", e.label())
+			continue
+		}
+		scanners = append(scanners, e)
+		if err := reg.RegisterScanner(e.s, e.caps...); err != nil && k.s.verbose {
+			_, _ = fmt.Fprintf(k.errw, "Warning: scanner %s is not reported to the platform: %v\n", e.label(), err)
+		}
+	}
+	return scanners
+}
+
 // newPoller sets up the command executor and poller.
 func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.CommandPoller {
 	out := k.out
@@ -735,6 +789,10 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	if k.opts.ScanTargetPolicy != nil {
 		executor.SetScanTargetPolicy(k.opts.ScanTargetPolicy)
 	}
+	// The local policy, behind the poller's admission check: targets
+	// (through the scan target policy), templates, callbacks, rate and
+	// run time.
+	executor.SetLocalPolicy(k.s.local)
 	if r := k.opts.CommandAssetResolver; r != nil {
 		executor.SetAssetResolver(r)
 	} else if r := k.opts.AssetResolver; r != nil {
@@ -806,6 +864,9 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// Commands for tools outside the platform's policy fail instead of
 	// running (api RFC-033 §6.12, a second line behind the platform's gates).
 	poller.SetCommandGate(k.sensor.CommandToolGate())
+	// The sensor-local policy decides first: admission before any executor
+	// or tool, and the local kill switch (api RFC-040 §5.7).
+	poller.SetLocalPolicy(k.s.local)
 
 	if p := k.opts.ScanTargetPolicy; p != nil && len(p.AllowedRoots) > 0 {
 		_, _ = fmt.Fprintf(out, "  Scan workspace: %s\n", strings.Join(p.AllowedRoots, string(filepath.ListSeparator)))
