@@ -72,6 +72,13 @@ linters:
       - tmp
       - examples
     rules:
+      # The tool wrappers moved to the sensor (deprecated in v0.16.0, removed
+      # in v0.17.0) still import each other until they are removed.
+      - path: ^pkg/(scanners|handler)/
+        text: "SA1019: \"?github.com/openctemio/sdk-go/pkg/(scanners|strategy)(/[a-z/]+)?\"? is deprecated"
+        linters:
+          - staticcheck
+
       # Allow unchecked Close() in defer (common Go pattern)
       - text: "Error return value of .*.Close.*is not checked"
         linters:
