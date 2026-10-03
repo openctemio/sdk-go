@@ -1,6 +1,6 @@
 // Package httpx provides a scanner implementation for the httpx HTTP probing tool.
 //
-// Deprecated: moved to github.com/openctemio/sensor/internal/scanners/recon/httpx; removed
+// Deprecated: moved to github.com/openctemio/sensor/internal/recon/httpx; removed
 // in v0.17.0. sdk-go keeps the runtime and safety layer the wrappers use
 // (core.ExecuteScanner, core.ValidateExtraArgs, the scanner environment).
 package httpx
