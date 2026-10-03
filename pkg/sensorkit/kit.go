@@ -884,6 +884,15 @@ type aliasScanner struct {
 
 func (a aliasScanner) Name() string { return a.name }
 
+// SettingsSchema forwards the wrapped scanner's settings schema, so a scan
+// dispatched under the configured name gets the same typed settings.
+func (a aliasScanner) SettingsSchema() *core.SettingsSchema {
+	if p, ok := a.Scanner.(core.SettingsSchemaProvider); ok {
+		return p.SettingsSchema()
+	}
+	return nil
+}
+
 // commandRouter runs the handled command types with their executor and the
 // rest with the SDK's.
 type commandRouter struct {
