@@ -64,6 +64,10 @@ type ToolSpec struct {
 	// Cost is an optional estimate of one job's cost, the prior of the
 	// resource manager until it has learned the tool (see CostHints).
 	Cost *resource.ToolCostHint
+	// Settings is what an administrator may configure for the tool (api
+	// RFC-038); nil: nothing. The manifest names it by version and digest,
+	// and a scan receives the effective values as ScanOptions.Settings.
+	Settings *SettingsSchema
 }
 
 // Default probe settings.
@@ -226,6 +230,9 @@ func (r *ToolRegistry) Register(spec ToolSpec) error {
 			if t.spec.Cost == nil {
 				t.spec.Cost = spec.Cost
 			}
+			if t.spec.Settings == nil {
+				t.spec.Settings = spec.Settings
+			}
 			return nil
 		}
 	}
@@ -387,6 +394,37 @@ func (r *ToolRegistry) Names() []string {
 	return out
 }
 
+// SettingsSchema returns a registered tool's settings schema, or nil (no
+// such tool, or a tool without settings).
+func (r *ToolRegistry) SettingsSchema(name string) *SettingsSchema {
+	name, ok := normalizeToolName(name)
+	if !ok {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, t := range r.tools {
+		if t.spec.Name == name {
+			return t.spec.Settings
+		}
+	}
+	return nil
+}
+
+// SettingsSchemas returns the settings schema of every allowed tool that
+// has one, by tool name.
+func (r *ToolRegistry) SettingsSchemas() map[string]*SettingsSchema {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[string]*SettingsSchema{}
+	for _, t := range r.tools {
+		if t.spec.Settings != nil && r.allowedLocked(t.spec.Name) {
+			out[t.spec.Name] = t.spec.Settings
+		}
+	}
+	return out
+}
+
 // HasKind reports whether an allowed tool of kind k is registered.
 func (r *ToolRegistry) HasKind(k ToolKind) bool {
 	r.mu.Lock()
@@ -447,7 +485,8 @@ func (r *ToolRegistry) CapabilityReport(ctx context.Context) CapabilityReport {
 			t.refreshing = true
 			stale = append(stale, t)
 		}
-		info := ToolInfo{Name: t.spec.Name, Kind: t.spec.Kind, Version: t.version, Installed: t.installed}
+		info := ToolInfo{Name: t.spec.Name, Kind: t.spec.Kind, Version: t.version, Installed: t.installed,
+			Settings: t.spec.Settings.ManifestSettings()}
 		if len(t.spec.Capabilities) > 0 {
 			info.Capabilities = slices.Clone(t.spec.Capabilities)
 		}

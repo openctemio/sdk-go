@@ -1,0 +1,41 @@
+{
+  "description": "Groups, required keys, formats, const and a sensitive key.",
+  "schema": {
+    "x-octm-schema-version": 1,
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["mode"],
+    "properties": {
+      "mode": { "enum": ["fast", "thorough"], "title": "Mode" },
+      "network": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["host"],
+        "title": "Network",
+        "properties": {
+          "host": { "type": "string", "format": "hostname", "maxLength": 253 },
+          "endpoint": { "type": "string", "format": "uri" },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 443 }
+        }
+      },
+      "api_token": { "type": "string", "x-octm-sensitive": true, "title": "API token" },
+      "format_version": { "type": "integer", "const": 2, "default": 2 },
+      "label": { "type": "string", "minLength": 2, "maxLength": 8, "deprecated": true }
+    }
+  },
+  "schema_valid": true,
+  "schema_digest": "sha256:10877130410c464802af2ca523c38b69f6cead647d47485c0175ceee4a991b69",
+  "defaults": {"format_version": 2, "network": {"port": 443}},
+  "cases": [
+    { "description": "required keys given", "values": { "mode": "fast", "network": { "host": "scan.example.com" } }, "valid": true, "error_paths": [] },
+    { "description": "required key missing at the root and in a group", "values": {}, "valid": false, "error_paths": ["/mode", "/network/host"] },
+    { "description": "group given without its required key", "values": { "mode": "fast", "network": { "port": 8443 } }, "valid": false, "error_paths": ["/network/host"] },
+    { "description": "unknown key inside a group", "values": { "mode": "fast", "network": { "host": "a.example", "proxy": "x" } }, "valid": false, "error_paths": ["/network/proxy"] },
+    { "description": "bad hostname and a non-http uri", "values": { "mode": "fast", "network": { "host": "bad host", "endpoint": "file:///etc/passwd" } }, "valid": false, "error_paths": ["/network/endpoint", "/network/host"] },
+    { "description": "sensitive key as a plain value", "values": { "mode": "fast", "network": { "host": "a.example" }, "api_token": "s3cr3t" }, "valid": false, "error_paths": ["/api_token"] },
+    { "description": "const violated", "values": { "mode": "fast", "network": { "host": "a.example" }, "format_version": 3 }, "valid": false, "error_paths": ["/format_version"] },
+    { "description": "string length bounds", "values": { "mode": "thorough", "network": { "host": "a.example" }, "label": "x" }, "valid": false, "error_paths": ["/label"] },
+    { "description": "group as a scalar", "values": { "mode": "fast", "network": "a.example" }, "valid": false, "error_paths": ["/network"] },
+    { "description": "enum without type", "values": { "mode": "slow", "network": { "host": "a.example" } }, "valid": false, "error_paths": ["/mode"] }
+  ]
+}

@@ -87,6 +87,17 @@ type ManifestTool struct {
 	Capabilities []string          `json:"capabilities,omitempty"`
 	TargetTypes  []string          `json:"target_types,omitempty"`
 	Content      []ManifestContent `json:"content,omitempty"`
+	// Settings identifies the tool's settings schema (api RFC-038): its
+	// version and digest only; the platform fetches a schema it does not
+	// have by digest. Absent for a tool without settings.
+	Settings *ManifestToolSettings `json:"settings,omitempty"`
+}
+
+// ManifestToolSettings is a tool's settings schema as the manifest names
+// it.
+type ManifestToolSettings struct {
+	SchemaVersion int    `json:"schema_version"`
+	Digest        string `json:"digest"`
 }
 
 // ManifestContent is a tool's content version, without the timestamps
@@ -190,6 +201,10 @@ func BuildManifest(status *SensorStatus, res *resource.HostResources, model stri
 	for _, t := range status.Tools {
 		mt := ManifestTool{Name: t.Name, Kind: t.Kind, Version: t.Version, Installed: t.Installed,
 			Capabilities: slices.Clone(t.Capabilities)}
+		if t.Settings != nil {
+			ts := *t.Settings
+			mt.Settings = &ts
+		}
 		for _, c := range t.Content {
 			mt.Content = append(mt.Content, ManifestContent{Name: c.Name, Version: c.Version, Digest: c.Digest,
 				Source: c.Source, Managed: c.Managed})
