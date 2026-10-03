@@ -1158,6 +1158,17 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		}
 	}
 
+	// The rest of the config reaches the scanner only as typed settings its
+	// own schema declares (api RFC-038); an invalid value fails the command.
+	settings, ignoredConfig, err := scanSettings(e.scannerSettingsSchema(payload.Scanner, scanner), payload.Config)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s settings: %w", payload.Scanner, err)
+	}
+	opts.Settings = settings
+	if len(ignoredConfig) > 0 && e.verbose.Load() {
+		fmt.Printf("[executor] %s does not take config keys %s; they have no effect\n", payload.Scanner, strings.Join(ignoredConfig, ", "))
+	}
+
 	// Handle custom templates if provided
 	var templateDir string
 	var cleanupTemplates func()
@@ -1209,6 +1220,15 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 			"scanner_version": scanResult.ScannerVersion,
 			"targets_scanned": len(targets),
 		},
+	}
+	// Say what the config did: the settings applied, and the keys that had
+	// no effect (instead of dropping them silently).
+	if settings != nil {
+		result.Metadata["settings_applied"] = settings.Keys()
+		result.Metadata["settings_schema_digest"] = settings.SchemaDigest()
+	}
+	if len(ignoredConfig) > 0 {
+		result.Metadata["ignored_config_keys"] = ignoredConfig
 	}
 
 	// Parse and push results if pusher is configured. Empty (or whitespace-

@@ -242,7 +242,8 @@ func (r *ToolRegistry) Register(spec ToolSpec) error {
 
 // RegisterScanner registers a scanner: probed with its IsInstalled, serving
 // the registry capabilities its Capabilities words map to (descriptive words
-// the platform does not know are left out) plus extraCaps as given.
+// the platform does not know are left out) plus extraCaps as given, with
+// its settings schema when it declares one (SettingsSchemaProvider).
 func (r *ToolRegistry) RegisterScanner(s Scanner, extraCaps ...string) error {
 	if s == nil {
 		return errNilTool
@@ -253,12 +254,16 @@ func (r *ToolRegistry) RegisterScanner(s Scanner, extraCaps ...string) error {
 			caps = append(caps, c)
 		}
 	}
-	return r.Register(ToolSpec{
+	spec := ToolSpec{
 		Name:         s.Name(),
 		Kind:         ToolKindScanner,
 		Capabilities: append(caps, extraCaps...),
 		Probe:        s.IsInstalled,
-	})
+	}
+	if p, ok := s.(SettingsSchemaProvider); ok {
+		spec.Settings = p.SettingsSchema()
+	}
+	return r.Register(spec)
 }
 
 // RegisterCollector registers a collector (always usable: it runs in
