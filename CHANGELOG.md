@@ -4,6 +4,33 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Upgrade notes
+
+- **The tool wrappers are removed** (deprecated in v0.16.0). A program that
+  imports `pkg/scanners`, `pkg/scanners/{nuclei,trivy,semgrep,betterleaks,codeql}`,
+  `pkg/scanners/recon`, `pkg/scanners/recon/{subfinder,dnsx,httpx,naabu,katana}`,
+  `pkg/handler` or `pkg/strategy` no longer builds against v0.17.0. The
+  sensor has its own copies (`github.com/openctemio/sensor/internal/scanners`,
+  `internal/recon`, `internal/handler`, `internal/strategy`) and builds
+  unchanged; any other program should copy the v0.16.0 code or run the
+  sensor. Nothing the wrappers used from the SDK goes away:
+  `core.ExecuteScanner` / `StreamScanner`, the scanner environment,
+  `core.ValidateExtraArgs` / `DangerousToolFlags`, `pkg/adapters`,
+  `pkg/gitenv` and `pkg/scanners/tenable` stay.
+
+### Removed
+
+- **Breaking:** the deprecated tool wrapper packages `pkg/scanners` (the
+  registry), `pkg/scanners/nuclei`, `pkg/scanners/trivy`,
+  `pkg/scanners/semgrep`, `pkg/scanners/betterleaks`, `pkg/scanners/codeql`,
+  `pkg/scanners/recon` and `pkg/scanners/recon/{subfinder,dnsx,httpx,naabu,katana}`
+  (with their private helpers `pkg/scanners/internal/...` and
+  `pkg/scanners/recon/internal/flagcheck`), the CI-mode `pkg/handler` and
+  `pkg/strategy`, and the `examples/semgrep-test` program that used them.
+  They live in the sensor now (see Upgrade notes). The finding-asset checks
+  for what stays moved with it: `core.SARIFParser` in `pkg/core`, the Nessus
+  converter in `pkg/scanners/tenable`.
+
 ### Security
 
 - **Custom templates must be signed by the platform.** A scan command's
@@ -55,6 +82,7 @@ All notable changes to `github.com/openctemio/sdk-go`.
   from 1 to `core.MaxScanLimit`; anything else fails the command) ask the
   scanner for gentler limits. `core.CapScanLimit` applies them under the
   ceiling the sensor's operator configured.
+
 ### Fixed
 
 - **A scan command's config reaches the scanner as typed settings** (api

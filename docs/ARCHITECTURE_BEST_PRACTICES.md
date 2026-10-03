@@ -1,5 +1,10 @@
 # OpenCTEM SDK - Architecture Best Practices
 
+> Since v0.17.0 the tool wrappers (`pkg/scanners/*` except `tenable`),
+> `pkg/handler` and `pkg/strategy` are no longer in the SDK: they live in
+> `github.com/openctemio/sensor/internal/...`. The patterns below describe
+> that code; the import paths in the examples are the old SDK ones.
+
 Tài liệu này tổng hợp các best practices từ việc nghiên cứu:
 - code-secure-analyzer (framework core)
 - code-secure-semgrep (SAST scanner)

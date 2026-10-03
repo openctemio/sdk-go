@@ -71,37 +71,6 @@ func main() {
 }
 ```
 
-### Scanner Integration
-
-```go
-package main
-
-import (
-    "github.com/openctemio/sdk-go/pkg/scanners/semgrep"
-    "github.com/openctemio/sdk-go/pkg/handler"
-)
-
-func main() {
-    // Create scanner
-    scanner := semgrep.New(
-        semgrep.WithConfig("p/security-audit"),
-    )
-
-    // Run scan
-    results, err := scanner.Scan(context.Background(), "./src")
-    if err != nil {
-        panic(err)
-    }
-
-    // Handle results
-    h := handler.New(
-        handler.WithAPIClient(client),
-        handler.WithOutputFile("results.sarif"),
-    )
-    h.Handle(results)
-}
-```
-
 ## Build a sensor in 30 lines
 
 `pkg/sensorkit` is the whole sensor runtime in one call. A sensor implements
@@ -247,8 +216,7 @@ it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
 | Package | Description |
 |---------|-------------|
 | `pkg/client` | API client for OpenCTEM API |
-| `pkg/scanners` | Scanner integrations: SAST/SCA/secrets (Semgrep, CodeQL, Trivy, Betterleaks), DAST (Nuclei + validation executor), recon (subfinder, dnsx, naabu, httpx, katana) |
-| `pkg/handler` | Result handlers and output formatters |
+| `pkg/scanners/tenable` | Nessus API client and `.nessus` converter (the other tool wrappers live in the sensor) |
 | `pkg/sensorkit` | The sensor runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain |
 | `pkg/core` | Core types and interfaces |
 | `pkg/errors` | Error types and handling |
