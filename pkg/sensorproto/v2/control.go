@@ -65,6 +65,11 @@ const (
 	// FeatureToolSettings: tool settings schemas and settings documents
 	// (api RFC-038). Without it a sensor runs its tools with their defaults.
 	FeatureToolSettings = "tool_settings"
+	// FeatureLocalPolicy: the platform reads the sensor-local policy report
+	// ("local_policy": state, digest, summary, kill switch) on heartbeats
+	// and manifests (api RFC-040 §5.7). Without it a sensor sends none; it
+	// enforces its local policy either way.
+	FeatureLocalPolicy = "local_policy"
 )
 
 // ManifestResponse answers PUT /manifest: the digest the platform stored

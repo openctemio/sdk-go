@@ -99,6 +99,12 @@ type ScanTargetPolicy struct {
 	// LookupIP resolves a hostname; nil uses net.DefaultResolver. Exposed
 	// for tests.
 	LookupIP func(ctx context.Context, host string) ([]net.IP, error)
+
+	// Local is the sensor-local policy (api RFC-040 §5.7): when set, network
+	// targets must also pass its target, range and port rules, checked
+	// against the same resolved addresses. It can only narrow what this
+	// policy allows. nil: no local policy.
+	Local *LocalPolicy
 }
 
 // DefaultScanTargetPolicy returns the policy DefaultCommandExecutor uses
@@ -296,6 +302,15 @@ func (p *ScanTargetPolicy) validateURLTarget(ctx context.Context, target string)
 	if host == "" {
 		return fmt.Errorf("scan target URL has no host")
 	}
+	if p.Local.Present() {
+		port, err := urlPort(u)
+		if err != nil {
+			return refuse("ports.allow", "%q: %v", target, err)
+		}
+		if err := p.Local.checkPort(port); err != nil {
+			return err
+		}
+	}
 	return p.checkHost(ctx, host, true)
 }
 
@@ -304,7 +319,24 @@ func (p *ScanTargetPolicy) validateURLTarget(ctx context.Context, target string)
 func (p *ScanTargetPolicy) validateNetworkTarget(ctx context.Context, target string) error {
 	// CIDR range: reject if it overlaps any blocked range.
 	if _, ipNet, err := net.ParseCIDR(target); err == nil {
-		return p.checkCIDR(ipNet)
+		if err := p.checkCIDR(ipNet); err != nil {
+			return err
+		}
+		if p.Local.Present() {
+			return p.Local.checkCIDR(ipNet)
+		}
+		return nil
+	}
+	if p.Local.Present() {
+		_, port, err := splitNetworkTarget(target)
+		if err != nil {
+			return refuse("targets", "%q: %v", target, err)
+		}
+		if port != 0 {
+			if err := p.Local.checkPort(port); err != nil {
+				return err
+			}
+		}
 	}
 
 	host := target
@@ -342,7 +374,16 @@ func (p *ScanTargetPolicy) checkHost(ctx context.Context, host string, failClose
 		if httpsec.IsIPBlockedWith(ip, p.AllowPrivate, p.AllowLoopback) {
 			return fmt.Errorf("scan target IP %s is in a blocked range", ip)
 		}
+		if p.Local.Present() {
+			_, err := p.Local.checkHost(ctx, lower, true)
+			return err
+		}
 		return nil
+	}
+	if p.Local.Present() {
+		if d := p.Local.nameDenied(lower); d != nil {
+			return refuse("targets.deny", "%s matches %s", lower, d)
+		}
 	}
 
 	lookup := p.LookupIP
@@ -362,6 +403,10 @@ func (p *ScanTargetPolicy) checkHost(ctx context.Context, host string, failClose
 		if httpsec.IsIPBlockedWith(ip, p.AllowPrivate, p.AllowLoopback) {
 			return fmt.Errorf("scan target host %q resolves to blocked address %s", host, ip)
 		}
+	}
+	if p.Local.Present() {
+		// The same addresses, not a second resolution.
+		return p.Local.checkResolved(lower, ips)
 	}
 	return nil
 }

@@ -119,7 +119,9 @@ type FakePlatform struct {
 	keys      int
 	released  []Release
 	manifests []json.RawMessage
-	digest    string
+	// localPolicy: hello lists "local_policy" (SetLocalPolicy).
+	localPolicy bool
+	digest      string
 	// policyTools, when set, is the policy's allowed_tools (else every
 	// tool of the manifest); slim answers omit_inventory (api RFC-033 §6.12).
 	policyTools   []string
@@ -149,6 +151,15 @@ func (f *FakePlatform) SetManifest(on bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Manifest = on
+}
+
+// SetLocalPolicy lists or stops listing the "local_policy" feature on hello
+// (api RFC-040 §5.7): with it, heartbeats and manifests carry the sensor's
+// local policy report.
+func (f *FakePlatform) SetLocalPolicy(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.localPolicy = on
 }
 
 // Manifests returns the manifests registered, in order.
@@ -621,6 +632,9 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 				protov2.FeatureSuppressions, protov2.FeatureFingerprints, protov2.FeatureKeys)
 			if f.Manifest {
 				features = append(features, protov2.FeatureManifest)
+			}
+			if f.localPolicy {
+				features = append(features, protov2.FeatureLocalPolicy)
 			}
 		}
 		f.mu.Unlock()

@@ -466,6 +466,9 @@ func TestNew_Errors(t *testing.T) {
 		{name: "CA file", env: map[string]string{EnvCACertFile: "/nonexistent/ca.pem"}, want: "CA certificate file", code: ExitError},
 		{name: "template keys", env: map[string]string{EnvTemplateSigningKeys: "not-a-key"}, want: "SENSOR_TEMPLATE_SIGNING_KEYS", code: ExitUsage},
 		{name: "template keys option", opts: func(o *Options) { o.TemplateSigningKeys = "c2hvcnQ=" }, want: "SENSOR_TEMPLATE_SIGNING_KEYS", code: ExitUsage},
+		{name: "local policy missing", env: map[string]string{core.EnvLocalPolicy: "/nonexistent/sensor-policy.yaml"}, want: "local policy /nonexistent/sensor-policy.yaml does not exist", code: ExitUsage},
+		{name: "local policy option missing", opts: func(o *Options) { o.LocalPolicyPath = "/nonexistent/p.yaml" }, want: "does not exist", code: ExitUsage},
+		{name: "local policy shorthand", env: map[string]string{core.EnvAllowedPorts: "0"}, want: "SENSOR_ALLOWED_PORTS", code: ExitUsage},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

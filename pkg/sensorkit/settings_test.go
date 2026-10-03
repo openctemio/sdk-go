@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
@@ -19,7 +20,7 @@ func clearEnv(t *testing.T) {
 		EnvAPIURL, EnvAPIKey, EnvSensorID, EnvSensorName, EnvProtocol, EnvMaxJobs, EnvDrainGrace, EnvTools,
 		EnvStateDir, EnvCACertFile, EnvKeyAutoRenew, EnvScannerPriority, EnvProtectFromOOM, EnvOutbox, EnvOutboxDir, EnvOutboxMaxBytes, EnvOutboxMaxAge,
 		EnvOutboxKeyFile, "RETRY_QUEUE", "RETRY_DIR", "SENSOR_ALLOW_PRIVATE_TARGETS", "AGENT_ID", "AGENT_NAME",
-		"AGENT_ALLOW_PRIVATE_TARGETS",
+		"AGENT_ALLOW_PRIVATE_TARGETS", core.EnvLocalPolicy, core.EnvAllowedRanges, core.EnvAllowedPorts, core.EnvKillSwitchFile,
 	} {
 		t.Setenv(k, "")
 		_ = os.Unsetenv(k)

@@ -4,6 +4,49 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Security
+
+- **Sensor-local policy** (api RFC-040 §5.7, owner decisions Q3 (a) and
+  Q4 (a)). The network owner writes a read-only YAML file at install time
+  (`SENSOR_LOCAL_POLICY`, `sensorkit.Options.LocalPolicyPath`, default
+  `/etc/openctem/sensor-policy.yaml` when it exists; `apiVersion:
+  openctem.io/sensor-policy/v1`): `targets.allow` / `targets.deny` (CIDRs,
+  IPs, host names, `*.domain`), `targets.allow_private`, `ports.allow`,
+  `tools.allow`, `checks.allow` (command types), `allow_custom_templates`,
+  `allow_interactsh`, `rate.max_rps`, `rate.max_job_seconds`,
+  `kill_switch` and `kill_switch_file`. Parsing fails closed: unknown keys,
+  malformed entries, a second document, an empty or world-writable file, a
+  configured path that does not exist, a private range without
+  `allow_private`, or an always-blocked range in `targets.allow` stop the
+  sensor (exit code 2). The command poller checks every job after it is
+  claimed and before any executor or tool sees it
+  (`LocalPolicy.AdmitCommand`): host names are resolved and every address
+  must pass, so a name resolving to a denied address is refused; a job's
+  `ports` setting (RFC-038) must lie inside `ports.allow`; a refused
+  job is reported failed with `refused by local policy: <rule>: <detail>`.
+  The executor enforces the same rules again (targets through
+  `ScanTargetPolicy.Local`, templates, callbacks) and caps the rate and run
+  time. The platform's tool policy, payload switches and limits cannot
+  widen it. `LocalPolicy.CheckDial` / `DialContext` are the egress hook
+  (RFC-034 forwarder, in-process dials): they dial the checked addresses
+  only. A kill switch (policy key, or a file named by `kill_switch_file` or
+  `SENSOR_KILL_SWITCH_FILE`) stops claiming, stops running jobs (reported
+  failed) and makes the heartbeat say `paused by local policy`. Without a
+  policy the sensor works as before and reports `local_policy: absent`
+  with warnings; custom templates and interactsh stay allowed there until
+  a policy sets them (they default to off in any policy).
+  `SENSOR_ALLOWED_RANGES` / `SENSOR_ALLOWED_PORTS` are a shorthand policy
+  without a file. Heartbeats and the manifest carry `local_policy` (state,
+  digest, summary; never the ranges) only to a platform that lists the new
+  hello feature `local_policy` (`protov2.FeatureLocalPolicy`). A scan's
+  `timeout_seconds` is now capped at `core.MaxScanTimeout` (24h). New:
+  `core.LocalPolicy`, `LoadLocalPolicy`, `ParseLocalPolicy`,
+  `LocalPolicyOptions`, `LocalPolicyError`, `ErrRefusedByLocalPolicy`,
+  `LocalPolicyReport`, `LocalPolicySummary`,
+  `CommandPoller.SetLocalPolicy`, `DefaultCommandExecutor.SetLocalPolicy`,
+  `BaseSensor.SetLocalPolicy`, `SensorStatus.LocalPolicy`,
+  `Manifest.LocalPolicy`, `client.HeartbeatRequest.LocalPolicy`,
+  `conformance.FakePlatform.SetLocalPolicy`.
 ## v0.17.0 — 2026-10-03
 
 ### Upgrade notes

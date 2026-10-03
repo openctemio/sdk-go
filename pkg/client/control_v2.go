@@ -142,6 +142,12 @@ func (c *Client) PutManifest(ctx context.Context, m *core.Manifest) (*core.Manif
 	if ok, _ := c.controlV2(ctx, protov2.FeatureManifest); !ok {
 		return nil, core.ErrManifestUnsupported
 	}
+	// The local policy report goes only to a platform that announces it.
+	if m != nil && m.LocalPolicy != nil && !c.PlatformSupports(ctx, protov2.FeatureLocalPolicy) {
+		cp := *m
+		cp.LocalPolicy = nil
+		m = &cp
+	}
 	var resp protov2.ManifestResponse
 	if _, err := c.v2JSON(ctx, http.MethodPut, protov2.PathPrefix+protov2.ManifestPath, m, &resp, nil, c.maxRetries); err != nil {
 		if isRouteMissing(err) {

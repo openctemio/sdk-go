@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
@@ -85,6 +86,37 @@ type BaseSensor struct {
 
 	// control measures the heartbeat loop (ControlStats, api RFC-035).
 	control controlTracker
+
+	// localPolicy is the sensor-local policy every heartbeat and manifest
+	// reports (SetLocalPolicy); nil reports nothing.
+	localPolicy atomic.Pointer[LocalPolicy]
+}
+
+// LocalPolicyPausedMessage is the heartbeat message while the sensor
+// owner's kill switch is engaged.
+const LocalPolicyPausedMessage = "paused by local policy"
+
+// SetLocalPolicy makes every heartbeat and manifest report lp (api RFC-040
+// §5.7): its state ("enforced" or "absent"), digest and summary, never its
+// ranges. The platform receives it only when it lists the "local_policy"
+// feature on hello. While lp's kill switch is engaged the heartbeat message
+// is LocalPolicyPausedMessage. Enforcement is the command poller's and the
+// executor's (CommandPoller.SetLocalPolicy); this only reports. Call before
+// Start.
+func (a *BaseSensor) SetLocalPolicy(lp *LocalPolicy) {
+	a.localPolicy.Store(lp)
+}
+
+// withLocalPolicy puts the local policy report on a heartbeat.
+func (a *BaseSensor) withLocalPolicy(status *SensorStatus) {
+	lp := a.localPolicy.Load()
+	if lp == nil || status == nil {
+		return
+	}
+	status.LocalPolicy = lp.Report()
+	if status.LocalPolicy.KillSwitch {
+		status.Message = LocalPolicyPausedMessage
+	}
 }
 
 // manifestState is what a BaseSensor knows about its registered manifest.
@@ -229,6 +261,11 @@ func slimHeartbeat(status *SensorStatus) {
 	}
 	status.Content = content
 	status.Tools, status.Capabilities, status.MaxConcurrentJobs = nil, nil, 0
+	// The manifest carries the policy summary; a slim heartbeat keeps what
+	// changes or identifies it.
+	if lp := status.LocalPolicy; lp != nil {
+		status.LocalPolicy = &LocalPolicyReport{State: lp.State, Source: lp.Source, Digest: lp.Digest, KillSwitch: lp.KillSwitch}
+	}
 }
 
 // manifestAsked notes what a heartbeat answer says about the manifest: a
@@ -797,6 +834,7 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 	}
 	start := time.Now()
 	status = a.withCapabilities(ctx, status)
+	a.withLocalPolicy(status)
 	mctx, cancel := context.WithTimeout(ctx, manifestSyncTimeout)
 	a.syncManifest(mctx, status)
 	cancel()
@@ -820,7 +858,7 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 		return a.afterHeartbeat(nil, next), nil
 	}
 
-	if state := a.doorbell.State(); state != "running" {
+	if state := a.doorbell.State(); state != "running" && status.Message != LocalPolicyPausedMessage {
 		status.Message = state
 	}
 	hints, err := dp.SendHeartbeatWithHints(ctx, status)
