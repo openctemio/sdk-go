@@ -4,6 +4,8 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+## v0.16.0 — 2026-10-03
+
 ### Added
 
 - **Tool settings schemas** (api RFC-038). A tool declares what an
