@@ -23,11 +23,11 @@ Thank you for your interest in contributing!
 
 ## Adding a New Scanner
 
-1. Create package in `pkg/scanners/`
-2. Implement `Scanner` interface
-3. Add tests
-4. Add example in `examples/`
-5. Update README
+Tool wrappers live in the sensor (`github.com/openctemio/sensor/internal/scanners`),
+not in the SDK; see [docs/STABILITY.md](docs/STABILITY.md). Implement
+`core.Scanner` there and register it with `sensorkit.Kit.AddScanner`. Add
+to the SDK only what every sensor needs (an interface, a runtime or safety
+helper), with tests.
 
 ## Releasing
 

@@ -26,18 +26,22 @@ tool-specific.
 | `pkg/platform` | Credentials file, key renewal (used by sensorkit) | stable for those parts; its bootstrap/lease client serves the removed platform mode and is a removal candidate |
 | `pkg/useragent`, `pkg/sdk` | Build identity on the wire | stable |
 
-**Deprecated, moving to the sensor** (`github.com/openctemio/sensor/internal/...`):
-`pkg/scanners/*` (nuclei, trivy, semgrep, betterleaks, codeql, recon tools,
-tenable), `pkg/adapters/*`, `pkg/strategy`, `pkg/gitenv`. They keep working
-in v0.16.x with a `Deprecated:` package comment and are removed in v0.17.0.
+**Moved to the sensor** (removed in v0.17.0, deprecated in v0.16.0): the
+tool wrappers `pkg/scanners` (the registry),
+`pkg/scanners/{nuclei,trivy,semgrep,betterleaks,codeql}`,
+`pkg/scanners/recon` and `pkg/scanners/recon/{subfinder,dnsx,httpx,naabu,katana}`,
+and the CI-mode `pkg/handler` and `pkg/strategy`. Their code lives in
+`github.com/openctemio/sensor/internal/{scanners,recon,handler,strategy}`.
 Tool wrappers change whenever a tool does; they belong to the program that
-ships the tool binaries.
+ships the tool binaries. What they use stays here: the safe-exec helpers
+(section 5), `pkg/adapters`, `pkg/gitenv` and `pkg/scanners/tenable` (the
+Nessus API client and converter).
 
 **Outside the stable surface** (no stability promise; each gets a
-keep/move/remove decision while planning v0.17.0): `pkg/connectors`,
-`pkg/providers`, `pkg/enrichers`, `pkg/handler` (the sensor's CI mode uses
-it), `pkg/pipeline`, `pkg/chunk`, `pkg/compress`, `pkg/retry` (partly
-deprecated already), `pkg/errors`, `pkg/health`, `pkg/metrics`,
+keep/move/remove decision before v1.0.0): `pkg/adapters`, `pkg/gitenv`,
+`pkg/scanners/tenable`, `pkg/connectors`, `pkg/providers`,
+`pkg/enrichers`, `pkg/pipeline`, `pkg/chunk`, `pkg/compress`, `pkg/retry`
+(partly deprecated already), `pkg/errors`, `pkg/health`, `pkg/metrics`,
 `pkg/audit`, `pkg/credentials`, `pkg/options`, `pkg/transport/grpc`,
 `pkg/shared/*`, `pkg/mocks`. Most have no importer in the sensor or the API.
 
@@ -121,7 +125,7 @@ A sensor can be pinned with `SENSOR_PROTOCOL=v1|v2|auto` (default `auto`).
   CHANGELOG.md. The `sensor-compat` job builds the sensor against the PR.
 - Removal: mark `Deprecated:` (with the replacement) → keep it for at least
   one minor release → remove it in a later minor, with an upgrade note.
-- **v1.0.0** when (a) the deprecated tool packages are gone (v0.17.0),
+- **v1.0.0** when (a) the deprecated tool packages are gone (done in v0.17.0),
   (b) the packages "outside the stable surface" each have a decision, and
   (c) one further minor release has shipped with no breaking change and no
   `breaking-change` label. From v1.0.0 on, removals wait for v2.

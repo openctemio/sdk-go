@@ -314,10 +314,10 @@ variables set explicitly in the scanner config or scan options.
 | `OPENCTEM_SDK_SCANNER_INHERIT_ENV=1` / `core.SetScannerInheritEnv(true)` | Restore full inheritance (not recommended) |
 
 Every process the SDK starts gets it: scanners (`core.ExecuteScanner`,
-`core.StreamScanner`, `BaseScanner.Scan`, every `pkg/scanners/*`), version
+`core.StreamScanner`, `BaseScanner.Scan`, and the sensor's tool wrappers built on them), version
 probes (`core.VersionOutput`, `core.CheckBinaryInstalled`,
 `BaseScanner.IsInstalled`), content downloads (`core.ContentEnviron`) and
-the `git diff` of `pkg/strategy` (which also keeps the `GIT_DIR`,
+the `git diff` of the sensor's CI-mode strategy (which also keeps the `GIT_DIR`,
 `GIT_WORK_TREE`, `GIT_CEILING_DIRECTORIES` and `GIT_CONFIG_*` variables
 that locate the repository). The sensor's key (`API_KEY`, `SENSOR_*`,
 `OPENCTEM_*`), the outbox key, tokens and passwords are not on the list.
