@@ -34,6 +34,9 @@ type ToolInfo struct {
 	// templates, rules) and how fresh it is; see ContentInfo. nil reports
 	// nothing (the platform shows no content for the tool).
 	Content []ContentInfo `json:"content,omitzero"`
+	// Settings names the tool's settings schema (ToolSpec.Settings) for the
+	// manifest. It is not part of the heartbeat.
+	Settings *ManifestToolSettings `json:"-"`
 }
 
 // CapabilityReport is what a sensor reports it can do.

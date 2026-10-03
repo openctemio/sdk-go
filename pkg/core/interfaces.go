@@ -62,6 +62,12 @@ type ScanOptions struct {
 
 	// Output
 	Verbose bool `yaml:"verbose" json:"verbose"`
+
+	// Settings are the tool's effective settings for this scan (api
+	// RFC-038), resolved against the tool's SettingsSchema; nil: the tool's
+	// own defaults, as before. A tool maps each typed value to a specific
+	// flag; settings never become free-form arguments.
+	Settings *ToolSettings `yaml:"-" json:"-"`
 }
 
 // ScanResult holds the raw scan result before conversion.
