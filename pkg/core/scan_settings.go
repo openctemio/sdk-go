@@ -14,10 +14,16 @@ type SettingsSchemaProvider interface {
 }
 
 // executorConfigKeys are the scan-command config keys the command executor
-// reads itself (see executeScan); a scanner's schema never receives them.
+// reads itself (see executeScan), besides ScanLimitKeys; a scanner's schema
+// never receives them.
 var executorConfigKeys = map[string]bool{
 	"allow_interactsh": true,
 	"exclude":          true,
+}
+
+// isExecutorConfigKey reports whether the executor reads key itself.
+func isExecutorConfigKey(key string) bool {
+	return executorConfigKeys[key] || slices.Contains(ScanLimitKeys, key)
 }
 
 // maxIgnoredConfigKeys bounds how many ignored keys a result names.
@@ -43,7 +49,7 @@ const invalidConfigKey = "<invalid key>"
 func scanSettings(schema *SettingsSchema, config map[string]any) (settings *ToolSettings, ignored []string, err error) {
 	layer := map[string]any{}
 	for k, v := range config {
-		if executorConfigKeys[k] {
+		if isExecutorConfigKey(k) {
 			continue
 		}
 		if schema != nil && settingNameRE.MatchString(k) && schema.Property(k) != nil {

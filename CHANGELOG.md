@@ -55,7 +55,6 @@ All notable changes to `github.com/openctemio/sdk-go`.
   from 1 to `core.MaxScanLimit`; anything else fails the command) ask the
   scanner for gentler limits. `core.CapScanLimit` applies them under the
   ceiling the sensor's operator configured.
-||||||| parent of 63a03fa (fix(core): a scan command's config reaches the scanner as typed settings)
 ### Fixed
 
 - **A scan command's config reaches the scanner as typed settings** (api

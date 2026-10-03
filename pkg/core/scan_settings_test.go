@@ -88,7 +88,7 @@ func TestExecuteScan_ConfigBecomesSettings(t *testing.T) {
 // A command that sets no declared key leaves Settings nil: the scanner runs
 // as it always did.
 func TestExecuteScan_NoDeclaredKeysNoSettings(t *testing.T) {
-	for _, cfg := range []string{`null`, `{}`, `{"allow_interactsh":false,"exclude":["a"]}`, `{"threads":3}`} {
+	for _, cfg := range []string{`null`, `{}`, `{"allow_interactsh":false,"exclude":["a"]}`, `{"rate_limit":10,"bulk_size":2,"concurrency":3}`, `{"threads":3}`} {
 		e, sc := newSettingsExecutor(t)
 		if _, err := e.Execute(context.Background(), configCommand(t, cfg)); err != nil {
 			t.Fatalf("%s: execute: %v", cfg, err)
@@ -197,5 +197,18 @@ func TestBoundIgnoredKeys(t *testing.T) {
 	}
 	if got := ignoredKeyName("Bad Key\n"); got != invalidConfigKey {
 		t.Errorf("ignoredKeyName = %q", got)
+	}
+}
+
+// The executor's own keys (scan limits included) are neither settings nor
+// reported as ignored.
+func TestExecuteScan_ExecutorKeysNotIgnored(t *testing.T) {
+	e, _ := newSettingsExecutor(t)
+	res, err := e.Execute(context.Background(), configCommand(t, `{"rate_limit":10,"allow_interactsh":false,"exclude":["a"],"ports":"80"}`))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if got, ok := res.Metadata["ignored_config_keys"]; ok {
+		t.Errorf("ignored_config_keys = %v", got)
 	}
 }
