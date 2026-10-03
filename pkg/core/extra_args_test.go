@@ -10,11 +10,11 @@ func TestValidateExtraArgs(t *testing.T) {
 		nil,
 		{},
 		{"-severity", "critical,high"},
-		{"-rate-limit", "50", "-timeout=10"},
+		{"-timeout=10"},
 		{"--exclude-tags", "dos"},
 		{"-", "--"},
 		{"-tags", "cve"},
-		{"-rl", "150"}, // nuclei/dnsx rate limit, not subfinder's -rL list
+		{"-etags", "intrusive"},
 	}
 	for _, args := range allowed {
 		if err := ValidateExtraArgs(args); err != nil {
@@ -50,6 +50,52 @@ func TestValidateExtraArgs(t *testing.T) {
 		{"-code"},
 		{"-je", "/tmp/out.json"},
 		{"--sarif-output=/etc/x"},
+	}
+	for _, args := range rejected {
+		if err := ValidateExtraArgs(args); err == nil {
+			t.Errorf("ValidateExtraArgs(%q) = nil, want an error", args)
+		}
+	}
+}
+
+// Every nuclei v3.11 flag that loads code, file, self-contained or headless
+// templates, switches signature checking off, or pulls templates or targets
+// from somewhere the sensor did not choose is refused, in every spelling.
+func TestValidateExtraArgsRefusesTemplateTrustFlags(t *testing.T) {
+	rejected := []string{
+		"-code", "--code", "-CODE", "-code=true",
+		"-file", "-esc", "-enable-self-contained", "-egm",
+		"-dut=false", "-disable-unsigned-templates=false", "-sign",
+		"-headless", "-ho", "-cdpe", "-sc", "-dast", "-fuzz",
+		"-turl", "-wurl", "-ai", "-prompt", "-tp", "-profile", "-it", "-vfp",
+		"-targets-inline", "-uncover", "-uq", "-sa", "-resume",
+		"-p", "-pi",
+		"-cc", "-client-key", "-ca",
+		"-pd", "-dashboard-upload", "-auth", "-dts", "-hae", "-ep",
+		"-up", "-ut", "-ud", "-reset", "-pe", "-project-path",
+	}
+	for _, arg := range rejected {
+		if err := ValidateExtraArgs([]string{arg}); err == nil {
+			t.Errorf("ValidateExtraArgs(%q) = nil, want an error", arg)
+		}
+	}
+}
+
+// Rate-limit flags never arrive as extra args: the typed options are capped
+// by the sensor, a free-form flag would not be.
+func TestValidateExtraArgsRefusesRateLimitFlags(t *testing.T) {
+	rejected := [][]string{
+		{"-rate-limit", "100000"},
+		{"-rl", "100000"},
+		{"--rate-limit=100000"},
+		{"-per-host-rate-limit"},
+		{"-bs", "1000"},
+		{"-bulk-size=1000"},
+		{"-c", "500"},
+		{"-concurrency", "500"},
+		{"-pc", "500"},
+		{"-rate", "100000"}, // naabu
+		{"-threads", "500"},
 	}
 	for _, args := range rejected {
 		if err := ValidateExtraArgs(args); err == nil {

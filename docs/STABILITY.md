@@ -134,7 +134,9 @@ these to every scanner it runs:
 | Control | API |
 |---|---|
 | Child env allow-list (no API key or proxy credentials leak into scanners) | `core.ScannerEnviron`, `SetScannerEnvAllowlist`, used by `ExecuteScanner` / `StreamScanner` / `BaseScanner` |
-| Dangerous scanner flags refused in user-supplied args | `core.ValidateExtraArgs`, `core.DangerousToolFlags` |
+| Dangerous scanner flags refused in user-supplied args | `core.ValidateExtraArgs`, `core.DangerousToolFlags`, `core.RateLimitToolFlags` |
+| Custom templates run only with a signed manifest a pinned key verifies | `core.TemplateVerifier`, `core.TemplateManifest`, `core.SignedEnvelope`, `core.DSSEPreAuthEncoding`, `DefaultCommandExecutor.SetTemplateVerifier` / `SetSensorID` |
+| A scan can lower rate limits, never raise them past the sensor's ceiling | `ScanOptions.RateLimit` / `BulkSize` / `Concurrency`, `core.CapScanLimit` |
 | Output caps | `ExecConfig.MaxOutputBytes`, `ErrScannerOutputTooLarge` |
 | Process-group kill on cancel/timeout, reaping, die-with-parent | `core.ConfigureScannerProcess`, `core.ReapScannerProcess` |
 | Scanner priority (nice, I/O class, OOM score) | `core.ScannerPriority`, `SetScannerPriority`, `ApplyScannerPriority`; sensorkit `SENSOR_SCANNER_PRIORITY`, `SENSOR_PROTECT_FROM_OOM` |
