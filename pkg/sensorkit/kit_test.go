@@ -761,3 +761,24 @@ func TestCapabilityReporter_EmptyInventory(t *testing.T) {
 		t.Fatalf("report %+v", rep)
 	}
 }
+
+// settingsTestScanner declares a settings schema.
+type settingsTestScanner struct {
+	testScanner
+	schema *core.SettingsSchema
+}
+
+func (s *settingsTestScanner) SettingsSchema() *core.SettingsSchema { return s.schema }
+
+// A scanner configured under another name keeps its settings schema, so a
+// command dispatched under that name still gets typed settings.
+func TestAliasScanner_ForwardsSettingsSchema(t *testing.T) {
+	schema := core.MustParseSettingsSchema(`{"$schema":"https://json-schema.org/draft/2020-12/schema","x-octm-schema-version":1,"type":"object","additionalProperties":false,"properties":{"ports":{"type":"string","x-octm-scope":"scan"}}}`)
+	a := aliasScanner{Scanner: &settingsTestScanner{schema: schema}, name: "naabu-web"}
+	if a.SettingsSchema() != schema {
+		t.Error("alias hides the wrapped scanner's settings schema")
+	}
+	if (aliasScanner{Scanner: &testScanner{}, name: "x"}).SettingsSchema() != nil {
+		t.Error("alias invents a schema")
+	}
+}

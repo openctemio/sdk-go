@@ -55,6 +55,27 @@ All notable changes to `github.com/openctemio/sdk-go`.
   from 1 to `core.MaxScanLimit`; anything else fails the command) ask the
   scanner for gentler limits. `core.CapScanLimit` applies them under the
   ceiling the sensor's operator configured.
+||||||| parent of 63a03fa (fix(core): a scan command's config reaches the scanner as typed settings)
+### Fixed
+
+- **A scan command's config reaches the scanner as typed settings** (api
+  RFC-038). `ScanOptions.Settings` existed but nothing filled it: the
+  command executor read only `allow_interactsh` and `exclude` from the
+  command's `config` and dropped every other key, so a platform pipeline
+  step with `ports: "80"` ran naabu on its default ports. The executor now
+  resolves the config keys that the scanner's settings schema declares, at
+  scan level (only `x-octm-scope: "scan"` keys), into
+  `ScanOptions.Settings`. An invalid value (wrong type, out of range,
+  pattern mismatch, a sensor-only key) fails the command before the
+  scanner runs; values never become free-form arguments. Keys the scanner
+  does not declare are listed in the result's `ignored_config_keys`
+  metadata instead of vanishing; `settings_applied` and
+  `settings_schema_digest` say what was applied. A command that sets no
+  declared key leaves `Settings` nil, as before.
+- `core.SettingsSchemaProvider`: a scanner declares its schema with
+  `SettingsSchema()`. `ToolRegistry.RegisterScanner` takes it into the
+  tool's `ToolSpec.Settings` (manifest digest), and sensorkit's alias for a
+  scanner configured under another name forwards it.
 
 ## v0.16.0 — 2026-10-03
 
