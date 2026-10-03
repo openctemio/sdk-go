@@ -1,0 +1,65 @@
+{
+  "description": "A scanner schema with integers, an enum array, a pattern array and a tiered boolean.",
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "x-octm-schema-version": 3,
+    "title": "nuclei",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "rate_limit": {
+        "type": "integer", "minimum": 1, "maximum": 1000, "default": 150,
+        "title": "Requests per second",
+        "description": "Upper bound on HTTP requests per second.",
+        "x-octm-scope": "scan", "x-octm-group": "Performance", "x-octm-order": 10
+      },
+      "concurrency": {
+        "type": "integer", "minimum": 1, "maximum": 100, "default": 25,
+        "title": "Templates in parallel", "x-octm-scope": "sensor",
+        "x-octm-group": "Performance"
+      },
+      "severity": {
+        "type": "array", "uniqueItems": true, "maxItems": 5,
+        "items": { "enum": ["info", "low", "medium", "high", "critical"] },
+        "default": ["low", "medium", "high", "critical"],
+        "title": "Severities", "x-octm-scope": "scan"
+      },
+      "exclude_tags": {
+        "type": "array", "maxItems": 3,
+        "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+        "title": "Excluded template tags", "x-octm-scope": "scan", "x-octm-widget": "tags"
+      },
+      "interactsh": {
+        "type": "boolean", "default": false, "title": "Out-of-band checks",
+        "x-octm-scope": "scan", "x-octm-tier": "T2"
+      },
+      "timeout": {
+        "type": "string", "format": "duration", "default": "10s", "title": "Request timeout"
+      },
+      "retries": {
+        "type": "number", "minimum": 0, "exclusiveMaximum": 5, "multipleOf": 0.5, "title": "Retries"
+      }
+    }
+  },
+  "schema_valid": true,
+  "schema_digest": "sha256:92d89783fba7c9ff1b9aebbbd8c99ab3d23e43c526ede68e0f08cd7bfa5f9e02",
+  "defaults": {"concurrency": 25, "interactsh": false, "rate_limit": 150, "severity": ["low", "medium", "high", "critical"], "timeout": "10s"},
+  "cases": [
+    { "description": "empty document", "values": {}, "valid": true, "error_paths": [] },
+    { "description": "every key in range", "values": { "rate_limit": 50, "concurrency": 10, "severity": ["high", "critical"], "exclude_tags": ["dos", "fuzz"], "interactsh": true, "timeout": "1m30s", "retries": 2.5 }, "valid": true, "error_paths": [] },
+    { "description": "integer written with a fraction of zero", "values": { "rate_limit": 50.0 }, "valid": true, "error_paths": [] },
+    { "description": "unknown key", "values": { "proxy": "http://attacker:8080" }, "valid": false, "error_paths": ["/proxy"] },
+    { "description": "below minimum and above maximum", "values": { "rate_limit": 0, "concurrency": 101 }, "valid": false, "error_paths": ["/concurrency", "/rate_limit"] },
+    { "description": "not an integer", "values": { "rate_limit": 1.5 }, "valid": false, "error_paths": ["/rate_limit"] },
+    { "description": "string for an integer", "values": { "rate_limit": "50" }, "valid": false, "error_paths": ["/rate_limit"] },
+    { "description": "enum item outside the list and a duplicate", "values": { "severity": ["high", "urgent", "high"] }, "valid": false, "error_paths": ["/severity/1", "/severity/2"] },
+    { "description": "pattern mismatch, too many items", "values": { "exclude_tags": ["ok", "-bad", "a", "b"] }, "valid": false, "error_paths": ["/exclude_tags", "/exclude_tags/1"] },
+    { "description": "flag injection attempt in a string array", "values": { "exclude_tags": ["dos -proxy http://x"] }, "valid": false, "error_paths": ["/exclude_tags/0"] },
+    { "description": "boolean as a string", "values": { "interactsh": "true" }, "valid": false, "error_paths": ["/interactsh"] },
+    { "description": "bad duration", "values": { "timeout": "ten seconds" }, "valid": false, "error_paths": ["/timeout"] },
+    { "description": "negative duration", "values": { "timeout": "-5s" }, "valid": false, "error_paths": ["/timeout"] },
+    { "description": "exclusive maximum and multipleOf", "values": { "retries": 5 }, "valid": false, "error_paths": ["/retries"] },
+    { "description": "not a multiple", "values": { "retries": 1.25 }, "valid": false, "error_paths": ["/retries"] },
+    { "description": "array for a scalar, object for an array", "values": { "concurrency": [1], "severity": { "a": "b" } }, "valid": false, "error_paths": ["/concurrency", "/severity"] }
+  ]
+}

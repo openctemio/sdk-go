@@ -62,6 +62,9 @@ const (
 	// FeatureManifest: PUT /manifest and the heartbeat's manifest_digest
 	// (api RFC-033).
 	FeatureManifest = "manifest"
+	// FeatureToolSettings: tool settings schemas and settings documents
+	// (api RFC-038). Without it a sensor runs its tools with their defaults.
+	FeatureToolSettings = "tool_settings"
 )
 
 // ManifestResponse answers PUT /manifest: the digest the platform stored

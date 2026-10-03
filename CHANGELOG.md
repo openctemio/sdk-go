@@ -6,6 +6,40 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **Tool settings schemas** (api RFC-038). A tool declares what an
+  administrator may configure as a `core.SettingsSchema`: a closed subset of
+  JSON Schema 2020-12 (types, enum/const, numeric and length bounds, RE2
+  `pattern`, `hostname`/`uri`/`duration` formats, arrays of scalars, one
+  level of groups, `additionalProperties: false` everywhere) plus
+  `x-octm-*` annotations (`schema-version`, `scope`, `tier`, `sensitive`,
+  `restart`, `group`, `order`, `widget`). `$ref`, `oneOf`, conditionals,
+  unknown keywords, duplicate members and schemas over 32 KiB or 64
+  properties are refused.
+  - `ParseSettingsSchema` / `MustParseSettingsSchema`, `Validate` /
+    `ValidateJSON` (unknown keys rejected, sensitive keys never accepted as
+    plain values; every problem as `SettingsErrors` with JSON-pointer
+    paths), `Defaults`, `Digest` (`sha256:` over canonical JSON),
+    `Property`, `ManifestSettings`; `core.SettingsDigest` for any document.
+  - `Resolve(layers...)`: defaults, then sensor, profile and scan layers;
+    a profile or scan layer may set only `scope: "scan"` keys. The result,
+    `*core.ToolSettings` (`Int`, `Float`, `Bool`, `String`, `Duration`,
+    `Strings`, `Source`, `Keys`; `Secret` reports nothing until secret
+    settings are delivered), reaches a tool as `ScanOptions.Settings` (nil:
+    the tool's defaults, as before).
+  - Registration: `ToolSpec.Settings`; `ToolRegistry.SettingsSchema` /
+    `SettingsSchemas`. The manifest names each tool's schema by version and
+    digest only (`ManifestTool.Settings`, `core.ManifestToolSettings`);
+    heartbeats are unchanged.
+  - The sensor's stored settings document: `core.SensorSettings` (kind
+    `openctem.sensor.settings/v1`, `Check`, `ValidateAgainst`),
+    `core.SettingsStore`, `core.NewFileSettingsStore` (0600 file in a 0700
+    directory, temporary file + fsync + rename; a version not above the
+    stored one is refused with `ErrSettingsVersionNotNewer`).
+  - `protov2.FeatureToolSettings` (`"tool_settings"`), for
+    `Client.PlatformSupports`.
+  - Golden vectors in `pkg/core/testdata/settings-vectors`: the platform's
+    validator copy must give the same verdicts, error paths, defaults and
+    digests for every file.
 - **`docs/STABILITY.md`**: the stable surface, how tools, flags, formats and
   platform features are added without an SDK release, protocol
   compatibility (unknown members ignored on the control plane; CTIS is
