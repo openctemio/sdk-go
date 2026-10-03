@@ -63,10 +63,12 @@ All notable changes to `github.com/openctemio/sdk-go`.
 - **The tool wrappers moved to the sensor** (owner decision 2026-10-02:
   sdk-go is the shared interfaces, runtime and safety layer). These packages
   are deprecated and are removed in v0.17.0; their code now lives in
-  `github.com/openctemio/sensor/internal/...` under the same names:
-  `pkg/scanners` (the registry), `pkg/scanners/{nuclei,trivy,semgrep,betterleaks,codeql}`,
-  `pkg/scanners/recon` and `pkg/scanners/recon/{subfinder,dnsx,httpx,naabu,katana}`,
-  and the CI-mode `pkg/handler` and `pkg/strategy`. They are unchanged and
+  `github.com/openctemio/sensor/internal/...`:
+  `pkg/scanners` (the registry) and `pkg/scanners/{nuclei,trivy,semgrep,betterleaks,codeql}`
+  in `internal/scanners/...`, `pkg/scanners/recon` and
+  `pkg/scanners/recon/{subfinder,dnsx,httpx,naabu,katana}` in `internal/recon/...`,
+  and the CI-mode `pkg/handler` and `pkg/strategy` in `internal/handler` and
+  `internal/strategy`. They are unchanged and
   still work until then. What the wrappers use stays here and is not
   deprecated: `core.ExecuteScanner` / `StreamScanner`, the scanner
   environment, `core.ValidateExtraArgs` / `DangerousToolFlags`,
@@ -103,6 +105,17 @@ All notable changes to `github.com/openctemio/sdk-go`.
   ("Current version:") parses.
 - The subfinder parser typed every host as `domain`; a host below its root
   is now `subdomain`, as `ctis.ConvertReconToCTIS` types it.
+- **SARIF `kind` and `baselineState` reach the platform in the CTIS
+  vocabulary.** The SARIF adapter copied `result.kind` verbatim, so a sensor
+  sent SARIF's `notApplicable`, which the CTIS schema and the platform's
+  `findings.kind` check reject (the platform only kept it because its ingest
+  normalizes). `pkg/ctis.FromSARIF` dropped both fields. Both paths now send
+  `not_applicable`, `pass`, `fail`, `review`, `open` or `informational`, and
+  `new`, `unchanged`, `updated` or `absent`, matched case-insensitively; a value
+  outside SARIF's set is left unset and an absent `kind` is not defaulted to
+  `fail`. New `ctis.NormalizeSARIFKind` and `ctis.NormalizeSARIFBaselineState`;
+  `ctis.SARIFResult` gains `Kind` and `BaselineState`. Mirrors
+  openctemio/ctis#10 (same sample, `pkg/ctis/testdata/sarif/kinds.sarif`).
 
 ### Security
 
@@ -126,20 +139,6 @@ All notable changes to `github.com/openctemio/sdk-go`.
   locate the repository. Tests now prove that no SDK-started process
   (scanners, version probes, content downloads, git) sees `API_KEY`,
   `SENSOR_*` keys, the outbox key, tokens or passwords.
-
-### Fixed
-
-- **SARIF `kind` and `baselineState` reach the platform in the CTIS
-  vocabulary.** The SARIF adapter copied `result.kind` verbatim, so a sensor
-  sent SARIF's `notApplicable`, which the CTIS schema and the platform's
-  `findings.kind` check reject (the platform only kept it because its ingest
-  normalizes). `pkg/ctis.FromSARIF` dropped both fields. Both paths now send
-  `not_applicable`, `pass`, `fail`, `review`, `open` or `informational`, and
-  `new`, `unchanged`, `updated` or `absent`, matched case-insensitively; a value
-  outside SARIF's set is left unset and an absent `kind` is not defaulted to
-  `fail`. New `ctis.NormalizeSARIFKind` and `ctis.NormalizeSARIFBaselineState`;
-  `ctis.SARIFResult` gains `Kind` and `BaselineState`. Mirrors
-  openctemio/ctis#10 (same sample, `pkg/ctis/testdata/sarif/kinds.sarif`).
 
 ## v0.15.0 — 2026-10-02
 

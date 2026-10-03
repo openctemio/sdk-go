@@ -1,6 +1,6 @@
 // Package naabu provides a scanner implementation for the naabu port scanning tool.
 //
-// Deprecated: moved to github.com/openctemio/sensor/internal/scanners/recon/naabu; removed
+// Deprecated: moved to github.com/openctemio/sensor/internal/recon/naabu; removed
 // in v0.17.0. sdk-go keeps the runtime and safety layer the wrappers use
 // (core.ExecuteScanner, core.ValidateExtraArgs, the scanner environment).
 package naabu
