@@ -55,6 +55,17 @@ type ScanOptions struct {
 	// (config "allow_interactsh": true, an approved intrusive run).
 	AllowInteractsh bool `yaml:"allow_interactsh" json:"allow_interactsh"`
 
+	// RateLimit (requests per second), BulkSize (hosts in parallel) and
+	// Concurrency (templates or workers in parallel) ask the scanner to run
+	// gentler than its own settings for this scan; 0 keeps them. They can
+	// only lower a scanner's limits: a scanner caps them at the ceilings
+	// its operator configured on the sensor. The command executor sets
+	// them from the command's config keys rate_limit, bulk_size and
+	// concurrency (see ScanLimitKeys).
+	RateLimit   int `yaml:"rate_limit" json:"rate_limit"`
+	BulkSize    int `yaml:"bulk_size" json:"bulk_size"`
+	Concurrency int `yaml:"concurrency" json:"concurrency"`
+
 	// Asset information for linking findings
 	RepoURL   string `yaml:"repo_url" json:"repo_url"`
 	Branch    string `yaml:"branch" json:"branch"`

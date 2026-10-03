@@ -163,6 +163,7 @@ one, the new key wins. Every heartbeat also carries the process's
 | Outbox | `SENSOR_OUTBOX`, `SENSOR_OUTBOX_DIR`, `_MAX_BYTES`, `_MAX_AGE`, `_KEY_FILE` | on, `/var/lib/openctem/outbox` |
 | State (the renewed API key, tool cost history) | `SENSOR_STATE_DIR` | `/var/lib/openctem/state` when writable, else `~/.openctem`: **mount a persistent volume there** |
 | Private CA | `SENSOR_CA_CERT_FILE` (PEM, added to the system roots; trusted for the platform and content downloads, so a TLS-inspecting proxy works) | system roots |
+| Template-signing keys | `SENSOR_TEMPLATE_SIGNING_KEYS` (base64 Ed25519 public keys, comma-separated, the tenant's keys from the platform's `GET /api/v1/scanner-templates/signing-key`): custom templates in a scan run only with a signature one of them verifies | none: commands carrying custom templates fail |
 | Proxy to the platform | `SENSOR_CONTROL_PROXY` (URL or `direct`), else `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | none |
 | Proxy for content and feeds | `SENSOR_CONTENT_PROXY` (URL or `direct`), else the platform setting | the platform setting |
 | Proxy variables for scanners | `SENSOR_SCAN_PROXY`: `inherit` (scanners get the sensor's `HTTP(S)_PROXY`; warned at start) or `direct` | `inherit` |

@@ -95,6 +95,10 @@ type ScanCommandPayload struct {
 	TimeoutSeconds  int                    `json:"timeout_seconds,omitempty"`
 	ReportProgress  bool                   `json:"report_progress,omitempty"`
 	CustomTemplates []EmbeddedTemplate     `json:"custom_templates,omitempty"`
+	// CustomTemplatesEnvelope is the platform's signed manifest of
+	// CustomTemplates (TemplateManifest in a DSSE envelope). Custom
+	// templates run only when it verifies (see TemplateVerifier.Verify).
+	CustomTemplatesEnvelope *SignedEnvelope `json:"custom_templates_envelope,omitempty"`
 }
 
 // EmbeddedTemplate is a custom template embedded in scan command payload.
@@ -921,6 +925,55 @@ type DefaultCommandExecutor struct {
 	// tools, when set, registers every scanner and collector added (see
 	// SetToolRegistry).
 	tools *ToolRegistry
+	// templates verifies custom template manifests; nil refuses every
+	// command that carries custom templates (SetTemplateVerifier).
+	templates atomic.Pointer[TemplateVerifier]
+	// sensorID is this sensor's own id, when known: a template manifest
+	// must name it (SetSensorID).
+	sensorID atomic.Pointer[string]
+}
+
+// SetTemplateVerifier sets the pinned keys custom templates must be signed
+// with (see TemplateVerifier). Without one, a command that carries custom
+// templates fails with ErrNoTemplateKeys: an unsigned template never
+// reaches a scanner.
+func (e *DefaultCommandExecutor) SetTemplateVerifier(v *TemplateVerifier) {
+	e.templates.Store(v)
+}
+
+// SetSensorID sets this sensor's own id (from its configuration, not from
+// the platform): a signed template manifest for another sensor is then
+// refused. Empty: manifests are bound to the command and the tenant's key
+// only.
+func (e *DefaultCommandExecutor) SetSensorID(id string) {
+	e.sensorID.Store(&id)
+}
+
+// verifyCustomTemplates checks the command's signed template manifest: the
+// templates run only if a pinned key signed exactly them for this command
+// (and this sensor, when it knows its id), and the manifest has not
+// expired.
+func (e *DefaultCommandExecutor) verifyCustomTemplates(cmdID string, payload *ScanCommandPayload) error {
+	verifier := e.templates.Load()
+	if verifier == nil {
+		return ErrNoTemplateKeys
+	}
+	contents := make([][]byte, len(payload.CustomTemplates))
+	for i := range payload.CustomTemplates {
+		c, err := decodeTemplateContent(&payload.CustomTemplates[i])
+		if err != nil {
+			return err
+		}
+		contents[i] = c
+	}
+	b := TemplateBinding{CommandID: cmdID}
+	if id := e.sensorID.Load(); id != nil {
+		b.SensorID = *id
+	}
+	if _, err := verifier.Verify(payload.CustomTemplatesEnvelope, b, payload.CustomTemplates, contents); err != nil {
+		return fmt.Errorf("custom templates refused: %w", err)
+	}
+	return nil
 }
 
 // NewDefaultCommandExecutor creates a new default executor.
@@ -1090,6 +1143,9 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		if allow, ok := payload.Config["allow_interactsh"].(bool); ok && allow {
 			opts.AllowInteractsh = true
 		}
+		if err := applyScanLimits(opts, payload.Config); err != nil {
+			return nil, err
+		}
 		if exclude, ok := payload.Config["exclude"].([]interface{}); ok {
 			for _, ex := range exclude {
 				if s, ok := ex.(string); ok {
@@ -1106,6 +1162,11 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	var templateDir string
 	var cleanupTemplates func()
 	if len(payload.CustomTemplates) > 0 {
+		// SECURITY: only templates the platform signed for this command are
+		// written (see verifyCustomTemplates); nothing is written before.
+		if err := e.verifyCustomTemplates(cmd.ID, &payload); err != nil {
+			return nil, err
+		}
 		var err error
 		templateDir, cleanupTemplates, err = e.writeCustomTemplates(payload.Scanner, payload.CustomTemplates)
 		if err != nil {

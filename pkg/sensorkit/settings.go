@@ -44,6 +44,10 @@ const (
 	// true writes SensorOOMScoreAdj to its oom_score_adj at start (Linux;
 	// needs CAP_SYS_RESOURCE). false, the default, leaves it.
 	EnvProtectFromOOM = "SENSOR_PROTECT_FROM_OOM"
+	// EnvTemplateSigningKeys are the platform's template-signing public
+	// keys (base64 Ed25519, comma-separated) custom templates must be
+	// signed with; unset, commands carrying custom templates are refused.
+	EnvTemplateSigningKeys = "SENSOR_TEMPLATE_SIGNING_KEYS"
 
 	EnvOutbox         = "SENSOR_OUTBOX"           // on | off (default: on for a daemon)
 	EnvOutboxDir      = "SENSOR_OUTBOX_DIR"       // default DefaultOutboxDir

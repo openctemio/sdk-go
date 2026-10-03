@@ -53,6 +53,12 @@ type Options struct {
 	// trusted besides the system trust store for platform requests and
 	// content downloads.
 	CACertFile string
+	// TemplateSigningKeys are the platform's template-signing public keys
+	// (SENSOR_TEMPLATE_SIGNING_KEYS; base64 Ed25519, comma-separated), as
+	// the platform shows them for the sensor's tenant. Custom templates in
+	// a scan command must carry a signature one of them verifies; without
+	// any, such commands fail (core.ErrNoTemplateKeys).
+	TemplateSigningKeys string
 	// ControlProxy, ContentProxy and ScanProxy are the proxy settings of
 	// the three outbound paths (SENSOR_CONTROL_PROXY, SENSOR_CONTENT_PROXY,
 	// SENSOR_SCAN_PROXY; see ResolveProxies for values and precedence).
@@ -202,6 +208,7 @@ type settings struct {
 	outbox                                   OutboxPlan
 	stateDir                                 string
 	key                                      startKey
+	templates                                *core.TemplateVerifier
 }
 
 // scannerEntry is an added scanner.
@@ -283,6 +290,13 @@ func New(opts Options) (*Kit, error) {
 		}
 		httpsec.SetAPIRootCAs(pool)
 		httpsec.SetContentRootCAs(pool)
+	}
+	if keys := envOr(opts.TemplateSigningKeys, EnvTemplateSigningKeys); strings.TrimSpace(keys) != "" {
+		v, err := core.ParseTemplateSigningKeys(keys)
+		if err != nil {
+			return nil, usageError(fmt.Errorf("%s: %w", EnvTemplateSigningKeys, err))
+		}
+		s.templates = v
 	}
 	proxyOpts := ProxyOptions{Control: opts.ControlProxy, Content: opts.ContentProxy, Scan: opts.ScanProxy}
 	proxies, err := ResolveProxies(proxyOpts)
@@ -712,6 +726,12 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 		parsers.Register(p)
 	}
 	executor.SetParserRegistry(parsers)
+	executor.SetTemplateVerifier(k.s.templates)
+	if k.s.sensorID != "" {
+		// Configured locally (SENSOR_ID), so a template manifest signed
+		// for another sensor is refused.
+		executor.SetSensorID(k.s.sensorID)
+	}
 	if k.opts.ScanTargetPolicy != nil {
 		executor.SetScanTargetPolicy(k.opts.ScanTargetPolicy)
 	}

@@ -4,6 +4,58 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Security
+
+- **Custom templates must be signed by the platform.** A scan command's
+  custom templates are written and run only when the command carries the
+  platform's signed manifest of them (`custom_templates_envelope`): a DSSE
+  envelope (exact signed bytes, Ed25519 over the DSSE pre-authentication
+  encoding) whose `core.TemplateManifest` names the tenant, sensor and
+  command, the issue and expiry times, and the id, name, type and SHA-256 of
+  every template in order. The signature is verified before the manifest is
+  parsed; then a manifest for another command (or sensor, when the sensor
+  knows its id), an expired one, unknown fields, or any template changed,
+  added, held back or reordered fails the command. New:
+  `core.TemplateVerifier`, `core.NewTemplateVerifier`,
+  `core.ParseTemplateSigningKeys`, `core.TemplateKeyID`,
+  `core.TemplateManifest`, `core.ManifestTemplate`, `core.SignedEnvelope`,
+  `core.EnvelopeSignature`, `core.DSSEPreAuthEncoding`,
+  `core.TemplateBinding`, `ScanCommandPayload.CustomTemplatesEnvelope`,
+  `DefaultCommandExecutor.SetTemplateVerifier` / `SetSensorID`,
+  `core.ErrNoTemplateKeys`, `core.ErrTemplatesUnsigned`. sensorkit reads the
+  keys from `SENSOR_TEMPLATE_SIGNING_KEYS` (`Options.TemplateSigningKeys`; a
+  malformed value stops the sensor with exit code 2) and binds manifests to
+  `SENSOR_ID` when it is set. **Breaking for sensors that run custom
+  templates:** without a pinned key, or for unsigned or altered templates,
+  the command fails before any scanner runs. Pin the tenant's key from the
+  platform (`GET /api/v1/scanner-templates/signing-key`).
+- **More nuclei flags refused in extra args** (`core.DangerousToolFlags`,
+  checked against nuclei v3.11.1 `-h`): template types the sensor never
+  enables (`-file`, `-esc`, `-egm`, `-headless`, `-ho`, `-cdpe`, `-sc`,
+  `-dast`, `-fuzz`; `-code` was already refused), the signature switch
+  (`-dut` / `-disable-unsigned-templates`, so `-dut=false` cannot turn it
+  off) and `-sign`, template sources by their real short names (`-turl`,
+  `-wurl`, `-ai`, `-tp`, `-it`, `-vfp`), target sources that skip target
+  validation (`-targets-inline`, `-uncover`/`-uq`/`-ue`, `-sa`, `-resume`),
+  the short proxy flag `-p` and `-pi`, client TLS files (`-cc`, `-ck`,
+  `-ca`), cloud upload (`-pd`, `-pdu`, `-auth`, `-tid`, `-sid`), listeners
+  (`-dts`, `-hae`, `-ep`), engine/template updates and resets (`-up`,
+  `-ut`, `-ud`, `-reset`) and more file writers (`-pe`, `-project-path`,
+  `-profile-mem`).
+- **Rate-limit flags refused in extra args** (`core.RateLimitToolFlags`:
+  `-rate-limit`/`-rl`, `-bulk-size`/`-bs`, `-concurrency`,
+  `-per-host-rate-limit`, `-rlm`, `-hbs`, `-headc`, `-jsc`, `-pc`, `-prc`,
+  naabu `-rate`, `-threads`, ...): a free-form flag would get around the
+  sensor's ceiling.
+
+### Added
+
+- `ScanOptions.RateLimit`, `BulkSize` and `Concurrency`: a scan command's
+  config keys `rate_limit`, `bulk_size` and `concurrency` (whole numbers
+  from 1 to `core.MaxScanLimit`; anything else fails the command) ask the
+  scanner for gentler limits. `core.CapScanLimit` applies them under the
+  ceiling the sensor's operator configured.
+
 ## v0.16.0 — 2026-10-03
 
 ### Added

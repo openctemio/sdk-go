@@ -464,6 +464,8 @@ func TestNew_Errors(t *testing.T) {
 		{name: "outbox", env: map[string]string{EnvOutboxMaxAge: "-1h"}, want: "SENSOR_OUTBOX_MAX_AGE", code: ExitError},
 		{name: "private targets", env: map[string]string{"SENSOR_ALLOW_PRIVATE_TARGETS": "yes please"}, want: "SENSOR_ALLOW_PRIVATE_TARGETS", code: ExitError},
 		{name: "CA file", env: map[string]string{EnvCACertFile: "/nonexistent/ca.pem"}, want: "CA certificate file", code: ExitError},
+		{name: "template keys", env: map[string]string{EnvTemplateSigningKeys: "not-a-key"}, want: "SENSOR_TEMPLATE_SIGNING_KEYS", code: ExitUsage},
+		{name: "template keys option", opts: func(o *Options) { o.TemplateSigningKeys = "c2hvcnQ=" }, want: "SENSOR_TEMPLATE_SIGNING_KEYS", code: ExitUsage},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
