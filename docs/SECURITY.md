@@ -215,7 +215,54 @@ err := core.ValidateTemplate(&core.EmbeddedTemplate{
 - Max 50 templates per command
 - Max 1MB per template
 - Content hash verification (if provided)
+- Platform signature verified against a pinned key (see below)
 - Duplicate filename detection
+
+#### Template Signatures
+
+A scan command's custom templates run only with the platform's signed
+manifest of them (`ScanCommandPayload.CustomTemplatesEnvelope`), or the
+command fails before any template is written or any scanner runs. The
+manifest (`core.TemplateManifest`, kind `openctem.template-manifest/v1`)
+names the tenant, the sensor and the command it is for, when it was issued
+and when it expires, and the id, name, type and SHA-256 of every template in
+order. It travels in a DSSE envelope (payload type
+`application/vnd.openctem.template-manifest+json`): the exact signed bytes,
+Ed25519 over DSSE's pre-authentication encoding, by a key derived for the
+tenant. The sensor checks it against keys its operator pinned:
+
+```go
+v, err := core.ParseTemplateSigningKeys(os.Getenv("SENSOR_TEMPLATE_SIGNING_KEYS"))
+exec.SetTemplateVerifier(v) // sensorkit does this from SENSOR_TEMPLATE_SIGNING_KEYS
+exec.SetSensorID(id)        // sensorkit does this from SENSOR_ID when set
+```
+
+`TemplateVerifier.Verify` checks the signature over the exact payload bytes
+before parsing them, then refuses: another payload type or manifest kind,
+unknown manifest fields, a manifest for another command (or another sensor,
+when the sensor knows its id), an expired one or one issued in the future
+(5 minutes of clock skew allowed), and any difference between the manifest's
+list and the command's templates (one changed, added, held back or
+reordered). No pinned key: `core.ErrNoTemplateKeys`; no envelope:
+`core.ErrTemplatesUnsigned`. Several keys may be pinned (comma-separated) to
+roll the platform key.
+
+The tenant's public key comes from the platform
+(`GET /api/v1/scanner-templates/signing-key`) and is pinned out of band, so
+neither a man in the middle nor a write to the platform's database or
+command queue can make a sensor run a template the platform did not
+validate and sign for it.
+
+#### Rate Limits
+
+Scan commands can ask for gentler limits with the config keys `rate_limit`,
+`bulk_size` and `concurrency` (whole numbers from 1 to `core.MaxScanLimit`;
+anything else fails the command). The executor puts them in
+`ScanOptions.RateLimit`, `BulkSize` and `Concurrency`; a scanner applies
+them with `core.CapScanLimit(requested, own, ceiling)`, so a scan never runs
+above the ceiling the sensor's operator configured. Rate-limit flags in extra
+args (`core.RateLimitToolFlags`: `-rate-limit`, `-bulk-size`, `-c`,
+`-per-host-rate-limit`, ...) are refused, so they cannot get around it.
 
 `core.TemplateCache` additionally requires the tenant ID to be a UUID and the
 template type to be on the allowlist (both become path components), checks

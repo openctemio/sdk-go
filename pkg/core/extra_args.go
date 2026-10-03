@@ -86,35 +86,110 @@ var DangerousToolFlags = map[string]bool{
 	"-system-resolvers": true, "-system-chrome": true, "-system-chrome-path": true,
 	"-chrome-data-dir": true, "-cdd": true, "-screenshot": true, "-ss": true,
 	"-show-browser": true, "-sb": true, "-iserver-token": true, "-itoken": true,
+
+	// Template trust (nuclei v3.11 -h, TEMPLATES section). The sensor
+	// decides which template types may load: never the code protocol, file
+	// templates, self-contained templates or the headless browser, and it
+	// always runs the official templates with -disable-unsigned-templates.
+	// "-dut=false" would switch that check off, so -dut is refused too.
+	"-file": true, "-esc": true, "-enable-self-contained": true,
+	"-egm": true, "-enable-global-matchers": true,
+	"-dut": true, "-disable-unsigned-templates": true,
+	"-sign": true, "-headless": true,
+	"-ho": true, "-headless-options": true, "-cdpe": true, "-cdp-endpoint": true,
+	"-sc": true, "-dast": true, "-fuzz": true,
+	// Template sources by their nuclei short names (-turl/-wurl; -tu/-wu
+	// above are older spellings), AI-generated templates, template profiles
+	// (a profile file can turn on code/headless) and templates forced past
+	// the filters.
+	"-turl": true, "-wurl": true, "-ai": true, "-prompt": true,
+	"-tp": true, "-profile": true, "-it": true, "-include-templates": true,
+	"-vfp": true, "-var-file-paths": true,
+
+	// Targets that skip target validation: inline lists, internet search
+	// engines (uncover), every IP of a host name, resumed scan files.
+	"-targets-inline": true, "-uc": true, "-uncover": true,
+	"-uq": true, "-uncover-query": true, "-ue": true, "-uncover-engine": true,
+	"-sa": true, "-scan-all-ips": true, "-resume": true,
+
+	// Short proxy spelling, proxying the tool's own requests.
+	"-p": true, "-pi": true, "-proxy-internal": true,
+
+	// Client TLS material read from the sensor's disk and presented to the
+	// target (would hand the sensor's own key to an attacker's host).
+	"-cc": true, "-client-cert": true, "-ck": true, "-client-key": true,
+	"-ca": true, "-client-ca": true,
+
+	// Results uploaded to a third-party cloud, listeners opened on the
+	// sensor, the engine or template set replaced, state wiped, more files
+	// written.
+	"-auth": true, "-tid": true, "-team-id": true, "-cup": true, "-cloud-upload": true,
+	"-pd": true, "-dashboard": true, "-pdu": true, "-dashboard-upload": true,
+	"-sid": true, "-scan-id": true,
+	"-dts": true, "-dast-server": true, "-dtsa": true, "-dast-server-address": true,
+	"-dtst": true, "-dast-server-token": true, "-dtr": true, "-dast-report": true,
+	"-hae": true, "-http-api-endpoint": true, "-ep": true, "-enable-pprof": true,
+	"-up": true, "-update": true, "-ut": true, "-update-templates": true,
+	"-ud": true, "-update-template-dir": true, "-reset": true,
+	"-pe": true, "-pdf-export": true, "-project-path": true, "-profile-mem": true,
+}
+
+// RateLimitToolFlags are scanner CLI flags that set how hard a tool hits its
+// targets (requests per second, hosts or templates in parallel). They never
+// arrive through extra args: a scan asks for lower limits with the typed
+// ScanOptions.RateLimit / BulkSize / Concurrency, and the sensor caps those
+// at the ceilings its operator configured. A free-form "-rate-limit 100000"
+// (or "-per-host-rate-limit", which lifts nuclei's global limit) would get
+// around the ceiling.
+var RateLimitToolFlags = map[string]bool{
+	// nuclei (v3.11 -h, RATE-LIMIT), httpx, katana, dnsx, subfinder.
+	"-rl": true, "-rate-limit": true, "-rld": true, "-rate-limit-duration": true,
+	"-per-host-rate-limit": true, "-rlm": true, "-rate-limit-minute": true,
+	"-bs": true, "-bulk-size": true, "-concurrency": true,
+	"-hbs": true, "-headless-bulk-size": true, "-headc": true, "-headless-concurrency": true,
+	"-jsc": true, "-js-concurrency": true, "-payload-concurrency": true,
+	"-prc": true, "-probe-concurrency": true,
+	// naabu, subfinder, dnsx, httpx.
+	"-rate": true, "-rls": true, "-threads": true, "-parallelism": true,
 }
 
 // ValidateExtraArgs rejects extra CLI args that contain a DangerousToolFlags
-// entry, either bare ("-proxy") or in "flag=value" form ("-proxy=http://x").
-// Matching is case-insensitive, ignores surrounding whitespace and ignores
-// how many dashes the flag has: Go's flag package (nuclei, httpx, katana,
-// subfinder, dnsx, naabu) accepts "-proxy" and "--proxy" alike, so an entry
-// listed as "-proxy" also blocks "--proxy" and "---proxy", and "--config"
-// also blocks "-config".
+// or RateLimitToolFlags entry, either bare ("-proxy") or in "flag=value"
+// form ("-proxy=http://x"). Matching is case-insensitive, ignores
+// surrounding whitespace and ignores how many dashes the flag has: Go's flag
+// package (nuclei, httpx, katana, subfinder, dnsx, naabu) accepts "-proxy"
+// and "--proxy" alike, so an entry listed as "-proxy" also blocks "--proxy"
+// and "---proxy", and "--config" also blocks "-config".
 func ValidateExtraArgs(args []string) error {
 	for _, arg := range args {
-		if isDangerousToolFlag(arg) {
+		name, ok := flagName(arg)
+		if !ok {
+			continue
+		}
+		if inFlagSet(DangerousToolFlags, name) {
 			return fmt.Errorf("extra arg %q is not allowed", arg)
+		}
+		if inFlagSet(RateLimitToolFlags, name) {
+			return fmt.Errorf("extra arg %q is not allowed: rate limits come from the scan's typed options, capped by the sensor", arg)
 		}
 	}
 	return nil
 }
 
-func isDangerousToolFlag(arg string) bool {
+// flagName returns arg's flag name without dashes or "=value", lower-cased;
+// false when arg is not a flag.
+func flagName(arg string) (string, bool) {
 	lower := strings.ToLower(strings.TrimSpace(arg))
 	if !strings.HasPrefix(lower, "-") {
-		return false
+		return "", false
 	}
 	name := strings.TrimLeft(lower, "-")
 	if i := strings.IndexByte(name, '='); i >= 0 {
 		name = name[:i]
 	}
-	if name == "" {
-		return false
-	}
-	return DangerousToolFlags["-"+name] || DangerousToolFlags["--"+name]
+	return name, name != ""
+}
+
+func inFlagSet(set map[string]bool, name string) bool {
+	return set["-"+name] || set["--"+name]
 }
