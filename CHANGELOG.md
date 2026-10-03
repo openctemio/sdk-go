@@ -4,6 +4,8 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+## v0.17.0 — 2026-10-03
+
 ### Upgrade notes
 
 - **The tool wrappers are removed** (deprecated in v0.16.0). A program that
