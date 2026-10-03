@@ -96,6 +96,10 @@ type FakePlatform struct {
 	// on hello: the fake stores the manifest's digest and asks for it again
 	// (send_manifest) when a heartbeat names another one.
 	Manifest bool
+	// FutureFields adds a member no SDK knows to every JSON object the
+	// fake answers with, as a newer platform would: a sensor must ignore
+	// it (forward compatibility, docs/STABILITY.md).
+	FutureFields bool
 
 	mu        sync.Mutex
 	fault     Fault
@@ -121,6 +125,10 @@ type FakePlatform struct {
 	policyTools   []string
 	slim          bool
 	manifestTools []string
+	// cmdPayload and cmdType are a queued command's payload and type
+	// (QueueCommandPayload); absent: {"scanner":"fake"} and "scan".
+	cmdPayload map[string]json.RawMessage
+	cmdType    map[string]string
 }
 
 // SetManifestPolicy sets what the manifest answers say from now on (api
@@ -181,6 +189,9 @@ func NewFakePlatform(v2 bool) *FakePlatform {
 		cmdErrors: map[string]string{},
 		cmdResult: map[string]json.RawMessage{},
 		cmdEpoch:  map[string]int{},
+
+		cmdPayload: map[string]json.RawMessage{},
+		cmdType:    map[string]string{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	return f
@@ -233,6 +244,26 @@ func (f *FakePlatform) QueueCommand(id string) {
 	defer f.mu.Unlock()
 	f.commands[id] = "pending"
 	f.cmdQueue = append(f.cmdQueue, id)
+}
+
+// QueueCommandPayload adds a pending command of the given type ("" is
+// "scan") and payload, as the platform dispatches it.
+func (f *FakePlatform) QueueCommandPayload(id, typ string, payload json.RawMessage) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commands[id] = "pending"
+	f.cmdQueue = append(f.cmdQueue, id)
+	f.cmdPayload[id] = append(json.RawMessage(nil), payload...)
+	if typ != "" {
+		f.cmdType[id] = typ
+	}
+}
+
+// SetFutureFields switches FutureFields.
+func (f *FakePlatform) SetFutureFields(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.FutureFields = on
 }
 
 // ReclaimCommand simulates a lease loss (api RFC-035 D6): the command was
@@ -378,6 +409,8 @@ func (f *FakePlatform) AcceptedFindings() int {
 type recorder struct {
 	http.ResponseWriter
 	status int
+	// future: writeJSON adds FutureMember to object answers.
+	future bool
 }
 
 func (r *recorder) WriteHeader(code int) {
@@ -390,9 +423,9 @@ func (f *FakePlatform) serve(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	f.mu.Lock()
 	f.seq++
-	seq, fault := f.seq, f.fault
+	seq, fault, future := f.seq, f.fault, f.FutureFields
 	f.mu.Unlock()
-	rec := &recorder{ResponseWriter: w, status: http.StatusOK}
+	rec := &recorder{ResponseWriter: w, status: http.StatusOK, future: future}
 	defer func() {
 		f.mu.Lock()
 		f.requests = append(f.requests, Request{Method: r.Method, Path: r.URL.Path, Header: r.Header.Clone(), Body: body, Status: rec.status})
@@ -484,7 +517,7 @@ func (f *FakePlatform) v1(w http.ResponseWriter, r *http.Request, body []byte) {
 			w.Header().Set(protov2.HeaderProtocolAdvert, "2")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{legacyv1.FieldSensorID: "s1", "status": "ok", "tenant_id": "t1"})
+		encodeJSON(w, map[string]string{legacyv1.FieldSensorID: "s1", "status": "ok", "tenant_id": "t1"})
 	case p == "/ingest":
 		raw, err := decodeBody(r.Header.Get("Content-Encoding"), body)
 		var rep ctis.Report
@@ -499,7 +532,7 @@ func (f *FakePlatform) v1(w http.ResponseWriter, r *http.Request, body []byte) {
 		f.v1Reports = append(f.v1Reports, &rep)
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]int{"findings_created": len(rep.Findings), "assets_created": len(rep.Assets)})
+		encodeJSON(w, map[string]int{"findings_created": len(rep.Findings), "assets_created": len(rep.Assets)})
 	case strings.HasPrefix(p, "/commands/"):
 		parts := strings.Split(strings.TrimPrefix(p, "/commands/"), "/")
 		if len(parts) != 2 {
@@ -572,7 +605,7 @@ func (f *FakePlatform) problemState(w http.ResponseWriter, status int, t protov2
 		base = protov2.ProblemTypeBaseSensor
 	}
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(protov2.Problem{
+	encodeJSON(w, protov2.Problem{
 		Type: base + string(t), Title: string(t), Status: status, Detail: "fake: " + string(t),
 		State: state, Retryable: status == 429 || status >= 500,
 	})
@@ -596,7 +629,7 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 			Encodings: []string{"gzip", "zstd"}, Digests: []string{"sha-256"}, Limits: f.Limits,
 		}
 		w.Header().Set("Content-Type", protov2.MediaTypeJSON)
-		_ = json.NewEncoder(w).Encode(h)
+		encodeJSON(w, h)
 		return
 	}
 	f.mu.Lock()
@@ -661,11 +694,41 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 	}
 }
 
+// FutureMember is the member FutureFields adds to every JSON object answer.
+const FutureMember = "x_openctem_future"
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", protov2.MediaTypeJSON)
 	w.Header().Set(protov2.HeaderProtocol, "2")
 	w.WriteHeader(status)
+	encodeJSON(w, v)
+}
+
+// encodeJSON writes v, with FutureMember added to an object when the fake
+// answers as a newer platform (FutureFields).
+func encodeJSON(w http.ResponseWriter, v any) {
+	if rec, ok := w.(*recorder); ok && rec.future {
+		if obj, ok := withFutureMember(v); ok {
+			_ = json.NewEncoder(w).Encode(obj)
+			return
+		}
+	}
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// withFutureMember returns v as a JSON object with FutureMember added, or
+// false when v is not an object.
+func withFutureMember(v any) (map[string]any, bool) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, false
+	}
+	var obj map[string]any
+	if json.Unmarshal(raw, &obj) != nil || obj == nil {
+		return nil, false
+	}
+	obj[FutureMember] = map[string]any{"note": "a member from a newer platform", "level": 3}
+	return obj, true
 }
 
 func decodeBody(enc string, body []byte) ([]byte, error) {
