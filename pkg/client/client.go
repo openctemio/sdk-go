@@ -438,6 +438,10 @@ type HeartbeatRequest struct {
 	// binary and a sensor block built from the status's version.
 	SDK    *core.SDKInfo     `json:"sdk,omitempty"`
 	Sensor *core.SensorBuild `json:"sensor,omitempty"`
+
+	// LocalPolicy is the sensor-local policy report (api RFC-040 §5.7),
+	// sent only to a platform that lists the "local_policy" feature.
+	LocalPolicy *core.LocalPolicyReport `json:"local_policy,omitempty"`
 }
 
 // MarshalJSON encodes the heartbeat. active_jobs is sent even when it is 0
@@ -687,6 +691,11 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 	if req.Sensor == nil {
 		b := core.NewSensorBuild("", status.Version, "", "")
 		req.Sensor = &b
+	}
+	// The local policy report is additive: only a platform that announces
+	// it reads it (an older one is never sent a member it does not know).
+	if status.LocalPolicy != nil && c.PlatformSupports(ctx, protov2.FeatureLocalPolicy) {
+		req.LocalPolicy = status.LocalPolicy
 	}
 	ob := c.Outbox()
 	if ob != nil {

@@ -262,6 +262,53 @@ type CommandPoller struct {
 	cmdBase    context.Context
 	draining   atomic.Bool
 	drainGrace time.Duration
+
+	// local is the sensor-local policy (SetLocalPolicy): admission before
+	// every command and the kill switch. killed is true while its kill
+	// switch is engaged.
+	local  atomic.Pointer[LocalPolicy]
+	killed atomic.Bool
+}
+
+// errKilledByLocalPolicy cancels running commands when the sensor owner
+// engages the local kill switch.
+var errKilledByLocalPolicy = errors.New("stopped by the local kill switch")
+
+// KillSwitchCheckInterval is how often a poller with a local policy checks
+// its kill switch file while commands run.
+const KillSwitchCheckInterval = 2 * time.Second
+
+// SetLocalPolicy makes the poller enforce the sensor-local policy (api
+// RFC-040 §5.7): every command passes LocalPolicy.AdmitCommand after it is
+// claimed and before any executor or tool sees it, and a refused command is
+// reported failed with "refused by local policy: <rule>: …", never run and
+// never dropped silently. While the kill switch is engaged the poller
+// claims nothing and stops the commands it runs (reported failed). It is
+// checked before the gate of SetCommandGate, so no platform policy can
+// widen it. Call before Start.
+func (p *CommandPoller) SetLocalPolicy(lp *LocalPolicy) {
+	p.local.Store(lp)
+}
+
+// LocalKillSwitch reports whether the local kill switch is engaged now.
+func (p *CommandPoller) LocalKillSwitch() bool {
+	return p.local.Load().KillSwitchEngaged()
+}
+
+// checkKillSwitch notes a change of the local kill switch: engaged, it
+// stops every running command.
+func (p *CommandPoller) checkKillSwitch() bool {
+	engaged := p.local.Load().KillSwitchEngaged()
+	if p.killed.Swap(engaged) == engaged {
+		return engaged
+	}
+	if engaged {
+		fmt.Printf("[command-poller] Local kill switch engaged: claiming nothing and stopping %d running command(s)\n", p.ActiveJobs())
+		p.queue.cancelAll(errKilledByLocalPolicy)
+	} else {
+		fmt.Printf("[command-poller] Local kill switch released: polling again\n")
+	}
+	return engaged
 }
 
 // CommandPollerConfig configures a CommandPoller.
@@ -373,12 +420,27 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 		wake = p.doorbell.Wake()
 	}
 
+	// The local kill switch is checked every KillSwitchCheckInterval while a
+	// local policy is set (nil channel otherwise).
+	var killTick <-chan time.Time
+	if p.local.Load() != nil {
+		kt := time.NewTicker(KillSwitchCheckInterval)
+		defer kt.Stop()
+		killTick = kt.C
+	}
+
 	// Poll immediately on start
 	p.pollAndExecute(ctx)
 	lastPoll := time.Now()
 
 	for {
 		select {
+		case <-killTick:
+			// Released: poll at once instead of waiting for the next tick.
+			if was := p.killed.Load(); !p.checkKillSwitch() && was {
+				p.pollAndExecute(ctx)
+				lastPoll = time.Now()
+			}
 		case <-ctx.Done():
 			p.drain()
 			return ctx.Err()
@@ -623,6 +685,11 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 	if p.draining.Load() {
 		return
 	}
+	// Stopped by the sensor owner (local kill switch): claim nothing; the
+	// heartbeat says "paused by local policy".
+	if p.checkKillSwitch() {
+		return
+	}
 	// Paused by the platform: claim nothing. Running commands finish.
 	if p.paused() {
 		if p.verbose.Load() {
@@ -816,6 +883,18 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 	}
 	p.queue.markStarted(cmd.ID)
 
+	// The sensor-local policy first: nothing the platform says (its tool
+	// policy below, the payload) can widen it.
+	if lp := p.local.Load(); lp != nil {
+		if err := lp.AdmitCommand(ctx, cmd); err != nil {
+			p.refuseCommand(ctx, cmd, err)
+			return
+		}
+		for _, w := range lp.CommandWarnings(cmd) {
+			fmt.Printf("[command-poller] Warning: %s\n", w)
+		}
+	}
+
 	if g := p.gate.Load(); g != nil {
 		if err := (*g)(cmd); err != nil {
 			fmt.Printf("[command-poller] Refusing command %s: %v\n", cmd.ID, err)
@@ -842,6 +921,11 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 		return p.executor.Execute(ctx, cmd)
 	}()
 
+	// Stopped by the local kill switch: reported failed with the reason.
+	if errors.Is(context.Cause(ctx), errKilledByLocalPolicy) {
+		p.refuseCommand(context.WithoutCancel(ctx), cmd, refuse("kill_switch", "stopped by the sensor owner while running"))
+		return
+	}
 	// Canceled by the platform or by a drain: release it (the platform
 	// re-queues it at once, or it is already canceled there) instead of
 	// reporting a failure that is not the command's.
@@ -888,6 +972,17 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 	}
 }
 
+// refuseCommand reports a command failed with err without running it (or
+// after stopping it): the platform shows the reason.
+func (p *CommandPoller) refuseCommand(ctx context.Context, cmd *Command, err error) {
+	fmt.Printf("[command-poller] Refusing command %s: %v\n", cmd.ID, err)
+	if rerr := p.client.ReportCommandResult(ctx, cmd.ID, &CommandResult{
+		Status: "failed", Error: err.Error(), CompletedAt: time.Now(),
+	}); rerr != nil {
+		fmt.Printf("[command-poller] Failed to report refused command %s: %v\n", cmd.ID, rerr)
+	}
+}
+
 // releaseReason names why a held command is handed back.
 func releaseReason(ctx context.Context, fallback string) string {
 	switch cause := context.Cause(ctx); {
@@ -931,6 +1026,17 @@ type DefaultCommandExecutor struct {
 	// sensorID is this sensor's own id, when known: a template manifest
 	// must name it (SetSensorID).
 	sensorID atomic.Pointer[string]
+	// local is the sensor-local policy (SetLocalPolicy); nil: none.
+	local atomic.Pointer[LocalPolicy]
+}
+
+// SetLocalPolicy makes the executor enforce the sensor-local policy (api
+// RFC-040 §5.7) on every scan, behind the poller's admission check: targets
+// through the scan target policy, allow_custom_templates, allow_interactsh,
+// rate.max_rps and rate.max_job_seconds. Nothing in a command can loosen
+// it. nil removes it (the MaxScanTimeout cap stays).
+func (e *DefaultCommandExecutor) SetLocalPolicy(lp *LocalPolicy) {
+	e.local.Store(lp)
 }
 
 // SetTemplateVerifier sets the pinned keys custom templates must be signed
@@ -1136,11 +1242,16 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		Verbose:   e.verbose.Load(),
 	}
 
+	local := e.local.Load()
 	// Add config options if provided
 	if payload.Config != nil {
 		// Out-of-band callbacks only when the command says so, as a boolean:
-		// anything else ("true", 1) leaves them off.
+		// anything else ("true", 1) leaves them off; and only when the local
+		// policy allows them.
 		if allow, ok := payload.Config["allow_interactsh"].(bool); ok && allow {
+			if !local.AllowsInteractsh() {
+				return nil, refuse("allow_interactsh", "the job asks for out-of-band callbacks (interactsh); this sensor's policy does not allow them")
+			}
 			opts.AllowInteractsh = true
 		}
 		if err := applyScanLimits(opts, payload.Config); err != nil {
@@ -1168,11 +1279,17 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	if len(ignoredConfig) > 0 && e.verbose.Load() {
 		fmt.Printf("[executor] %s does not take config keys %s; they have no effect\n", payload.Scanner, strings.Join(ignoredConfig, ", "))
 	}
+	// The local policy's rate ceiling: no scan runs above it, whatever the
+	// command asked for.
+	opts.RateLimit = local.CapRate(opts.RateLimit)
 
 	// Handle custom templates if provided
 	var templateDir string
 	var cleanupTemplates func()
 	if len(payload.CustomTemplates) > 0 {
+		if !local.AllowsCustomTemplates() {
+			return nil, refuse("allow_custom_templates", "the job carries %d custom template(s); this sensor's policy does not allow platform-supplied templates", len(payload.CustomTemplates))
+		}
 		// SECURITY: only templates the platform signed for this command are
 		// written (see verifyCustomTemplates); nothing is written before.
 		if err := e.verifyCustomTemplates(cmd.ID, &payload); err != nil {
@@ -1193,10 +1310,16 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		}
 	}
 
-	// Create context with timeout if specified
+	// Create context with timeout if specified: never above MaxScanTimeout
+	// or the local policy's rate.max_job_seconds (which also applies when
+	// the command sets none).
+	var requested time.Duration
 	if payload.TimeoutSeconds > 0 {
+		requested = time.Duration(min(int64(payload.TimeoutSeconds), int64(MaxScanTimeout/time.Second))) * time.Second
+	}
+	if timeout := local.CapTimeout(requested); timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(payload.TimeoutSeconds)*time.Second)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 
@@ -1289,6 +1412,11 @@ func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payloa
 	}
 
 	policy := e.ScanTargetPolicy()
+	if lp := e.local.Load(); lp.Present() && policy.Local == nil {
+		withLocal := *policy
+		withLocal.Local = lp
+		policy = &withLocal
+	}
 	seen := make(map[string]bool, len(raw))
 	out := make([]string, 0, len(raw))
 	var refused []string

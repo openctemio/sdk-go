@@ -57,6 +57,11 @@ type Manifest struct {
 	Concurrency  *ManifestConcurrency `json:"concurrency,omitempty"`
 	Capabilities []string             `json:"capabilities,omitempty"`
 	Tools        []ManifestTool       `json:"tools"`
+	// LocalPolicy is the sensor-local policy's state, digest and summary
+	// (api RFC-040 §5.7), without the live kill switch (the heartbeat
+	// carries that). The API client sends it only to a platform that lists
+	// the "local_policy" feature.
+	LocalPolicy *LocalPolicyReport `json:"local_policy,omitempty"`
 }
 
 // ManifestPlatform is the operating system and architecture.
@@ -221,6 +226,17 @@ func BuildManifest(status *SensorStatus, res *resource.HostResources, model stri
 		if !provided[c] && !slices.Contains(m.Capabilities, c) {
 			m.Capabilities = append(m.Capabilities, c)
 		}
+	}
+	if lp := status.LocalPolicy; lp != nil {
+		r := *lp
+		r.KillSwitch = false // live state: on the heartbeat, not in the manifest
+		r.Warnings = slices.Clone(lp.Warnings)
+		if lp.Summary != nil {
+			s := *lp.Summary
+			s.Tools, s.Checks = slices.Clone(s.Tools), slices.Clone(s.Checks)
+			r.Summary = &s
+		}
+		m.LocalPolicy = &r
 	}
 	return m
 }

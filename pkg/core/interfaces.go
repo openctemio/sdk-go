@@ -512,6 +512,12 @@ type SensorStatus struct {
 	// Control is the control channel's own stats (api RFC-035): BaseSensor
 	// sets it on every heartbeat.
 	Control *ControlStats `json:"control,omitempty"`
+
+	// LocalPolicy is the sensor-local policy's state, digest and summary
+	// (api RFC-040 §5.7; BaseSensor.SetLocalPolicy). nil reports nothing;
+	// the API client sends it only to a platform that lists the
+	// "local_policy" feature.
+	LocalPolicy *LocalPolicyReport `json:"local_policy,omitempty"`
 }
 
 // =============================================================================
