@@ -1,4 +1,8 @@
 // Package semgrep provides a scanner implementation for the Semgrep SAST tool.
+//
+// Deprecated: moved to github.com/openctemio/sensor/internal/scanners/semgrep; removed
+// in v0.17.0. sdk-go keeps the runtime and safety layer the wrappers use
+// (core.ExecuteScanner, core.ValidateExtraArgs, the scanner environment).
 package semgrep
 
 import (

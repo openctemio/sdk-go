@@ -58,6 +58,21 @@ All notable changes to `github.com/openctemio/sdk-go`.
   answer (problem documents included) carry `FutureMember`, as a newer
   platform's would.
 
+### Deprecated
+
+- **The tool wrappers moved to the sensor** (owner decision 2026-10-02:
+  sdk-go is the shared interfaces, runtime and safety layer). These packages
+  are deprecated and are removed in v0.17.0; their code now lives in
+  `github.com/openctemio/sensor/internal/...` under the same names:
+  `pkg/scanners` (the registry), `pkg/scanners/{nuclei,trivy,semgrep,betterleaks,codeql}`,
+  `pkg/scanners/recon` and `pkg/scanners/recon/{subfinder,dnsx,httpx,naabu,katana}`,
+  and the CI-mode `pkg/handler` and `pkg/strategy`. They are unchanged and
+  still work until then. What the wrappers use stays here and is not
+  deprecated: `core.ExecuteScanner` / `StreamScanner`, the scanner
+  environment, `core.ValidateExtraArgs` / `DangerousToolFlags`,
+  `pkg/gitenv`, `pkg/adapters` and `pkg/scanners/tenable`. A program that
+  embeds a wrapper should copy it or move to the sensor.
+
 ### Fixed
 
 - Recon tool command lines, checked against each tool's own `-h` output

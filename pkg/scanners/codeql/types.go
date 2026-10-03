@@ -1,6 +1,10 @@
 // Package codeql provides a scanner implementation for GitHub CodeQL.
 // CodeQL provides full inter-procedural dataflow analysis and outputs SARIF
 // with complete codeFlows for taint tracking.
+//
+// Deprecated: moved to github.com/openctemio/sensor/internal/scanners/codeql; removed
+// in v0.17.0. sdk-go keeps the runtime and safety layer the wrappers use
+// (core.ExecuteScanner, core.ValidateExtraArgs, the scanner environment).
 package codeql
 
 // =============================================================================

@@ -1,4 +1,8 @@
 // Package dnsx provides a scanner implementation for the dnsx DNS toolkit.
+//
+// Deprecated: moved to github.com/openctemio/sensor/internal/scanners/recon/dnsx; removed
+// in v0.17.0. sdk-go keeps the runtime and safety layer the wrappers use
+// (core.ExecuteScanner, core.ValidateExtraArgs, the scanner environment).
 package dnsx
 
 import (
