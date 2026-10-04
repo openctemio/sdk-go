@@ -328,11 +328,73 @@ func FromSARIF(data []byte, opts *ConvertOptions) (*Report, error) {
 		finding.BaselineState = NormalizeSARIFBaselineState(result.BaselineState)
 		finding.Kind = NormalizeSARIFKind(result.Kind)
 		finding.Tags = sarifTags(result.Properties, ruleProps)
+		if finding.Type == FindingTypeSecret || isSecretTool(strings.ToLower(run.Tool.Driver.Name)) {
+			redactSecretFinding(&finding)
+		}
 
 		report.Findings = append(report.Findings, finding)
 	}
 
 	return report, nil
+}
+
+// redactedSecret replaces a secret, or a code line holding one, that is too
+// short to show any of it.
+const redactedSecret = "REDACTED"
+
+// secretPrefixLen is how many leading characters of a secret maskSecret keeps,
+// enough to recognize its kind (AKIA, ghp_, xoxb) and never enough to use it.
+const secretPrefixLen = 4
+
+// minMaskedPrefixLen is the shortest secret maskSecret shows a prefix of.
+// Shorter ones (passwords, PINs) are hidden entirely.
+const minMaskedPrefixLen = 16
+
+// redactSecretFinding keeps a secret scanner's raw match out of the CTIS
+// report. Secret scanners put the matched secret in the SARIF region snippet
+// (gitleaks and betterleaks do unless run with --redact), and FromSARIF copied
+// it into location.snippet, so the live credential traveled in the report and
+// was stored wherever the report was. The snippet is masked, and the raw value
+// is also masked wherever the title or description repeats it.
+//
+// The masked value is not written to secret.masked_value: receivers fingerprint
+// secret findings by it (spec section 5.2), and setting it would change the
+// identity of every finding already ingested from a SARIF secret scan.
+func redactSecretFinding(f *Finding) {
+	if f.Location == nil || f.Location.Snippet == "" {
+		return
+	}
+	raw := f.Location.Snippet
+	if isRedacted(raw) {
+		return
+	}
+	masked := maskSecret(raw)
+	f.Location.Snippet = masked
+	if needle := strings.TrimSpace(raw); len(needle) >= 6 {
+		f.Title = strings.ReplaceAll(f.Title, needle, masked)
+		f.Description = strings.ReplaceAll(f.Description, needle, masked)
+		f.Message = strings.ReplaceAll(f.Message, needle, masked)
+	}
+}
+
+// isRedacted reports whether a scanner already fully redacted the snippet:
+// gitleaks --redact writes "REDACTED", other tools mask with asterisks. A
+// partial redaction (gitleaks --redact=N keeps part of the secret followed by
+// "...") is masked again.
+func isRedacted(s string) bool {
+	t := strings.TrimSpace(s)
+	return strings.EqualFold(t, redactedSecret) || strings.Trim(t, "*•") == ""
+}
+
+// maskSecret returns the first secretPrefixLen characters of a secret of at
+// least minMaskedPrefixLen characters followed by asterisks, or redactedSecret
+// for a shorter one. The masked form does not reveal the secret's length.
+func maskSecret(s string) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) < minMaskedPrefixLen {
+		return redactedSecret
+	}
+	return string(r[:secretPrefixLen]) + "********"
 }
 
 // sarifFingerprint picks the result fingerprint with the lowest key, so the

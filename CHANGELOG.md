@@ -6,6 +6,7 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Security
 
+- **`ctis.FromSARIF` masks secret scanners' raw matches** (ctis#14). gitleaks and betterleaks write the matched secret into the SARIF region snippet unless run with `--redact`, and `FromSARIF` copied it into `location.snippet`. For secret findings the snippet is now masked (the first 4 characters of a value of 16 or more, else `REDACTED`), and the raw value is masked in the title, message and description too. `secret.masked_value` stays unset so platform fingerprints do not change. `scripts/check-ctis-parity.sh` now compares the redaction code and the shared gitleaks sample with ctis.
 - **Sensor-local policy** (api RFC-040 §5.7, owner decisions Q3 (a) and
   Q4 (a)). The network owner writes a read-only YAML file at install time
   (`SENSOR_LOCAL_POLICY`, `sensorkit.Options.LocalPolicyPath`, default
