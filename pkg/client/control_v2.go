@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
@@ -222,10 +223,27 @@ func errPausedHeartbeat() error {
 // Commands
 // =============================================================================
 
+// claimOnPoll reports whether polls ask the platform to claim (claim-N):
+// the platform offers the capacity feature and the client did not opt out.
+func (c *Client) claimOnPoll(ctx context.Context) bool {
+	if c.noClaimOnPoll {
+		return false
+	}
+	ok, _ := c.controlV2(ctx, protov2.FeatureCapacity)
+	return ok
+}
+
 func (c *Client) pollCommandsV2(ctx context.Context, limit int) ([]Command, error) {
 	var list protov2.CommandList
 	path := protov2.PathPrefix + protov2.CommandsPath + "?limit=" + strconv.Itoa(limit)
-	if _, err := c.v2JSON(ctx, http.MethodGet, path, nil, &list, nil, c.maxRetries); err != nil {
+	// Claim-N: against a platform that offers it, the poll claims what it
+	// returns, so the platform counts the slots and no second sensor polls
+	// the same command.
+	var extra http.Header
+	if c.claimOnPoll(ctx) {
+		extra = http.Header{legacyv1.HeaderSensorFeatures: []string{protov2.FeatureCapacity}}
+	}
+	if _, err := c.v2JSON(ctx, http.MethodGet, path, nil, &list, extra, c.maxRetries); err != nil {
 		return nil, err
 	}
 	out := make([]Command, 0, len(list.Commands))

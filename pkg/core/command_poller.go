@@ -63,6 +63,10 @@ type Command struct {
 	// Zero on protocol v1 and from a platform without leases.
 	LeaseEpoch     int       `json:"lease_epoch,omitempty"`
 	LeaseExpiresAt time.Time `json:"lease_expires_at,omitzero"`
+	// Claimed is true when the poll already claimed the command for this
+	// sensor (claim-N, api RFC-046 §11). The poller still acknowledges it
+	// (a replay) when it runs it, and releases it when it does not.
+	Claimed bool `json:"-"`
 }
 
 // CommandResult represents the result of command execution.
@@ -573,6 +577,17 @@ func (p *CommandPoller) drain() {
 	<-done
 }
 
+// dropClaimed hands back a command the poll claimed for this sensor
+// (claim-N) that the poller will not run, so the platform offers it to
+// another sensor at once instead of after its lease. A command the poll only
+// listed needs nothing: it is still pending.
+func (p *CommandPoller) dropClaimed(cmd *Command, reason string) {
+	if cmd == nil || !cmd.Claimed {
+		return
+	}
+	go p.release(cmd.ID, reason)
+}
+
 // release hands a command back to the platform (best-effort).
 func (p *CommandPoller) release(id, reason string) {
 	rc, ok := p.client.(ReleasingCommandClient)
@@ -755,10 +770,14 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 	orderCommands(resp.Commands)
 	limit := p.slotLimit()
 
-	for _, cmd := range resp.Commands {
+	for i, cmd := range resp.Commands {
 		// Paused while this batch was being claimed: leave the rest pending
-		// (unacknowledged) for later or for another sensor.
+		// (unacknowledged) for later or for another sensor; hand back the
+		// ones the poll already claimed (claim-N).
 		if p.paused() {
+			for _, rest := range resp.Commands[i:] {
+				p.dropClaimed(rest, "sensor paused")
+			}
 			return
 		}
 		// Validate command type
@@ -766,6 +785,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			if p.verbose.Load() {
 				fmt.Printf("[command-poller] Skipping disallowed command type: %s\n", cmd.Type)
 			}
+			p.dropClaimed(cmd, "command type not allowed on this sensor")
 			continue
 		}
 
@@ -774,6 +794,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			if p.verbose.Load() {
 				fmt.Printf("[command-poller] Skipping expired command: %s\n", cmd.ID)
 			}
+			p.dropClaimed(cmd, "command expired")
 			continue
 		}
 
@@ -785,6 +806,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		// for later or for another sensor.
 		if len(p.sem) >= limit {
 			p.backlog.Store(true)
+			p.dropClaimed(cmd, "no free slot")
 			continue
 		}
 		select {
@@ -794,6 +816,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			if p.verbose.Load() {
 				fmt.Printf("[command-poller] No free slot: leaving command %s pending\n", cmd.ID)
 			}
+			p.dropClaimed(cmd, "no free slot")
 			continue
 		}
 
@@ -811,6 +834,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			if p.verbose.Load() {
 				fmt.Printf("[command-poller] Leaving command %s pending: its hosts are busy here\n", cmd.ID)
 			}
+			p.dropClaimed(cmd, "its hosts are busy on this sensor")
 			continue
 		}
 
