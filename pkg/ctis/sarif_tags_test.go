@@ -124,13 +124,19 @@ func TestFromSARIF_TagsHostileInput(t *testing.T) {
 
 // betterleaks is a gitleaks fork. Its SARIF driver name must classify the
 // same way: secret findings from a secret-capability tool.
-func TestDetectFindingType_Betterleaks(t *testing.T) {
-	for _, name := range []string{"gitleaks", "betterleaks", "Betterleaks", "betterleaks v1.1.0"} {
-		if got := detectFindingType(name, ""); got != FindingTypeSecret {
-			t.Errorf("detectFindingType(%q) = %s, want secret", name, got)
+func TestFromSARIF_SecretToolsClassifyAsSecret(t *testing.T) {
+	for _, name := range []string{"gitleaks", "betterleaks", "Betterleaks", "betterleaks v1.1.0", "trufflehog", "detect-secrets"} {
+		log := []byte(`{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"` + name + `"}},
+		  "results":[{"ruleId":"generic-api-key","message":{"text":"m"}}]}]}`)
+		r, err := FromSARIF(log, &ConvertOptions{AssetValue: "github.com/example/shop"})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
 		}
-		if got := detectCapabilities(name, ""); !reflect.DeepEqual(got, []string{"secret"}) {
-			t.Errorf("detectCapabilities(%q) = %q, want [secret]", name, got)
+		if r.Findings[0].Type != FindingTypeSecret {
+			t.Errorf("%s: finding type = %s, want secret", name, r.Findings[0].Type)
+		}
+		if !reflect.DeepEqual(r.Tool.Capabilities, []string{"secret"}) {
+			t.Errorf("%s: capabilities = %q, want [secret]", name, r.Tool.Capabilities)
 		}
 	}
 	report := readBetterleaksSARIF(t)
@@ -139,21 +145,11 @@ func TestDetectFindingType_Betterleaks(t *testing.T) {
 			t.Errorf("finding %d type = %s, want secret", i, f.Type)
 		}
 	}
-	if !reflect.DeepEqual(report.Tool.Capabilities, []string{"secret"}) {
-		t.Errorf("tool capabilities = %q, want [secret]", report.Tool.Capabilities)
-	}
 }
 
-// detectFindingType and detectCapabilities read the one secretToolNames list,
-// so every entry classifies the same in both (they used to keep separate
-// lists, and capabilities matched "leaks" while the type did not).
-func TestSecretToolNamesShared(t *testing.T) {
-	for _, name := range secretToolNames {
-		if got := detectFindingType(name, ""); got != FindingTypeSecret {
-			t.Errorf("detectFindingType(%q) = %s, want secret", name, got)
-		}
-		if got := detectCapabilities(name, ""); !reflect.DeepEqual(got, []string{"secret"}) {
-			t.Errorf("detectCapabilities(%q) = %q, want [secret]", name, got)
-		}
-	}
-}
+// The module caps tags per finding (spec 6.1); the values are unexported
+// there, so the test names them.
+const (
+	maxSARIFTags   = 50
+	maxSARIFTagLen = 128
+)

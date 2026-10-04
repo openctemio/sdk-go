@@ -18,7 +18,7 @@ tool-specific.
 | `pkg/client` | Platform protocol client (v2 negotiated, v1 fallback) | stable |
 | `pkg/sensorproto/v2` | Protocol v2 wire types | stable |
 | `pkg/sensorproto/legacyv1` | Protocol v1 wire vocabulary | frozen (no additions) |
-| `pkg/ctis` | CTIS types; kept identical to `github.com/openctemio/ctis` by the `ctis-parity` CI job | stable, follows CTIS |
+| `pkg/ctis` | CTIS types: re-exports `github.com/openctemio/ctis` (generated aliases; the `ctis-parity` CI job fails when they are stale) | stable, follows CTIS |
 | `pkg/outbox` | Durable, encrypted result queue | stable |
 | `pkg/httpsec` | SSRF-safe HTTP clients and URL validation | stable |
 | `pkg/resource` | Slot sizing from CPU, memory and tool cost | stable |

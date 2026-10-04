@@ -11,8 +11,8 @@ import (
 // case-insensitively; values outside SARIF's sets are left unset, and an absent
 // kind is not defaulted to SARIF's implicit "fail".
 //
-// This copy of FromSARIF converts the first run only, so only the first run's
-// four results are checked.
+// FromSARIF converts every run (the old hand copy converted only the first):
+// the sample's two runs give eight findings; the first run's four are checked.
 func TestFromSARIF_ResultKindAndBaselineState(t *testing.T) {
 	data, err := os.ReadFile("testdata/sarif/kinds.sarif")
 	if err != nil {
@@ -30,8 +30,8 @@ func TestFromSARIF_ResultKindAndBaselineState(t *testing.T) {
 		{"not_applicable", ""},
 		{"pass", "absent"},
 	}
-	if len(report.Findings) != len(want) {
-		t.Fatalf("got %d findings, want %d", len(report.Findings), len(want))
+	if len(report.Findings) != 8 {
+		t.Fatalf("got %d findings, want 8 (two runs of four)", len(report.Findings))
 	}
 	for i, w := range want {
 		f := report.Findings[i]
