@@ -1408,6 +1408,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		}
 
 		result.FindingsCount = len(report.Findings)
+		report.Metadata.CoverageType = scanCoverageType(report, scanResult)
 
 		// Push findings
 		_, err = e.pusher.PushFindings(ctx, report)
@@ -1657,6 +1658,7 @@ func (e *DefaultCommandExecutor) executeCollect(ctx context.Context, cmd *Comman
 	if e.pusher != nil {
 		for _, report := range collectResult.Reports {
 			result.FindingsCount += len(report.Findings)
+			report.Metadata.CoverageType = collectCoverageType(report)
 			_, err := e.pusher.PushFindings(ctx, report)
 			if err != nil {
 				return result, fmt.Errorf("push failed: %w", err)
@@ -1695,4 +1697,71 @@ func (e *DefaultCommandExecutor) executeHealthCheck(ctx context.Context, cmd *Co
 // SetVerbose sets verbose mode.
 func (e *DefaultCommandExecutor) SetVerbose(v bool) {
 	e.verbose.Store(v)
+}
+
+// CTIS coverage_type values (spec 4.5).
+const (
+	coverageTypeFull        = "full"
+	coverageTypePartial     = "partial"
+	coverageTypeIncremental = "incremental"
+)
+
+// scanCoverageType is the coverage_type a scan command's report declares.
+// Every report states one: a receiver must not read an absent value as full
+// (CTIS spec 4.5), and the platform auto-resolves findings a run no longer
+// reports only on full coverage.
+//
+//   - A run the scanner says stopped part-way (ScanResult.Error) or with
+//     targets it could not scan (properties.failed_targets) is partial, even
+//     when the parser declared full.
+//   - Otherwise a value the parser declared is kept.
+//   - A repository scan (metadata.branch set) is partial: it has its own,
+//     default-branch-gated auto-resolve, and the runtime cannot tell that the
+//     checkout was the whole repository.
+//   - Anything else, a completed run over its targets, is full.
+func scanCoverageType(report *ctis.Report, r *ScanResult) string {
+	declared := report.Metadata.CoverageType
+	if (r != nil && r.Error != "") || hasFailedTargets(report) {
+		if declared == coverageTypeIncremental {
+			return declared
+		}
+		return coverageTypePartial
+	}
+	if declared != "" {
+		return declared
+	}
+	if report.Metadata.Branch != nil {
+		return coverageTypePartial
+	}
+	return coverageTypeFull
+}
+
+// hasFailedTargets reports whether a report lists targets the run could not
+// scan (recon scanners record them in properties.failed_targets).
+func hasFailedTargets(report *ctis.Report) bool {
+	v, ok := report.Properties["failed_targets"]
+	if !ok || v == nil {
+		return false
+	}
+	switch t := v.(type) {
+	case []string:
+		return len(t) > 0
+	case []any:
+		return len(t) > 0
+	case string:
+		return t != ""
+	default:
+		return true
+	}
+}
+
+// collectCoverageType is the coverage_type a collector's report declares:
+// the collector's own value (an import that knows it is a complete export,
+// such as a Tenable scan, says full), else partial. The runtime cannot know
+// that an external source returned everything.
+func collectCoverageType(report *ctis.Report) string {
+	if report.Metadata.CoverageType != "" {
+		return report.Metadata.CoverageType
+	}
+	return coverageTypePartial
 }
