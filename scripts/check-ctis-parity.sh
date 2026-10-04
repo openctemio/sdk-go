@@ -13,8 +13,9 @@
 # It compares two things and fails on any difference:
 #   1. typed string-constant ENUM sets (e.g. FindingStatus, Severity)
 #   2. struct field json tags (catches added/removed/renamed fields)
-#   3. FromSARIF: the secret-scanner list, tag caps, sarifTags and isSecretTool
-#      in sarif.go, and the shared testdata/sarif/betterleaks.sarif sample
+#   3. FromSARIF: the secret-scanner list, tag caps, sarifTags, isSecretTool and
+#      the secret-snippet redaction in sarif.go, and the shared
+#      testdata/sarif/betterleaks.sarif and gitleaks-unredacted.sarif samples
 #
 # Scope: this is a high-signal text check, not a full AST/type comparison (a
 # field's Go type change with the same json tag would not be caught). Override
@@ -28,9 +29,11 @@ set -euo pipefail
 CTIS_REF="${CTIS_REF:-1af1b6a7c34a45388bb2d28e49b8cbd43c991b11}"
 CTIS_TYPES_URL="${CTIS_TYPES_URL:-https://raw.githubusercontent.com/openctemio/ctis/${CTIS_REF}/types.go}"
 # FromSARIF is also hand-copied. Its secret-scanner list, its tag caps and the
-# shared betterleaks sample are compared against this ctis commit (the ctis#12
-# merge). Bump it with CTIS_REF when pkg/ctis/sarif.go is synced.
-CTIS_SARIF_REF="${CTIS_SARIF_REF:-11b7540f92f26e6b9d53f4d36dce65175e95f4d7}"
+# shared betterleaks sample are compared against this ctis commit, as are the
+# secret-snippet redaction (redactSecretFinding, isRedacted, maskSecret and
+# their constants) and the shared gitleaks sample (the ctis#14 commit). Bump it
+# with CTIS_REF when pkg/ctis/sarif.go is synced.
+CTIS_SARIF_REF="${CTIS_SARIF_REF:-1f96790f7a6f1e730e4ce2071984f1964b4ca526}"
 CTIS_RAW_BASE="https://raw.githubusercontent.com/openctemio/ctis/${CTIS_SARIF_REF}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOCAL_TYPES="$ROOT/pkg/ctis/types.go"
@@ -96,22 +99,25 @@ compare "struct json fields" extract_fields "fields"
 # sarifTags and isSecretTool function bodies, and
 # the betterleaks sample both test suites read (byte-identical).
 extract_sarif_rules() {
-  grep -E '^[[:space:]]*(var secretToolNames|maxSARIFTags|maxSARIFTagLen)[[:space:]]*=' "$1" \
+  grep -E '^[[:space:]]*(var secretToolNames|maxSARIFTags|maxSARIFTagLen|const redactedSecret|const secretPrefixLen|const minMaskedPrefixLen)[[:space:]]*=' "$1" \
     | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | sort
   # The bodies of sarifTags and isSecretTool, which apply them.
-  awk '/^func (sarifTags|isSecretTool)\(/,/^}/' "$1"
+  awk '/^func (sarifTags|isSecretTool|redactSecretFinding|isRedacted|maskSecret)\(/,/^}/' "$1"
 }
 canonical_sarif="$work/sarif.go"
 canonical_sample="$work/betterleaks.sarif"
+canonical_gitleaks="$work/gitleaks-unredacted.sarif"
 if ! curl -fsSL "$CTIS_RAW_BASE/sarif.go" -o "$canonical_sarif" \
-  || ! curl -fsSL "$CTIS_RAW_BASE/testdata/sarif/betterleaks.sarif" -o "$canonical_sample"; then
+  || ! curl -fsSL "$CTIS_RAW_BASE/testdata/sarif/betterleaks.sarif" -o "$canonical_sample" \
+  || ! curl -fsSL "$CTIS_RAW_BASE/testdata/sarif/gitleaks-unredacted.sarif" -o "$canonical_gitleaks"; then
   echo "ERROR: failed to fetch canonical CTIS FromSARIF sources from $CTIS_RAW_BASE" >&2
   exit 2
 fi
 extract_sarif_rules "$canonical_sarif" > "$work/sarif_canon"
 extract_sarif_rules "$LOCAL_SARIF" > "$work/sarif_local"
 if ! grep -q '^func sarifTags(' "$work/sarif_canon" || ! grep -q '^func isSecretTool(' "$work/sarif_canon" \
-  || [[ $(grep -cE '^(var secretToolNames|maxSARIFTags|maxSARIFTagLen) ' "$work/sarif_canon") -ne 3 ]]; then
+  || ! grep -q '^func redactSecretFinding(' "$work/sarif_canon" \
+  || [[ $(grep -cE '^(var secretToolNames|maxSARIFTags|maxSARIFTagLen|const redactedSecret|const secretPrefixLen|const minMaskedPrefixLen) ' "$work/sarif_canon") -ne 6 ]]; then
   echo "  DRIFT: could not find secretToolNames, the tag caps, sarifTags or isSecretTool in ctis@${CTIS_SARIF_REF} sarif.go." >&2
   rc=1
 elif diff -u "$work/sarif_canon" "$work/sarif_local" > "$work/sarif_diff" 2>&1; then
@@ -119,6 +125,12 @@ elif diff -u "$work/sarif_canon" "$work/sarif_local" > "$work/sarif_diff" 2>&1; 
 else
   echo "  DRIFT: FromSARIF secret scanners or tag caps differ from ctis@${CTIS_SARIF_REF}." >&2
   sed 's/^/    /' "$work/sarif_diff" >&2
+  rc=1
+fi
+if cmp -s "$canonical_gitleaks" "$ROOT/pkg/ctis/testdata/sarif/gitleaks-unredacted.sarif"; then
+  echo "  OK: gitleaks SARIF sample identical."
+else
+  echo "  DRIFT: pkg/ctis/testdata/sarif/gitleaks-unredacted.sarif differs from ctis@${CTIS_SARIF_REF}." >&2
   rc=1
 fi
 if cmp -s "$canonical_sample" "$LOCAL_SARIF_SAMPLE"; then
