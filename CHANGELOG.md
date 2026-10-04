@@ -4,6 +4,23 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Upgrade notes
+
+- **`pkg/ctis` is now `github.com/openctemio/ctis`.** It re-exports the
+  module (type aliases, constants and wrapper functions generated from the
+  version in go.mod) instead of keeping a hand copy. Code that only uses
+  the CTIS types, constants, `NewReport`, `FromSARIF`, `ConvertReconToCTIS`
+  and so on builds unchanged, and `pkg/ctis` and module values are now the
+  same types. `SARIFLog` and `SARIFRun` stay SDK types (the module's plus
+  `versionControlProvenance` and `SARIFRun.Repository()`); the nested SARIF
+  types are the module's, so one detail breaks:
+  - `SARIFResult.RuleIndex` is `*int` (was `int`), so index 0 is
+    distinguishable from absent.
+  apidiff reports every exported signature that mentions a `pkg/ctis` type
+  as changed, because the named types now live in the module; source code
+  using the same names is unaffected.
+  The sensor builds unchanged (`sensor-compat`).
+
 ### Security
 
 - **Sensor-local policy** (api RFC-040 §5.7, owner decisions Q3 (a) and
@@ -49,6 +66,34 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `conformance.FakePlatform.SetLocalPolicy`.
 
 ### Changed
+
+- **`pkg/ctis` imports `github.com/openctemio/ctis`** (owner decision Q3,
+  research 16 G2), pinned to the ctis#14 commit `1f96790` (main plus the
+  secret-snippet masking; reachable from ctis main once #14 merges). The hand
+  copy had drifted and the sensor ran stale converters. Fixed by the switch:
+  - recon reports validate: no scope type `web`, no raw recon type
+    (`port`, `url_crawl`) as a capability, IPv6 addresses as `AAAA`
+    records, one DNS record per value, hostname-only port results as
+    `host` assets, every probe an `http_service`, stable asset IDs and order;
+  - `FromSARIF` converts every run (each finding names its run's tool
+    when there are several), reads `security-severity` and CVE/CWE tags,
+    types Trivy CVEs as `vulnerability` (they were all misconfigurations),
+    gives an unknown tool no capabilities (it got `vulnerability, secret`,
+    so SAST from an unknown tool could be filed as secret), and gives the
+    asset no criticality (it defaulted to `high`; spec 4.1 leaves it to the
+    receiver);
+  - `NewReport()` stamps schema version `1.3` (was `1.0`);
+  - new from the module: `SchemaVersion`, `SchemaURL`, `ParseVersion`,
+    `IsCompatibleVersion`, `(*Report).Validate`, `SARIFLogicalLocation`,
+    `SARIFReportingReference`.
+  The SDK keeps its asset rule on top of the module's `FromSARIF` (options,
+  then branch info, then `versionControlProvenance`; results without an
+  asset are `ErrNoAssetForFindings`), plus `CheckFindingAssets` and the
+  `NormalizeSARIF*` helpers. `scripts/check-ctis-parity.sh` (the
+  `ctis-parity` job) now regenerates the aliases and fails when they are
+  stale, or when `pkg/ctis` declares a model struct of its own again.
+  Bumping CTIS is `go get github.com/openctemio/ctis@<ver>` plus
+  `go generate ./pkg/ctis`.
 
 - `ctis.FromSARIF` carries `properties.tags` from the result and its rule
   into the finding's `tags` (they were dropped), as `github.com/openctemio/ctis`

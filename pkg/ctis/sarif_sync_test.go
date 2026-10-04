@@ -1,8 +1,6 @@
 package ctis
 
 import (
-	"math"
-	"strconv"
 	"testing"
 )
 
@@ -46,20 +44,6 @@ func TestFromSARIF_FingerprintDeterministic(t *testing.T) {
 	}
 	if len(seen) != 1 || seen["aaaaaaaaaaaaaaaa"] != 200 {
 		t.Fatalf("fingerprints over 200 conversions: %v, want the lowest key every time", seen)
-	}
-	if got := sarifFingerprint(map[string]string{"k": string(make([]byte, 65))}); len(got) != 64 {
-		t.Errorf("long fingerprint must be hashed, got %q", got)
-	}
-	if sarifFingerprint(nil) != "" || sarifFingerprint(map[string]string{"k": ""}) != "" {
-		t.Error("no usable fingerprint must give empty")
-	}
-}
-
-func TestItoaMinInt(t *testing.T) {
-	for _, n := range []int{0, 42, -42, math.MaxInt, math.MinInt} {
-		if got, want := itoa(n), strconv.Itoa(n); got != want {
-			t.Errorf("itoa(%d) = %q, want %q", n, got, want)
-		}
 	}
 }
 
