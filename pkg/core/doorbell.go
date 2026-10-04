@@ -158,8 +158,6 @@ func validConfigVersion(v string) bool {
 	return true
 }
 
-// DoorbellPusher is a Pusher whose heartbeat announces the doorbell and
-// returns the hints. *client.Client implements it.
 // CancelPusher sends a heartbeat that does not announce the doorbell and
 // returns the commands the platform says this sensor must stop
 // (cancel_command_ids). A sensor without a doorbell (sensorkit
@@ -175,6 +173,8 @@ type CommandCanceler interface {
 	CancelCommands(ids ...string)
 }
 
+// DoorbellPusher is a Pusher whose heartbeat announces the doorbell and
+// returns the hints. *client.Client implements it.
 type DoorbellPusher interface {
 	SendHeartbeatWithHints(ctx context.Context, status *SensorStatus) (*HeartbeatHints, error)
 }
