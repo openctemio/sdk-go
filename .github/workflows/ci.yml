@@ -68,15 +68,21 @@ jobs:
           # pinned (was latest) — avoid CI-breaking tool drift
           version: v2.13.1
 
-  # Guards against CTIS schema drift: pkg/ctis is a copy of the canonical
-  # github.com/openctemio/ctis module (RFC-002). They must carry the same enum
-  # constants — see scripts/check-ctis-parity.sh.
+  # pkg/ctis re-exports github.com/openctemio/ctis (generated aliases). Fails
+  # when the generated file is stale for the ctis version in go.mod, or when
+  # pkg/ctis starts copying model types again — see scripts/check-ctis-parity.sh.
   ctis-parity:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Check CTIS enum parity with canonical module
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          cache: true
+
+      - name: Check pkg/ctis re-exports the CTIS module
         run: ./scripts/check-ctis-parity.sh
 
   build:
