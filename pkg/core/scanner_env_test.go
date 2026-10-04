@@ -125,7 +125,7 @@ func TestMaskSecretInText(t *testing.T) {
 			}
 		})
 	}
-	if got := MaskSecretInText(`key="`+secret+`"`, secret); !strings.HasPrefix(got, `key="ghp****`) {
+	if got := MaskSecretInText(`key="`+secret+`"`, secret); !strings.HasPrefix(got, `key="ghp_****`) {
 		t.Errorf("context around the secret should be kept: %q", got)
 	}
 	if MaskSecretInText("", "x") != "" {

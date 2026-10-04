@@ -1,6 +1,8 @@
 // Package semgrep provides an adapter to convert Semgrep JSON output to CTIS.
 package semgrep
 
+import "encoding/json"
+
 // SemgrepOutput is the root Semgrep JSON document.
 type SemgrepOutput struct {
 	Results []SemgrepResult `json:"results"`
@@ -85,5 +87,45 @@ type SemgrepError struct {
 	Code    int    `json:"code,omitempty"`
 	Level   string `json:"level,omitempty"`
 	Message string `json:"message,omitempty"`
-	Type    string `json:"type,omitempty"`
+	// Type is the error kind, e.g. "PartialParsing" or "Timeout".
+	//
+	// semgrep's schema (semgrep_output_v1.atd) declares it as a variant: a
+	// plain string for kinds without a payload, an array such as
+	// ["PartialParsing", [{...}]] for kinds with one. A file that only
+	// partially parses is routine on real repos, and decoding that array into
+	// a string made json.Unmarshal fail for the whole document, so every
+	// finding of the scan was dropped. UnmarshalJSON accepts every shape and
+	// keeps the kind name.
+	Type string `json:"type,omitempty"`
+}
+
+// UnmarshalJSON decodes a semgrep error whatever the shape of its type (see
+// SemgrepError.Type). A shape without a kind name leaves Type empty; it never
+// fails the document.
+func (e *SemgrepError) UnmarshalJSON(data []byte) error {
+	type plain SemgrepError // no methods: no recursion
+	var aux struct {
+		plain
+		Type json.RawMessage `json:"type,omitempty"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*e = SemgrepError(aux.plain)
+	e.Type = semgrepErrorKind(aux.Type)
+	return nil
+}
+
+// semgrepErrorKind is the kind name of a semgrep error type: the string
+// itself, or the first element of the array form.
+func semgrepErrorKind(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var arr []json.RawMessage
+	if json.Unmarshal(raw, &arr) == nil && len(arr) > 0 && json.Unmarshal(arr[0], &s) == nil {
+		return s
+	}
+	return ""
 }

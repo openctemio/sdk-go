@@ -49,3 +49,8 @@ updates:
       - "github-actions"
     commit-message:
       prefix: "deps(actions)"
+    # One weekly PR for minor/patch bumps of the SHA-pinned actions; majors stay separate.
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

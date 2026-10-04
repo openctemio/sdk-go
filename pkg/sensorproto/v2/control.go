@@ -70,6 +70,12 @@ const (
 	// and manifests (api RFC-040 §5.7). Without it a sensor sends none; it
 	// enforces its local policy either way.
 	FeatureLocalPolicy = "local_policy"
+	// FeatureCapacity: claim-N (api RFC-046 §11, RFC-030 §5.9). A sensor
+	// that names it in X-OpenCTEM-Sensor-Features on GET /commands gets the
+	// commands already claimed for it (status acknowledged, lease set), at
+	// most its free slots of scans; its claim of each is a replay. A
+	// command it then does not run must be released.
+	FeatureCapacity = "capacity"
 )
 
 // ManifestResponse answers PUT /manifest: the digest the platform stored

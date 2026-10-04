@@ -15,8 +15,38 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `core.CancelPusher`) and the poller (`core.CommandCanceler`) stops and
   releases those commands, as with the doorbell. The heartbeat itself is
   unchanged: it does not announce the doorbell.
+### Added
+
+- **Claim-N** (api RFC-046 §11, RFC-030 §5.9). Against a platform whose
+  hello lists `capacity`, `GET /api/v2/sensor/commands` sends
+  `X-OpenCTEM-Sensor-Features: capacity` and the platform answers with the
+  commands already claimed for this sensor (acknowledged, lease set), at
+  most its free slots of scans, in its fair order. `core.Command.Claimed`
+  says so; the poller still acknowledges each one it runs (a replay) and
+  now **releases** at once any claimed command it does not run (no free
+  slot, type not allowed, expired, hosts busy, sensor paused), instead of
+  leaving it to its lease. Older platforms and v1 are unchanged.
+  `client.WithoutClaimOnPoll()` opts a client out (a caller that polls
+  without running what it gets).
 
 ### Security
+
+- **Secret masking reveals at most a quarter of a secret** (CTIS spec 4.8
+  and 5.2). `core.MaskSecret` showed the first and last 3 characters of any
+  secret over 8 characters, which is most of a 9-12 character password. It
+  now shows nothing of a secret under 12 characters and at most a quarter of
+  a longer one (at most 4 characters at either end), counts runes instead of
+  bytes, and uses a fixed-length marker so the masked value no longer gives
+  away the length. `MaskAPIKey` and the betterleaks adapter (which showed
+  4+4 characters, all but one character of a 9-character secret) follow the
+  same rule. `MaskSecretInText` now hides the whole text when the secret is
+  not found in it. `core.GenerateSecretFingerprint` hashed the raw secret
+  into the fingerprint, so a short secret could be recovered from the
+  fingerprint by brute force; it now hashes the masked value.
+  **Identity note:** `secret.masked_value`, and secret fingerprints built by
+  these helpers, change once for every secret of 9 or more characters.
+  OpenCTEM derives a secret finding's identity from `masked_value`, so the
+  first scan after the upgrade reports such secrets under new identities.
 
 - **Sensor-local policy** (api RFC-040 §5.7, owner decisions Q3 (a) and
   Q4 (a)). The network owner writes a read-only YAML file at install time
@@ -60,7 +90,30 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `Manifest.LocalPolicy`, `client.HeartbeatRequest.LocalPolicy`,
   `conformance.FakePlatform.SetLocalPolicy`.
 
+- **v1 results name their command.** The v1 ingest path (the fallback when
+  the platform has no protocol v2, `Protocol: v1`, and the outbox's v1
+  delivery) now sends `X-OpenCTEM-Command-ID` with the command id from
+  `core.WithCommandID` (`legacyv1.HeaderCommandID`). Without it the platform
+  treated every v1 report as unsolicited and, under its `quarantine` policy,
+  held it for review (api RFC-040 §5.3). When the platform answers
+  `404 COMMAND_NOT_FOUND` (the command finished more than its grace period
+  ago), the report is sent once more unbound, as the v2 path does. A command
+  id that is not visible ASCII or is longer than 128 bytes is never put on
+  the header.
+
 ### Changed
+
+- **Every report the runtime pushes states `coverage_type`** (CTIS spec 4.5:
+  an absent value is not `full`; research 16 G4, owner decision Q5). A scan
+  command's report is `partial` when the scanner says the run stopped
+  part-way (`ScanResult.Error`) or the report lists `failed_targets`, even if
+  the parser declared `full`; otherwise a value the parser declared is kept;
+  a repository scan (`metadata.branch`) is `partial`; any other completed
+  run is `full`. Collector reports keep the collector's value, else
+  `partial`. Daemon-mode scan and collect reports follow the same rules.
+  The platform's coverage-scoped auto-resolve used to read the missing
+  value as `full`; it is being changed to read it as not full, and this
+  keeps completed sensor scans eligible after that change.
 
 - `ctis.FromSARIF` carries `properties.tags` from the result and its rule
   into the finding's `tags` (they were dropped), as `github.com/openctemio/ctis`
@@ -75,6 +128,15 @@ All notable changes to `github.com/openctemio/sdk-go`.
 - `scripts/check-ctis-parity.sh` also compares FromSARIF's secret-scanner
   list, tag caps, `sarifTags` / `isSecretTool` bodies and the shared
   betterleaks sample against ctis.
+
+### Fixed
+
+- **semgrep: a partially parsed file no longer drops every finding.**
+  semgrep emits `errors[].type` as a string or an array
+  (`["PartialParsing", [...]]`); `SemgrepError.Type` was a string, so
+  `json.Unmarshal` failed for the whole document and the adapter returned no
+  findings at all. `SemgrepError` now decodes every shape and keeps the kind
+  name in `Type` (still a string, e.g. `"PartialParsing"`).
 
 ## v0.17.0 — 2026-10-03
 

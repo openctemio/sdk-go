@@ -24,9 +24,15 @@ func GenerateScaFingerprint(pkgName, pkgVersion, vulnID string) string {
 }
 
 // GenerateSecretFingerprint creates a fingerprint for secret findings.
-// Deprecated: Use fingerprint.GenerateSecret from pkg/shared/fingerprint instead.
+//
+// secretValue may be the raw secret: it is masked with MaskSecret before it
+// goes into the fingerprint, so the fingerprint never carries a hash of the
+// secret itself. An unsalted hash of a short secret can be reversed by brute
+// force; a hash of the masked value reveals no more than the masked value
+// does (CTIS spec 5.2: the secret input is the masked value or a keyed hash).
+// Callers of fingerprint.GenerateSecret directly must do the same.
 func GenerateSecretFingerprint(file, ruleID string, startLine int, secretValue string) string {
-	return fingerprint.GenerateSecret(file, ruleID, startLine, secretValue)
+	return fingerprint.GenerateSecret(file, ruleID, startLine, MaskSecret(secretValue))
 }
 
 // =============================================================================
@@ -133,12 +139,51 @@ func DetectPackageType(filename string) PackageType {
 // Masking Utilities
 // =============================================================================
 
-// MaskSecret masks a secret value, showing only first and last few characters.
-func MaskSecret(secret string) string {
-	if len(secret) <= 8 {
-		return "****"
+// secretMaskMarker stands for the hidden part of a masked secret. Its length
+// is fixed, so a masked value does not reveal the secret's length.
+const secretMaskMarker = "****"
+
+const (
+	// secretMinVisibleLen is the shortest secret (in characters) of which
+	// any character is shown. Shorter secrets are masked completely.
+	secretMinVisibleLen = 12
+	// secretMaxVisibleEnd is the most characters shown at either end.
+	secretMaxVisibleEnd = 4
+)
+
+// secretVisibleEnds returns how many characters of an n-character secret
+// may be shown at its start and at its end: none below
+// secretMinVisibleLen characters, otherwise a quarter of the secret in
+// total, at most secretMaxVisibleEnd at each end. The start gets the odd
+// character: it is usually the token type prefix ("ghp_", "AKIA").
+func secretVisibleEnds(n int) (head, tail int) {
+	if n < secretMinVisibleLen {
+		return 0, 0
 	}
-	return secret[:3] + "****" + secret[len(secret)-3:]
+	show := n / 4
+	if show > 2*secretMaxVisibleEnd {
+		show = 2 * secretMaxVisibleEnd
+	}
+	return (show + 1) / 2, show / 2
+}
+
+// MaskSecret masks a secret value for display and for use as a fingerprint
+// input (CTIS spec 4.8 and 5.2). It never shows more than a quarter of the
+// secret, at most 4 characters at either end, and nothing at all of a
+// secret shorter than 12 characters:
+//
+//	MaskSecret("not-a-real-1")                       == "no****1"
+//	MaskSecret("short-one")                          == "****"
+//	MaskSecret("fake_tok_0123456789abcdefghijklmn") == "fake****klmn"
+//
+// Characters are counted as runes, so a multi-byte character is never cut.
+func MaskSecret(secret string) string {
+	r := []rune(secret)
+	head, tail := secretVisibleEnds(len(r))
+	if head == 0 && tail == 0 {
+		return secretMaskMarker
+	}
+	return string(r[:head]) + secretMaskMarker + string(r[len(r)-tail:])
 }
 
 // MaskSecretInText returns text with every occurrence of secret replaced by
@@ -146,22 +191,25 @@ func MaskSecret(secret string) string {
 // line, which embed the raw secret.
 //
 // It fails safe: when secret is empty or does not occur in text (the scanner
-// trimmed or re-encoded it), the whole text is masked, because it cannot be
-// shown that the text is free of the secret.
+// trimmed or re-encoded it), the whole text is replaced by the mask marker,
+// because no part of the text can be shown to be free of the secret.
 func MaskSecretInText(text, secret string) string {
 	if text == "" {
 		return ""
 	}
 	if secret == "" || !strings.Contains(text, secret) {
-		return MaskSecret(text)
+		return secretMaskMarker
 	}
 	return strings.ReplaceAll(text, secret, MaskSecret(secret))
 }
 
-// MaskAPIKey masks an API key.
+// MaskAPIKey masks an API key for logs. It shows as many characters as
+// MaskSecret does: none below 12 characters, at most a quarter in total.
 func MaskAPIKey(key string) string {
-	if len(key) <= 10 {
+	r := []rune(key)
+	head, tail := secretVisibleEnds(len(r))
+	if head == 0 && tail == 0 {
 		return "****"
 	}
-	return key[:4] + "..." + key[len(key)-4:]
+	return string(r[:head]) + "..." + string(r[len(r)-tail:])
 }

@@ -63,6 +63,10 @@ type Command struct {
 	// Zero on protocol v1 and from a platform without leases.
 	LeaseEpoch     int       `json:"lease_epoch,omitempty"`
 	LeaseExpiresAt time.Time `json:"lease_expires_at,omitzero"`
+	// Claimed is true when the poll already claimed the command for this
+	// sensor (claim-N, api RFC-046 §11). The poller still acknowledges it
+	// (a replay) when it runs it, and releases it when it does not.
+	Claimed bool `json:"-"`
 }
 
 // CommandResult represents the result of command execution.
@@ -573,6 +577,17 @@ func (p *CommandPoller) drain() {
 	<-done
 }
 
+// dropClaimed hands back a command the poll claimed for this sensor
+// (claim-N) that the poller will not run, so the platform offers it to
+// another sensor at once instead of after its lease. A command the poll only
+// listed needs nothing: it is still pending.
+func (p *CommandPoller) dropClaimed(cmd *Command, reason string) {
+	if cmd == nil || !cmd.Claimed {
+		return
+	}
+	go p.release(cmd.ID, reason)
+}
+
 // release hands a command back to the platform (best-effort).
 func (p *CommandPoller) release(id, reason string) {
 	rc, ok := p.client.(ReleasingCommandClient)
@@ -755,10 +770,14 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 	orderCommands(resp.Commands)
 	limit := p.slotLimit()
 
-	for _, cmd := range resp.Commands {
+	for i, cmd := range resp.Commands {
 		// Paused while this batch was being claimed: leave the rest pending
-		// (unacknowledged) for later or for another sensor.
+		// (unacknowledged) for later or for another sensor; hand back the
+		// ones the poll already claimed (claim-N).
 		if p.paused() {
+			for _, rest := range resp.Commands[i:] {
+				p.dropClaimed(rest, "sensor paused")
+			}
 			return
 		}
 		// Validate command type
@@ -766,6 +785,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			if p.verbose.Load() {
 				fmt.Printf("[command-poller] Skipping disallowed command type: %s\n", cmd.Type)
 			}
+			p.dropClaimed(cmd, "command type not allowed on this sensor")
 			continue
 		}
 
@@ -774,6 +794,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			if p.verbose.Load() {
 				fmt.Printf("[command-poller] Skipping expired command: %s\n", cmd.ID)
 			}
+			p.dropClaimed(cmd, "command expired")
 			continue
 		}
 
@@ -785,6 +806,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		// for later or for another sensor.
 		if len(p.sem) >= limit {
 			p.backlog.Store(true)
+			p.dropClaimed(cmd, "no free slot")
 			continue
 		}
 		select {
@@ -794,6 +816,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			if p.verbose.Load() {
 				fmt.Printf("[command-poller] No free slot: leaving command %s pending\n", cmd.ID)
 			}
+			p.dropClaimed(cmd, "no free slot")
 			continue
 		}
 
@@ -811,6 +834,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			if p.verbose.Load() {
 				fmt.Printf("[command-poller] Leaving command %s pending: its hosts are busy here\n", cmd.ID)
 			}
+			p.dropClaimed(cmd, "its hosts are busy on this sensor")
 			continue
 		}
 
@@ -1384,6 +1408,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		}
 
 		result.FindingsCount = len(report.Findings)
+		report.Metadata.CoverageType = scanCoverageType(report, scanResult)
 
 		// Push findings
 		_, err = e.pusher.PushFindings(ctx, report)
@@ -1633,6 +1658,7 @@ func (e *DefaultCommandExecutor) executeCollect(ctx context.Context, cmd *Comman
 	if e.pusher != nil {
 		for _, report := range collectResult.Reports {
 			result.FindingsCount += len(report.Findings)
+			report.Metadata.CoverageType = collectCoverageType(report)
 			_, err := e.pusher.PushFindings(ctx, report)
 			if err != nil {
 				return result, fmt.Errorf("push failed: %w", err)
@@ -1671,4 +1697,71 @@ func (e *DefaultCommandExecutor) executeHealthCheck(ctx context.Context, cmd *Co
 // SetVerbose sets verbose mode.
 func (e *DefaultCommandExecutor) SetVerbose(v bool) {
 	e.verbose.Store(v)
+}
+
+// CTIS coverage_type values (spec 4.5).
+const (
+	coverageTypeFull        = "full"
+	coverageTypePartial     = "partial"
+	coverageTypeIncremental = "incremental"
+)
+
+// scanCoverageType is the coverage_type a scan command's report declares.
+// Every report states one: a receiver must not read an absent value as full
+// (CTIS spec 4.5), and the platform auto-resolves findings a run no longer
+// reports only on full coverage.
+//
+//   - A run the scanner says stopped part-way (ScanResult.Error) or with
+//     targets it could not scan (properties.failed_targets) is partial, even
+//     when the parser declared full.
+//   - Otherwise a value the parser declared is kept.
+//   - A repository scan (metadata.branch set) is partial: it has its own,
+//     default-branch-gated auto-resolve, and the runtime cannot tell that the
+//     checkout was the whole repository.
+//   - Anything else, a completed run over its targets, is full.
+func scanCoverageType(report *ctis.Report, r *ScanResult) string {
+	declared := report.Metadata.CoverageType
+	if (r != nil && r.Error != "") || hasFailedTargets(report) {
+		if declared == coverageTypeIncremental {
+			return declared
+		}
+		return coverageTypePartial
+	}
+	if declared != "" {
+		return declared
+	}
+	if report.Metadata.Branch != nil {
+		return coverageTypePartial
+	}
+	return coverageTypeFull
+}
+
+// hasFailedTargets reports whether a report lists targets the run could not
+// scan (recon scanners record them in properties.failed_targets).
+func hasFailedTargets(report *ctis.Report) bool {
+	v, ok := report.Properties["failed_targets"]
+	if !ok || v == nil {
+		return false
+	}
+	switch t := v.(type) {
+	case []string:
+		return len(t) > 0
+	case []any:
+		return len(t) > 0
+	case string:
+		return t != ""
+	default:
+		return true
+	}
+}
+
+// collectCoverageType is the coverage_type a collector's report declares:
+// the collector's own value (an import that knows it is a complete export,
+// such as a Tenable scan, says full), else partial. The runtime cannot know
+// that an external source returned everything.
+func collectCoverageType(report *ctis.Report) string {
+	if report.Metadata.CoverageType != "" {
+		return report.Metadata.CoverageType
+	}
+	return coverageTypePartial
 }
