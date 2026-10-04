@@ -92,6 +92,18 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Changed
 
+- **Every report the runtime pushes states `coverage_type`** (CTIS spec 4.5:
+  an absent value is not `full`; research 16 G4, owner decision Q5). A scan
+  command's report is `partial` when the scanner says the run stopped
+  part-way (`ScanResult.Error`) or the report lists `failed_targets`, even if
+  the parser declared `full`; otherwise a value the parser declared is kept;
+  a repository scan (`metadata.branch`) is `partial`; any other completed
+  run is `full`. Collector reports keep the collector's value, else
+  `partial`. Daemon-mode scan and collect reports follow the same rules.
+  The platform's coverage-scoped auto-resolve used to read the missing
+  value as `full`; it is being changed to read it as not full, and this
+  keeps completed sensor scans eligible after that change.
+
 - `ctis.FromSARIF` carries `properties.tags` from the result and its rule
   into the finding's `tags` (they were dropped), as `github.com/openctemio/ctis`
   does (ctis#12). Tags are deduplicated ignoring case in first-seen order;
