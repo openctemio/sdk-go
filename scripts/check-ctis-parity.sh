@@ -13,10 +13,13 @@
 # It compares two things and fails on any difference:
 #   1. typed string-constant ENUM sets (e.g. FindingStatus, Severity)
 #   2. struct field json tags (catches added/removed/renamed fields)
+#   3. FromSARIF: the secret-scanner list, tag caps, sarifTags and isSecretTool
+#      in sarif.go, and the shared testdata/sarif/betterleaks.sarif sample
 #
 # Scope: this is a high-signal text check, not a full AST/type comparison (a
 # field's Go type change with the same json tag would not be caught). Override
-# the canonical ref/source with CTIS_REF / CTIS_TYPES_URL if needed.
+# the canonical ref/source with CTIS_REF / CTIS_TYPES_URL / CTIS_SARIF_REF if
+# needed.
 set -euo pipefail
 
 # Pinned to the ctis commit this copy mirrors, so a change on ctis main does
@@ -24,7 +27,15 @@ set -euo pipefail
 # pkg/ctis (to the release tag once one exists, e.g. v1.3.0).
 CTIS_REF="${CTIS_REF:-1af1b6a7c34a45388bb2d28e49b8cbd43c991b11}"
 CTIS_TYPES_URL="${CTIS_TYPES_URL:-https://raw.githubusercontent.com/openctemio/ctis/${CTIS_REF}/types.go}"
-LOCAL_TYPES="$(cd "$(dirname "$0")/.." && pwd)/pkg/ctis/types.go"
+# FromSARIF is also hand-copied. Its secret-scanner list, its tag caps and the
+# shared betterleaks sample are compared against this ctis commit (the ctis#12
+# merge). Bump it with CTIS_REF when pkg/ctis/sarif.go is synced.
+CTIS_SARIF_REF="${CTIS_SARIF_REF:-11b7540f92f26e6b9d53f4d36dce65175e95f4d7}"
+CTIS_RAW_BASE="https://raw.githubusercontent.com/openctemio/ctis/${CTIS_SARIF_REF}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LOCAL_TYPES="$ROOT/pkg/ctis/types.go"
+LOCAL_SARIF="$ROOT/pkg/ctis/sarif.go"
+LOCAL_SARIF_SAMPLE="$ROOT/pkg/ctis/testdata/sarif/betterleaks.sarif"
 
 if [[ ! -f "$LOCAL_TYPES" ]]; then
   echo "ERROR: local CTIS types not found at $LOCAL_TYPES" >&2
@@ -80,8 +91,45 @@ echo "Checking CTIS parity vs canonical ctis@${CTIS_REF} ..."
 compare "enum constants" extract_consts "constants"
 compare "struct json fields" extract_fields "fields"
 
+# FromSARIF behaviour that must match ctis: the secretToolNames list and the
+# maxSARIFTags / maxSARIFTagLen caps (whitespace-normalised source lines), the
+# sarifTags and isSecretTool function bodies, and
+# the betterleaks sample both test suites read (byte-identical).
+extract_sarif_rules() {
+  grep -E '^[[:space:]]*(var secretToolNames|maxSARIFTags|maxSARIFTagLen)[[:space:]]*=' "$1" \
+    | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | sort
+  # The bodies of sarifTags and isSecretTool, which apply them.
+  awk '/^func (sarifTags|isSecretTool)\(/,/^}/' "$1"
+}
+canonical_sarif="$work/sarif.go"
+canonical_sample="$work/betterleaks.sarif"
+if ! curl -fsSL "$CTIS_RAW_BASE/sarif.go" -o "$canonical_sarif" \
+  || ! curl -fsSL "$CTIS_RAW_BASE/testdata/sarif/betterleaks.sarif" -o "$canonical_sample"; then
+  echo "ERROR: failed to fetch canonical CTIS FromSARIF sources from $CTIS_RAW_BASE" >&2
+  exit 2
+fi
+extract_sarif_rules "$canonical_sarif" > "$work/sarif_canon"
+extract_sarif_rules "$LOCAL_SARIF" > "$work/sarif_local"
+if ! grep -q '^func sarifTags(' "$work/sarif_canon" || ! grep -q '^func isSecretTool(' "$work/sarif_canon" \
+  || [[ $(grep -cE '^(var secretToolNames|maxSARIFTags|maxSARIFTagLen) ' "$work/sarif_canon") -ne 3 ]]; then
+  echo "  DRIFT: could not find secretToolNames, the tag caps, sarifTags or isSecretTool in ctis@${CTIS_SARIF_REF} sarif.go." >&2
+  rc=1
+elif diff -u "$work/sarif_canon" "$work/sarif_local" > "$work/sarif_diff" 2>&1; then
+  echo "  OK: FromSARIF secret scanners, tag caps, sarifTags and isSecretTool in sync."
+else
+  echo "  DRIFT: FromSARIF secret scanners or tag caps differ from ctis@${CTIS_SARIF_REF}." >&2
+  sed 's/^/    /' "$work/sarif_diff" >&2
+  rc=1
+fi
+if cmp -s "$canonical_sample" "$LOCAL_SARIF_SAMPLE"; then
+  echo "  OK: betterleaks SARIF sample identical."
+else
+  echo "  DRIFT: pkg/ctis/testdata/sarif/betterleaks.sarif differs from ctis@${CTIS_SARIF_REF}." >&2
+  rc=1
+fi
+
 if [[ $rc -ne 0 ]]; then
-  echo "Fix: sync pkg/ctis/types.go with github.com/openctemio/ctis (see RFC-002)." >&2
+  echo "Fix: sync pkg/ctis (types.go, sarif.go, testdata) with github.com/openctemio/ctis (see RFC-002)." >&2
   exit 1
 fi
 echo "OK: pkg/ctis is in sync with the canonical CTIS schema."

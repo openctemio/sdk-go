@@ -47,6 +47,23 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `BaseSensor.SetLocalPolicy`, `SensorStatus.LocalPolicy`,
   `Manifest.LocalPolicy`, `client.HeartbeatRequest.LocalPolicy`,
   `conformance.FakePlatform.SetLocalPolicy`.
+
+### Changed
+
+- `ctis.FromSARIF` carries `properties.tags` from the result and its rule
+  into the finding's `tags` (they were dropped), as `github.com/openctemio/ctis`
+  does (ctis#12). Tags are deduplicated ignoring case in first-seen order;
+  non-string, empty and over-long (more than 128 bytes) entries are skipped; at
+  most 50 are kept per finding.
+- The SARIF converter keeps one secret-scanner list (gitleaks, betterleaks,
+  trufflehog, detect-secrets, or any name containing `secret`) for both the
+  finding type and the tool capabilities. Capabilities used to match any name
+  containing `leaks`; they now match the same names as the finding type and
+  as ctis.
+- `scripts/check-ctis-parity.sh` also compares FromSARIF's secret-scanner
+  list, tag caps, `sarifTags` / `isSecretTool` bodies and the shared
+  betterleaks sample against ctis.
+
 ## v0.17.0 — 2026-10-03
 
 ### Upgrade notes
