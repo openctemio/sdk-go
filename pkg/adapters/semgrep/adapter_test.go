@@ -2,6 +2,9 @@ package semgrep
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -342,3 +345,50 @@ func TestParseToCTIS(t *testing.T) {
 // testRepo names the scanned repository: a code scan's findings are filed
 // on it, and converting them with no repository is an error.
 var testRepo = &core.AdapterOptions{Repository: "github.com/example/app"}
+
+// Real semgrep 1.149.0 output (`semgrep --json` over a Go and a JS file that
+// each have one syntax error). Its errors[].type is an array,
+// ["PartialParsing", [...]], and a parse error there used to sink the whole
+// document: CanConvert false, Convert error, every finding dropped.
+func TestConvert_PartialParsingKeepsFindings(t *testing.T) {
+	input, err := os.ReadFile(filepath.Join("..", "testdata", "semgrep-partial-parsing.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewAdapter()
+	if !a.CanConvert(input) {
+		t.Fatal("CanConvert = false for real semgrep output with PartialParsing errors")
+	}
+	report, err := a.Convert(context.Background(), input, testRepo)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if len(report.Findings) != 2 {
+		t.Fatalf("findings = %d, want 2 (one per partially parsed file)", len(report.Findings))
+	}
+}
+
+// semgrep emits a plain string for error kinds without a payload, and an
+// array (or another shape) for others; every shape must parse, and the kind
+// name is kept.
+func TestSemgrepError_TypeShapes(t *testing.T) {
+	cases := map[string]string{
+		`"Timeout"`:                            "Timeout",
+		`["PartialParsing",[{"path":"a.go"}]]`: "PartialParsing",
+		`{"kind":"x"}`:                         "",
+		`[]`:                                   "",
+		`null`:                                 "",
+	}
+	for typ, want := range cases {
+		in := []byte(`{"version":"1.149.0","errors":[{"code":3,"level":"warn","message":"m","type":` + typ + `}],"results":[]}`)
+		var out SemgrepOutput
+		if err := json.Unmarshal(in, &out); err != nil {
+			t.Errorf("type %s: %v", typ, err)
+			continue
+		}
+		e := out.Errors[0]
+		if e.Type != want || e.Code != 3 || e.Level != "warn" || e.Message != "m" {
+			t.Errorf("type %s: got %+v, want Type %q and the other fields kept", typ, e, want)
+		}
+	}
+}

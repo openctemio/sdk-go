@@ -40,6 +40,9 @@ var goldenCases = []struct {
 	// No options: the repository comes from versionControlProvenance.
 	{"sarif-provenance", sarif.NewAdapter(), "codeql-provenance.sarif.json", nil},
 	{"semgrep", semgrep.NewAdapter(), "semgrep.json", repo},
+	// Real semgrep 1.149.0 output with two PartialParsing errors: the
+	// findings of the partially parsed files must survive.
+	{"semgrep-partial-parsing", semgrep.NewAdapter(), "semgrep-partial-parsing.json", repo},
 	{"betterleaks", betterleaks.NewAdapter(), "betterleaks.json", repo},
 	// No options: an image scan names its own asset, the image.
 	{"trivy-image", trivy.NewAdapter(), "trivy.json", nil},
