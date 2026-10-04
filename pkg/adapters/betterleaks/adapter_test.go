@@ -294,10 +294,10 @@ func TestMaskSecret(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"AKIAIOSFODNN7EXAMPLE", "AKIA************MPLE"},
-		{"short", "*****"},
-		{"12345678", "********"},
-		{"123456789", "1234*6789"},
+		{"fakevalue0example123", "fak****23"},
+		{"short", "****"},
+		{"12345678", "****"},
+		{"123456789", "****"},
 	}
 
 	for _, tt := range tests {

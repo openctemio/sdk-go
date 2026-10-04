@@ -50,7 +50,7 @@
       "secret": {
         "secret_type": "credential",
         "service": "aws",
-        "masked_value": "AKIA************MPLE",
+        "masked_value": "AKI****LE",
         "length": 20,
         "entropy": 3.6
       },
@@ -81,7 +81,7 @@
       },
       "secret": {
         "secret_type": "api_key",
-        "masked_value": "sk_l*******************TURE",
+        "masked_value": "sk_****URE",
         "length": 27,
         "entropy": 4.2
       },
@@ -113,7 +113,7 @@
       "secret": {
         "secret_type": "credential",
         "service": "github",
-        "masked_value": "ghp_********************************xxxx",
+        "masked_value": "ghp_****xxxx",
         "length": 40
       },
       "tags": [
@@ -146,7 +146,7 @@
       "secret": {
         "secret_type": "api_key",
         "service": "stripe",
-        "masked_value": "sk_t************xxxx",
+        "masked_value": "sk_****xx",
         "length": 20
       },
       "tags": [

@@ -264,12 +264,13 @@ func ruleIDToService(ruleID string) string {
 	return ""
 }
 
-// maskSecret masks a secret value, showing only first and last 4 characters.
+// maskSecret masks a secret value for secret.masked_value.
+//
+// It is core.MaskSecret: at most a quarter of the secret is shown, nothing of
+// a secret under 12 characters, and the masked value does not reveal the
+// secret's length.
 func maskSecret(secret string) string {
-	if len(secret) <= 8 {
-		return strings.Repeat("*", len(secret))
-	}
-	return secret[:4] + strings.Repeat("*", len(secret)-8) + secret[len(secret)-4:]
+	return core.MaskSecret(secret)
 }
 
 // meetsMinSeverity checks if severity meets minimum threshold.
