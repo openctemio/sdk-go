@@ -68,3 +68,27 @@ func TestAllDataFlowLocationTypes(t *testing.T) {
 		t.Error("five data flow location types")
 	}
 }
+
+// partialFingerprints reach the finding (SARIF 2.1.0 section 3.27.17): a
+// receiver keys a line-independent identity on primaryLocationLineHash.
+func TestFromSARIF_PartialFingerprintsPassThrough(t *testing.T) {
+	sarif := []byte(`{"version":"2.1.0","runs":[{` + sarifSyncRepo + `
+	  "tool":{"driver":{"name":"CodeQL"}},"results":[
+	    {"ruleId":"js/sql-injection","message":{"text":"m"},
+	     "partialFingerprints":{"primaryLocationLineHash":"39fa2ee980eb94b0:1","empty":""}},
+	    {"ruleId":"js/xss","message":{"text":"m"}}]}]}`)
+	r, err := FromSARIF(sarif, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := r.Findings[0].PartialFingerprints
+	if got["primaryLocationLineHash"] != "39fa2ee980eb94b0:1" {
+		t.Fatalf("partial fingerprints = %v, want primaryLocationLineHash kept", got)
+	}
+	if _, ok := got["empty"]; ok {
+		t.Fatal("an empty partial fingerprint was kept")
+	}
+	if r.Findings[1].PartialFingerprints != nil {
+		t.Fatalf("a result without partial fingerprints got %v", r.Findings[1].PartialFingerprints)
+	}
+}
