@@ -181,6 +181,10 @@ func DefaultConvertOptions() *ConvertOptions {
 }
 
 // FromSARIF converts SARIF log to CTIS report.
+//
+// properties.tags of the result, then of its rule, are carried as the
+// finding's tags, deduplicated ignoring case in first-seen order; at most 50,
+// each at most 128 bytes (same rule as github.com/openctemio/ctis FromSARIF).
 func FromSARIF(data []byte, opts *ConvertOptions) (*Report, error) {
 	if opts == nil {
 		opts = DefaultConvertOptions()
@@ -266,7 +270,9 @@ func FromSARIF(data []byte, opts *ConvertOptions) (*Report, error) {
 		finding.AssetRef = asset.ID
 
 		// Add rule details
+		var ruleProps map[string]any
 		if rule, ok := ruleMap[result.RuleID]; ok {
+			ruleProps = rule.Properties
 			if rule.ShortDescription != nil {
 				finding.Description = rule.ShortDescription.Text
 			}
@@ -321,6 +327,7 @@ func FromSARIF(data []byte, opts *ConvertOptions) (*Report, error) {
 		finding.Fingerprint = sarifFingerprint(result.Fingerprints)
 		finding.BaselineState = NormalizeSARIFBaselineState(result.BaselineState)
 		finding.Kind = NormalizeSARIFKind(result.Kind)
+		finding.Tags = sarifTags(result.Properties, ruleProps)
 
 		report.Findings = append(report.Findings, finding)
 	}
@@ -349,6 +356,57 @@ func sarifFingerprint(fps map[string]string) string {
 		return hex.EncodeToString(hash[:])
 	}
 	return fp
+}
+
+// Bounds on the tags FromSARIF carries, so a hostile or broken SARIF log
+// cannot inflate every finding with an unbounded tag list. Same values as
+// github.com/openctemio/ctis FromSARIF (checked by scripts/check-ctis-parity.sh).
+const (
+	// maxSARIFTags is the most tags one finding gets.
+	maxSARIFTags = 50
+	// maxSARIFTagLen is the longest tag kept, in bytes. Longer values are
+	// dropped rather than cut, so no tag is invented by truncation.
+	maxSARIFTagLen = 128
+)
+
+// sarifTags collects properties.tags from the result, then from its rule, into
+// finding.tags (same rule as github.com/openctemio/ctis FromSARIF). Order is
+// first seen; duplicates are dropped ignoring case (the first spelling wins);
+// surrounding whitespace is trimmed; empty, non-string and over-long
+// (maxSARIFTagLen) entries are skipped; at most maxSARIFTags are kept. A string
+// tags value is treated as a single tag.
+func sarifTags(resultProps, ruleProps map[string]any) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, props := range []map[string]any{resultProps, ruleProps} {
+		var raw []any
+		switch t := props["tags"].(type) {
+		case string:
+			raw = []any{t}
+		case []any:
+			raw = t
+		}
+		for _, v := range raw {
+			if len(out) >= maxSARIFTags {
+				return out
+			}
+			s, ok := v.(string)
+			if !ok {
+				continue
+			}
+			s = strings.TrimSpace(s)
+			if s == "" || len(s) > maxSARIFTagLen {
+				continue
+			}
+			key := strings.ToLower(s)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // sarifAsset returns the asset a SARIF run's findings belong to, and false
@@ -414,12 +472,8 @@ func detectFindingType(toolName string, toolType string) FindingType {
 		return FindingTypeWeb3
 	}
 
-	// Secret scanners
-	secretTools := []string{"betterleaks", "gitleaks", "trufflehog", "detect-secrets", "secret"}
-	for _, t := range secretTools {
-		if strings.Contains(name, t) {
-			return FindingTypeSecret
-		}
+	if isSecretTool(name) {
+		return FindingTypeSecret
 	}
 
 	// Web3 scanners
@@ -442,6 +496,22 @@ func detectFindingType(toolName string, toolType string) FindingType {
 	return FindingTypeVulnerability
 }
 
+// secretToolNames are secret scanners, matched as substrings of the lowercased
+// tool name. betterleaks is a gitleaks fork with its own driver name. The list
+// must equal github.com/openctemio/ctis's (checked by
+// scripts/check-ctis-parity.sh).
+var secretToolNames = []string{"gitleaks", "betterleaks", "trufflehog", "detect-secrets", "secret"}
+
+// isSecretTool reports whether a lowercased tool name is a secret scanner.
+func isSecretTool(name string) bool {
+	for _, t := range secretToolNames {
+		if strings.Contains(name, t) {
+			return true
+		}
+	}
+	return false
+}
+
 // detectCapabilities determines tool capabilities.
 func detectCapabilities(toolName string, toolType string) []string {
 	name := strings.ToLower(toolName)
@@ -458,7 +528,7 @@ func detectCapabilities(toolName string, toolType string) []string {
 	}
 
 	// Auto-detect
-	if strings.Contains(name, "secret") || strings.Contains(name, "leaks") || strings.Contains(name, "trufflehog") {
+	if isSecretTool(name) {
 		return []string{"secret"}
 	}
 	if strings.Contains(name, "slither") || strings.Contains(name, "mythril") {
