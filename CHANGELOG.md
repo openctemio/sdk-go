@@ -70,7 +70,8 @@ All notable changes to `github.com/openctemio/sdk-go`.
   semgrep emits `errors[].type` as a string or an array
   (`["PartialParsing", [...]]`); `SemgrepError.Type` was a string, so
   `json.Unmarshal` failed for the whole document and the adapter returned no
-  findings at all. `SemgrepError.Type` is now `json.RawMessage`.
+  findings at all. `SemgrepError` now decodes every shape and keeps the kind
+  name in `Type` (still a string, e.g. `"PartialParsing"`).
 
 ## v0.17.0 — 2026-10-03
 
