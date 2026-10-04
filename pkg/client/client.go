@@ -693,6 +693,23 @@ func (c *Client) SendHeartbeatWithHints(ctx context.Context, status *core.Sensor
 
 var _ core.DoorbellPusher = (*Client)(nil)
 
+// SendHeartbeatForCancels sends a heartbeat exactly like SendHeartbeat (no
+// doorbell announced) and returns the platform's cancel_command_ids: the
+// commands this sensor listed as running that it must stop. A disabled
+// sensor's pause is an error, as in SendHeartbeat.
+func (c *Client) SendHeartbeatForCancels(ctx context.Context, status *core.SensorStatus) ([]string, error) {
+	data, paused, err := c.sendHeartbeat(ctx, status, nil)
+	if err == nil && paused {
+		return nil, errPausedHeartbeat()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return core.ParseHeartbeatHints(data).CancelCommandIDs, nil
+}
+
+var _ core.CancelPusher = (*Client)(nil)
+
 // sendHeartbeat sends one heartbeat on protocol v2 when the platform offers
 // it (api RFC-029 §4.3) and on v1 otherwise. extra is v1-only (the doorbell
 // feature header; v2 always has the doorbell). paused is true when v2 told a
