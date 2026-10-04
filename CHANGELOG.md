@@ -48,6 +48,17 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `Manifest.LocalPolicy`, `client.HeartbeatRequest.LocalPolicy`,
   `conformance.FakePlatform.SetLocalPolicy`.
 
+- **v1 results name their command.** The v1 ingest path (the fallback when
+  the platform has no protocol v2, `Protocol: v1`, and the outbox's v1
+  delivery) now sends `X-OpenCTEM-Command-ID` with the command id from
+  `core.WithCommandID` (`legacyv1.HeaderCommandID`). Without it the platform
+  treated every v1 report as unsolicited and, under its `quarantine` policy,
+  held it for review (api RFC-040 §5.3). When the platform answers
+  `404 COMMAND_NOT_FOUND` (the command finished more than its grace period
+  ago), the report is sent once more unbound, as the v2 path does. A command
+  id that is not visible ASCII or is longer than 128 bytes is never put on
+  the header.
+
 ### Changed
 
 - `ctis.FromSARIF` carries `properties.tags` from the result and its rule
