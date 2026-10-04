@@ -392,4 +392,4 @@ See [Security Guide](./SECURITY.md) for detailed information.
 - [SDK README](../README.md) - Quick start guide
 - [Security Guide](./SECURITY.md) - Security best practices
 - [API Documentation](https://github.com/openctemio/openctem/tree/main/api/docs/api) - Backend API reference ([OpenAPI spec](https://github.com/openctemio/openctem/blob/main/api/api/openapi/swagger.yaml))
-- [CTIS Schema](../pkg/ctis/types.go) - Full CTIS type definitions
+- [CTIS module](https://github.com/openctemio/ctis) - CTIS type definitions (`pkg/ctis` re-exports them)

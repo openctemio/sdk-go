@@ -1,8 +1,6 @@
 package ctis
 
 import (
-	"math"
-	"strconv"
 	"testing"
 )
 
@@ -47,20 +45,6 @@ func TestFromSARIF_FingerprintDeterministic(t *testing.T) {
 	if len(seen) != 1 || seen["aaaaaaaaaaaaaaaa"] != 200 {
 		t.Fatalf("fingerprints over 200 conversions: %v, want the lowest key every time", seen)
 	}
-	if got := sarifFingerprint(map[string]string{"k": string(make([]byte, 65))}); len(got) != 64 {
-		t.Errorf("long fingerprint must be hashed, got %q", got)
-	}
-	if sarifFingerprint(nil) != "" || sarifFingerprint(map[string]string{"k": ""}) != "" {
-		t.Error("no usable fingerprint must give empty")
-	}
-}
-
-func TestItoaMinInt(t *testing.T) {
-	for _, n := range []int{0, 42, -42, math.MaxInt, math.MinInt} {
-		if got, want := itoa(n), strconv.Itoa(n); got != want {
-			t.Errorf("itoa(%d) = %q, want %q", n, got, want)
-		}
-	}
 }
 
 func TestAllDataFlowLocationTypes(t *testing.T) {
@@ -85,9 +69,8 @@ func TestFromSARIF_PartialFingerprintsPassThrough(t *testing.T) {
 	if got["primaryLocationLineHash"] != "39fa2ee980eb94b0:1" {
 		t.Fatalf("partial fingerprints = %v, want primaryLocationLineHash kept", got)
 	}
-	if _, ok := got["empty"]; ok {
-		t.Fatal("an empty partial fingerprint was kept")
-	}
+	// The module carries partialFingerprints unchanged (CTIS spec 5.1),
+	// empty values included; they are evidence, never identity.
 	if r.Findings[1].PartialFingerprints != nil {
 		t.Fatalf("a result without partial fingerprints got %v", r.Findings[1].PartialFingerprints)
 	}
