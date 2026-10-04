@@ -1,0 +1,82 @@
+{
+  "version": "1.3",
+  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "metadata": {
+    "timestamp": "0001-01-01T00:00:00Z",
+    "source_type": "scanner",
+    "scope": {
+      "name": "github.com/example/shop"
+    }
+  },
+  "tool": {
+    "name": "semgrep",
+    "version": "1.149.0",
+    "vendor": "Semgrep, Inc.",
+    "capabilities": [
+      "vulnerability",
+      "secret"
+    ]
+  },
+  "assets": [
+    {
+      "id": "asset-1",
+      "type": "repository",
+      "value": "github.com/example/shop",
+      "name": "github.com/example/shop",
+      "criticality": "high",
+      "properties": {
+        "branch": "main",
+        "commit_sha": "3f1c2a9e",
+        "source": "adapter_options"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding-1",
+      "type": "vulnerability",
+      "title": "exec",
+      "message": "exec",
+      "severity": "medium",
+      "confidence": 70,
+      "rule_id": "go-exec",
+      "rule_name": "Go Exec",
+      "asset_ref": "asset-1",
+      "location": {
+        "path": "src2/b.go",
+        "start_line": 3,
+        "end_line": 3,
+        "start_column": 20,
+        "end_column": 35,
+        "snippet": "requires login"
+      },
+      "tags": [
+        "semgrep"
+      ],
+      "fingerprint": "requires login"
+    },
+    {
+      "id": "finding-2",
+      "type": "vulnerability",
+      "title": "exec",
+      "message": "exec",
+      "severity": "high",
+      "confidence": 70,
+      "rule_id": "js-exec",
+      "rule_name": "Js Exec",
+      "asset_ref": "asset-1",
+      "location": {
+        "path": "src2/broken.js",
+        "start_line": 2,
+        "end_line": 2,
+        "start_column": 18,
+        "end_column": 28,
+        "snippet": "requires login"
+      },
+      "tags": [
+        "semgrep"
+      ],
+      "fingerprint": "requires login"
+    }
+  ]
+}

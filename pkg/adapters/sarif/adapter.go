@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -196,20 +197,7 @@ func (a *Adapter) convertResult(result SARIFResult, ruleIndex map[string]*SARIFR
 	finding.Message = result.Message.Text
 
 	// Fingerprint from result fingerprints
-	if len(result.Fingerprints) > 0 {
-		// Prefer matchBasedId/v1
-		if fp, ok := result.Fingerprints["matchBasedId/v1"]; ok && fp != "requires login" {
-			finding.Fingerprint = fp
-		} else {
-			// Use first available fingerprint
-			for _, fp := range result.Fingerprints {
-				if fp != "requires login" {
-					finding.Fingerprint = fp
-					break
-				}
-			}
-		}
-	}
+	finding.Fingerprint = pickResultFingerprint(result.Fingerprints)
 
 	// Generate fingerprint if not available
 	if finding.Fingerprint == "" {
@@ -702,4 +690,27 @@ func ParseJSONBytes(data []byte) (*SARIFReport, error) {
 		return nil, fmt.Errorf("failed to parse SARIF JSON: %w", err)
 	}
 	return &report, nil
+}
+
+// pickResultFingerprint chooses one of a result's fingerprints the same way
+// every time: matchBasedId/v1 when usable, else the usable value under the
+// lowest key. Ranging over the map picked a random entry, so a re-scan could
+// carry a different fingerprint for the same result. "requires login" is
+// what Semgrep reports instead of a value when a pro feature is missing.
+func pickResultFingerprint(fps map[string]string) string {
+	usable := func(v string) bool { return v != "" && v != "requires login" }
+	if fp, ok := fps["matchBasedId/v1"]; ok && usable(fp) {
+		return fp
+	}
+	keys := make([]string, 0, len(fps))
+	for k, v := range fps {
+		if usable(v) {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	return fps[keys[0]]
 }

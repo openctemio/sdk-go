@@ -23,6 +23,23 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Security
 
+- **Secret masking reveals at most a quarter of a secret** (CTIS spec 4.8
+  and 5.2). `core.MaskSecret` showed the first and last 3 characters of any
+  secret over 8 characters, which is most of a 9-12 character password. It
+  now shows nothing of a secret under 12 characters and at most a quarter of
+  a longer one (at most 4 characters at either end), counts runes instead of
+  bytes, and uses a fixed-length marker so the masked value no longer gives
+  away the length. `MaskAPIKey` and the betterleaks adapter (which showed
+  4+4 characters, all but one character of a 9-character secret) follow the
+  same rule. `MaskSecretInText` now hides the whole text when the secret is
+  not found in it. `core.GenerateSecretFingerprint` hashed the raw secret
+  into the fingerprint, so a short secret could be recovered from the
+  fingerprint by brute force; it now hashes the masked value.
+  **Identity note:** `secret.masked_value`, and secret fingerprints built by
+  these helpers, change once for every secret of 9 or more characters.
+  OpenCTEM derives a secret finding's identity from `masked_value`, so the
+  first scan after the upgrade reports such secrets under new identities.
+
 - **Sensor-local policy** (api RFC-040 §5.7, owner decisions Q3 (a) and
   Q4 (a)). The network owner writes a read-only YAML file at install time
   (`SENSOR_LOCAL_POLICY`, `sensorkit.Options.LocalPolicyPath`, default
@@ -65,12 +82,24 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `Manifest.LocalPolicy`, `client.HeartbeatRequest.LocalPolicy`,
   `conformance.FakePlatform.SetLocalPolicy`.
 
+- **v1 results name their command.** The v1 ingest path (the fallback when
+  the platform has no protocol v2, `Protocol: v1`, and the outbox's v1
+  delivery) now sends `X-OpenCTEM-Command-ID` with the command id from
+  `core.WithCommandID` (`legacyv1.HeaderCommandID`). Without it the platform
+  treated every v1 report as unsolicited and, under its `quarantine` policy,
+  held it for review (api RFC-040 §5.3). When the platform answers
+  `404 COMMAND_NOT_FOUND` (the command finished more than its grace period
+  ago), the report is sent once more unbound, as the v2 path does. A command
+  id that is not visible ASCII or is longer than 128 bytes is never put on
+  the header.
+
 ### Changed
 
 - **`pkg/ctis` imports `github.com/openctemio/ctis`** (owner decision Q3,
-  research 16 G2), pinned to the ctis#14 commit `1f96790` (main plus the
-  secret-snippet masking; reachable from ctis main once #14 merges). The hand
-  copy had drifted and the sensor ran stale converters. Fixed by the switch:
+  research 16 G2), pinned to ctis main at `7d7d5ec` (untagged; includes
+  ctis#14 secret-snippet masking in `FromSARIF`, ctis#15 recon hardening and
+  ctis#16 SARIF suppressions). The hand copy had drifted and the sensor ran
+  stale converters. Fixed by the switch:
   - recon reports validate: no scope type `web`, no raw recon type
     (`port`, `url_crawl`) as a capability, IPv6 addresses as `AAAA`
     records, one DNS record per value, hostname-only port results as
@@ -108,6 +137,15 @@ All notable changes to `github.com/openctemio/sdk-go`.
 - `scripts/check-ctis-parity.sh` also compares FromSARIF's secret-scanner
   list, tag caps, `sarifTags` / `isSecretTool` bodies and the shared
   betterleaks sample against ctis.
+
+### Fixed
+
+- **semgrep: a partially parsed file no longer drops every finding.**
+  semgrep emits `errors[].type` as a string or an array
+  (`["PartialParsing", [...]]`); `SemgrepError.Type` was a string, so
+  `json.Unmarshal` failed for the whole document and the adapter returned no
+  findings at all. `SemgrepError` now decodes every shape and keeps the kind
+  name in `Type` (still a string, e.g. `"PartialParsing"`).
 
 ## v0.17.0 — 2026-10-03
 
