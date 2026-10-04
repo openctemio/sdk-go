@@ -843,7 +843,7 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 
 	dp, doorbell := a.pusher.(DoorbellPusher)
 	if a.doorbell == nil || !doorbell {
-		err := a.pusher.SendHeartbeat(ctx, status)
+		err := a.sendPlainHeartbeat(ctx, status)
 		if err != nil {
 			a.control.failed()
 			if a.verbose {
@@ -884,6 +884,32 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 	}
 	a.control.delivered(sent, rtt, next)
 	return a.afterHeartbeat(nil, next), nil
+}
+
+// sendPlainHeartbeat sends a heartbeat without the doorbell. It still acts on
+// cancel_command_ids when the pusher can read them and the load reporter
+// (the sensor's *CommandPoller) can stop commands: a command the platform
+// canceled, timed out or handed to another sensor is stopped on this
+// heartbeat instead of running to the end (api RFC-046 §8).
+func (a *BaseSensor) sendPlainHeartbeat(ctx context.Context, status *SensorStatus) error {
+	cp, canRead := a.pusher.(CancelPusher)
+	a.statusMu.RLock()
+	canceler, canStop := a.loadReporter.(CommandCanceler)
+	a.statusMu.RUnlock()
+	if !canRead || !canStop {
+		return a.pusher.SendHeartbeat(ctx, status)
+	}
+	ids, err := cp.SendHeartbeatForCancels(ctx, status)
+	if err != nil {
+		return err
+	}
+	if len(ids) > 0 {
+		if a.verbose {
+			fmt.Printf("[%s] Platform canceled %d command(s)\n", a.name, len(ids))
+		}
+		canceler.CancelCommands(ids...)
+	}
+	return nil
 }
 
 // nextAfterFailure is the delay after a heartbeat that failed: about

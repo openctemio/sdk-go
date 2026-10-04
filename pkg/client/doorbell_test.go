@@ -67,3 +67,26 @@ func TestClient_SendHeartbeatWithHints_Error(t *testing.T) {
 		t.Fatalf("want 401 error, got %v", err)
 	}
 }
+
+// A sensor without the doorbell still reads cancel_command_ids, and its
+// heartbeat does not announce the doorbell.
+func TestClient_SendHeartbeatForCancels(t *testing.T) {
+	var gotFeatures []string
+	srv := httptest.NewServer(v1Only(func(w http.ResponseWriter, r *http.Request) {
+		gotFeatures = append(gotFeatures, strings.Join(r.Header.Values(legacyv1.HeaderSensorFeatures), ","))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"agent_id":"s","status":"ok","actions":["cancel"],"cancel_command_ids":["c1","c2"]}`))
+	}))
+	defer srv.Close()
+	c := New(&Config{BaseURL: srv.URL, APIKey: "k", SensorID: "s"})
+	ids, err := c.SendHeartbeatForCancels(context.Background(), &core.SensorStatus{Name: "n", Status: core.SensorStateRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(ids, ",") != "c1,c2" {
+		t.Fatalf("cancel ids %v", ids)
+	}
+	if len(gotFeatures) != 1 || strings.Contains(gotFeatures[0], legacyv1.FeatureDoorbell) {
+		t.Fatalf("features %q: the plain heartbeat must not announce the doorbell", gotFeatures)
+	}
+}

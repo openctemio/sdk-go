@@ -4,6 +4,17 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Fixed
+
+- **Cancels reach a sensor without the doorbell** (api RFC-046 §8). A
+  sensor started with the doorbell off (`sensorkit.Options.DisableDoorbell`,
+  `-disable-doorbell`) sent plain heartbeats and ignored the answer, so a
+  scan the user canceled, a run that hit its deadline or a command handed to
+  another sensor ran to the end. The plain heartbeat now reads
+  `cancel_command_ids` (`client.SendHeartbeatForCancels`,
+  `core.CancelPusher`) and the poller (`core.CommandCanceler`) stops and
+  releases those commands, as with the doorbell. The heartbeat itself is
+  unchanged: it does not announce the doorbell.
 ### Upgrade notes
 
 - **`pkg/ctis` is now `github.com/openctemio/ctis`.** It re-exports the
