@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "betterleaks",
+          "semanticVersion": "1.1.0",
+          "informationUri": "https://github.com/betterleaks/betterleaks",
+          "rules": [
+            {"id": "aws-access-token", "shortDescription": {"text": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms."}, "properties": {"tags": ["cloud", "aws", "Key"]}},
+            {"id": "generic-api-key", "shortDescription": {"text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."}}
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "aws-access-token",
+          "message": {"text": "aws-access-token has detected secret for file config/prod.env."},
+          "locations": [{"physicalLocation": {"artifactLocation": {"uri": "config/prod.env"}, "region": {"startLine": 3, "startColumn": 19, "endLine": 3, "endColumn": 39, "snippet": {"text": "REDACTED"}}}}],
+          "partialFingerprints": {"commitSha": "0123456789abcdef0123456789abcdef01234567", "email": "", "author": "", "date": "2026-10-01T00:00:00Z", "commitMessage": ""},
+          "properties": {"tags": ["key", "  verified ", "", 42, null, {"x": 1}, "cloud", "KEY"]}
+        },
+        {
+          "ruleId": "generic-api-key",
+          "message": {"text": "generic-api-key has detected secret for file src/client.go."},
+          "locations": [{"physicalLocation": {"artifactLocation": {"uri": "src/client.go"}, "region": {"startLine": 12, "startColumn": 8, "endLine": 12, "endColumn": 48, "snippet": {"text": "REDACTED"}}}}],
+          "partialFingerprints": {"commitSha": "0123456789abcdef0123456789abcdef01234567", "email": "", "author": "", "date": "2026-10-01T00:00:00Z", "commitMessage": ""},
+          "properties": {"tags": "entropy"}
+        }
+      ]
+    }
+  ]
+}
