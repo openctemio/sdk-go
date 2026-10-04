@@ -344,7 +344,7 @@ func (c *Client) deliverReport(ctx context.Context, d *outbox.Delivery) (any, er
 	}
 	// Protocol v1. A replay after a lost response is deduplicated by the
 	// server's finding fingerprints: best effort, not exact.
-	res, err := c.pushReportV1(ctx, &r, assetsOnly, 0)
+	res, err := c.pushReportV1(ctx, &r, assetsOnly, d.Meta.CommandID, 0)
 	if err != nil {
 		return nil, classify(err)
 	}

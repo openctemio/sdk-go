@@ -517,7 +517,7 @@ func (c *Client) pushReportDirect(ctx context.Context, report *ctis.Report, asse
 		return nil, err
 	}
 	if !useV2 {
-		return c.pushReportV1(ctx, r, assetsOnly, c.maxRetries)
+		return c.pushReportV1(ctx, r, assetsOnly, core.CommandIDFromContext(ctx), c.maxRetries)
 	}
 	opts := &V2PushOptions{CommandID: core.CommandIDFromContext(ctx)}
 	var prog V2Progress
@@ -550,7 +550,7 @@ func (c *Client) pushReportDirect(ctx context.Context, report *ctis.Report, asse
 		switch {
 		case errors.As(err, &ve) && c.protocol == ProtocolAuto && (ve.routeMissing() || ve.ProblemName() == protov2.ProblemScopeDenied):
 			c.forceV1(!ve.routeMissing())
-			return c.pushReportV1(ctx, r, assetsOnly, c.maxRetries)
+			return c.pushReportV1(ctx, r, assetsOnly, core.CommandIDFromContext(ctx), c.maxRetries)
 		case errors.As(err, &ve) && ve.Transient():
 		case errors.As(err, &ve), errors.Is(err, ErrV2NoTool), ctx.Err() != nil:
 			return nil, err
@@ -560,8 +560,10 @@ func (c *Client) pushReportDirect(ctx context.Context, report *ctis.Report, asse
 }
 
 // pushReportV1 posts a report to the v1 ingest route with up to retries
-// retries.
-func (c *Client) pushReportV1(ctx context.Context, report *ctis.Report, assetsOnly bool, retries int) (*core.PushResult, error) {
+// retries. A non-empty commandID binds the report to that command
+// (legacyv1.HeaderCommandID); without it the platform treats the report as
+// unsolicited and may quarantine it.
+func (c *Client) pushReportV1(ctx context.Context, report *ctis.Report, assetsOnly bool, commandID string, retries int) (*core.PushResult, error) {
 	url := c.baseURL + legacyv1.PathIngest
 	if assetsOnly && len(report.Findings) > 0 {
 		cp := *report
@@ -575,7 +577,20 @@ func (c *Client) pushReportV1(ctx context.Context, report *ctis.Report, assetsOn
 	if err != nil {
 		return nil, fmt.Errorf("marshal report: %w", err)
 	}
-	data, _, err := c.doRequestFull(ctx, "POST", url, body, nil, retries)
+	var bind http.Header
+	if validCommandID(commandID) {
+		bind = http.Header{legacyv1.HeaderCommandID: {commandID}}
+	}
+	data, _, err := c.doRequestFull(ctx, "POST", url, body, bind, retries)
+	if err != nil && bind != nil && isV1CommandNotFound(err) {
+		// The command is no longer open on the platform (it finished more
+		// than the grace period ago). Send the report unbound, as the v2
+		// path does: the platform then applies its unsolicited policy.
+		if c.verbose {
+			fmt.Printf("[openctem] Command %s is no longer open; sending the report unbound\n", commandID)
+		}
+		data, _, err = c.doRequestFull(ctx, "POST", url, body, nil, retries)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -600,6 +615,37 @@ func (c *Client) pushReportV1(ctx context.Context, report *ctis.Report, assetsOn
 		AssetsCreated:   resp.AssetsCreated,
 		AssetsUpdated:   resp.AssetsUpdated,
 	}, nil
+}
+
+// maxCommandIDLen bounds the command id put on a v1 request header.
+const maxCommandIDLen = 128
+
+// validCommandID reports whether id can go on the v1 command header: not
+// empty, bounded, and visible ASCII only (no header injection).
+func validCommandID(id string) bool {
+	if id == "" || len(id) > maxCommandIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if id[i] <= ' ' || id[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+// isV1CommandNotFound reports whether err is the v1 404 COMMAND_NOT_FOUND
+// answer to a legacyv1.HeaderCommandID. A plain 404 (an old platform without
+// the route) is not.
+func isV1CommandNotFound(err error) bool {
+	he, ok := IsHTTPError(err)
+	if !ok || he.StatusCode != http.StatusNotFound {
+		return false
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	return json.Unmarshal([]byte(he.Body), &body) == nil && body.Code == legacyv1.CodeCommandNotFound
 }
 
 // SendHeartbeat sends a heartbeat to OpenCTEM. It does not announce the

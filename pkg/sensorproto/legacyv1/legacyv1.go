@@ -67,6 +67,15 @@ const (
 	// FeatureDoorbell: the sensor acts on the heartbeat doorbell hints
 	// (RFC-023 §9.2a).
 	FeatureDoorbell = "doorbell"
+
+	// HeaderCommandID binds a v1 ingest request to the command it is the
+	// result of (api RFC-040 §5.3). The platform checks that the command is
+	// assigned to this sensor and open; a report without it is unsolicited.
+	// Additive to v1: a server that does not know it ignores it.
+	HeaderCommandID = "X-OpenCTEM-Command-ID"
+	// CodeCommandNotFound is the v1 error code (HTTP 404) for a
+	// HeaderCommandID that names no command open on this sensor.
+	CodeCommandNotFound = "COMMAND_NOT_FOUND"
 )
 
 // Protocol v1 JSON keys and values.
