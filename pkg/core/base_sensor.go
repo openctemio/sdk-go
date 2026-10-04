@@ -1028,6 +1028,8 @@ func (a *BaseSensor) runAllScans(ctx context.Context) {
 				continue
 			}
 
+			report.Metadata.CoverageType = scanCoverageType(report, result)
+
 			// Push findings
 			if a.pusher != nil && len(report.Findings) > 0 {
 				pushResult, err := a.pusher.PushFindings(ctx, report)
@@ -1085,6 +1087,7 @@ func (a *BaseSensor) runAllCollections(ctx context.Context) {
 
 		// Push all collected reports
 		for _, report := range result.Reports {
+			report.Metadata.CoverageType = collectCoverageType(report)
 			if a.pusher != nil && len(report.Findings) > 0 {
 				pushResult, err := a.pusher.PushFindings(ctx, report)
 				if err != nil {

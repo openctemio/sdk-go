@@ -20,6 +20,19 @@ All notable changes to `github.com/openctemio/sdk-go`.
   as changed, because the named types now live in the module; source code
   using the same names is unaffected.
   The sensor builds unchanged (`sensor-compat`).
+### Added
+
+- **Claim-N** (api RFC-046 §11, RFC-030 §5.9). Against a platform whose
+  hello lists `capacity`, `GET /api/v2/sensor/commands` sends
+  `X-OpenCTEM-Sensor-Features: capacity` and the platform answers with the
+  commands already claimed for this sensor (acknowledged, lease set), at
+  most its free slots of scans, in its fair order. `core.Command.Claimed`
+  says so; the poller still acknowledges each one it runs (a replay) and
+  now **releases** at once any claimed command it does not run (no free
+  slot, type not allowed, expired, hosts busy, sensor paused), instead of
+  leaving it to its lease. Older platforms and v1 are unchanged.
+  `client.WithoutClaimOnPoll()` opts a client out (a caller that polls
+  without running what it gets).
 
 ### Security
 
@@ -123,6 +136,17 @@ All notable changes to `github.com/openctemio/sdk-go`.
   stale, or when `pkg/ctis` declares a model struct of its own again.
   Bumping CTIS is `go get github.com/openctemio/ctis@<ver>` plus
   `go generate ./pkg/ctis`.
+- **Every report the runtime pushes states `coverage_type`** (CTIS spec 4.5:
+  an absent value is not `full`; research 16 G4, owner decision Q5). A scan
+  command's report is `partial` when the scanner says the run stopped
+  part-way (`ScanResult.Error`) or the report lists `failed_targets`, even if
+  the parser declared `full`; otherwise a value the parser declared is kept;
+  a repository scan (`metadata.branch`) is `partial`; any other completed
+  run is `full`. Collector reports keep the collector's value, else
+  `partial`. Daemon-mode scan and collect reports follow the same rules.
+  The platform's coverage-scoped auto-resolve used to read the missing
+  value as `full`; it is being changed to read it as not full, and this
+  keeps completed sensor scans eligible after that change.
 
 - `ctis.FromSARIF` carries `properties.tags` from the result and its rule
   into the finding's `tags` (they were dropped), as `github.com/openctemio/ctis`
