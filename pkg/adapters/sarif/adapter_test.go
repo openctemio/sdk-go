@@ -1130,3 +1130,22 @@ func TestConvert_NormalizesKindAndBaselineState(t *testing.T) {
 		}
 	}
 }
+
+// The adapter picks the same fingerprint for the same result every time.
+func TestPickResultFingerprint_Deterministic(t *testing.T) {
+	fps := map[string]string{"c/v1": "ccc", "a/v1": "aaa", "b/v1": "bbb", "0/v1": "requires login"}
+	for i := 0; i < 200; i++ {
+		if got := pickResultFingerprint(fps); got != "aaa" {
+			t.Fatalf("run %d picked %q, want the lowest usable key's value", i, got)
+		}
+	}
+	if got := pickResultFingerprint(map[string]string{"matchBasedId/v1": "m", "a/v1": "aaa"}); got != "m" {
+		t.Fatalf("matchBasedId/v1 not preferred: %q", got)
+	}
+	if got := pickResultFingerprint(map[string]string{"matchBasedId/v1": "requires login", "b/v1": "bbb"}); got != "bbb" {
+		t.Fatalf("unusable matchBasedId not skipped: %q", got)
+	}
+	if got := pickResultFingerprint(map[string]string{"a": "requires login"}); got != "" {
+		t.Fatalf("no usable value should give empty, got %q", got)
+	}
+}

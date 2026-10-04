@@ -90,7 +90,11 @@ type SARIFResult struct {
 	Message      SARIFMessage      `json:"message"`
 	Locations    []SARIFLocation   `json:"locations,omitempty"`
 	Fingerprints map[string]string `json:"fingerprints,omitempty"`
-	Properties   map[string]any    `json:"properties,omitempty"`
+	// PartialFingerprints are the contributing identity components of the
+	// result (SARIF 2.1.0 section 3.27.17), e.g. primaryLocationLineHash. A
+	// receiver builds a line-independent identity from them.
+	PartialFingerprints map[string]string `json:"partialFingerprints,omitempty"`
+	Properties          map[string]any    `json:"properties,omitempty"`
 	// BaselineState is the result's state relative to a baseline: new,
 	// unchanged, updated or absent (SARIF 2.1.0 section 3.27.24).
 	BaselineState string `json:"baselineState,omitempty"`
@@ -319,6 +323,7 @@ func FromSARIF(data []byte, opts *ConvertOptions) (*Report, error) {
 		}
 
 		finding.Fingerprint = sarifFingerprint(result.Fingerprints)
+		finding.PartialFingerprints = sarifPartialFingerprints(result.PartialFingerprints)
 		finding.BaselineState = NormalizeSARIFBaselineState(result.BaselineState)
 		finding.Kind = NormalizeSARIFKind(result.Kind)
 
@@ -349,6 +354,22 @@ func sarifFingerprint(fps map[string]string) string {
 		return hex.EncodeToString(hash[:])
 	}
 	return fp
+}
+
+// sarifPartialFingerprints copies a result's partialFingerprints, without
+// empty values, or returns nil when there are none.
+func sarifPartialFingerprints(pfs map[string]string) map[string]string {
+	var out map[string]string
+	for k, v := range pfs {
+		if k == "" || v == "" {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string, len(pfs))
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // sarifAsset returns the asset a SARIF run's findings belong to, and false
