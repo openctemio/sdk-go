@@ -6,6 +6,23 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Security
 
+- **Secret masking reveals at most a quarter of a secret** (CTIS spec 4.8
+  and 5.2). `core.MaskSecret` showed the first and last 3 characters of any
+  secret over 8 characters, which is most of a 9-12 character password. It
+  now shows nothing of a secret under 12 characters and at most a quarter of
+  a longer one (at most 4 characters at either end), counts runes instead of
+  bytes, and uses a fixed-length marker so the masked value no longer gives
+  away the length. `MaskAPIKey` and the betterleaks adapter (which showed
+  4+4 characters, all but one character of a 9-character secret) follow the
+  same rule. `MaskSecretInText` now hides the whole text when the secret is
+  not found in it. `core.GenerateSecretFingerprint` hashed the raw secret
+  into the fingerprint, so a short secret could be recovered from the
+  fingerprint by brute force; it now hashes the masked value.
+  **Identity note:** `secret.masked_value`, and secret fingerprints built by
+  these helpers, change once for every secret of 9 or more characters.
+  OpenCTEM derives a secret finding's identity from `masked_value`, so the
+  first scan after the upgrade reports such secrets under new identities.
+
 - **Sensor-local policy** (api RFC-040 §5.7, owner decisions Q3 (a) and
   Q4 (a)). The network owner writes a read-only YAML file at install time
   (`SENSOR_LOCAL_POLICY`, `sensorkit.Options.LocalPolicyPath`, default
