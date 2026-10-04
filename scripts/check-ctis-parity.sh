@@ -28,9 +28,9 @@ set -euo pipefail
 CTIS_REF="${CTIS_REF:-1af1b6a7c34a45388bb2d28e49b8cbd43c991b11}"
 CTIS_TYPES_URL="${CTIS_TYPES_URL:-https://raw.githubusercontent.com/openctemio/ctis/${CTIS_REF}/types.go}"
 # FromSARIF is also hand-copied. Its secret-scanner list, its tag caps and the
-# shared betterleaks sample are compared against this ctis commit (ctis#12, the
-# change that added them). Bump it with CTIS_REF when pkg/ctis/sarif.go is synced.
-CTIS_SARIF_REF="${CTIS_SARIF_REF:-72c2f118f0a98ade096bd95463153d22045d1541}"
+# shared betterleaks sample are compared against this ctis commit (the ctis#12
+# merge). Bump it with CTIS_REF when pkg/ctis/sarif.go is synced.
+CTIS_SARIF_REF="${CTIS_SARIF_REF:-11b7540f92f26e6b9d53f4d36dce65175e95f4d7}"
 CTIS_RAW_BASE="https://raw.githubusercontent.com/openctemio/ctis/${CTIS_SARIF_REF}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOCAL_TYPES="$ROOT/pkg/ctis/types.go"
