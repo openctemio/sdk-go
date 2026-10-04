@@ -108,6 +108,8 @@ func (c *Client) GetCommandsLimit(ctx context.Context, limit int) (*core.GetComm
 			cc.ExpiresAt = *cmd.ExpiresAt
 		}
 		cc.LeaseEpoch = cmd.LeaseEpoch
+		// Claim-N: the platform already claimed it for this sensor.
+		cc.Claimed = cmd.Status == "acknowledged"
 		if cmd.LeaseExpiresAt != nil {
 			cc.LeaseExpiresAt = *cmd.LeaseExpiresAt
 		}

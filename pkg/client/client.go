@@ -48,6 +48,9 @@ type Client struct {
 	maxRetries     int
 	retryDelay     time.Duration
 	verbose        bool
+	// noClaimOnPoll: never ask the platform to claim on poll (claim-N),
+	// see WithoutClaimOnPoll.
+	noClaimOnPoll bool
 	// userAgent is the product token (Config.UserAgent); empty: the
 	// process-wide one (useragent.SetProduct).
 	userAgent string
@@ -319,6 +322,16 @@ func WithRetry(maxRetries int, retryDelay time.Duration) Option {
 	return func(c *Client) {
 		c.maxRetries = maxRetries
 		c.retryDelay = retryDelay
+	}
+}
+
+// WithoutClaimOnPoll makes polls only list commands, as before claim-N
+// (api RFC-046 §11): the poller claims each one. Use it only for a caller
+// that polls without running what it gets (a dry run, a dashboard): a
+// claimed command it does not run would wait for its lease to expire.
+func WithoutClaimOnPoll() Option {
+	return func(c *Client) {
+		c.noClaimOnPoll = true
 	}
 }
 
