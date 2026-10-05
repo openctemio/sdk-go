@@ -447,6 +447,22 @@ func (f *FakePlatform) AcceptedFindings() int {
 	return n
 }
 
+// AcceptedReports returns the reports the fake accepted: every segment of
+// each committed v2 report, then the v1 reports.
+func (f *FakePlatform) AcceptedReports() []*ctis.Report {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*ctis.Report
+	for _, r := range f.reports {
+		if r.Committed {
+			for _, s := range r.Segments {
+				out = append(out, s.report)
+			}
+		}
+	}
+	return append(out, f.v1Reports...)
+}
+
 type recorder struct {
 	http.ResponseWriter
 	status int

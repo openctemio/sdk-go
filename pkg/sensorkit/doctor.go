@@ -244,6 +244,8 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "Protect the sensor itself from the OOM killer (needs CAP_SYS_RESOURCE)."},
 		settingsreg.Setting{Name: EnvTools, Type: settingsreg.List, Group: "tools",
 			Description: "Allowlist of tools the sensor runs (comma-separated). Unset: every installed tool."},
+		settingsreg.Setting{Name: EnvAdapterDirs, Type: settingsreg.String, Group: "tools",
+			Description: "Directories of operator-installed tools (tool.yaml with its program), separated by the OS path list separator."},
 		settingsreg.Setting{Name: EnvTemplateSigningKeys, Type: settingsreg.List, Group: "policy",
 			Description: "The platform's template-signing public keys (base64 Ed25519); needed for custom templates."},
 		settingsreg.Setting{Name: core.EnvLocalPolicy, Type: settingsreg.Path, Default: core.DefaultLocalPolicyPath, Group: "policy",

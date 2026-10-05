@@ -22,6 +22,7 @@ Setup & health checklist shows each one's presence, never its value.
 | [`SENSOR_SCANNER_PRIORITY`](https://docs.openctem.io/sensor/settings#SENSOR_SCANNER_PRIORITY) | enum |  | `low` |  | Priority of scanner processes. |
 | [`SENSOR_PROTECT_FROM_OOM`](https://docs.openctem.io/sensor/settings#SENSOR_PROTECT_FROM_OOM) | bool |  | `false` |  | Protect the sensor itself from the OOM killer (needs CAP_SYS_RESOURCE). |
 | [`SENSOR_TOOLS`](https://docs.openctem.io/sensor/settings#SENSOR_TOOLS) | list |  |  |  | Allowlist of tools the sensor runs (comma-separated). Unset: every installed tool. |
+| [`SENSOR_ADAPTER_DIRS`](https://docs.openctem.io/sensor/settings#SENSOR_ADAPTER_DIRS) | string |  |  |  | Directories of operator-installed tools (tool.yaml with its program), separated by the OS path list separator. |
 | [`SENSOR_TEMPLATE_SIGNING_KEYS`](https://docs.openctem.io/sensor/settings#SENSOR_TEMPLATE_SIGNING_KEYS) | list |  |  |  | The platform's template-signing public keys (base64 Ed25519); needed for custom templates. |
 | [`SENSOR_LOCAL_POLICY`](https://docs.openctem.io/sensor/settings#SENSOR_LOCAL_POLICY) | path |  | `/etc/openctem/sensor-policy.yaml` |  | The sensor-local policy file the network owner installs. |
 | [`SENSOR_ALLOWED_RANGES`](https://docs.openctem.io/sensor/settings#SENSOR_ALLOWED_RANGES) | list |  |  |  | Shorthand local policy: allowed target ranges. |
