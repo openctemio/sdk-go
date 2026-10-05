@@ -216,6 +216,7 @@ func Golden(t testing.TB, report *ctis.Report, path string) {
 var volatile = map[string]bool{
 	"timestamp": true, "duration_ms": true, "discovered_at": true, "first_seen": true, "last_seen": true,
 	"started_at": true, "finished_at": true, "scanned_at": true, "detected_at": true,
+	"first_seen_at": true, "last_seen_at": true, "created_at": true, "updated_at": true,
 }
 
 // Normalize returns a report as stable, indented JSON: times and durations
