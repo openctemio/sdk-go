@@ -1,0 +1,4 @@
+### Upgrade notes
+
+- `ctis.IdentityHints.AgentID` (added earlier in this unreleased cycle) is now `ctis.IdentityHints.ScannerAgentID`; the JSON name stays `agent_id`, so reports are unchanged. The Go name says it is the scanner's own endpoint agent.
+- **CTIS 1.4** (`pkg/ctis` follows `github.com/openctemio/ctis`): `ctis.SchemaVersion` changed from `"1.3"` to `"1.4"`, so `NewReport()` and every adapter now stamp `"version": "1.4"`. Reports declaring 1.0 to 1.3 are still accepted, decode strictly and validate. Code that compared a version against the literal `"1.3"` should use `ctis.SupportedSchemaVersions()` / `ctis.IsSupportedVersion()` (versions this SDK knows every member of) or `ctis.IsCompatibleVersion()` (any minor of major 1). The OpenCTEM API accepts the 1.4 stamp today; do not send the new 1.4 members until the API runs a ctis 1.4 build.
