@@ -19,6 +19,18 @@ permissions:
   contents: read
 
 jobs:
+  # Changelog entries live one file per change in changelog.d/, so pull
+  # requests never conflict on CHANGELOG.md. Refuses an entry written under
+  # the Unreleased heading, an invalid fragment, and merge-conflict markers in
+  # any tracked text file.
+  changelog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Changelog fragments and conflict markers
+        run: python3 .github/scripts/release/changelog-fragments.py check
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -109,7 +121,7 @@ jobs:
   # Exported-API compatibility (api RFC-029 §8.6): a sensor built against the
   # last release must build against this change. Any incompatible change to an
   # exported identifier fails unless the PR is labelled breaking-change (and
-  # CHANGELOG.md says how to upgrade under "Upgrade notes").
+  # a changelog.d/ fragment says how to upgrade under "### Upgrade notes").
   api-compat:
     runs-on: ubuntu-latest
     steps:
@@ -138,7 +150,7 @@ jobs:
         if: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') }}
         run: |
           scripts/check-api-compat.sh ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }} || echo "::warning::incompatible API change declared with the breaking-change label"
-          grep -q '^### Upgrade notes' CHANGELOG.md || { echo "::error::breaking-change needs an 'Upgrade notes' section in CHANGELOG.md"; exit 1; }
+          grep -qs '^### Upgrade notes' changelog.d/*.md || { echo "::error::breaking-change needs a changelog.d/<slug>.md fragment with an '### Upgrade notes' section"; exit 1; }
 
   # The sensor (github.com/openctemio/sensor, main) must build against this
   # change without edits: that is what "bump the SDK and done" means for the
