@@ -38,7 +38,7 @@ const (
 // the same checks as any record. All targets share the outcome.
 func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o RunOptions, argv []string) (*Outcome, error) {
 	start := time.Now()
-	p, ierr, err := h.prepare(m, task, o)
+	p, ierr, err := h.prepare(ctx, m, task, o)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +53,8 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if ierr != nil {
 		return h.failedOutcome(m, task, ierr), nil
 	}
-	timeout, _, maxBytes, _ := m.Resources.Limits()
+	_, _, maxBytes, _ := m.Resources.Limits()
+	timeout := p.timeout
 	stdout := &cappedBuffer{max: int(min(maxBytes, 1<<30))}
 	stderr := &cappedBuffer{max: MaxStderr}
 	be := h.backend()
@@ -138,6 +139,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		}
 		out.Targets = append(out.Targets, to)
 	}
+	p.addRefused(out)
 	out.Duration = time.Since(start)
 	h.stamp(out, m, p.task, "exec profile")
 	return out, nil
