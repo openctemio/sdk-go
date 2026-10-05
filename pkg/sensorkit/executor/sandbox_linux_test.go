@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +75,13 @@ func hostileTool(mode string, args []string) int {
 	case "sleep":
 		time.Sleep(time.Minute)
 		return 0
+	case "stdin":
+		b, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+		if err != nil {
+			return report(err)
+		}
+		fmt.Print(strings.ToUpper(string(b)))
+		return 0
 	case "kill-parent":
 		return report(syscall.Kill(os.Getppid(), 0))
 	}
@@ -121,6 +129,45 @@ func runTool(t *testing.T, b Backend, spec TaskSpec, mode string, args ...string
 		return o, res
 	}
 	return strings.TrimSpace(errb.String()), res
+}
+
+// A task reads its standard input (the adapter protocol's channel), in the
+// sandbox and without it, from a pipe whose descriptor the task gets.
+func TestTaskReadsStdin(t *testing.T) {
+	off, err := NewProcessBackend(Config{Mode: ModeOff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string]Backend{"sandbox": newTestBackend(t), "off": off} {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			_, _ = io.WriteString(w, "hello adapter")
+			_ = w.Close()
+		}()
+		out, res := runTool(t, b, TaskSpec{Stdin: r}, "stdin")
+		_ = r.Close()
+		if out != "HELLO ADAPTER" || res.ExitCode != 0 {
+			t.Errorf("%s: %q exit %d", name, out, res.ExitCode)
+		}
+	}
+}
+
+// The process backend never claims to enforce the network class: untrusted
+// tools must not be admitted on it.
+func TestProcessBackendDoesNotEnforceNetwork(t *testing.T) {
+	if st := newTestBackend(t).Status(); st.NetworkEnforced {
+		t.Fatalf("sandboxed process backend claims network enforcement: %+v", st)
+	}
+	off, err := NewProcessBackend(Config{Mode: ModeOff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.Status().NetworkEnforced {
+		t.Fatal("ModeOff claims network enforcement")
+	}
 }
 
 func TestProbeEnforcesEverything(t *testing.T) {

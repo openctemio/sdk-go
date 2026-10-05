@@ -4,6 +4,32 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Upgrade notes
+
+- **CTIS 1.4** (`pkg/ctis` follows `github.com/openctemio/ctis`): `ctis.SchemaVersion` changed from `"1.3"` to `"1.4"`, so `NewReport()` and every adapter now stamp `"version": "1.4"`. Reports declaring 1.0 to 1.3 are still accepted, decode strictly and validate. Code that compared a version against the literal `"1.3"` should use `ctis.SupportedSchemaVersions()` / `ctis.IsSupportedVersion()` (versions this SDK knows every member of) or `ctis.IsCompatibleVersion()` (any minor of major 1). The OpenCTEM API accepts the 1.4 stamp today; do not send the new 1.4 members until the API runs a ctis 1.4 build.
+
+### Deprecated
+
+- Packages with no importer in the sensor, the platform or the asset
+  collector are marked `Deprecated:` and will be removed in a later minor
+  release: `pkg/transport/grpc` and `proto/openctemio/v1` (removed in the
+  next minor, which drops the `google.golang.org/grpc` dependency),
+  `pkg/adapters/...`, `pkg/pipeline`, `pkg/audit`, `pkg/credentials`,
+  `pkg/errors`, `pkg/health`, `pkg/metrics`, `pkg/options`,
+  `pkg/enrichers/{epss,kev}`, `pkg/connectors/...`, `pkg/providers/github`
+  and `pkg/scanners/tenable`. `docs/STABILITY.md` lists the replacement of
+  each.
+
+### Documentation
+
+- `docs/rfcs/sensor-sdk-v2.md`: the accepted design for the next SDK
+  generation (one tool contract with a `tool.yaml` manifest, out-of-process
+  execution for every tool, adapter protocol v1 for any language, one
+  runtime, stability tiers, transport v3 behind the SDK). `docs/STABILITY.md`
+  now gives every package a tier (Stable, Beta, Frozen, Internal-bound,
+  Deprecated). The module description no longer lists scanner wrappers
+  (they moved to the sensor in v0.17.0).
+
 ### Added
 
 - **Tool contract** (`pkg/tool`, docs/rfcs/sensor-sdk-v2.md): one contract
@@ -31,6 +57,13 @@ All notable changes to `github.com/openctemio/sdk-go`.
   config, declared credentials only, record checks, quarantine of
   undeclared output, caps, report assembly and provenance); `Normalize` and
   `Golden` for golden CTIS files.
+- `pkg/ctis` re-exports the CTIS 1.4 interoperability members (`finding.native`, `scores`, `vex`, `source_lifecycle`, `source_extra`, `vulnerability.ids`, remediation solution metadata, `asset.identity_hints`) and their normalizers (`NormalizeNativeSeverity`, `NormalizeNativeStatus`, `NormalizeVEXStatus`, `NormalizeVEXJustification`, `NormalizeVulnerabilityID`, `PreferredVulnerabilityID`, `LocationKey`, `AllScores`, `SetSourceExtra`), plus `SupportedSchemaVersions` and `IsSupportedVersion`.
+- `executor.TaskSpec.Stdin`: a task can read its standard input (the
+  channel of the tool adapter protocol); pass the read end of an `os.Pipe`
+  so the task gets the descriptor itself. `executor.Status.NetworkEnforced`
+  says whether the backend itself confines a task to its network class;
+  the process backend records the class but does not enforce it, so it
+  reports false (untrusted tools need a backend that reports true).
 - **Per-task tool sandbox** (`pkg/sensorkit/executor`). Every tool run
   (`core.ExecuteScanner`, `StreamScanner`, `BaseScanner`) goes through one
   executor with a small backend interface (`Backend.Prepare` → `Task`:

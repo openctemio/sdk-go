@@ -277,7 +277,7 @@ func (t *processTask) Start(ctx context.Context) error {
 	if t.workdir == "" {
 		cmd.Dir = t.spec.Dir
 	}
-	cmd.Stdout, cmd.Stderr = t.spec.Stdout, t.spec.Stderr
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = t.spec.Stdin, t.spec.Stdout, t.spec.Stderr
 	if h := t.spec.Hooks.Configure; h != nil {
 		h(cmd)
 	}

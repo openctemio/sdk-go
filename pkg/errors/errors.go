@@ -1,5 +1,9 @@
 // Package errors provides custom error types for the OpenCTEM SDK.
 // It follows industry best practices (HashiCorp, AWS SDK) for error handling.
+//
+// Deprecated: no sensor, platform or collector imports it. Tool errors are
+// categorized by pkg/tool (tool.Error, tool.Class). Removal is planned for a
+// later minor release (docs/STABILITY.md).
 package errors
 
 import (

@@ -1,5 +1,8 @@
 // Package metrics provides metrics collection and reporting for the OpenCTEM SDK.
 // It includes interfaces for metric collection and a Prometheus-compatible implementation.
+//
+// Deprecated: no sensor, platform or collector imports it. Removal is
+// planned for a later minor release (docs/STABILITY.md).
 package metrics
 
 import (
