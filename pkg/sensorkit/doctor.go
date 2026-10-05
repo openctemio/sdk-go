@@ -340,6 +340,7 @@ func (k *Kit) preflightNew(proxies Proxies, proxyOpts ProxyOptions) {
 			}
 			k.ReportCheck(core.ConfigCheck{ID: CheckEnvUnknown, Status: core.CheckWarn, Code: "unknown",
 				Params: params, Summary: summary})
+			_, _ = fmt.Fprintf(k.errw, "Warning: %s\n", summary)
 		}
 	}
 	// Scanners and the environment proxy (api RFC-034 G1).
@@ -520,6 +521,9 @@ func environmentProxyVars() []string {
 // printPreflight prints one line with the counts.
 func (k *Kit) printPreflight() {
 	pass, warn, fail := k.doc.counts()
-	_, _ = fmt.Fprintf(k.out, "  Preflight: %d passed, %d warning(s), %d failed (the platform shows them under the sensor's Setup & health)\n",
-		pass, warn, fail)
+	where := ""
+	if k.client != nil {
+		where = " (the platform shows them under the sensor's Setup & health)"
+	}
+	_, _ = fmt.Fprintf(k.out, "  Preflight: %d passed, %d warning(s), %d failed%s\n", pass, warn, fail, where)
 }
