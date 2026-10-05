@@ -4,9 +4,11 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,72 +117,82 @@ func TestNewWithOptions(t *testing.T) {
 }
 
 func TestClient_PushFindings(t *testing.T) {
-	// Create a test server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify request
-		if r.Method != "POST" {
-			t.Errorf("Method = %s, want POST", r.Method)
+	server := v2Platform(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/v2/sensor/results/") {
+			t.Errorf("Path = %s, want /api/v2/sensor/results/{id}", r.URL.Path)
 		}
-		if r.URL.Path != "/api/v1/agent/ingest" {
-			t.Errorf("Path = %s, want /api/v1/agent/ingest", r.URL.Path)
-		}
-
-		// Check authorization header
-		auth := r.Header.Get("Authorization")
-		if auth != "Bearer test-key" {
+		if auth := r.Header.Get("Authorization"); auth != "Bearer test-key" {
 			t.Errorf("Authorization = %q, want 'Bearer test-key'", auth)
 		}
-
-		// Return success response
-		resp := IngestResponse{
-			ScanID:          "scan-123",
-			FindingsCreated: 2,
-			FindingsUpdated: 1,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	c := New(&Config{
-		BaseURL:  server.URL,
-		APIKey:   "test-key",
-		Protocol: ProtocolV1,
+		acceptResults(t, w, r)
 	})
 
-	report := ctis.NewReport()
+	c := New(&Config{BaseURL: server.URL, APIKey: "test-key"})
+
+	report := testReport()
+	report.Assets = []ctis.Asset{{ID: "a1", Type: ctis.AssetTypeRepository, Value: "github.com/test/repo"}}
 	report.Findings = []ctis.Finding{
-		{ID: "finding-1", Title: "Test Finding", Severity: ctis.SeverityHigh},
-		{ID: "finding-2", Title: "Another Finding", Severity: ctis.SeverityMedium},
+		{ID: "finding-1", Title: "Test Finding", Severity: ctis.SeverityHigh, AssetRef: "a1"},
+		{ID: "finding-2", Title: "Another Finding", Severity: ctis.SeverityMedium, AssetRef: "a1"},
 	}
 
 	result, err := c.PushFindings(context.Background(), report)
 	if err != nil {
 		t.Fatalf("PushFindings() error = %v", err)
 	}
-
 	if result.FindingsCreated != 2 {
 		t.Errorf("FindingsCreated = %d, want 2", result.FindingsCreated)
 	}
-	if result.FindingsUpdated != 1 {
-		t.Errorf("FindingsUpdated = %d, want 1", result.FindingsUpdated)
+}
+
+// Protocol v1 is retired: against a platform without protocol v2 a push is
+// ErrV2Unsupported, and nothing is sent to /api/v1/agent.
+func TestClient_PushFindings_NoV2IsAnError(t *testing.T) {
+	var v1 int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/agent") {
+			v1++
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	c := New(&Config{BaseURL: server.URL, APIKey: "test-key", MaxRetries: 0})
+	report := testReport()
+	report.Findings = []ctis.Finding{{ID: "f1"}}
+	if _, err := c.PushFindings(context.Background(), report); !errors.Is(err, ErrV2Unsupported) {
+		t.Fatalf("err = %v, want ErrV2Unsupported", err)
+	}
+	if err := c.SendHeartbeat(context.Background(), &core.SensorStatus{Name: "s"}); !errors.Is(err, ErrV2Unsupported) {
+		t.Fatalf("heartbeat err = %v, want ErrV2Unsupported", err)
+	}
+	if v1 != 0 {
+		t.Fatalf("%d requests went to the retired protocol v1", v1)
+	}
+}
+
+// The protocol setting "v1" is refused; auto and v2 are protocol v2.
+func TestParseProtocol_V1Retired(t *testing.T) {
+	if _, err := ParseProtocol("v1"); !errors.Is(err, ErrProtocolV1Retired) {
+		t.Fatalf("v1: err = %v", err)
+	}
+	for _, in := range []string{"", "auto", "AUTO", "v2"} {
+		if _, err := ParseProtocol(in); err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
 	}
 }
 
 // SetAPIKey rotates the key used on subsequent requests (sensor key auto-renewal).
 func TestClient_SetAPIKey_RotatesBearer(t *testing.T) {
 	var gotAuth string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := v2Platform(t, func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(IngestResponse{ScanID: "s"})
-	}))
-	defer server.Close()
+		acceptResults(t, w, r)
+	})
 
 	c := New(&Config{BaseURL: server.URL, APIKey: "old-key"})
-	report := ctis.NewReport()
+	report := testReport()
 	report.Findings = []ctis.Finding{{ID: "f1", Title: "t", Severity: ctis.SeverityHigh}}
 
 	if _, err := c.PushFindings(context.Background(), report); err != nil {
@@ -200,11 +212,10 @@ func TestClient_SetAPIKey_RotatesBearer(t *testing.T) {
 }
 
 func TestClient_PushFindings_Error(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := v2Platform(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error": "server error"}`))
-	}))
-	defer server.Close()
+		_, _ = w.Write([]byte(`{"error": "server error"}`))
+	})
 
 	c := New(&Config{
 		BaseURL:    server.URL,
@@ -213,34 +224,20 @@ func TestClient_PushFindings_Error(t *testing.T) {
 		RetryDelay: 10 * time.Millisecond,
 	})
 
-	report := ctis.NewReport()
+	report := testReport()
 	report.Findings = []ctis.Finding{{ID: "f1"}}
 
-	_, err := c.PushFindings(context.Background(), report)
-	if err == nil {
+	if _, err := c.PushFindings(context.Background(), report); err == nil {
 		t.Error("PushFindings() should return error on server error")
 	}
 }
 
 func TestClient_PushAssets(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := IngestResponse{
-			ScanID:        "scan-456",
-			AssetsCreated: 3,
-			AssetsUpdated: 0,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
+	server := v2Platform(t, func(w http.ResponseWriter, r *http.Request) { acceptResults(t, w, r) })
 
-	c := New(&Config{
-		BaseURL: server.URL,
-		APIKey:  "test-key",
-	})
+	c := New(&Config{BaseURL: server.URL, APIKey: "test-key"})
 
-	report := ctis.NewReport()
+	report := testReport()
 	report.Assets = []ctis.Asset{
 		{ID: "asset-1", Type: ctis.AssetTypeRepository, Value: "github.com/test/repo"},
 	}
@@ -249,42 +246,28 @@ func TestClient_PushAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PushAssets() error = %v", err)
 	}
-
-	if result.AssetsCreated != 3 {
-		t.Errorf("AssetsCreated = %d, want 3", result.AssetsCreated)
+	if result.AssetsCreated != 1 {
+		t.Errorf("AssetsCreated = %d, want 1", result.AssetsCreated)
 	}
 }
 
 func TestClient_SendHeartbeat(t *testing.T) {
-	server := httptest.NewServer(v1Only(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/agent/heartbeat" {
-			t.Errorf("Path = %s, want /api/v1/agent/heartbeat", r.URL.Path)
-		}
-
-		resp := map[string]interface{}{
-			"status":    "ok",
-			"agent_id":  "sensor-123",
-			"tenant_id": "tenant-456",
+	server := v2Platform(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/sensor/heartbeat" {
+			t.Errorf("Path = %s, want /api/v2/sensor/heartbeat", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	c := New(&Config{
-		BaseURL:  server.URL,
-		APIKey:   "test-key",
-		SensorID: "sensor-123",
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "sensor_id": "sensor-123", "tenant_id": "tenant-456"})
 	})
+
+	c := New(&Config{BaseURL: server.URL, APIKey: "test-key", SensorID: "sensor-123"})
 
 	status := &core.SensorStatus{
 		Name:     "test-sensor",
 		Status:   core.SensorStateRunning,
 		Scanners: []string{"semgrep", "trivy"},
 	}
-
-	err := c.SendHeartbeat(context.Background(), status)
-	if err != nil {
+	if err := c.SendHeartbeat(context.Background(), status); err != nil {
 		t.Errorf("SendHeartbeat() error = %v", err)
 	}
 }
@@ -302,13 +285,12 @@ func TestClient_TestConnection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := v2Platform(t, func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tt.statusCode)
 				if tt.statusCode == http.StatusOK {
-					json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+					_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 				}
-			}))
-			defer server.Close()
+			})
 
 			c := New(&Config{
 				BaseURL:    server.URL,
@@ -326,38 +308,24 @@ func TestClient_TestConnection(t *testing.T) {
 }
 
 func TestClient_CheckFingerprints(t *testing.T) {
-	server := httptest.NewServer(v1Only(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/agent/ingest/check" {
-			t.Errorf("Path = %s, want /api/v1/agent/ingest/check", r.URL.Path)
+	server := v2Platform(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/sensor/fingerprints/check" {
+			t.Errorf("Path = %s, want /api/v2/sensor/fingerprints/check", r.URL.Path)
 		}
-
-		// Parse request
 		var req struct {
 			Fingerprints []string `json:"fingerprints"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
-
-		// Return some as existing, some as missing
-		resp := map[string]interface{}{
-			"existing": []string{req.Fingerprints[0]},
-			"missing":  req.Fingerprints[1:],
-		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
-
-	c := New(&Config{
-		BaseURL: server.URL,
-		APIKey:  "test-key",
+		_ = json.NewEncoder(w).Encode(map[string]any{"existing": []string{req.Fingerprints[0]}, "missing": req.Fingerprints[1:]})
 	})
 
-	fingerprints := []string{"fp1", "fp2", "fp3"}
-	result, err := c.CheckFingerprints(context.Background(), fingerprints)
+	c := New(&Config{BaseURL: server.URL, APIKey: "test-key"})
+
+	result, err := c.CheckFingerprints(context.Background(), []string{"fp1", "fp2", "fp3"})
 	if err != nil {
 		t.Fatalf("CheckFingerprints() error = %v", err)
 	}
-
 	if len(result.Existing) != 1 || result.Existing[0] != "fp1" {
 		t.Errorf("existing = %v, want [fp1]", result.Existing)
 	}
@@ -369,27 +337,23 @@ func TestClient_CheckFingerprints(t *testing.T) {
 func TestClient_Headers(t *testing.T) {
 	var capturedHeaders http.Header
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := v2Platform(t, func(w http.ResponseWriter, r *http.Request) {
 		capturedHeaders = r.Header.Clone()
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	}))
-	defer server.Close()
-
-	c := New(&Config{
-		BaseURL:  server.URL,
-		APIKey:   "my-api-key",
-		SensorID: "sensor-xyz",
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
-	c.TestConnection(context.Background())
+	c := New(&Config{BaseURL: server.URL, APIKey: "my-api-key", SensorID: "sensor-xyz"})
 
-	// Verify headers
+	if err := c.TestConnection(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if auth := capturedHeaders.Get("Authorization"); auth != "Bearer my-api-key" {
 		t.Errorf("Authorization = %q, want 'Bearer my-api-key'", auth)
 	}
-	if sensorID := capturedHeaders.Get("X-Agent-ID"); sensorID != "sensor-xyz" {
-		t.Errorf("X-Agent-ID = %q, want 'sensor-xyz'", sensorID)
+	// Identity is the key alone: no sensor-id header on protocol v2.
+	if got := capturedHeaders.Get("X-Agent-ID"); got != "" {
+		t.Errorf("X-Agent-ID = %q, want none", got)
 	}
 	if contentType := capturedHeaders.Get("Content-Type"); contentType != "application/json" {
 		t.Errorf("Content-Type = %q, want 'application/json'", contentType)
@@ -552,29 +516,15 @@ func TestClient_SetVerbose(t *testing.T) {
 }
 
 func TestClient_PushReport(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := IngestResponse{
-			ScanID:          "scan-789",
-			FindingsCreated: 1,
-			AssetsCreated:   1,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer server.Close()
+	server := v2Platform(t, func(w http.ResponseWriter, r *http.Request) { acceptResults(t, w, r) })
 
-	c := New(&Config{
-		BaseURL: server.URL,
-		APIKey:  "test-key",
-	})
+	c := New(&Config{BaseURL: server.URL, APIKey: "test-key"})
 
-	report := ctis.NewReport()
-	report.Findings = []ctis.Finding{{ID: "f1"}}
+	report := testReport()
+	report.Findings = []ctis.Finding{{ID: "f1", AssetRef: "a1"}}
 	report.Assets = []ctis.Asset{{ID: "a1", Type: ctis.AssetTypeRepository, Value: "test"}}
 
-	err := c.PushReport(context.Background(), report)
-	if err != nil {
+	if err := c.PushReport(context.Background(), report); err != nil {
 		t.Errorf("PushReport() error = %v", err)
 	}
 }

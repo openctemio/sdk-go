@@ -1,8 +1,8 @@
 package conformance
 
 // api RFC-029 §4.3.1: a sensor reports its tool inventory, capabilities,
-// concurrency, OS and architecture on the heartbeat, on v2 and on v1, and a
-// sensor without a reporter sends none of the members.
+// concurrency, OS and architecture on the heartbeat, and a sensor without a
+// reporter sends none of the members.
 
 import (
 	"context"
@@ -66,15 +66,14 @@ func heartbeatWithReporter(t *testing.T, f *FakePlatform, protocol string, r cor
 	}
 }
 
-func TestCapabilities_ReportedOnV2AndV1(t *testing.T) {
+func TestCapabilities_Reported(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		v2       bool
 		protocol string
 	}{
 		{"v2 control plane", true, client.ProtocolAuto},
-		{"v1 platform", false, client.ProtocolAuto},
-		{"v1 forced", true, client.ProtocolV1},
+		{"protocol v2 set", true, client.ProtocolV2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := NewFakePlatform(tc.v2)

@@ -60,7 +60,7 @@ type Command struct {
 	// LeaseEpoch and LeaseExpiresAt are the command's lease as the poll
 	// saw it (protocol v2, api RFC-035 D6): the claim that follows starts
 	// a new epoch, which the client keeps and echoes on complete and fail.
-	// Zero on protocol v1 and from a platform without leases.
+	// Zero from a platform without leases.
 	LeaseEpoch     int       `json:"lease_epoch,omitempty"`
 	LeaseExpiresAt time.Time `json:"lease_expires_at,omitzero"`
 	// Claimed is true when the poll already claimed the command for this
@@ -96,7 +96,7 @@ type ScanCommandPayload struct {
 	// several targets for a list-capable scanner (nuclei) and sends only
 	// Targets; when both are set, Target is the job.
 	Target string `json:"target"`
-	// Targets is the full target list (protocol v1, additive).
+	// Targets is the full target list (additive).
 	Targets         []string               `json:"targets,omitempty"`
 	Config          map[string]interface{} `json:"config,omitempty"`
 	TimeoutSeconds  int                    `json:"timeout_seconds,omitempty"`

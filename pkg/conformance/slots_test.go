@@ -207,9 +207,9 @@ func startTried(f *FakePlatform) bool {
 
 // A sensor with a LoadReporter sends active_jobs on every heartbeat, also
 // when it is 0 (idle), and max_concurrent_jobs; without one, 0 is left out
-// as before. On v1 and v2.
+// as before.
 func TestSlots_HeartbeatCarriesLoad(t *testing.T) {
-	for _, v2 := range []bool{false, true} {
+	for _, v2 := range []bool{true} {
 		t.Run(fmt.Sprintf("v2=%v", v2), func(t *testing.T) {
 			f := NewFakePlatform(v2)
 			f.SetControl(v2)
@@ -275,11 +275,11 @@ func TestQueue_DrainReleasesOverV2(t *testing.T) {
 	}
 }
 
-// A platform without the release transition (404 on v2, or v1): the
+// A platform without the release transition (404 on v2): the
 // command is failed with "released: <reason>" instead of waiting for a
 // timeout.
 func TestRelease_FallsBackToFail(t *testing.T) {
-	for _, v2 := range []bool{true, false} {
+	for _, v2 := range []bool{true} {
 		t.Run(fmt.Sprintf("v2=%v", v2), func(t *testing.T) {
 			f := NewFakePlatform(v2)
 			f.SetControl(v2)
@@ -305,9 +305,9 @@ func TestRelease_FallsBackToFail(t *testing.T) {
 }
 
 // The heartbeat carries resources, capacity, queue and the held ids with
-// the names the platform reads, on v1 and v2.
+// the names the platform reads.
 func TestHeartbeat_WorkBlocks(t *testing.T) {
-	for _, v2 := range []bool{false, true} {
+	for _, v2 := range []bool{true} {
 		t.Run(fmt.Sprintf("v2=%v", v2), func(t *testing.T) {
 			f := NewFakePlatform(v2)
 			f.SetControl(v2)
@@ -415,10 +415,10 @@ func TestSlots_CompleteBeforeNextPollWithOutbox(t *testing.T) {
 	}
 }
 
-// Every heartbeat names the SDK and the sensor binary, on v1 and v2: a
+// Every heartbeat names the SDK and the sensor binary: a
 // BaseSensor from its config, and a bare client.SendHeartbeat by itself.
 func TestHeartbeat_SDKAndSensorBuild(t *testing.T) {
-	for _, v2 := range []bool{false, true} {
+	for _, v2 := range []bool{true} {
 		t.Run(fmt.Sprintf("v2=%v", v2), func(t *testing.T) {
 			f := NewFakePlatform(v2)
 			f.SetControl(v2)

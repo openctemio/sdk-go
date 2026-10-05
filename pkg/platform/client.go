@@ -10,11 +10,9 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/audit" //nolint:staticcheck // the removed platform-mode client; removed with it
-	"github.com/openctemio/sdk-go/pkg/chunk"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/pipeline" //nolint:staticcheck // the removed platform-mode client; removed with it
 	"github.com/openctemio/sdk-go/pkg/resource"
-	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
@@ -85,27 +83,25 @@ type RenewKeyResponse struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
-// RenewKey rotates this sensor's API key by presenting the current one. It
-// uses protocol v2 (POST /api/v2/sensor/keys, api RFC-029 §4.7) and falls
-// back to protocol v1 (POST /api/v1/agent/renew) only when the platform does
-// not serve the v2 route (404/405 without a problem document). It does NOT
+// RenewKey rotates this sensor's API key by presenting the current one
+// (POST /api/v2/sensor/keys, api RFC-029 §4.7). A platform that does not
+// serve the route (404/405 without a problem document) answers
+// ErrRenewUnsupported: protocol v1 is retired, there is no fall-back. It does NOT
 // swap the key in — the caller decides when to call SetAPIKey (and persist),
 // so a failed persist never leaves the running client on a key the sensor
 // can't recover after a restart. It never retries: without a key TTL the
 // platform replaces the presented key, so a repeated renewal after a lost
 // answer would be refused.
 func (c *PlatformClient) RenewKey(ctx context.Context) (*RenewKeyResponse, error) {
-	out, err := c.renewKey(ctx, protov2.PathPrefix+protov2.KeysPath, false)
-	if errors.Is(err, errRenewRouteMissing) {
-		out, err = c.renewKey(ctx, legacyv1.PathRenew, true)
-	}
-	return out, err
+	return c.renewKey(ctx, protov2.PathPrefix+protov2.KeysPath)
 }
 
-// errRenewRouteMissing: the platform does not serve the v2 renewal route.
-var errRenewRouteMissing = errors.New("v2 key renewal not served")
+// ErrRenewUnsupported: the platform does not serve sensor protocol v2 key
+// renewal (an OpenCTEM API from before 2026-10); upgrade the platform.
+var ErrRenewUnsupported = errors.New("the platform does not serve sensor protocol v2 key renewal " +
+	"(upgrade the OpenCTEM API: protocol v1 is retired)")
 
-func (c *PlatformClient) renewKey(ctx context.Context, path string, v1 bool) (*RenewKeyResponse, error) {
+func (c *PlatformClient) renewKey(ctx context.Context, path string) (*RenewKeyResponse, error) {
 	url, err := apiURL(c.config.BaseURL, path)
 	if err != nil {
 		return nil, err
@@ -115,10 +111,6 @@ func (c *PlatformClient) renewKey(ctx context.Context, path string, v1 bool) (*R
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.currentAPIKey())
-	if v1 {
-		// Protocol v1 only; v2 identifies the sensor by its key alone.
-		req.Header.Set(legacyv1.HeaderSensorID, c.config.SensorID)
-	}
 
 	resp, err := c.renewClient.Do(req)
 	if err != nil {
@@ -127,10 +119,10 @@ func (c *PlatformClient) renewKey(ctx context.Context, path string, v1 bool) (*R
 	defer func() { _ = resp.Body.Close() }()
 
 	switch {
-	case !v1 && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) &&
+	case (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) &&
 		!protov2.IsProblemContentType(resp.Header.Get("Content-Type")):
-		return nil, errRenewRouteMissing
-	case v1 && resp.StatusCode != http.StatusOK, !v1 && resp.StatusCode != http.StatusCreated:
+		return nil, ErrRenewUnsupported
+	case resp.StatusCode != http.StatusCreated:
 		return nil, &RenewError{StatusCode: resp.StatusCode}
 	}
 
@@ -241,8 +233,6 @@ type SensorBuilder struct {
 	auditConfig    *audit.LoggerConfig
 	pipelineConfig *pipeline.PipelineConfig
 	uploader       pipeline.Uploader
-	chunkConfig    *chunk.Config
-	chunkUploader  chunk.Uploader
 }
 
 // NewSensorBuilder creates a new SensorBuilder.
@@ -355,16 +345,6 @@ func (b *SensorBuilder) WithPipeline(config *pipeline.PipelineConfig, uploader p
 	return b
 }
 
-// WithChunkManager enables chunked uploads for large reports.
-// When enabled, large reports are automatically detected and split into chunks
-// for efficient upload. The chunk manager handles compression, storage,
-// retry, and background upload.
-func (b *SensorBuilder) WithChunkManager(config *chunk.Config, uploader chunk.Uploader) *SensorBuilder {
-	b.chunkConfig = config
-	b.chunkUploader = uploader
-	return b
-}
-
 // Build creates a PlatformSensor from the builder configuration.
 func (b *SensorBuilder) Build() (*PlatformSensor, error) {
 	if b.config.BaseURL == "" {
@@ -464,45 +444,6 @@ func (b *SensorBuilder) Build() (*PlatformSensor, error) {
 		sensor.uploadPipeline = pipeline.NewPipeline(b.pipelineConfig, b.uploader)
 	}
 
-	// Create chunk manager if configured
-	if b.chunkConfig != nil {
-		chunkMgr, err := chunk.NewManager(b.chunkConfig)
-		if err != nil {
-			return nil, fmt.Errorf("create chunk manager: %w", err)
-		}
-
-		if b.chunkUploader != nil {
-			chunkMgr.SetUploader(b.chunkUploader)
-		}
-
-		// Set verbose mode
-		chunkMgr.SetVerbose(b.config.Verbose)
-
-		// Wire audit logging to chunk callbacks
-		if sensor.auditLogger != nil {
-			chunkMgr.SetCallbacks(
-				// onProgress
-				func(p *chunk.Progress) {
-					sensor.auditLogger.ChunkUploaded(p.ReportID, p.CompletedChunks, p.TotalChunks, int(p.BytesUploaded))
-				},
-				// onComplete
-				func(reportID string) {
-					sensor.auditLogger.Info(audit.EventUploadCompleted, "Chunked upload completed", map[string]interface{}{
-						"report_id": reportID,
-					})
-				},
-				// onError
-				func(reportID string, err error) {
-					sensor.auditLogger.Error(audit.EventChunkFailed, "Chunked upload failed", err, map[string]interface{}{
-						"report_id": reportID,
-					})
-				},
-			)
-		}
-
-		sensor.chunkManager = chunkMgr
-	}
-
 	return sensor, nil
 }
 
@@ -521,7 +462,6 @@ type PlatformSensor struct {
 	resourceController *resource.Controller
 	auditLogger        *audit.Logger
 	uploadPipeline     *pipeline.Pipeline
-	chunkManager       *chunk.Manager
 }
 
 // Start starts the platform sensor (lease manager + job poller).
@@ -562,17 +502,6 @@ func (a *PlatformSensor) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start chunk manager if configured
-	if a.chunkManager != nil {
-		if err := a.chunkManager.Start(ctx); err != nil {
-			a.stopHelpers()
-			return fmt.Errorf("start chunk manager: %w", err)
-		}
-		if a.config.Verbose {
-			fmt.Printf("[sensor] Chunk manager started\n")
-		}
-	}
-
 	// Start lease manager
 	if err := a.leaseManager.Start(ctx); err != nil {
 		a.stopHelpers()
@@ -594,18 +523,13 @@ func (a *PlatformSensor) Start(ctx context.Context) error {
 	return nil
 }
 
-// stopHelpers stops resource controller, audit logger, pipeline, and chunk manager.
+// stopHelpers stops resource controller, audit logger and pipeline.
 func (a *PlatformSensor) stopHelpers() {
 	// Stop pipeline first (wait for pending uploads)
 	if a.uploadPipeline != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		_ = a.uploadPipeline.Stop(ctx)
 		cancel()
-	}
-
-	// Close chunk manager (flushes pending chunks)
-	if a.chunkManager != nil {
-		a.chunkManager.Close()
 	}
 
 	if a.resourceController != nil {
@@ -735,54 +659,13 @@ func (a *PlatformSensor) PipelineStats() *pipeline.Stats {
 	return a.uploadPipeline.GetStats()
 }
 
-// ChunkManager returns the chunk manager if configured.
-func (a *PlatformSensor) ChunkManager() *chunk.Manager {
-	return a.chunkManager
-}
-
-// NeedsChunking checks if a report should be uploaded via chunking.
-// Returns false if chunk manager is not configured.
-func (a *PlatformSensor) NeedsChunking(report *ctis.Report) bool {
-	if a.chunkManager == nil {
-		return false
+// SmartSubmitReport queues a report on the upload pipeline. Large reports
+// need no special path: the client sends them as protocol v2 segments.
+// It returns the pipeline item id, or an error when no pipeline is
+// configured.
+func (a *PlatformSensor) SmartSubmitReport(_ context.Context, report *ctis.Report, opts ...pipeline.SubmitOption) (string, error) {
+	if a.uploadPipeline == nil {
+		return "", fmt.Errorf("no upload pipeline configured")
 	}
-	return a.chunkManager.NeedsChunking(report)
-}
-
-// SubmitChunkedReport queues a large report for chunked upload.
-// The report will be split into chunks, compressed, and uploaded in the background.
-// Returns an error if the chunk manager is not configured.
-func (a *PlatformSensor) SubmitChunkedReport(ctx context.Context, report *ctis.Report) (*chunk.Report, error) {
-	if a.chunkManager == nil {
-		return nil, fmt.Errorf("chunk manager not configured")
-	}
-	return a.chunkManager.SubmitReport(ctx, report)
-}
-
-// SmartSubmitReport automatically chooses between regular upload, pipeline, or chunked upload.
-// - Small reports: uploaded directly via pipeline (if configured) or returned for manual upload
-// - Large reports: uploaded via chunk manager (if configured)
-//
-// Returns:
-// - For pipeline submissions: (pipelineItemID, nil, nil)
-// - For chunked submissions: ("", chunkReport, nil)
-// - If neither is configured: ("", nil, error)
-func (a *PlatformSensor) SmartSubmitReport(ctx context.Context, report *ctis.Report, opts ...pipeline.SubmitOption) (string, *chunk.Report, error) {
-	// Check if report needs chunking
-	if a.NeedsChunking(report) {
-		if a.chunkManager == nil {
-			return "", nil, fmt.Errorf("large report requires chunking but chunk manager not configured")
-		}
-		chunkReport, err := a.chunkManager.SubmitReport(ctx, report)
-		return "", chunkReport, err
-	}
-
-	// Use pipeline for smaller reports
-	if a.uploadPipeline != nil {
-		id, err := a.uploadPipeline.Submit(report, opts...)
-		return id, nil, err
-	}
-
-	// Neither configured
-	return "", nil, fmt.Errorf("no upload mechanism configured (neither pipeline nor chunk manager)")
+	return a.uploadPipeline.Submit(report, opts...)
 }

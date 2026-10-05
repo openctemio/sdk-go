@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/sensorsig"
 )
 
 // The control channel (api RFC-035 §5.1): heartbeats go on their own HTTP
@@ -64,12 +65,20 @@ func (c *Client) controlHTTP() *http.Client {
 			Jar:           base.Jar,
 			Timeout:       timeout,
 		}
-		if tr, ok := base.Transport.(*http.Transport); ok {
+		inner, signer := base.Transport, (*sensorsig.Transport)(nil)
+		if st, ok := inner.(*sensorsig.Transport); ok {
+			inner, signer = st.Base, st
+		}
+		if tr, ok := inner.(*http.Transport); ok {
 			ctl := tr.Clone()
 			// The platform path's proxy (api RFC-034: SENSOR_CONTROL_PROXY,
 			// else HTTP(S)_PROXY), as the API client's transport has it.
 			ctl.Proxy = httpsec.APIProxy().Func()
 			hc.Transport = ctl
+			if signer != nil {
+				// A key-bound client signs its heartbeats too.
+				hc.Transport = &sensorsig.Transport{Signer: signer.Signer, Base: ctl, MaxBody: signer.MaxBody}
+			}
 		}
 		c.ctl = hc
 	})

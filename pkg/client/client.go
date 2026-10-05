@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,13 +15,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
-	"github.com/openctemio/sdk-go/pkg/chunk"
 	"github.com/openctemio/sdk-go/pkg/compress"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
@@ -30,8 +27,8 @@ import (
 	"github.com/openctemio/sdk-go/pkg/outbox"
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/retry"
-	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
+	"github.com/openctemio/sdk-go/pkg/sensorsig"
 	"github.com/openctemio/sdk-go/pkg/useragent"
 )
 
@@ -42,6 +39,9 @@ type Client struct {
 	apiKey     string
 	sensorID   string // Sensor ID for tracking which sensor is pushing
 	httpClient *http.Client
+	// signed: requests are signed by the transport (Config.Signer); no
+	// bearer key is ever set.
+	signed bool
 	// ctl is the control client (heartbeats), built from httpClient on first
 	// use; controlTimeout bounds its requests (control_channel.go).
 	ctl            *http.Client
@@ -135,6 +135,11 @@ type Config struct {
 	// platform offers it, else v1), "v1" or "v2".
 	Protocol string `yaml:"protocol" json:"protocol"`
 
+	// Signer makes the client key-bound (api RFC-052): every request is
+	// signed with the sensor key (RFC 9421, pkg/sensorsig) and no bearer
+	// key is sent; APIKey is ignored.
+	Signer *sensorsig.Signer `yaml:"-" json:"-"`
+
 	// OutboxDir enables the durable outbox (see EnableOutbox) in that
 	// directory. New logs, and leaves the outbox off, when it cannot be
 	// opened; call EnableOutbox yourself to handle the error.
@@ -220,6 +225,11 @@ func New(cfg *Config) *Client {
 		analyzer:         analyzer,
 		protocol:         protocol,
 	}
+	if cfg.Signer != nil {
+		c.signed = true
+		c.apiKey = ""
+		c.httpClient.Transport = &sensorsig.Transport{Signer: cfg.Signer, Base: c.httpClient.Transport}
+	}
 	if cfg.OutboxDir != "" || cfg.EnableRetryQueue {
 		ocfg := OutboxConfig{Dir: cfg.OutboxDir, MaxBytes: cfg.OutboxMaxBytes, MaxAge: cfg.OutboxMaxAge}
 		if ocfg.MaxAge == 0 {
@@ -281,8 +291,8 @@ func NewWithOptions(opts ...Option) *Client {
 	return c
 }
 
-// WithProtocol sets the results protocol: ProtocolAuto (default),
-// ProtocolV1 or ProtocolV2. An unknown value keeps auto.
+// WithProtocol sets the protocol: ProtocolAuto (default) or ProtocolV2,
+// which are the same. An unknown or retired value ("v1") keeps auto.
 func WithProtocol(p string) Option {
 	return func(c *Client) {
 		if v, err := ParseProtocol(p); err == nil {
@@ -386,17 +396,6 @@ func WithoutCompression() Option {
 	}
 }
 
-// IngestResponse is the response from ingest endpoints.
-type IngestResponse struct {
-	ScanID          string   `json:"scan_id"`
-	AssetsCreated   int      `json:"assets_created"`
-	AssetsUpdated   int      `json:"assets_updated"`
-	FindingsCreated int      `json:"findings_created"`
-	FindingsUpdated int      `json:"findings_updated"`
-	FindingsSkipped int      `json:"findings_skipped"`
-	Errors          []string `json:"errors,omitempty"`
-}
-
 // HeartbeatRequest is the heartbeat payload.
 type HeartbeatRequest struct {
 	Name     string           `json:"name,omitempty"`
@@ -478,8 +477,8 @@ func (r HeartbeatRequest) MarshalJSON() ([]byte, error) {
 	}{plain(r), r.ActiveJobs})
 }
 
-// HeartbeatOutbox is the outbox state a heartbeat reports (additive to the
-// v1 heartbeat; servers that do not know it ignore it).
+// HeartbeatOutbox is the outbox state a heartbeat reports (additive;
+// servers that do not know it ignore it).
 type HeartbeatOutbox struct {
 	PendingCount     int   `json:"pending_count"`
 	PendingBytes     int64 `json:"pending_bytes"`
@@ -488,9 +487,9 @@ type HeartbeatOutbox struct {
 	EvictedCount     int64 `json:"evicted_count"`
 }
 
-// PushFindings sends a report's findings (and assets) to OpenCTEM, over
-// protocol v2 when the platform offers it (Config.Protocol) and v1
-// otherwise.
+// PushFindings sends a report's findings (and assets) to OpenCTEM over
+// protocol v2 (PUT /api/v2/sensor/results/...). A platform without protocol
+// v2 results answers ErrV2Unsupported.
 //
 // With the outbox enabled (EnableOutbox) the report is first written to disk
 // and this call waits up to OutboxConfig.SyncWait for its delivery: it
@@ -517,9 +516,9 @@ func (c *Client) PushAssets(ctx context.Context, report *ctis.Report) (*core.Pus
 	return c.pushReportDirect(ctx, report, true)
 }
 
-// pushReportDirect sends a report without the outbox: v2 or v1 by protocol,
-// with the client's retries (MaxRetries) on transient failures. v2 retries
-// reuse the report id, so they never duplicate.
+// pushReportDirect sends a report without the outbox, with the client's
+// retries (MaxRetries) on transient failures. Retries reuse the report id,
+// so they never duplicate.
 func (c *Client) pushReportDirect(ctx context.Context, report *ctis.Report, assetsOnly bool) (*core.PushResult, error) {
 	r := report
 	if assetsOnly {
@@ -527,16 +526,8 @@ func (c *Client) pushReportDirect(ctx context.Context, report *ctis.Report, asse
 		cp.Findings = nil
 		r = &cp
 	}
-	useV2, _, err := c.resultsProtocol(ctx)
-	if err != nil && !errors.Is(err, ErrV2Unsupported) && c.protocol == ProtocolAuto {
-		// Discovery failed (network): v1 is what an unknown platform speaks.
-		useV2, err = false, nil
-	}
-	if err != nil {
+	if _, err := c.resultsHello(ctx); err != nil {
 		return nil, err
-	}
-	if !useV2 {
-		return c.pushReportV1(ctx, r, assetsOnly, core.CommandIDFromContext(ctx), c.maxRetries)
 	}
 	opts := &V2PushOptions{CommandID: core.CommandIDFromContext(ctx)}
 	var prog V2Progress
@@ -567,9 +558,8 @@ func (c *Client) pushReportDirect(ctx context.Context, report *ctis.Report, asse
 		}
 		var ve *V2Error
 		switch {
-		case errors.As(err, &ve) && c.protocol == ProtocolAuto && (ve.routeMissing() || ve.ProblemName() == protov2.ProblemScopeDenied):
-			c.forceV1(!ve.routeMissing())
-			return c.pushReportV1(ctx, r, assetsOnly, core.CommandIDFromContext(ctx), c.maxRetries)
+		case isRouteMissing(err):
+			return nil, c.v2Missing(err)
 		case errors.As(err, &ve) && ve.Transient():
 		case errors.As(err, &ve), errors.Is(err, ErrV2NoTool), ctx.Err() != nil:
 			return nil, err
@@ -578,119 +568,25 @@ func (c *Client) pushReportDirect(ctx context.Context, report *ctis.Report, asse
 	return nil, fmt.Errorf("request failed after %d retries: %w", c.maxRetries, lastErr)
 }
 
-// pushReportV1 posts a report to the v1 ingest route with up to retries
-// retries. A non-empty commandID binds the report to that command
-// (legacyv1.HeaderCommandID); without it the platform treats the report as
-// unsolicited and may quarantine it.
-func (c *Client) pushReportV1(ctx context.Context, report *ctis.Report, assetsOnly bool, commandID string, retries int) (*core.PushResult, error) {
-	url := c.baseURL + legacyv1.PathIngest
-	if assetsOnly && len(report.Findings) > 0 {
-		cp := *report
-		cp.Findings = nil
-		report = &cp
-	}
-	if c.verbose {
-		fmt.Printf("[openctem] Pushing %d findings, %d assets to %s\n", len(report.Findings), len(report.Assets), url)
-	}
-	body, err := json.Marshal(report)
-	if err != nil {
-		return nil, fmt.Errorf("marshal report: %w", err)
-	}
-	var bind http.Header
-	if validCommandID(commandID) {
-		bind = http.Header{legacyv1.HeaderCommandID: {commandID}}
-	}
-	data, _, err := c.doRequestFull(ctx, "POST", url, body, bind, retries)
-	if err != nil && bind != nil && isV1CommandNotFound(err) {
-		// The command is no longer open on the platform (it finished more
-		// than the grace period ago). Send the report unbound, as the v2
-		// path does: the platform then applies its unsolicited policy.
-		if c.verbose {
-			fmt.Printf("[openctem] Command %s is no longer open; sending the report unbound\n", commandID)
-		}
-		data, _, err = c.doRequestFull(ctx, "POST", url, body, nil, retries)
-	}
-	if err != nil {
-		return nil, err
-	}
-	var resp IngestResponse
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
-	}
-	if c.verbose {
-		fmt.Printf("[openctem] Push completed: %d findings created, %d updated\n",
-			resp.FindingsCreated, resp.FindingsUpdated)
-	}
-	success := len(resp.Errors) == 0
-	message := ""
-	if !success {
-		message = fmt.Sprintf("%d errors occurred", len(resp.Errors))
-	}
-	return &core.PushResult{
-		Success:         success,
-		Message:         message,
-		FindingsCreated: resp.FindingsCreated,
-		FindingsUpdated: resp.FindingsUpdated,
-		AssetsCreated:   resp.AssetsCreated,
-		AssetsUpdated:   resp.AssetsUpdated,
-	}, nil
-}
-
-// maxCommandIDLen bounds the command id put on a v1 request header.
-const maxCommandIDLen = 128
-
-// validCommandID reports whether id can go on the v1 command header: not
-// empty, bounded, and visible ASCII only (no header injection).
-func validCommandID(id string) bool {
-	if id == "" || len(id) > maxCommandIDLen {
-		return false
-	}
-	for i := 0; i < len(id); i++ {
-		if id[i] <= ' ' || id[i] > '~' {
-			return false
-		}
-	}
-	return true
-}
-
-// isV1CommandNotFound reports whether err is the v1 404 COMMAND_NOT_FOUND
-// answer to a legacyv1.HeaderCommandID. A plain 404 (an old platform without
-// the route) is not.
-func isV1CommandNotFound(err error) bool {
-	he, ok := IsHTTPError(err)
-	if !ok || he.StatusCode != http.StatusNotFound {
-		return false
-	}
-	var body struct {
-		Code string `json:"code"`
-	}
-	return json.Unmarshal([]byte(he.Body), &body) == nil && body.Code == legacyv1.CodeCommandNotFound
-}
-
 // SendHeartbeat sends a heartbeat to OpenCTEM. It does not announce the
 // heartbeat doorbell and ignores the response body: a caller that acts on the
 // platform's hints uses SendHeartbeatWithHints instead.
 func (c *Client) SendHeartbeat(ctx context.Context, status *core.SensorStatus) error {
-	_, paused, err := c.sendHeartbeat(ctx, status, nil)
+	_, paused, err := c.sendHeartbeat(ctx, status)
 	if err == nil && paused {
 		// Protocol v2 tells a disabled sensor to pause with a 200; a caller
-		// that does not act on hints must still see a refused key, as v1's
-		// 401 told it.
+		// that does not act on hints must still see a refused key.
 		return errPausedHeartbeat()
 	}
 	return err
 }
 
-// SendHeartbeatWithHints sends a heartbeat that announces the doorbell
-// (X-OpenCTEM-Sensor-Features: doorbell) and returns the hints the platform
-// answered with. Against a server without the doorbell the hints have
-// Present=false. Announcing the feature is a promise to act on it: a disabled
-// sensor is then answered 200 with the pause action instead of 401. On
-// protocol v2 the doorbell is always on.
+// SendHeartbeatWithHints sends a heartbeat and returns the doorbell hints
+// the platform answered with (protocol v2 always has the doorbell). The
+// caller acts on them: a disabled sensor is answered 200 with the pause
+// action, not an error.
 func (c *Client) SendHeartbeatWithHints(ctx context.Context, status *core.SensorStatus) (*core.HeartbeatHints, error) {
-	data, _, err := c.sendHeartbeat(ctx, status, http.Header{
-		legacyv1.HeaderSensorFeatures: []string{legacyv1.FeatureDoorbell},
-	})
+	data, _, err := c.sendHeartbeat(ctx, status)
 	if err != nil {
 		return nil, err
 	}
@@ -704,7 +600,7 @@ var _ core.DoorbellPusher = (*Client)(nil)
 // commands this sensor listed as running that it must stop. A disabled
 // sensor's pause is an error, as in SendHeartbeat.
 func (c *Client) SendHeartbeatForCancels(ctx context.Context, status *core.SensorStatus) ([]string, error) {
-	data, paused, err := c.sendHeartbeat(ctx, status, nil)
+	data, paused, err := c.sendHeartbeat(ctx, status)
 	if err == nil && paused {
 		return nil, errPausedHeartbeat()
 	}
@@ -716,15 +612,13 @@ func (c *Client) SendHeartbeatForCancels(ctx context.Context, status *core.Senso
 
 var _ core.CancelPusher = (*Client)(nil)
 
-// sendHeartbeat sends one heartbeat on protocol v2 when the platform offers
-// it (api RFC-029 §4.3) and on v1 otherwise. extra is v1-only (the doorbell
-// feature header; v2 always has the doorbell). paused is true when v2 told a
-// disabled sensor to pause.
-func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, extra http.Header) ([]byte, bool, error) {
+// sendHeartbeat sends one heartbeat (POST /api/v2/sensor/heartbeat, api
+// RFC-029 §4.3). paused is true when the platform told a disabled sensor to
+// pause.
+func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus) ([]byte, bool, error) {
 	// Heartbeats are control traffic: the control client, no retries of a
 	// stale report beyond controlRetries (control_channel.go).
 	ctx = withControl(ctx)
-	url := c.baseURL + legacyv1.PathHeartbeat
 
 	req := HeartbeatRequest{
 		Name:       status.Name,
@@ -744,10 +638,9 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		ActiveJobsReported: status.ActiveJobsReported,
 		// Version and Hostname were declared on the request but never set, so
 		// every sensor showed "No host info" on the platform.
-		Version:    status.Version,
-		Hostname:   status.Hostname,
-		InstanceID: cmp.Or(status.InstanceID, core.ProcessInstanceID()),
-		// The manifest is a v2 feature; v1 ignores the member.
+		Version:        status.Version,
+		Hostname:       status.Hostname,
+		InstanceID:     cmp.Or(status.InstanceID, core.ProcessInstanceID()),
 		ManifestDigest: status.ManifestDigest,
 		Content:        status.Content,
 		// What the sensor reports it can do (nil: nothing reported).
@@ -794,59 +687,18 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 		}
 	}
 
-	if useV2, _ := c.controlV2(ctx, protov2.FeatureHeartbeat); useV2 {
-		raw, resp, err := c.heartbeatV2(ctx, &req)
-		if err == nil {
-			if ob != nil {
-				ob.Wake()
-			}
-			if c.verbose {
-				fmt.Printf("[openctem] Heartbeat sent (v2): %s\n", status.Status)
-			}
-			return raw, resp.Status == protov2.HeartbeatStatusPaused, nil
-		}
-		if !isRouteMissing(err) {
-			return nil, false, err
-		}
-		c.renegotiate() // the platform listed v2 heartbeat but does not serve it
-	}
-
-	body, err := json.Marshal(req)
+	raw, resp, err := c.heartbeatV2(ctx, &req)
 	if err != nil {
-		return nil, false, fmt.Errorf("marshal heartbeat: %w", err)
-	}
-
-	// Discovery of protocol v2 results (RFC-026, RFC-023 C3): the answer
-	// carries X-OpenCTEM-Protocol: 2 when the platform offers it.
-	announceV2 := c.protocol != ProtocolV1
-	if announceV2 {
-		h := http.Header{}
-		for k, vs := range extra {
-			for _, v := range vs {
-				h.Add(k, v)
-			}
-		}
-		h.Add(legacyv1.HeaderSensorFeatures, protov2.FeatureResultsV2)
-		extra = h
-	}
-
-	data, hdr, err := c.doRequestFull(ctx, "POST", url, body, extra, min(c.maxRetries, controlRetries))
-	if err != nil {
-		return nil, false, err
-	}
-	if announceV2 {
-		c.noteProtocolAdvert(hdr.Get(protov2.HeaderProtocolAdvert) == strconv.Itoa(protov2.ProtocolVersion))
+		return nil, false, c.v2Missing(err)
 	}
 	// The platform answered: deliver what waits now (doorbell).
 	if ob != nil {
 		ob.Wake()
 	}
-
 	if c.verbose {
 		fmt.Printf("[openctem] Heartbeat sent: %s\n", status.Status)
 	}
-
-	return data, false, nil
+	return raw, resp.Status == protov2.HeartbeatStatusPaused, nil
 }
 
 // TestConnection tests the API connection.
@@ -857,17 +709,6 @@ func (c *Client) TestConnection(ctx context.Context) error {
 		Message: "connection test",
 	}
 	return c.SendHeartbeat(ctx, status)
-}
-
-// checkFingerprintsRequest is the internal request for checking fingerprint existence.
-type checkFingerprintsRequest struct {
-	Fingerprints []string `json:"fingerprints"`
-}
-
-// checkFingerprintsResponse is the internal response for fingerprint check.
-type checkFingerprintsResponse struct {
-	Existing []string `json:"existing"` // Fingerprints that already exist
-	Missing  []string `json:"missing"`  // Fingerprints that don't exist
 }
 
 // CheckFingerprints checks which fingerprints already exist on the server.
@@ -882,46 +723,14 @@ func (c *Client) CheckFingerprints(ctx context.Context, fingerprints []string) (
 		}, nil
 	}
 
-	if useV2, h := c.controlV2(ctx, protov2.FeatureFingerprints); useV2 {
-		existing, missing, err := c.checkFingerprintsV2(ctx, fingerprints, h)
-		if err == nil {
-			return &retry.FingerprintCheckResult{Existing: existing, Missing: missing}, nil
-		}
-		if !isRouteMissing(err) {
-			return nil, fmt.Errorf("check fingerprints: %w", err)
-		}
-		c.renegotiate()
-	}
-
-	req := checkFingerprintsRequest{
-		Fingerprints: fingerprints,
-	}
-
-	reqBody, err := json.Marshal(req)
+	existing, missing, err := c.checkFingerprintsV2(ctx, fingerprints, c.knownHello(ctx))
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		return nil, fmt.Errorf("check fingerprints: %w", c.v2Missing(err))
 	}
-
-	url := c.baseURL + legacyv1.PathIngestCheck
-	respBody, err := c.doRequest(ctx, "POST", url, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("check fingerprints: %w", err)
-	}
-
-	var resp checkFingerprintsResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
-	}
-
 	if c.verbose {
-		fmt.Printf("[openctem] Fingerprint check: %d existing, %d missing\n",
-			len(resp.Existing), len(resp.Missing))
+		fmt.Printf("[openctem] Fingerprint check: %d existing, %d missing\n", len(existing), len(missing))
 	}
-
-	return &retry.FingerprintCheckResult{
-		Existing: resp.Existing,
-		Missing:  resp.Missing,
-	}, nil
+	return &retry.FingerprintCheckResult{Existing: existing, Missing: missing}, nil
 }
 
 const (
@@ -930,18 +739,6 @@ const (
 	// maxBackoffShift caps the exponent so 1<<shift can't overflow / explode.
 	maxBackoffShift = 16
 )
-
-type baselineDiffRequest struct {
-	Repository   string   `json:"repository"`
-	BaseBranch   string   `json:"base_branch"`
-	Fingerprints []string `json:"fingerprints"`
-}
-
-type baselineDiffResponse struct {
-	New               []string `json:"new_fingerprints"`
-	PreExisting       []string `json:"pre_existing_fingerprints"`
-	BaseBranchScanned bool     `json:"base_branch_scanned"`
-}
 
 // BaselineDiff returns the subset of fingerprints that are NEW relative to a PR's
 // base/target branch (not already open there). Used to focus a PR gate / inline
@@ -952,41 +749,14 @@ func (c *Client) BaselineDiff(ctx context.Context, repository, baseBranch string
 	if len(fingerprints) == 0 {
 		return []string{}, nil
 	}
-	if useV2, h := c.controlV2(ctx, protov2.FeatureFingerprints); useV2 {
-		out, err := c.baselineDiffV2(ctx, repository, baseBranch, fingerprints, h)
-		if err == nil {
-			return out, nil
-		}
-		if !isRouteMissing(err) {
-			return nil, fmt.Errorf("baseline diff: %w", err)
-		}
-		c.renegotiate()
-	}
-
-	reqBody, err := json.Marshal(baselineDiffRequest{
-		Repository:   repository,
-		BaseBranch:   baseBranch,
-		Fingerprints: fingerprints,
-	})
+	out, err := c.baselineDiffV2(ctx, repository, baseBranch, fingerprints, c.knownHello(ctx))
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	url := c.baseURL + legacyv1.PathIngestBaselineDiff
-	respBody, err := c.doRequest(ctx, "POST", url, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("baseline diff: %w", err)
-	}
-
-	var resp baselineDiffResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
+		return nil, fmt.Errorf("baseline diff: %w", c.v2Missing(err))
 	}
 	if c.verbose {
-		fmt.Printf("[openctem] Baseline diff: %d new, %d pre-existing (base scanned=%v)\n",
-			len(resp.New), len(resp.PreExisting), resp.BaseBranchScanned)
+		fmt.Printf("[openctem] Baseline diff: %d new\n", len(out))
 	}
-	return resp.New, nil
+	return out, nil
 }
 
 // doRequest performs an HTTP request with retry logic.
@@ -1097,7 +867,7 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
+	c.setAuth(req)
 	req.Header.Set("User-Agent", c.userAgentHeader())
 
 	// Add Content-Encoding header if compressed
@@ -1105,10 +875,6 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 		req.Header.Set("Content-Encoding", contentEncoding)
 	}
 
-	// Add sensor ID header for audit trail
-	if c.sensorID != "" {
-		req.Header.Set(legacyv1.HeaderSensorID, c.sensorID)
-	}
 	for k, vs := range extra {
 		for _, v := range vs {
 			req.Header.Add(k, v)
@@ -1120,7 +886,6 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 		return nil, nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
-	c.noteV1Deprecation(resp.Header)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Best effort: a truncated or failed read still yields a useful error.
@@ -1297,8 +1062,26 @@ func (c *Client) SetAPIKey(key string) {
 // APIKeyHint names the client's API key in log lines without revealing it
 // (core.APIKeyHint: at most its first 8 characters).
 func (c *Client) APIKeyHint() string {
+	if c.signed {
+		if st, ok := c.httpClient.Transport.(*sensorsig.Transport); ok {
+			return core.KeyBoundHint(st.Signer.KeyID())
+		}
+	}
 	return core.APIKeyHint(c.getAPIKey())
 }
+
+// setAuth sets the bearer key; a key-bound client sends none (its
+// transport signs the request).
+func (c *Client) setAuth(req *http.Request) {
+	if c.signed {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
+}
+
+// KeyBound reports whether the client signs its requests with a sensor key
+// instead of sending a bearer key.
+func (c *Client) KeyBound() bool { return c.signed }
 
 // getAPIKey returns the current API key under a read lock.
 func (c *Client) getAPIKey() string {
@@ -1625,107 +1408,6 @@ func (c *Client) GetKEVEntries(ctx context.Context, cveIDs []string) ([]KEVEntry
 }
 
 // =============================================================================
-// Chunked Upload API
-// =============================================================================
-
-// ChunkUploadResponse is the response from chunk upload endpoint.
-type ChunkUploadResponse struct {
-	ChunkID         string `json:"chunk_id"`
-	ReportID        string `json:"report_id"`
-	ChunkIndex      int    `json:"chunk_index"`
-	Status          string `json:"status"`
-	AssetsCreated   int    `json:"assets_created"`
-	AssetsUpdated   int    `json:"assets_updated"`
-	FindingsCreated int    `json:"findings_created"`
-	FindingsUpdated int    `json:"findings_updated"`
-	FindingsSkipped int    `json:"findings_skipped"`
-}
-
-// UploadChunk uploads a single chunk of a large report.
-// This implements the chunk.Uploader interface.
-func (c *Client) UploadChunk(ctx context.Context, data *chunk.ChunkData) error {
-	url := c.baseURL + legacyv1.PathIngestChunk
-
-	if c.verbose {
-		fmt.Printf("[openctem] Uploading chunk %d/%d for report %s\n",
-			data.ChunkIndex+1, data.TotalChunks, data.ReportID)
-	}
-
-	// Serialize chunk data
-	chunkJSON, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("marshal chunk data: %w", err)
-	}
-
-	// Compress chunk data using ZSTD (default)
-	var compressedData []byte
-	compressionAlgo := "zstd"
-
-	if c.compressor != nil {
-		compressedData, err = c.compressor.Compress(chunkJSON)
-		if err != nil {
-			return fmt.Errorf("compress chunk data: %w", err)
-		}
-		compressionAlgo = string(c.compressor.Algorithm())
-	} else {
-		// Use default ZSTD compressor
-		compressedData, err = compress.QuickCompress(chunkJSON)
-		if err != nil {
-			return fmt.Errorf("compress chunk data: %w", err)
-		}
-	}
-
-	// Base64 encode compressed data
-	encodedData := base64.StdEncoding.EncodeToString(compressedData)
-
-	// Build request body
-	reqBody := struct {
-		ReportID    string `json:"report_id"`
-		ChunkIndex  int    `json:"chunk_index"`
-		TotalChunks int    `json:"total_chunks"`
-		Compression string `json:"compression"`
-		Data        string `json:"data"`
-		IsFinal     bool   `json:"is_final"`
-	}{
-		ReportID:    data.ReportID,
-		ChunkIndex:  data.ChunkIndex,
-		TotalChunks: data.TotalChunks,
-		Compression: compressionAlgo,
-		Data:        encodedData,
-		IsFinal:     data.IsFinal,
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return fmt.Errorf("marshal request: %w", err)
-	}
-
-	// Send request (the body itself is not compressed at HTTP level since data is base64)
-	respBody, err := c.doRequest(ctx, "POST", url, body)
-	if err != nil {
-		return fmt.Errorf("upload chunk: %w", err)
-	}
-
-	var resp ChunkUploadResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return fmt.Errorf("unmarshal response: %w", err)
-	}
-
-	if c.verbose {
-		fmt.Printf("[openctem] Chunk %d/%d uploaded: %d findings, %d assets\n",
-			data.ChunkIndex+1, data.TotalChunks, resp.FindingsCreated, resp.AssetsCreated)
-	}
-
-	return nil
-}
-
-// AsChunkUploader returns the client as a chunk.Uploader interface.
-// This is useful for passing to chunk.Manager.
-func (c *Client) AsChunkUploader() chunk.Uploader {
-	return c
-}
-
-// =============================================================================
 // Suppression API
 // =============================================================================
 
@@ -1742,9 +1424,7 @@ type SuppressionRule struct {
 // platform, for the security gate to leave out findings the platform has
 // suppressed.
 //
-// It calls the sensor route (legacyv1.PathSuppressions). An API that predates
-// that route answers 404; the client then tries the user route
-// (legacyv1.PathSuppressionsUser) once, which only accepts a user token.
+// It calls GET /api/v2/sensor/suppressions (revalidated with its ETag).
 //
 // A failure is returned, never swallowed: the caller decides whether a gate
 // may run without suppressions, and should say so where the operator sees it.
@@ -1753,45 +1433,14 @@ func (c *Client) GetSuppressions(ctx context.Context) ([]SuppressionRule, error)
 		fmt.Println("[openctem] Fetching suppression rules")
 	}
 
-	if useV2, _ := c.controlV2(ctx, protov2.FeatureSuppressions); useV2 {
-		rules, err := c.suppressionsV2(ctx)
-		if err == nil {
-			if c.verbose {
-				fmt.Printf("[openctem] Fetched %d suppression rules (v2)\n", len(rules))
-			}
-			return rules, nil
-		}
-		if !isRouteMissing(err) {
-			return nil, fmt.Errorf("fetch suppression rules: %w", err)
-		}
-		c.renegotiate()
-	}
-
-	data, err := c.doRequest(ctx, http.MethodGet, c.baseURL+legacyv1.PathSuppressions, nil)
-	if err != nil && IsNotFoundError(err) {
-		data, err = c.doRequest(ctx, http.MethodGet, c.baseURL+legacyv1.PathSuppressionsUser, nil)
-	}
+	rules, err := c.suppressionsV2(ctx)
 	if err != nil {
-		if IsAuthenticationError(err) || IsAuthorizationError(err) {
-			return nil, fmt.Errorf("fetch suppression rules: the platform refused this key (%w); "+
-				"the platform needs %s (OpenCTEM API with sensor suppressions)", err, legacyv1.PathSuppressions)
-		}
-		return nil, fmt.Errorf("fetch suppression rules: %w", err)
+		return nil, fmt.Errorf("fetch suppression rules: %w", c.v2Missing(err))
 	}
-
-	var resp struct {
-		Rules []SuppressionRule `json:"rules"`
-		Count int               `json:"count"`
-	}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("unmarshal suppressions response: %w", err)
-	}
-
 	if c.verbose {
-		fmt.Printf("[openctem] Fetched %d suppression rules\n", resp.Count)
+		fmt.Printf("[openctem] Fetched %d suppression rules\n", len(rules))
 	}
-
-	return resp.Rules, nil
+	return rules, nil
 }
 
 // FilterSuppressedFindings removes findings that match suppression rules.

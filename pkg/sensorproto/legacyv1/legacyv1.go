@@ -1,96 +1,33 @@
-// Package legacyv1 is the only place the SDK still speaks the pre-sensor
-// "agent" vocabulary (RFC-023 §9.5). It mirrors the API's
-// pkg/sensorproto/legacyv1.
+// Package legacyv1 is the only place the SDK still spells the pre-sensor
+// "agent" vocabulary (RFC-023 §9.5).
 //
-// Two kinds of name keep the old spelling, both because something already
-// deployed depends on the exact bytes:
+// Sensor protocol v1 (the /api/v1/agent/* wire) is retired: the platform
+// removed it in 2026-10 and the SDK speaks protocol v2 only. What stays here
+// is what existing installations and the platform-sensor routes still carry:
 //
-//   - Sensor protocol v1, the wire between a sensor and the API: the
-//     /api/v1/agent/* routes, the X-Agent-ID header, the "agent_id" and
-//     "agent_preference" JSON keys and the "agent" CTIS discovery source.
-//     Protocol v1 is frozen (RFC-023 §9.2 C1). It is retired by raising the
-//     minimum sensor protocol, never by renaming. Go struct tags cannot refer
-//     to constants, so the "agent_id" keys also appear in the tags of the wire
-//     types; the golden test in ./goldentest pins every request and response
-//     byte for byte.
-//   - Configuration an existing installation already has on disk or in its
-//     environment: the AGENT_* environment variables and the
-//     ~/.openctem/agent-credentials.json file. Each is read under its old name
-//     only to migrate it (see env.go, and platform.EnsureRegistered for the
-//     credentials file).
+//   - configuration on disk or in the environment: the AGENT_* environment
+//     variables and flags and the ~/.openctem/agent-credentials.json file,
+//     each read under its old name only to migrate it (env.go, migrate.go,
+//     config.go, and platform.EnsureRegistered for the credentials file);
+//   - the sensor-id header and JSON key the platform-sensor routes
+//     (/api/v1/platform/*) and the gRPC transport still use.
 //
 // Everything else in the SDK uses sensor terms.
 //
 // Stability: Frozen (docs/STABILITY.md): no additions; removed when the
-// protocol it serves is sunset.
+// configuration and routes it serves are retired.
 package legacyv1
 
-// Protocol v1 routes (tenant sensors). The platform-sensor routes live under
-// /api/v1/platform/* and carry no "agent" in their path.
+// Header and metadata names of the platform-sensor routes and the gRPC
+// transport.
 const (
-	// PathPrefix is the sensor protocol v1 mount (sensor API-key auth).
-	PathPrefix = "/api/v1/agent"
-
-	PathHeartbeat          = PathPrefix + "/heartbeat"
-	PathIngest             = PathPrefix + "/ingest"
-	PathIngestCheck        = PathPrefix + "/ingest/check"
-	PathIngestBaselineDiff = PathPrefix + "/ingest/baseline-diff"
-	PathIngestChunk        = PathPrefix + "/ingest/chunk"
-	PathCommands           = PathPrefix + "/commands"
-	// PathRenew is the sensor's API-key self-renewal (RFC-014).
-	PathRenew = PathPrefix + "/renew"
-	// PathSuppressions lists the tenant's active suppression rules for the
-	// sensor's security gate. Additive to v1 (2026-10): before it the SDK
-	// called the user route PathSuppressionsUser with the sensor key, which
-	// the API always refused (401), so the gate never applied suppressions.
-	PathSuppressions = PathPrefix + "/suppressions"
-	// PathSuppressionsUser is the user-authenticated route the SDK falls back
-	// to when an API without PathSuppressions answers 404.
-	PathSuppressionsUser = "/api/v1/suppressions/active"
-)
-
-// PathCommand returns the v1 route of an action on one command
-// (acknowledge, start, complete, fail). id must already be path-escaped.
-func PathCommand(id, action string) string {
-	return PathCommands + "/" + id + "/" + action
-}
-
-// Protocol v1 header and metadata names.
-const (
-	// HeaderSensorID carries the sensor's id on every v1 request, for the
-	// audit trail.
+	// HeaderSensorID carries the sensor id on platform-sensor requests.
 	HeaderSensorID = "X-Agent-ID"
 	// GRPCMetadataSensorID is the same for the gRPC transport.
 	GRPCMetadataSensorID = "x-agent-id"
-
-	// HeaderSensorFeatures lists, comma-separated, the optional protocol
-	// features a sensor acts on. Additive to v1: a server that does not know
-	// it ignores it.
-	HeaderSensorFeatures = "X-OpenCTEM-Sensor-Features"
-	// FeatureDoorbell: the sensor acts on the heartbeat doorbell hints
-	// (RFC-023 §9.2a).
-	FeatureDoorbell = "doorbell"
-
-	// HeaderCommandID binds a v1 ingest request to the command it is the
-	// result of (api RFC-040 §5.3). The platform checks that the command is
-	// assigned to this sensor and open; a report without it is unsolicited.
-	// Additive to v1: a server that does not know it ignores it.
-	HeaderCommandID = "X-OpenCTEM-Command-ID"
-	// CodeCommandNotFound is the v1 error code (HTTP 404) for a
-	// HeaderCommandID that names no command open on this sensor.
-	CodeCommandNotFound = "COMMAND_NOT_FOUND"
 )
 
-// Protocol v1 JSON keys and values.
-const (
-	// FieldSensorID is the JSON key of the sensor id in v1 request and
-	// response bodies (registration response, lease info, exposure ingest).
-	FieldSensorID = "agent_id"
-	// PayloadKeySensorPreference is the job-payload key the API uses for the
-	// sensor selection mode (auto | tenant | platform).
-	PayloadKeySensorPreference = "agent_preference"
-	// DiscoverySourceSensor is the CTIS discovery_source a sensor puts on the
-	// assets it discovered itself. The API accepts it and stores "sensor";
-	// an API from before the rename knows only this value.
-	DiscoverySourceSensor = "agent"
-)
+// FieldSensorID is the JSON key of the sensor id in the platform-sensor
+// registration response and lease info, and in credentials files written by
+// older SDKs.
+const FieldSensorID = "agent_id"

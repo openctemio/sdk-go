@@ -64,7 +64,7 @@ client := client.New(&client.Config{
 - Registered in the backend database
 - Receives commands from the server
 - Sends heartbeats to report status
-- All pushed data is tagged with the sensor id for audit trail (sent as the protocol v1 `X-Agent-ID` header)
+- All pushed data is attributed to the sensor by its key (protocol v2 identifies a sensor by its key alone)
 
 **Sensor types:**
 
@@ -127,22 +127,21 @@ poller.SetDoorbell(bell) // polls when the doorbell rings
 | `config_version` | `Doorbell.ConfigVersion()`; changes are logged |
 
 The hints only say *that* work is waiting; jobs are still fetched and claimed
-through `GET /api/v1/agent/commands`. There is no free-text or shell action.
+through `GET /api/v2/sensor/commands`. There is no free-text or shell action.
 
 ### Results delivery: protocol v2 and the durable outbox
 
-**Protocol.** `client.Config.Protocol` is `auto` (default), `v1` or `v2`. In
-`auto` the heartbeat announces `X-OpenCTEM-Sensor-Features: results-v2`; a
-platform with protocol v2 results (api RFC-026) answers
-`X-OpenCTEM-Protocol: 2`, and the client reads `GET /api/v2/sensor/hello` for
-the limits. Results then go as
+**Protocol.** Protocol v2 is the only sensor protocol (the platform retired
+v1 in 2026-10). `client.Config.Protocol` is `auto` (default) or `v2`, which
+are the same; `v1` is refused. The client reads `GET /api/v2/sensor/hello`
+for the features and limits. Results go as
 `PUT /api/v2/sensor[/commands/{command_id}]/results/{report_id}` with
 `Content-Type: application/vnd.openctem.ctis.v1+json`, a `Content-Digest`
 (sha-256 of the bytes as sent) and zstd. Reports over the per-request limits
 are sent as segments (each a complete CTIS document with the report's tool,
 metadata and the assets its findings reference; `chunk.SplitSegments`) and a
-commit. A platform without v2 gets the v1 routes, byte for byte as before.
-`v1` never touches v2; `v2` fails against a platform without it.
+commit. A platform without protocol v2 answers `client.ErrV2Unsupported`;
+the outbox keeps the report queued until the platform serves v2.
 
 | v2 answer | SDK |
 |---|---|

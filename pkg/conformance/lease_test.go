@@ -14,7 +14,6 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
-	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
@@ -133,52 +132,6 @@ func TestLease_NoEpochNoHeader(t *testing.T) {
 	for _, r := range f.Requests() {
 		if v := r.Header.Values(protov2.HeaderLeaseEpoch); len(v) > 0 {
 			t.Fatalf("%s %s sent %s %q", r.Method, r.Path, protov2.HeaderLeaseEpoch, v)
-		}
-	}
-}
-
-// Protocol v1 never carries the header, even for a command whose epoch the
-// client learned on v2 before falling back.
-func TestLease_V1NeverSendsHeader(t *testing.T) {
-	f := newControlFake(t)
-	id := "0192a3b4-0000-7000-8000-000000000107"
-	f.QueueCommand(id)
-	c := newClient(t, f, client.ProtocolAuto)
-	claimAndStart(t, c, id)
-	f.SetFault(func(r *http.Request, _ int) *FaultAnswer {
-		if strings.HasSuffix(r.URL.Path, "/complete") && strings.HasPrefix(r.URL.Path, protov2.PathPrefix) {
-			return &FaultAnswer{Status: http.StatusNotFound}
-		}
-		return nil
-	})
-	if err := c.CompleteCommand(context.Background(), id, nil); err != nil {
-		t.Fatal(err)
-	}
-	// The epoch was known: the v2 attempt carried it.
-	if got := leaseHeaders(f, id, protov2.CompleteAction); len(got) != 1 || got[0] != "1" {
-		t.Fatalf("v2 complete lease headers %q", got)
-	}
-	v1 := f.RequestsTo(http.MethodPost, legacyv1.PathCommands+"/"+id+"/complete")
-	if len(v1) != 1 {
-		t.Fatalf("requests %v", paths(f.Requests()))
-	}
-	if len(v1[0].Header.Values(protov2.HeaderLeaseEpoch)) > 0 {
-		t.Fatalf("v1 complete carries %s", protov2.HeaderLeaseEpoch)
-	}
-
-	f1 := NewFakePlatform(true)
-	defer f1.Close()
-	f1.SetControl(true)
-	f1.QueueCommand(id)
-	c1 := newClient(t, f1, client.ProtocolV1)
-	claimAndStart(t, c1, id)
-	_ = c1.FailCommand(context.Background(), id, "boom")
-	for _, r := range f1.Requests() {
-		if len(r.Header.Values(protov2.HeaderLeaseEpoch)) > 0 {
-			t.Fatalf("v1 %s %s carries %s", r.Method, r.Path, protov2.HeaderLeaseEpoch)
-		}
-		if strings.HasPrefix(r.Path, protov2.PathPrefix+protov2.CommandsPath) {
-			t.Fatalf("v1 client used v2 command route %s", r.Path)
 		}
 	}
 }

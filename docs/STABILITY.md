@@ -41,11 +41,12 @@ without a tier fails the job.
 | `pkg/testkit` | Run a tool in-process with the runtime's rules; golden CTIS | Stable |
 | `pkg/importtool` | The file importer as a parser-class tool: Nessus, Qualys with KnowledgeBase, DefectDojo Generic JSON, CycloneDX, SPDX, osv-scanner, CSAF and OpenVEX files to CTIS (the `ctis/importer` package), sandboxed with no network | Beta |
 | `pkg/sensorkit/toolhost` | The runtime side of the tool contract: runs one task out of process and checks, assembles and stamps its output | Beta |
+| `pkg/sensorkit/identity` | A key-bound sensor's identity on disk (permission-checked) and the interactive pairing client (api RFC-052) | Beta |
 | `pkg/sensorkit/executor` | Per-task tool sandbox behind a small backend interface (`Backend`, `TaskSpec`, `Status`) | Beta |
 | `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries, the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | Stable; its runtime internals are Internal-bound and its overlapping tool interfaces are replaced by the tool contract (RFC) |
-| `pkg/client` | Platform protocol client (v2 negotiated, v1 fallback) | Stable; its protocol internals are Internal-bound |
+| `pkg/client` | Platform protocol client (protocol v2; v1 is retired) | Stable; its protocol internals are Internal-bound |
 | `pkg/sensorproto/v2` | Protocol v2 wire types | Frozen once protocol v3 ships; Stable until then |
-| `pkg/sensorproto/legacyv1` | Protocol v1 wire vocabulary | Frozen |
+| `pkg/sensorproto/legacyv1` | Pre-sensor names still read from existing installations (AGENT_* settings, credentials file) and the platform-sensor header | Frozen |
 | `pkg/sensorproto/pairing` | Interactive pairing protocol (api RFC-052): wire types, commitment, SAS, codes, shared test vectors | Beta |
 | `pkg/sensorsig` | RFC 9421 request signatures of a key-bound sensor (api RFC-052 §4.3): signer, verifier, signing transport | Beta |
 | `pkg/ctis` | CTIS types: re-exports `github.com/openctemio/ctis` (generated aliases; the `ctis-parity` CI job fails when they are stale) | Stable, follows CTIS |
@@ -144,18 +145,17 @@ a new member sends nothing new.
 
 **Feature negotiation.** The platform's hello (`GET /api/v2/sensor/hello`,
 `protov2.Hello`) carries `protocol`, `features`, media types, encodings,
-digests, limits and `deprecations`. The client asks it before using a
-protocol v2 resource and falls back to v1 per resource when a feature is
-not listed (`Client.controlV2`), so a sensor works against older and newer
-platforms alike. A sensor gates its own optional behavior the same way
-with `Client.PlatformSupports(ctx, feature)`, which also answers for
-feature names newer than the SDK. Per-sensor policy (allowed tools,
+digests, limits and `deprecations`. Protocol v2 is the only sensor
+protocol: the platform retired v1 in 2026-10, and a platform that does not
+serve a v2 route answers `client.ErrV2Unsupported` (no fall-back). A sensor
+gates optional behavior with `Client.PlatformSupports(ctx, feature)`, which
+also answers for feature names newer than the SDK. Per-sensor policy (allowed tools,
 slim heartbeats) comes back on the manifest answer (`core.ManifestAck`).
 
 **Versions.** `protov2.ProtocolVersion` is the protocol level; a hello
-below it means v1 only. A protocol is retired with a `deprecations` entry on
-hello (`protocol_v1`, with a sunset date) long before the platform drops it.
-A sensor can be pinned with `SENSOR_PROTOCOL=v1|v2|auto` (default `auto`).
+below it means no protocol v2. A protocol is retired with a `deprecations`
+entry on hello before the platform drops it. `SENSOR_PROTOCOL` takes `auto`
+(default) or `v2`, which are the same; `v1` is refused.
 
 ## 4. Versioning
 
