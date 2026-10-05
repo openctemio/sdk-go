@@ -44,3 +44,22 @@ func TestInteropMembersReExported(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The version bump keeps older reports readable: every supported version
+// decodes and validates, 1.3 included.
+func TestSupportedVersionsReExported(t *testing.T) {
+	vs := SupportedSchemaVersions()
+	if len(vs) == 0 || vs[len(vs)-1] != SchemaVersion || SchemaVersion != "1.4" {
+		t.Fatalf("supported %v, current %s", vs, SchemaVersion)
+	}
+	if !IsSupportedVersion("1.3") || IsSupportedVersion("1.5") {
+		t.Fatal("IsSupportedVersion")
+	}
+	var r Report
+	if err := json.Unmarshal([]byte(`{"version":"1.3","metadata":{"timestamp":"2026-10-02T00:00:00Z"},"findings":[{"type":"vulnerability","title":"t","severity":"high"}]}`), &r); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a 1.3 report no longer validates: %v", err)
+	}
+}

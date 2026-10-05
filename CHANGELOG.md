@@ -4,7 +4,13 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Upgrade notes
+
+- **CTIS 1.4** (`pkg/ctis` follows `github.com/openctemio/ctis`): `ctis.SchemaVersion` changed from `"1.3"` to `"1.4"`, so `NewReport()` and every adapter now stamp `"version": "1.4"`. Reports declaring 1.0 to 1.3 are still accepted, decode strictly and validate. Code that compared a version against the literal `"1.3"` should use `ctis.SupportedSchemaVersions()` / `ctis.IsSupportedVersion()` (versions this SDK knows every member of) or `ctis.IsCompatibleVersion()` (any minor of major 1). The OpenCTEM API accepts the 1.4 stamp today; do not send the new 1.4 members until the API runs a ctis 1.4 build.
+
 ### Added
+
+- `pkg/ctis` re-exports the CTIS 1.4 interoperability members (`finding.native`, `scores`, `vex`, `source_lifecycle`, `source_extra`, `vulnerability.ids`, remediation solution metadata, `asset.identity_hints`) and their normalizers (`NormalizeNativeSeverity`, `NormalizeNativeStatus`, `NormalizeVEXStatus`, `NormalizeVEXJustification`, `NormalizeVulnerabilityID`, `PreferredVulnerabilityID`, `LocationKey`, `AllScores`, `SetSourceExtra`), plus `SupportedSchemaVersions` and `IsSupportedVersion`.
 
 - **Per-task tool sandbox** (`pkg/sensorkit/executor`). Every tool run
   (`core.ExecuteScanner`, `StreamScanner`, `BaseScanner`) goes through one
