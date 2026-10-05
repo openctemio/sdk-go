@@ -32,13 +32,29 @@ func newCA(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
 	return c, key
 }
 
-func serverWithChain(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, sendCA bool) *httptest.Server {
+func serverWithChain(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, sendCA bool, dnsNames ...string) *httptest.Server {
 	t.Helper()
+	if len(dnsNames) == 0 {
+		dnsNames = []string{"localhost"}
+	}
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	tpl := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "platform"},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		KeyUsage: x509.KeyUsageDigitalSignature}
+		DNSNames: dnsNames, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
+	if ca == nil { // self-signed platform certificate
+		tpl.IsCA, tpl.BasicConstraintsValid = true, true
+		tpl.KeyUsage |= x509.KeyUsageCertSign
+		der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+		srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, MinVersion: tls.VersionTLS12}
+		srv.StartTLS()
+		t.Cleanup(srv.Close)
+		return srv
+	}
 	der, err := x509.CreateCertificate(rand.Reader, tpl, ca, &key.PublicKey, caKey)
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +68,12 @@ func serverWithChain(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// byName is the server URL with the host name localhost instead of 127.0.0.1:
+// a pinned connection needs a host name to check the certificate against.
+func byName(srv *httptest.Server) string {
+	return strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
 }
 
 func get(t *testing.T, url string) error {
@@ -73,25 +95,39 @@ func TestPinnedCA(t *testing.T) {
 
 	withCA := serverWithChain(t, ca, caKey, true)
 	SetAPIPinnedCA(sum[:])
-	if err := get(t, withCA.URL); err != nil {
+	if err := get(t, byName(withCA)); err != nil {
 		t.Fatalf("pinned CA in the chain: %v", err)
 	}
 	SetAPIPinnedCA(otherSum[:])
-	if err := get(t, withCA.URL); err == nil {
+	if err := get(t, byName(withCA)); err == nil {
 		t.Fatal("another pin must refuse the server")
 	}
 	withoutCA := serverWithChain(t, ca, caKey, false)
 	SetAPIPinnedCA(sum[:])
-	if err := get(t, withoutCA.URL); err == nil {
+	if err := get(t, byName(withoutCA)); err == nil {
 		t.Fatal("a chain without the pinned certificate must be refused")
 	}
 	// The leaf itself may be pinned (self-signed platform certificate).
-	self := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
-	defer self.Close()
+	self := serverWithChain(t, nil, nil, false)
 	leaf := sha256.Sum256(self.Certificate().Raw)
 	SetAPIPinnedCA(leaf[:])
-	if err := get(t, self.URL); err != nil {
+	if err := get(t, byName(self)); err != nil {
 		t.Fatalf("pinned self-signed certificate: %v", err)
+	}
+}
+
+// crypto/tls leaves the server name empty for an IP address (no SNI) and
+// x509 then skips the name check, so a pinned connection to an IP address is
+// refused instead of verified without a name.
+func TestPinnedCARefusesAnIPAddressURL(t *testing.T) {
+	ca, caKey := newCA(t)
+	sum := sha256.Sum256(ca.Raw)
+	t.Cleanup(func() { SetAPIPinnedCA(nil) })
+	srv := serverWithChain(t, ca, caKey, true)
+	SetAPIPinnedCA(sum[:])
+	err := get(t, srv.URL) // https://127.0.0.1:port
+	if err == nil || !strings.Contains(err.Error(), "host name") {
+		t.Fatalf("a pinned connection to an IP address must be refused: %v", err)
 	}
 }
 
@@ -115,7 +151,7 @@ func TestPinnedCAStillChecksTheName(t *testing.T) {
 	ca, caKey := newCA(t)
 	sum := sha256.Sum256(ca.Raw)
 	t.Cleanup(func() { SetAPIPinnedCA(nil) })
-	srv := serverWithChain(t, ca, caKey, true) // certificate for 127.0.0.1 only
+	srv := serverWithChain(t, ca, caKey, true, "platform.invalid") // not issued for localhost
 	SetAPIPinnedCA(sum[:])
 	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
 	err := get(t, "https://localhost:"+port)

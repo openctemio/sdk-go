@@ -73,7 +73,17 @@ func pinnedTLSConfig(pin []byte) *tls.Config {
 	}
 }
 
+// ErrPinnedCANoServerName is a pinned connection without a server name to
+// check the certificate against. crypto/tls leaves ConnectionState.ServerName
+// empty when the platform URL is an IP address (no SNI), and x509 skips the
+// name check for an empty DNSName, so such a connection is refused: with a
+// pin, the platform URL must use a host name.
+var ErrPinnedCANoServerName = errors.New("httpsec: a pinned platform CA needs a host name in the platform URL, not an IP address")
+
 func verifyPinned(cs tls.ConnectionState, pin []byte) error {
+	if cs.ServerName == "" {
+		return ErrPinnedCANoServerName
+	}
 	if len(cs.PeerCertificates) == 0 {
 		return ErrPinnedCAMismatch
 	}

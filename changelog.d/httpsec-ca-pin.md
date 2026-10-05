@@ -8,3 +8,4 @@
   is set; the name, validity and key usage are still checked. This is what
   makes the first contact of a pairing sensor safe from a fake platform
   (api RFC-052).
+- With a pin, the platform URL must use a host name: crypto/tls sends no server name for an IP address and x509 would skip the name check, so a pinned connection to an IP address is refused (`ErrPinnedCANoServerName`).
