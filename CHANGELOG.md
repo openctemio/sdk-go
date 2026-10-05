@@ -29,6 +29,18 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `ExecResult` carries the sandbox status it ran under. No Docker socket is
   ever used.
 
+- **Structured policy refusals** (api research/25 §3.6, D8). A command a
+  policy refused (the local policy's admission or executor checks, the kill
+  switch, the platform's tool gate) is reported with
+  `core.CommandResult.Refusal` (`core.Refusal{Layer, Rule, Detail}`; layers
+  `builtin`, `local`, `managed`, `scope`, `platform_tool_gate`). The client
+  sends it as `refusal` on v2 `POST /commands/{id}/fail` when the platform's
+  hello lists the new feature `refusal` (`protov2.FeatureRefusal`), so the
+  platform re-queues routed work to another sensor; the failure text is
+  unchanged. `core.RefusalOf(err)` builds it; `LocalPolicyError` gains
+  `Layer`. Values are bounded: unknown layers become `local`, malformed rules
+  `unknown`, details lose control and bidi characters and stop at 512 bytes.
+
 - **HTTP probe results keep what they learned about the server** (api
   research/22 E5). `core.LiveHost` gains `TLS` (`core.TLSLeaf`: the leaf
   certificate's subject, SANs, issuer, serial, validity and SHA-256
