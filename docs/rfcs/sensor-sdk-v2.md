@@ -437,7 +437,7 @@ Runtime → adapter:
 | `hello` | `protocol: [1]`, `runtime: {name, version, os, arch}`, `limits: {max_line, max_records, max_output_bytes, max_artifact_bytes}`, `features: ["artifacts","progress","credentials","target_status"]` | first message |
 | `describe` | — | answer `manifest` |
 | `validate` | `task` | answer `validation` |
-| `run` | `task: {id, attempt, deadline, targets[], config, inputs[], workdir, credentials: [{name, file}], repo?, scope}` | starts the task |
+| `run` | `task: {id, attempt, deadline, targets[], config, inputs[], workdir, credentials: [{name, value}], repo?, scope, local?}` | starts the task; `credentials` holds only what the manifest declares and the operator stored; `local` is configuration a sensor supplies to a tool compiled into it |
 | `cancel` | `reason` | then SIGTERM after `grace` (default 10 s), SIGKILL after 2×grace |
 
 Adapter → runtime:
@@ -452,10 +452,11 @@ Adapter → runtime:
 | `record` | `kind: asset|finding|dependency`, `target`, `data` (one CTIS object) | validated on arrival |
 | `target_status` | `target`, `status: done|failed|skipped`, `error?: {class, detail}` | coverage |
 | `artifact` | `name`, `media_type`, `path` (relative to workdir), `sha256`, `size` | runtime opens it beneath the workdir (no symlink escape), checks size and digest |
+| `report_info` | `info: {tool, metadata, properties}` | a report's non-record parts (the tool name is always the manifest's) |
 | `heartbeat` | — | keeps a quiet adapter alive under `idle_timeout` |
 | `result` | `status: ok|partial|failed|canceled`, `error?: {class, retryable, retry_after_ms, detail}`, `stats` | final; exit 0 afterwards |
 
-Exiting without `result` is `tool_crashed`. A `result` claiming `ok` while targets were never reported is downgraded to `partial` by the runtime.
+Exiting without `result` is `tool_crashed`. A `result` claiming `ok` while targets were never reported is downgraded to `partial` by the runtime. The manifest returned by `describe` is compared without its `run` section (how a tool is started is the runtime's business).
 
 Example exchange:
 
@@ -617,7 +618,7 @@ Suites take a `conformance.T` (the subset of `testing.TB` they use), so the same
 2. **Resolve the tool** by name to its loaded manifest (embedded or signed `tool.yaml`, catalogue pin when enabled).
 3. **Admission.** Effective permission = manifest ∩ L0 built-in ∩ L1 local policy ∩ L2 managed policy ∩ job. Check the tier against `tiers.max`, each target against the target guard (private ranges need both switches, metadata endpoints refused, local deny lists). Refused targets get `refused_by_policy`; a fully refused job is released for another sensor (RFC-040 refusal re-queue).
 4. **Validate input.** Config against the manifest schema (strict); extra arguments against the dangerous-flag list; inputs against declared media types and sizes.
-5. **Credentials.** The broker writes only declared and granted credentials into a per-task file (mode 0400, tmpfs where available) and passes its path. Wiped at the end.
+5. **Credentials.** The broker delivers only declared and granted credentials, inside the `run` message on the task's stdin: never as a file, argument or environment variable, so another task under the same user has nothing to read (the adapter process also makes itself non-dumpable). Their values are masked in everything the runtime keeps.
 6. **Execute.** `executor.Backend.Prepare(TaskSpec{…})` with limits = manifest ∧ policy, the network class, the write and read-only paths and the protected paths denied; then start the adapter.
 7. **Stream.** The adapter host validates every message and record (schema, produces, caps, sanitization), stamps provenance (tool, version, artifact digest, sandbox `Status`, sensor, task), assembles CTIS and writes it to the encrypted outbox in segments.
 8. **Deliver.** Resumable, chunked, exactly-once upload bound to the command (lease epoch echo); logs streamed (redacted, capped); artifacts through their own upload; the command completed with outcome and error class.
