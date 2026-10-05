@@ -115,7 +115,12 @@ func runTool(t *testing.T, b Backend, spec TaskSpec, mode string, args ...string
 	if err != nil {
 		t.Fatalf("wait: %v (stderr %s)", err, errb.String())
 	}
-	return strings.TrimSpace(out.String() + errb.String()), res
+	// The tool's verdict is on stdout; stderr carries the launcher's own
+	// errors (and the test binary's coverage notes under -cover).
+	if o := strings.TrimSpace(out.String()); o != "" {
+		return o, res
+	}
+	return strings.TrimSpace(errb.String()), res
 }
 
 func TestProbeEnforcesEverything(t *testing.T) {
@@ -194,8 +199,8 @@ func TestTaskWritesOnlyInItsDirectory(t *testing.T) {
 func TestTaskEnvironmentAndCleanup(t *testing.T) {
 	b := newTestBackend(t)
 	exe, _ := os.Executable()
-	var out bytes.Buffer
-	task, err := b.Prepare(TaskSpec{Argv: []string{exe}, Env: []string{"EXECUTOR_TEST_TOOL=env", "HOME=/home/sensor"}, Stdout: &out, Stderr: &out})
+	var out, errb bytes.Buffer
+	task, err := b.Prepare(TaskSpec{Argv: []string{exe}, Env: []string{"EXECUTOR_TEST_TOOL=env", "HOME=/home/sensor"}, Stdout: &out, Stderr: &errb})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +222,7 @@ func TestTaskEnvironmentAndCleanup(t *testing.T) {
 		t.Errorf("workdir left: %v", err)
 	}
 	out.Reset()
-	task, _ = b.Prepare(TaskSpec{Argv: []string{exe}, Env: []string{"EXECUTOR_TEST_TOOL=env"}, SetEnv: map[string]string{"HOME": "/opt/tool-home"}, Stdout: &out, Stderr: &out})
+	task, _ = b.Prepare(TaskSpec{Argv: []string{exe}, Env: []string{"EXECUTOR_TEST_TOOL=env"}, SetEnv: map[string]string{"HOME": "/opt/tool-home"}, Stdout: &out, Stderr: &errb})
 	_ = task.Start(context.Background())
 	_, _ = task.Wait()
 	_ = task.Cleanup()
