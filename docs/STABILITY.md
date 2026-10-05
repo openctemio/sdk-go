@@ -26,6 +26,8 @@ holds today.
 |---|---|---|
 | `pkg/sensorkit` | The runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain, preflight checks and the config report; runner mode (`CIRun`, `Kit.RunOnce`: CI OIDC exchange, uploads, gate verdict, api RFC-051) | Stable; runner mode Beta |
 | `pkg/sensorkit/settings` | The settings registry: every setting declared once (name, type, required, default, secret, description, docs link, validation); `docs/SETTINGS.md` is generated from it | Stable |
+| `pkg/tool` | The tool contract: `tool.yaml` manifest, `Run(ctx, task)`, emitter, categorized errors (docs/rfcs/sensor-sdk-v2.md) | Stable |
+| `pkg/testkit` | Run a tool in-process with the runtime's rules; golden CTIS | Stable |
 | `pkg/sensorkit/executor` | Per-task tool sandbox behind a small backend interface (`Backend`, `TaskSpec`, `Status`) | Beta |
 | `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries, the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | Stable; its runtime internals are Internal-bound and its overlapping tool interfaces are replaced by the tool contract (RFC) |
 | `pkg/client` | Platform protocol client (v2 negotiated, v1 fallback) | Stable; its protocol internals are Internal-bound |
