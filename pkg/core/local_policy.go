@@ -52,8 +52,14 @@ const (
 	// or without a policy file.
 	EnvKillSwitchFile = "SENSOR_KILL_SWITCH_FILE"
 
-	// LocalPolicyAPIVersion is the apiVersion a policy file must declare.
+	// LocalPolicyAPIVersion is the apiVersion of schema v1. v1 is frozen:
+	// it never gains a key, because a sensor refuses a file with a key it
+	// does not know, so a new v1 key would stop every older sensor (owner
+	// decision D13, api research/25 §3.3). New keys go into a new version.
 	LocalPolicyAPIVersion = "openctem.io/sensor-policy/v1"
+	// LocalPolicyAPIVersionV2 is the apiVersion of schema v2: every v1 key
+	// plus managed (see policyFileV2).
+	LocalPolicyAPIVersionV2 = "openctem.io/sensor-policy/v2"
 	// MaxLocalPolicyBytes bounds the policy file.
 	MaxLocalPolicyBytes = 1 << 20
 	// MaxLocalPolicyEntries bounds each list in the policy.
@@ -63,6 +69,12 @@ const (
 	// platform sends (api RFC-040 P0); a local policy can lower it.
 	MaxScanTimeout = 24 * time.Hour
 )
+
+// LocalPolicySchemas are the local policy schema versions this SDK reads,
+// as LocalPolicyReport.Schemas reports them: the platform generates a
+// recommended policy only in a version the sensor lists, so a downloaded
+// file never stops a sensor.
+var LocalPolicySchemas = []string{"v1", "v2"}
 
 // Local policy states, as LocalPolicyReport.State reports them.
 const (
@@ -89,6 +101,9 @@ var ErrRefusedByLocalPolicy = errors.New("refused by local policy")
 // and Detail the offending item. Its text is what the platform shows:
 // "refused by local policy: <rule>: <detail>".
 type LocalPolicyError struct {
+	// Layer is the policy layer that refused (RefusalLayer*); "" is the
+	// local policy.
+	Layer  string
 	Rule   string
 	Detail string
 }
@@ -148,11 +163,21 @@ type LocalPolicy struct {
 	allowCustomTemplates bool
 	allowInteractsh      bool
 
+	// schema is the file's schema version ("v1", "v2"); "" without a file.
+	schema string
+	// managedAccept is managed.accept (v2; true when absent): false means
+	// the sensor owner refuses every platform-managed policy document
+	// (owner decision D11).
+	managedAccept bool
+
 	maxRPS        int
 	maxJobSeconds int
 
 	killSwitch      bool
 	killSwitchFiles []string
+	// reloadFailed is why a reload of the policy failed (ReloadLocalPolicy):
+	// set, every job is stopped until a reload succeeds.
+	reloadFailed string
 
 	warnings []string
 	lookupIP func(ctx context.Context, host string) ([]net.IP, error)
@@ -184,6 +209,20 @@ type policyFile struct {
 	} `yaml:"rate"`
 	KillSwitch     bool   `yaml:"kill_switch"`
 	KillSwitchFile string `yaml:"kill_switch_file"`
+}
+
+// policyFileV2 is schema v2: every v1 key, plus managed. Like v1 it is
+// frozen once released; later keys go into v3.
+type policyFileV2 struct {
+	policyFile `yaml:",inline"`
+	// Managed decides whether the platform may narrow this policy further
+	// with a managed document (api research/25 §3.5). It is read only from
+	// this file, never from the network.
+	Managed *struct {
+		// Accept false: the sensor ignores every platform-managed policy
+		// and the platform shows it as locked by its owner. Default true.
+		Accept *bool `yaml:"accept"`
+	} `yaml:"managed"`
 }
 
 // domainPattern is a targets entry naming hosts: an exact name, or
@@ -322,22 +361,48 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, errors.New("the policy is empty")
 	}
+	// The version first (a lenient read of apiVersion alone), then the
+	// whole document strictly against that version's keys: a v1 file with
+	// a v2 key is refused, as every v1-only sensor refuses it.
+	var head struct {
+		APIVersion string `yaml:"apiVersion"`
+	}
+	if err := yaml.Unmarshal(data, &head); err != nil {
+		return nil, fmt.Errorf("invalid policy: %w", err)
+	}
+	var (
+		doc    policyFile
+		target any
+		v2     policyFileV2
+		schema string
+	)
+	switch head.APIVersion {
+	case LocalPolicyAPIVersion:
+		target, schema = &doc, "v1"
+	case LocalPolicyAPIVersionV2:
+		target, schema = &v2, "v2"
+	default:
+		return nil, fmt.Errorf("apiVersion is %q; it must be %q or %q", head.APIVersion, LocalPolicyAPIVersion, LocalPolicyAPIVersionV2)
+	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
-	var doc policyFile
-	if err := dec.Decode(&doc); err != nil {
-		return nil, fmt.Errorf("invalid policy: %w", err)
+	if err := dec.Decode(target); err != nil {
+		return nil, fmt.Errorf("invalid policy (schema %s): %w", schema, err)
 	}
 	var extra any
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, errors.New("invalid policy: more than one YAML document")
 	}
-	if doc.APIVersion != LocalPolicyAPIVersion {
-		return nil, fmt.Errorf("apiVersion is %q; it must be %q", doc.APIVersion, LocalPolicyAPIVersion)
+	managedAccept := true
+	if schema == "v2" {
+		doc = v2.policyFile
+		if m := v2.Managed; m != nil && m.Accept != nil {
+			managedAccept = *m.Accept
+		}
 	}
 
 	sum := sha256.Sum256(data)
-	lp := &LocalPolicy{present: true, digest: "sha256:" + hex.EncodeToString(sum[:])}
+	lp := &LocalPolicy{present: true, digest: "sha256:" + hex.EncodeToString(sum[:]), schema: schema, managedAccept: managedAccept}
 	envPrivate := privateSwitch(lookup)
 
 	if t := doc.Targets; t != nil {
@@ -413,7 +478,7 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 // SENSOR_ALLOWED_PORTS). Private ranges follow the private-range switch.
 func policyFromEnv(ranges, ports string, lookup func(string) (string, bool)) (*LocalPolicy, error) {
 	envPrivate := privateSwitch(lookup)
-	lp := &LocalPolicy{present: true, source: LocalPolicySourceEnv, allowPrivate: envPrivate}
+	lp := &LocalPolicy{present: true, source: LocalPolicySourceEnv, allowPrivate: envPrivate, managedAccept: true}
 	if ranges != "" {
 		lp.targetsAllowSet = true
 		if err := lp.addTargets(EnvAllowedRanges, splitList(ranges), true, envPrivate); err != nil {
@@ -441,9 +506,13 @@ func absentPolicy() *LocalPolicy {
 		// with a warning, until they write a policy.
 		allowCustomTemplates: true,
 		allowInteractsh:      true,
+		managedAccept:        true,
 		warnings: []string{
 			"no local policy: this sensor runs any target the platform sends outside the built-in deny list (api RFC-040 Q3); install " + DefaultLocalPolicyPath,
-			"no local policy: custom templates from the platform (signed manifests only) and out-of-band callbacks (interactsh) are allowed; set allow_custom_templates and allow_interactsh in a local policy",
+			// What actually happens (api research/25 §0.5): callbacks run
+			// only when a job asks for them, and custom templates only
+			// with pinned signing keys.
+			"no local policy: jobs may enable out-of-band callbacks (interactsh), and custom templates run when SENSOR_TEMPLATE_SIGNING_KEYS is set; install " + DefaultLocalPolicyPath + " with allow_interactsh and allow_custom_templates to decide",
 		},
 	}
 }
@@ -674,6 +743,23 @@ func (lp *LocalPolicy) AllowsInteractsh() bool {
 	return lp == nil || lp.allowInteractsh
 }
 
+// Schema is the policy file's schema version ("v1", "v2"), "" without a
+// file.
+func (lp *LocalPolicy) Schema() string {
+	if lp == nil {
+		return ""
+	}
+	return lp.schema
+}
+
+// AcceptsManagedPolicy reports whether the sensor owner lets the platform
+// narrow this policy with a managed document (v2 managed.accept; true
+// without a policy or the key). A managed policy never widens the local
+// one; this only decides whether it is read at all (owner decision D11).
+func (lp *LocalPolicy) AcceptsManagedPolicy() bool {
+	return lp == nil || !lp.present || lp.managedAccept
+}
+
 // AllowsTool reports whether tools.allow lets tool run (always without a
 // policy or a tools section).
 func (lp *LocalPolicy) AllowsTool(tool string) bool {
@@ -729,6 +815,9 @@ func (lp *LocalPolicy) killSwitchReason() string {
 	if lp == nil {
 		return ""
 	}
+	if lp.reloadFailed != "" {
+		return "the local policy could not be reloaded: " + lp.reloadFailed
+	}
 	if lp.killSwitch {
 		return "kill_switch is set in the local policy"
 	}
@@ -757,6 +846,13 @@ type LocalPolicyReport struct {
 	Summary *LocalPolicySummary `json:"summary,omitempty"`
 	// Warnings are the operator warnings (see LocalPolicy.Warnings).
 	Warnings []string `json:"warnings,omitempty"`
+	// Schema is the policy file's schema version ("v1", "v2"); "" without
+	// a file.
+	Schema string `json:"schema,omitempty"`
+	// Schemas are the schema versions this sensor reads
+	// (LocalPolicySchemas): the platform generates a recommended policy
+	// only in one of them.
+	Schemas []string `json:"schemas,omitempty"`
 }
 
 // LocalPolicySummary is the shape of an enforced policy: counts for the
@@ -783,15 +879,19 @@ type LocalPolicySummary struct {
 	// (0 = not set).
 	MaxRPS        int `json:"max_rps,omitempty"`
 	MaxJobSeconds int `json:"max_job_seconds,omitempty"`
+	// ManagedAccept is managed.accept (v2): false when the sensor owner
+	// refuses platform-managed policy documents.
+	ManagedAccept bool `json:"managed_accept"`
 }
 
 // Report is the policy's state now (the kill switch is read live).
 func (lp *LocalPolicy) Report() *LocalPolicyReport {
-	r := &LocalPolicyReport{State: LocalPolicyStateAbsent, KillSwitch: lp.KillSwitchEngaged(), Warnings: lp.Warnings()}
+	r := &LocalPolicyReport{State: LocalPolicyStateAbsent, KillSwitch: lp.KillSwitchEngaged(), Warnings: lp.Warnings(),
+		Schemas: slices.Clone(LocalPolicySchemas)}
 	if !lp.Present() {
 		return r
 	}
-	r.State, r.Source, r.Digest = LocalPolicyStateEnforced, lp.source, lp.digest
+	r.State, r.Source, r.Digest, r.Schema = LocalPolicyStateEnforced, lp.source, lp.digest, lp.schema
 	s := &LocalPolicySummary{
 		TargetsAllow:         -1,
 		TargetsDeny:          len(lp.denyNets) + len(lp.denyDomains),
@@ -803,6 +903,7 @@ func (lp *LocalPolicy) Report() *LocalPolicyReport {
 		AllowInteractsh:      lp.allowInteractsh,
 		MaxRPS:               lp.maxRPS,
 		MaxJobSeconds:        lp.maxJobSeconds,
+		ManagedAccept:        lp.managedAccept,
 	}
 	if lp.targetsAllowSet {
 		s.TargetsAllow = len(lp.allowNets) + len(lp.allowDomains)
@@ -833,4 +934,39 @@ func (lp *LocalPolicy) Describe() string {
 	}
 	return fmt.Sprintf("enforced from %s (%s): targets allow %s, deny %d, private %t, ports %s, tools %s, custom templates %t, interactsh %t",
 		from, shortDigest(lp.digest), allow, s.TargetsDeny, s.AllowPrivate, ports, tools, s.AllowCustomTemplates, s.AllowInteractsh)
+}
+
+// ReloadLocalPolicy re-reads the local policy (on SIGHUP; owner decision
+// D10, api research/25 §4.2). A policy that loads replaces prev. One that
+// does not load (a typo, a world-writable file, a missing file that was
+// configured) does not leave the previous policy running: that may be the
+// looser one the owner just tried to tighten. The result is prev with the
+// kill switch engaged and a warning naming the error, so every job stops
+// and the platform sees why, until a reload succeeds. The error is
+// returned for the log.
+func ReloadLocalPolicy(prev *LocalPolicy, opts LocalPolicyOptions) (*LocalPolicy, error) {
+	lp, err := LoadLocalPolicy(opts)
+	if err == nil {
+		return lp, nil
+	}
+	return prev.withReloadFailure(err), err
+}
+
+// withReloadFailure is a copy of lp (or of the absent policy) with the kill
+// switch engaged because a reload failed. The copy shares lp's lists, which
+// are never modified after loading.
+func (lp *LocalPolicy) withReloadFailure(err error) *LocalPolicy {
+	var cp LocalPolicy
+	if lp != nil {
+		cp = *lp
+	} else {
+		cp = *absentPolicy()
+	}
+	reason := strings.Join(strings.Fields(err.Error()), " ")
+	if len(reason) > 512 {
+		reason = reason[:512]
+	}
+	cp.reloadFailed = reason
+	cp.warnings = append(slices.Clone(cp.warnings), "local policy reload failed ("+reason+"): every job is stopped until the file is fixed and the sensor reloads it (SIGHUP) or restarts")
+	return &cp
 }

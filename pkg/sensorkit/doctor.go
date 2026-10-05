@@ -358,8 +358,13 @@ func (k *Kit) preflightNew(proxies Proxies, proxyOpts ProxyOptions) {
 			Keys:    []string{EnvScanProxy},
 			Summary: "scanner processes inherit this sensor's proxy variables"})
 	}
-	// The local policy.
-	if lp := k.s.local; lp != nil {
+	k.reportLocalPolicyChecks(k.s.local)
+}
+
+// reportLocalPolicyChecks records the local policy checks for lp (at start
+// and after each reload).
+func (k *Kit) reportLocalPolicyChecks(lp *core.LocalPolicy) {
+	if lp != nil {
 		rep := lp.Report()
 		if rep.State == core.LocalPolicyStateEnforced {
 			k.ReportCheck(core.ConfigCheck{ID: CheckLocalPolicy, Status: core.CheckPass, Code: "enforced"})

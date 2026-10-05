@@ -100,6 +100,10 @@ const (
 	// most its free slots of scans; its claim of each is a replay. A
 	// command it then does not run must be released.
 	FeatureCapacity = "capacity"
+	// FeatureRefusal: POST /commands/{id}/fail takes a structured refusal
+	// (FailRequest.Refusal). The platform re-queues a refused routed job to
+	// another sensor and never offers it to the refuser again.
+	FeatureRefusal = "refusal"
 )
 
 // ManifestResponse answers PUT /manifest: the digest the platform stored
@@ -255,7 +259,30 @@ type CompleteRequest struct {
 // FailRequest is the body of POST /commands/{id}/fail.
 type FailRequest struct {
 	ErrorMessage string `json:"error_message"`
+	// Refusal says the command was refused by a policy, never run (or
+	// stopped by the kill switch). Sent only to a platform that lists
+	// FeatureRefusal; ErrorMessage keeps the text form older platforms parse
+	// ("refused by local policy: <rule>: <detail>").
+	Refusal *Refusal `json:"refusal,omitempty"`
 }
+
+// Refusal is a structured policy refusal (api research/25 §3.6, D8): the
+// layer that refused (RefusalLayer*), the rule ("tools.allow",
+// "allow_interactsh", ...; lower case, '_' and '.') and a short detail.
+type Refusal struct {
+	Layer  string `json:"layer"`
+	Rule   string `json:"rule"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// Refusal layers, the closed set the platform accepts.
+const (
+	RefusalLayerBuiltin          = "builtin"
+	RefusalLayerLocal            = "local"
+	RefusalLayerManaged          = "managed"
+	RefusalLayerScope            = "scope"
+	RefusalLayerPlatformToolGate = "platform_tool_gate"
+)
 
 // FingerprintsCheckRequest is the body of POST /fingerprints/check.
 type FingerprintsCheckRequest struct {

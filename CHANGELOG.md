@@ -42,6 +42,35 @@ All notable changes to `github.com/openctemio/sdk-go`.
   characters are stripped, and every field is bounded
   (`core.ConfigReport.Finalize`). The conformance fake serves the feature
   (`SetConfigReport`, `ConfigReports`).
+- **Local policy schema v2; v1 frozen** (owner decision D13, api
+  research/25 §3.3). `openctem.io/sensor-policy/v1` never gains a key again
+  (a sensor refuses a key it does not know, so a new v1 key would stop every
+  older sensor). `openctem.io/sensor-policy/v2` reads every v1 key plus
+  `managed: {accept: bool}` (default true; false = the owner refuses
+  platform-managed policy documents, D11; `LocalPolicy.AcceptsManagedPolicy`).
+  The version is read first and the document then decoded strictly against
+  that version's keys: a v1 file with a v2 key is refused. The report gains
+  `schema` (the file's version) and `schemas` (the versions this SDK reads,
+  `core.LocalPolicySchemas`), and the summary `managed_accept`, so the
+  platform generates a recommended policy only in a version the sensor reads.
+- **Local policy reload** (D10). `core.ReloadLocalPolicy(prev, opts)`; on a
+  file that does not load, the result is the previous policy with the kill
+  switch engaged and a warning naming the error (never the previous policy
+  silently). `sensorkit.Kit.SetLocalPolicy` / `ReloadLocalPolicy` apply a
+  policy to the running poller, executor and heartbeat;
+  `Kit.ReloadLocalPolicyOnSIGHUP` reloads on every SIGHUP.
+
+- **Structured policy refusals** (api research/25 §3.6, D8). A command a
+  policy refused (the local policy's admission or executor checks, the kill
+  switch, the platform's tool gate) is reported with
+  `core.CommandResult.Refusal` (`core.Refusal{Layer, Rule, Detail}`; layers
+  `builtin`, `local`, `managed`, `scope`, `platform_tool_gate`). The client
+  sends it as `refusal` on v2 `POST /commands/{id}/fail` when the platform's
+  hello lists the new feature `refusal` (`protov2.FeatureRefusal`), so the
+  platform re-queues routed work to another sensor; the failure text is
+  unchanged. `core.RefusalOf(err)` builds it; `LocalPolicyError` gains
+  `Layer`. Values are bounded: unknown layers become `local`, malformed rules
+  `unknown`, details lose control and bidi characters and stop at 512 bytes.
 
 - **HTTP probe results keep what they learned about the server** (api
   research/22 E5). `core.LiveHost` gains `TLS` (`core.TLSLeaf`: the leaf
@@ -51,6 +80,12 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `FaviconMMH3`, `JARM`, `ASN` and `CDNType` and emits a `certificate` asset
   per leaf (re-exported `TLSLeafInput`, `ASNInput`). The sensor maps httpx
   output onto them.
+
+### Changed
+
+- The absent-policy warning says what actually happens: "jobs may enable
+  out-of-band callbacks (interactsh), and custom templates run when
+  SENSOR_TEMPLATE_SIGNING_KEYS is set" (it said both "are allowed").
 
 ### Fixed
 

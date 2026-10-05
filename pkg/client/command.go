@@ -178,11 +178,18 @@ func (c *Client) completeCommand(ctx context.Context, cmdID string, result json.
 
 // FailCommand marks a command as failed with an error message.
 func (c *Client) FailCommand(ctx context.Context, cmdID string, errorMsg string) error {
-	return c.failCommand(ctx, cmdID, errorMsg, c.maxRetries)
+	return c.failCommand(ctx, cmdID, errorMsg, nil, c.maxRetries)
 }
 
-func (c *Client) failCommand(ctx context.Context, cmdID string, errorMsg string, retries int) error {
-	if done, err := c.commandV2(ctx, cmdID, protov2.FailAction, protov2.FailRequest{ErrorMessage: errorMsg}, retries); done {
+// failCommand fails a command. A policy refusal goes along structured
+// (protov2.FailRequest.Refusal) when the platform lists FeatureRefusal; the
+// error message carries the text form either way.
+func (c *Client) failCommand(ctx context.Context, cmdID string, errorMsg string, refusal *core.Refusal, retries int) error {
+	req := protov2.FailRequest{ErrorMessage: errorMsg}
+	if refusal != nil && c.PlatformSupports(ctx, protov2.FeatureRefusal) {
+		req.Refusal = &protov2.Refusal{Layer: refusal.Layer, Rule: refusal.Rule, Detail: refusal.Detail}
+	}
+	if done, err := c.commandV2(ctx, cmdID, protov2.FailAction, req, retries); done {
 		return err
 	}
 	reqURL := c.baseURL + legacyv1.PathCommand(url.PathEscape(cmdID), "fail")
@@ -219,7 +226,7 @@ func (c *Client) ReleaseCommand(ctx context.Context, cmdID, reason string) error
 			return err
 		}
 	}
-	return c.failCommand(ctx, cmdID, "released: "+reason, c.maxRetries)
+	return c.failCommand(ctx, cmdID, "released: "+reason, nil, c.maxRetries)
 }
 
 var _ core.ReleasingCommandClient = (*Client)(nil)
@@ -299,7 +306,7 @@ func (c *Client) reportCommandResult(ctx context.Context, cmdID string, result *
 		resultJSON, _ := json.Marshal(result)
 		return c.completeCommand(ctx, cmdID, resultJSON, retries)
 	}
-	return c.failCommand(ctx, cmdID, result.Error, retries)
+	return c.failCommand(ctx, cmdID, result.Error, result.Refusal, retries)
 }
 
 // ReportCommandProgress reports progress of command execution.
