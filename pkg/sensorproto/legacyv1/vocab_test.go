@@ -36,6 +36,9 @@ func TestNoAgentVocabularyOutsideLegacy(t *testing.T) {
 	// (any service may use them, not only ours).
 	allowedLiteral := map[string]map[string]bool{
 		"pkg/httpsec/ssrf.go": {`"X-Agent-Key"`: true, `"X-Agent-API-Key"`: true},
+		// An English word of the pairing SAS list, fixed by the protocol
+		// (its digest is pinned in the shared test vectors).
+		"pkg/sensorproto/pairing/words.go": {`"agent"`: true},
 	}
 	// Struct tags keeping the v1 "agent_id" key: protocol v1 wire types, and
 	// the Legacy* fields that read pre-rename configuration and credentials.
