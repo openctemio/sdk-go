@@ -9,10 +9,16 @@ Go SDK for building integrations with the OpenCTEM security platform.
 ## Overview
 
 OpenCTEM SDK provides Go packages for:
-- API client for interacting with OpenCTEM API
-- Scanner integrations: SAST/SCA/secrets (Semgrep, CodeQL, Trivy, Betterleaks), DAST (Nuclei, including a validation executor), and recon (subfinder, dnsx, naabu, httpx, katana)
-- Output formatters (SARIF, JSON)
-- Common utilities and helpers
+- `pkg/sensorkit`: the sensor runtime in one call (identity, connection, heartbeat, commands, durable outbox, per-task tool sandbox, local policy, preflight checks and the config report)
+- `pkg/client`: the platform protocol client
+- `pkg/ctis`: the CTIS result types
+- `pkg/httpsec`: SSRF-safe HTTP clients
+- `pkg/conformance`: a fake platform and the sensor conformance suite
+
+The scanner wrappers (Semgrep, CodeQL, Trivy, Betterleaks, Nuclei and the recon
+tools) live in the sensor (`github.com/openctemio/sensor`), not in the SDK.
+What each package promises is in [docs/STABILITY.md](docs/STABILITY.md); where
+the SDK is going is in [docs/rfcs/sensor-sdk-v2.md](docs/rfcs/sensor-sdk-v2.md).
 
 ## Installation
 

@@ -1,4 +1,10 @@
 // Package grpc provides a gRPC transport layer for the OpenCTEM SDK client.
+//
+// Deprecated: nothing imports it and no platform serves it; it only adds
+// google.golang.org/grpc to every sensor's module graph. Sensor protocol v3
+// (gRPC with mTLS, HTTPS fallback) will be generated from its own proto
+// definitions. Removal is planned for the next minor release
+// (docs/STABILITY.md).
 package grpc
 
 import (
