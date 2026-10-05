@@ -3,12 +3,14 @@ package core
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 )
 
 // =============================================================================
@@ -27,6 +29,14 @@ type ExecConfig struct {
 	// DefaultMaxScannerOutput. A scanner that writes more is stopped and the
 	// call returns ErrScannerOutputTooLarge.
 	MaxOutputBytes int64
+	// WritePaths are paths the scanner may write besides its private task
+	// directory, when the task sandbox is on (pkg/sensorkit/executor): an output
+	// file's directory, a cache the scanner owns. Everything else is
+	// read-only to it.
+	WritePaths []string
+	// Limits override the sandbox's default resource limits (zero fields:
+	// the defaults).
+	Limits executor.Limits
 }
 
 // ExecResult holds the result of scanner execution.
@@ -36,6 +46,8 @@ type ExecResult struct {
 	Stderr     []byte
 	DurationMs int64
 	Error      error
+	// Sandbox is the protection the scanner ran under (pkg/sensorkit/executor).
+	Sandbox executor.Status
 }
 
 // ExecuteScanner runs a scanner binary with real-time output streaming.
@@ -79,35 +91,47 @@ func runScanner(ctx context.Context, cfg *ExecConfig, stdoutLine, stderrLine fun
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
 
-	cmd := exec.CommandContext(runCtx, cfg.Binary, cfg.Args...) //nolint:gosec // Scanner binary is configured, not user input
-
-	if cfg.WorkDir != "" {
-		cmd.Dir = cfg.WorkDir
-	}
-
 	// Allowlisted environment only (see scanner_env.go): the sensor's API key
-	// and other credentials must not leak into scanner processes.
-	cmd.Env = ScannerEnviron(cfg.Env)
-	ConfigureScannerProcess(cmd)
-
+	// and other credentials must not leak into scanner processes. The task
+	// runs on the executor (pkg/sensorkit/executor): in its sandbox when the sensor
+	// turned it on, else as a plain child process as before.
+	//
 	// Writers, not pipes read by our own goroutines: exec copies the output
 	// and Wait (with the WaitDelay ConfigureScannerProcess set) never waits
 	// on a pipe forever.
 	stdout := newOutputCapture(cfg.MaxOutputBytes, stdoutLine, stop)
 	stderr := newOutputCapture(maxScannerStderr, stderrLine, nil)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	backend := executor.Current()
+	task, err := backend.Prepare(executor.TaskSpec{
+		ID:         filepath.Base(cfg.Binary),
+		Argv:       append([]string{cfg.Binary}, cfg.Args...),
+		Env:        ScannerEnviron(cfg.Env),
+		SetEnv:     cfg.Env,
+		Dir:        cfg.WorkDir,
+		WritePaths: cfg.WritePaths,
+		Limits:     cfg.Limits,
+		Stdout:     stdout,
+		Stderr:     stderr,
+		Hooks: executor.ProcessHooks{
+			Configure: ConfigureScannerProcess,
+			Started:   ApplyScannerPriority,
+			Finished: func(cmd *exec.Cmd) {
+				ReapScannerProcess(cmd)
+				RecordProcessState(ctx, cmd.ProcessState)
+			},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to start scanner: %w", err)
+	}
+	defer func() { _ = task.Cleanup() }()
 
 	start := time.Now()
 
-	if err := cmd.Start(); err != nil {
+	if err := task.Start(runCtx); err != nil {
 		return nil, fmt.Errorf("failed to start scanner: %w", err)
 	}
-	ApplyScannerPriority(cmd)
-
-	err := cmd.Wait()
-	ReapScannerProcess(cmd)
-	RecordProcessState(ctx, cmd.ProcessState)
+	res, err := task.Wait()
 	stdout.finish()
 	stderr.finish()
 
@@ -115,6 +139,7 @@ func runScanner(ctx context.Context, cfg *ExecConfig, stdoutLine, stderrLine fun
 		Stdout:     stdout.Bytes(),
 		Stderr:     stderr.stderrBytes(),
 		DurationMs: time.Since(start).Milliseconds(),
+		Sandbox:    backend.Status(),
 	}
 
 	if stdout.Overflowed() {
@@ -127,13 +152,11 @@ func runScanner(ctx context.Context, cfg *ExecConfig, stdoutLine, stderrLine fun
 		return result, result.Error
 	}
 
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			result.ExitCode = exitErr.ExitCode()
-		} else {
-			result.Error = err
-		}
+	switch {
+	case err != nil:
+		result.Error = err
+	case res != nil:
+		result.ExitCode = res.ExitCode
 	}
 
 	return result, nil

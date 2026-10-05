@@ -282,6 +282,8 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "Lets SDK HTTP clients reach private addresses."},
 		settingsreg.Setting{Name: "OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK", Type: settingsreg.Bool, Group: "network",
 			Description: "Lets SDK HTTP clients reach loopback addresses."},
+		settingsreg.Setting{Name: EnvSandbox, Type: settingsreg.Enum, Enum: []string{"off", "auto", "required"}, Default: "auto", Group: "runtime",
+			Description: "How every tool run is confined: auto (what the host supports), required (refuse to start without every control), off."},
 		settingsreg.Setting{Name: EnvOutbox, Type: settingsreg.Enum, Enum: []string{"on", "off", "true", "false"}, Group: "storage",
 			Description: "The durable results outbox (on for a daemon)."},
 		settingsreg.Setting{Name: EnvOutboxDir, Type: settingsreg.Path, Group: "storage",

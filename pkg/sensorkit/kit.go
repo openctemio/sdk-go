@@ -162,6 +162,18 @@ type Options struct {
 	// WorkDir is where scans write; its free disk is part of the slot
 	// sizing (default StateDir).
 	WorkDir string
+	// Sandbox is how every tool run is confined (pkg/sensorkit/executor): "off",
+	// "auto" (the default: every control the host supports, the rest
+	// reported) or "required" (New fails unless all are enforced). Empty:
+	// SENSOR_SANDBOX, else auto. The sandbox needs the program to call
+	// executor.RunLauncherIfRequested first in main; without it, auto runs
+	// tools unconfined and says so.
+	Sandbox string
+	// ProtectedPaths are more paths no tool may read or write (the
+	// sensor's own configuration files, connector credentials). The kit
+	// protects its credentials file, outbox, outbox key and local policy
+	// itself.
+	ProtectedPaths []string
 	// AssetResolver names the asset a scan's findings belong to when the
 	// parser does not; CommandAssetResolver replaces it for dispatched scans.
 	AssetResolver        core.AssetResolver
@@ -396,24 +408,9 @@ func New(opts Options) (*Kit, error) {
 		}
 	}
 
-	if s.drainGrace, err = ResolveDrainGrace(); err != nil {
-		k.closeClient()
-		return nil, err
-	}
-	if opts.MaxJobs != 0 {
-		s.maxJobs, err = checkMaxJobs("MaxJobs", opts.MaxJobs)
-	} else {
-		s.maxJobs, err = ResolveMaxJobs(MaxJobsSetting{}, MaxJobsSetting{})
-	}
-	if err != nil {
-		k.closeClient()
-		return nil, err
-	}
-	if s.scannerPriority, err = ResolveScannerPriority(opts.ScannerPriority); err != nil {
-		k.closeClient()
-		return nil, err
-	}
-	if s.protectFromOOM, err = ResolveProtectFromOOM(opts.ProtectFromOOM); err != nil {
+	// The tool sandbox and the runtime limits (drain grace, slots, scanner
+	// priority, OOM protection).
+	if err := k.resolveRuntime(); err != nil {
 		k.closeClient()
 		return nil, err
 	}
@@ -552,6 +549,33 @@ func orNone(s string) string {
 		return "none"
 	}
 	return s
+}
+
+// resolveRuntime installs the tool sandbox (every tool run is confined and
+// cannot read the key, the outbox or the policy; pkg/sensorkit/executor) and
+// resolves the runtime limits.
+func (k *Kit) resolveRuntime() error {
+	s, opts := &k.s, k.opts
+	if err := k.setupSandbox(); err != nil {
+		return err
+	}
+	var err error
+	if s.drainGrace, err = ResolveDrainGrace(); err != nil {
+		return err
+	}
+	if opts.MaxJobs != 0 {
+		s.maxJobs, err = checkMaxJobs("MaxJobs", opts.MaxJobs)
+	} else {
+		s.maxJobs, err = ResolveMaxJobs(MaxJobsSetting{}, MaxJobsSetting{})
+	}
+	if err != nil {
+		return err
+	}
+	if s.scannerPriority, err = ResolveScannerPriority(opts.ScannerPriority); err != nil {
+		return err
+	}
+	s.protectFromOOM, err = ResolveProtectFromOOM(opts.ProtectFromOOM)
+	return err
 }
 
 // loadLocalPolicy is Options.LocalPolicy, else the policy loaded from
