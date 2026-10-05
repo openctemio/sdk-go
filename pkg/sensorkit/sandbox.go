@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/outbox"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 )
 
 // EnvSandbox sets the tool sandbox mode: off, auto (default) or required.
