@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openctem.io/schema/tool/v1/tool.schema.json",
+  "title": "OpenCTEM tool manifest (tool.yaml)",
+  "description": "Describes a tool a sensor runs. The runtime trusts this file, never the tool's description of itself. Unknown keys are refused. Rules that span fields (class against network and tier, placeholders against the config schema, no secrets in config) are enforced by the validators of the SDKs, which share test vectors.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "name", "version", "class", "tier", "produces"],
+  "properties": {
+    "apiVersion": {"const": "openctem.io/tool/v1"},
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+    "version": {"type": "string", "pattern": "^v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,64})?(\\+[0-9A-Za-z.-]{1,64})?$"},
+    "description": {"type": "string", "maxLength": 1024},
+    "class": {"enum": ["target-scan", "connector", "parser", "enricher"]},
+    "modes": {"type": "array", "maxItems": 2, "uniqueItems": true, "items": {"enum": ["daemon", "runner"]}},
+    "tier": {"enum": ["T0", "T1", "T2"]},
+    "capabilities": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{0,63}$"}},
+    "consumes": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 140}},
+    "produces": {
+      "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^(asset:[a-z_]+|finding:[a-z0-9_]+|dependency)$"}
+    },
+    "config": {"type": "object", "description": "The configuration schema: the closed JSON Schema subset of api RFC-038 (x-octm-* annotations), with no secret fields."},
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": {"enum": ["none", "targets", "egress-proxy", "vendor"]},
+        "vendor_hosts": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 270}},
+        "filesystem": {"enum": ["workdir", "scan-roots-read-only"]},
+        "credentials": {
+          "type": "array", "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "kind"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+              "kind": {"enum": ["api_key", "token", "password", "basic", "private_key", "certificate", "other"]},
+              "required": {"type": "boolean"},
+              "description": {"type": "string", "maxLength": 1024}
+            }
+          }
+        },
+        "linux_caps": {"type": "array", "uniqueItems": true, "items": {"enum": ["NET_RAW", "NET_BIND_SERVICE"]}}
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {"type": "number", "minimum": 0, "maximum": 256},
+        "memory": {"type": ["integer", "string"], "description": "Bytes, or a size such as \"512Mi\" or \"1Gi\" (at most 64Gi)."},
+        "timeout": {"type": ["number", "string"], "description": "A duration such as \"20m\" or a number of seconds (at most 24h)."},
+        "idle_timeout": {"type": ["number", "string"], "description": "No message for this long ends the task (default 10m)."},
+        "max_output_bytes": {"type": ["integer", "string"], "description": "CTIS bytes per task (default 64Mi, at most 1Gi)."},
+        "max_records": {"type": "integer", "minimum": 0, "maximum": 10000000},
+        "cost": {"type": "integer", "minimum": 0, "maximum": 64}
+      }
+    },
+    "selftest": {
+      "type": "array", "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "task", "expect"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "task": {"type": "string", "minLength": 1},
+          "expect": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min": {"type": "integer", "minimum": 1},
+        "max": {"type": "integer", "minimum": 0}
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv"],
+      "properties": {
+        "profile": {"enum": ["adapter", "exec"]},
+        "argv": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "string", "maxLength": 4096}},
+        "output": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "from"],
+          "properties": {
+            "format": {"enum": ["ctis", "sarif", "jsonl-ctis"]},
+            "from": {"enum": ["stdout", "file"]}
+          }
+        },
+        "exit_codes": {
+          "type": "object",
+          "propertyNames": {"pattern": "^(0|[1-9][0-9]{0,2})$"},
+          "additionalProperties": {"enum": ["ok", "partial", "tool_error", "invalid_input", "target_unreachable", "transient"]}
+        }
+      }
+    }
+  }
+}

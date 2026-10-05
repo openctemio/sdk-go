@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "assets": [
+    {
+      "id": "target-a1",
+      "name": "http://127.0.0.1:PORT",
+      "type": "http_service",
+      "value": "http://127.0.0.1:PORT"
+    }
+  ],
+  "findings": [
+    {
+      "asset_ref": "target-a1",
+      "rule_id": "dotenv-exposed",
+      "severity": "high",
+      "title": ".env file is publicly readable",
+      "type": "misconfiguration"
+    }
+  ],
+  "metadata": {
+    "properties": {
+      "provenance": "<provenance>"
+    },
+    "source_type": "scanner"
+  },
+  "tool": {
+    "name": "dotenv-check"
+  },
+  "version": "1.4"
+}
