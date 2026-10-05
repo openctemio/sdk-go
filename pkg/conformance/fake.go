@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -193,12 +194,14 @@ func (f *FakePlatform) SetLogs(on bool) {
 func (f *FakePlatform) CommandLogs(id string) []protov2.CommandLogLine {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	batches := f.cmdLogs[id]
+	seqs := make([]int, 0, len(f.cmdLogs[id]))
+	for seq := range f.cmdLogs[id] {
+		seqs = append(seqs, seq)
+	}
+	slices.Sort(seqs)
 	var out []protov2.CommandLogLine
-	for seq := 0; len(batches) > 0 && seq <= len(batches)+1000; seq++ {
-		if b, ok := batches[seq]; ok {
-			out = append(out, b.Lines...)
-		}
+	for _, seq := range seqs {
+		out = append(out, f.cmdLogs[id][seq].Lines...)
 	}
 	return out
 }
