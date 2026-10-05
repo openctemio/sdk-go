@@ -40,7 +40,7 @@ func serverWithChain(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	tpl := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "platform"},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		DNSNames: dnsNames, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames: dnsNames, IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.IPv6loopback},
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
 	if ca == nil { // self-signed platform certificate
 		tpl.IsCA, tpl.BasicConstraintsValid = true, true
@@ -49,7 +49,7 @@ func serverWithChain(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey
 		if err != nil {
 			t.Fatal(err)
 		}
-		srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+		srv := newLocalhostServer(t)
 		srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, MinVersion: tls.VersionTLS12}
 		srv.StartTLS()
 		t.Cleanup(srv.Close)
@@ -63,17 +63,37 @@ func serverWithChain(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey
 	if sendCA {
 		chain = append(chain, ca.Raw)
 	}
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	srv := newLocalhostServer(t)
 	srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: chain, PrivateKey: key}}, MinVersion: tls.VersionTLS12}
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	return srv
 }
 
-// byName is the server URL with the host name localhost instead of 127.0.0.1:
-// a pinned connection needs a host name to check the certificate against.
+// newLocalhostServer listens on "localhost", so the server and the client
+// resolve the name the same way (::1 first on some hosts, 127.0.0.1 on others).
+func newLocalhostServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = srv.Listener.Close()
+	srv.Listener = ln
+	return srv
+}
+
+// byName is the server URL with the host name localhost: a pinned connection
+// needs a host name to check the certificate against.
 func byName(srv *httptest.Server) string {
-	return strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	return "https://localhost:" + port
+}
+
+// byIP is the server URL with its IP address literal.
+func byIP(srv *httptest.Server) string {
+	return "https://" + srv.Listener.Addr().String()
 }
 
 func get(t *testing.T, url string) error {
@@ -125,7 +145,7 @@ func TestPinnedCARefusesAnIPAddressURL(t *testing.T) {
 	t.Cleanup(func() { SetAPIPinnedCA(nil) })
 	srv := serverWithChain(t, ca, caKey, true)
 	SetAPIPinnedCA(sum[:])
-	err := get(t, srv.URL) // https://127.0.0.1:port
+	err := get(t, byIP(srv))
 	if err == nil || !strings.Contains(err.Error(), "host name") {
 		t.Fatalf("a pinned connection to an IP address must be refused: %v", err)
 	}
@@ -153,9 +173,8 @@ func TestPinnedCAStillChecksTheName(t *testing.T) {
 	t.Cleanup(func() { SetAPIPinnedCA(nil) })
 	srv := serverWithChain(t, ca, caKey, true, "platform.invalid") // not issued for localhost
 	SetAPIPinnedCA(sum[:])
-	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
-	err := get(t, "https://localhost:"+port)
-	if err == nil || !strings.Contains(err.Error(), "localhost") {
+	err := get(t, byName(srv))
+	if err == nil || !strings.Contains(err.Error(), "certificate") {
 		t.Fatalf("a certificate for another name must be refused under a pin: %v", err)
 	}
 }
