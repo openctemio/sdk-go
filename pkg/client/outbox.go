@@ -285,6 +285,8 @@ func (c *Client) Deliver(ctx context.Context, d *outbox.Delivery) (any, error) {
 		return c.deliverReport(ctx, d)
 	case outbox.KindCommandResult:
 		return nil, c.deliverCommandResult(ctx, d)
+	case outbox.KindCommandLog:
+		return nil, c.deliverCommandLogs(ctx, d)
 	default:
 		return nil, outbox.Permanent(0, fmt.Sprintf("item kind %q is not delivered by the API client", d.Meta.Kind), nil, nil)
 	}
