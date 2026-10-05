@@ -22,17 +22,15 @@
       "type": "repository",
       "value": "github.com/example/shop",
       "name": "github.com/example/shop",
-      "criticality": "high",
       "properties": {
         "branch": "main",
         "commit_sha": "3f1c2a9e",
-        "source": "adapter_options"
+        "source": "import_options"
       }
     }
   ],
   "findings": [
     {
-      "id": "finding-1",
       "type": "secret",
       "title": "AWS Access Key",
       "message": "Secret detected: AWS Access Key in config.yml",
@@ -46,12 +44,13 @@
         "end_line": 10,
         "start_column": 1,
         "end_column": 20,
+        "snippet": "AKIA********",
         "commit_sha": "abc123def456"
       },
       "secret": {
-        "secret_type": "credential",
+        "secret_type": "aws_key",
         "service": "aws",
-        "masked_value": "AKI****LE",
+        "masked_value": "AKIA********",
         "length": 20,
         "entropy": 3.6
       },
@@ -61,10 +60,18 @@
       ],
       "fingerprint": "config.yml:aws-access-key-id:10",
       "author": "dev@example.com",
-      "author_email": "dev@example.com"
+      "author_email": "dev@example.com",
+      "commit_date": "2023-01-15T10:30:00Z",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "aws-access-key-id",
+        "raw_ref": "/0"
+      },
+      "source_extra": {
+        "commit_message": "add config"
+      }
     },
     {
-      "id": "finding-2",
       "type": "secret",
       "title": "Generic API Key",
       "message": "Secret detected: Generic API Key in src/config.py",
@@ -78,11 +85,12 @@
         "end_line": 25,
         "start_column": 10,
         "end_column": 50,
+        "snippet": "api_key = \"sk_l********\"",
         "commit_sha": "def789abc012"
       },
       "secret": {
         "secret_type": "api_key",
-        "masked_value": "sk_****URE",
+        "masked_value": "sk_l********",
         "length": 27,
         "entropy": 4.2
       },
@@ -92,10 +100,14 @@
       ],
       "fingerprint": "src/config.py:generic-api-key:25",
       "author": "admin@example.com",
-      "author_email": "admin@example.com"
+      "author_email": "admin@example.com",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "generic-api-key",
+        "raw_ref": "/1"
+      }
     },
     {
-      "id": "finding-3",
       "type": "secret",
       "title": "GitHub Personal Access Token",
       "message": "Secret detected: GitHub Personal Access Token in .env",
@@ -109,12 +121,13 @@
         "end_line": 5,
         "start_column": 1,
         "end_column": 40,
+        "snippet": "ghp_********",
         "commit_sha": "111222333444"
       },
       "secret": {
-        "secret_type": "credential",
+        "secret_type": "generic_secret",
         "service": "github",
-        "masked_value": "ghp_****xxxx",
+        "masked_value": "ghp_********",
         "length": 40
       },
       "tags": [
@@ -125,10 +138,14 @@
       ],
       "fingerprint": ".env:github-pat:5",
       "author": "dev2@example.com",
-      "author_email": "dev2@example.com"
+      "author_email": "dev2@example.com",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "github-pat",
+        "raw_ref": "/2"
+      }
     },
     {
-      "id": "finding-4",
       "type": "secret",
       "title": "Stripe Secret Key",
       "message": "Secret detected: Stripe Secret Key in payment.js",
@@ -147,14 +164,19 @@
       "secret": {
         "secret_type": "api_key",
         "service": "stripe",
-        "masked_value": "sk_****xx",
+        "masked_value": "sk_t********",
         "length": 20
       },
       "tags": [
         "betterleaks",
         "secret"
       ],
-      "fingerprint": "payment.js:stripe-api-key:3"
+      "fingerprint": "payment.js:stripe-api-key:3",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "stripe-api-key",
+        "raw_ref": "/3"
+      }
     }
   ]
 }

@@ -3,15 +3,14 @@
   "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
   "metadata": {
     "timestamp": "0001-01-01T00:00:00Z",
-    "source_type": "scanner",
-    "coverage_type": "full"
+    "source_type": "scanner"
   },
   "tool": {
     "name": "vuls",
     "vendor": "future-architect",
     "info_url": "https://vuls.io",
     "capabilities": [
-      "vulnerability"
+      "va"
     ]
   },
   "assets": [
@@ -30,12 +29,17 @@
           "version": 4,
           "hostname": "web-server-01"
         }
+      },
+      "properties": {
+        "kernel_release": "generic",
+        "kernel_version": "6.8.0-85",
+        "os_family": "ubuntu",
+        "os_release": "22.04"
       }
     }
   ],
   "findings": [
     {
-      "id": "finding-1",
       "type": "vulnerability",
       "title": "Critical vulnerability in Linux kernel",
       "description": "A buffer overflow in the Linux kernel allows privilege escalation.",
@@ -45,6 +49,9 @@
       "asset_ref": "host-1",
       "vulnerability": {
         "cve_id": "CVE-2024-1234",
+        "cve_ids": [
+          "CVE-2024-1234"
+        ],
         "cwe_ids": [
           "CWE-120"
         ],
@@ -56,23 +63,44 @@
         "purl": "pkg:deb/ubuntu/linux@6.8.0-85?arch=amd64\u0026distro=22.04",
         "affected_version": "6.8.0-85",
         "fixed_version": "6.8.0-90",
-        "ecosystem": "deb"
+        "ids": [
+          {
+            "type": "cve",
+            "id": "CVE-2024-1234"
+          }
+        ]
       },
       "remediation": {
-        "recommendation": "Update linux to version 6.8.0-90"
+        "recommendation": "Update linux to version 6.8.0-90",
+        "fix_available": true,
+        "solution_type": "upgrade"
       },
       "references": [
-        "https://nvd.nist.gov/vuln/detail/CVE-2024-1234",
         "https://nvd.nist.gov/vuln/detail/CVE-2024-1234"
       ],
       "tags": [
         "vuls",
         "web-server-01"
       ],
-      "fingerprint": "252b7bfb1f8e7395e2a0cd9509d45653547a396a2116dcfc0d8db4d211f392c8"
+      "fingerprint": "252b7bfb1f8e7395e2a0cd9509d45653547a396a2116dcfc0d8db4d211f392c8",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "CVE-2024-1234"
+      },
+      "scores": [
+        {
+          "system": "cvss",
+          "version": "3.1",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+          "value": 9.8,
+          "source": "nvd"
+        }
+      ],
+      "source_extra": {
+        "detection_method": "ChangelogExactMatch"
+      }
     },
     {
-      "id": "finding-2",
       "type": "vulnerability",
       "title": "OpenSSL timing side-channel",
       "description": "A timing side-channel in OpenSSL RSA implementation.",
@@ -81,22 +109,44 @@
       "asset_ref": "host-1",
       "vulnerability": {
         "cve_id": "CVE-2024-5678",
+        "cve_ids": [
+          "CVE-2024-5678"
+        ],
         "cvss_version": "3.1",
         "cvss_score": 5.3,
         "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
         "package": "openssl",
         "purl": "pkg:deb/ubuntu/openssl@3.0.2-0ubuntu1.15?arch=amd64\u0026distro=22.04",
         "affected_version": "3.0.2-0ubuntu1.15",
-        "ecosystem": "deb"
+        "ids": [
+          {
+            "type": "cve",
+            "id": "CVE-2024-5678"
+          }
+        ]
       },
       "remediation": {
-        "recommendation": "No fix available yet. Consider mitigation or alternative packages."
+        "recommendation": "No fix available yet. Consider mitigation or alternative packages.",
+        "solution_type": "no_fix"
       },
       "tags": [
         "vuls",
         "web-server-01"
       ],
-      "fingerprint": "70379235cd15ea2c16836b59e7a005a72175d30515a38beab269c3569810b09d"
+      "fingerprint": "70379235cd15ea2c16836b59e7a005a72175d30515a38beab269c3569810b09d",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "CVE-2024-5678"
+      },
+      "scores": [
+        {
+          "system": "cvss",
+          "version": "3.1",
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+          "value": 5.3,
+          "source": "ubuntu"
+        }
+      ]
     }
   ],
   "dependencies": [

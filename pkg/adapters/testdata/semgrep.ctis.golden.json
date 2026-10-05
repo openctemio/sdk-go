@@ -13,8 +13,7 @@
     "version": "1.50.0",
     "vendor": "Semgrep, Inc.",
     "capabilities": [
-      "vulnerability",
-      "secret"
+      "sast"
     ]
   },
   "assets": [
@@ -23,24 +22,22 @@
       "type": "repository",
       "value": "github.com/example/shop",
       "name": "github.com/example/shop",
-      "criticality": "high",
       "properties": {
         "branch": "main",
         "commit_sha": "3f1c2a9e",
-        "source": "adapter_options"
+        "source": "import_options"
       }
     }
   ],
   "findings": [
     {
-      "id": "finding-1",
       "type": "vulnerability",
       "title": "SQL injection vulnerability detected. User input is used directly in a SQL query without sanitization.",
       "message": "SQL injection vulnerability detected. User input is used directly in a SQL query without sanitization.",
       "severity": "high",
       "confidence": 90,
-      "impact": "HIGH",
-      "likelihood": "HIGH",
+      "impact": "high",
+      "likelihood": "high",
       "category": "security",
       "vulnerability_class": [
         "SQL Injection"
@@ -77,10 +74,15 @@
         "django",
         "semgrep"
       ],
-      "fingerprint": "abc123def456"
+      "fingerprint": "abc123def456",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "python.lang.security.injection.sql-injection",
+        "severity": "ERROR",
+        "raw_ref": "/results/0"
+      }
     },
     {
-      "id": "finding-2",
       "type": "vulnerability",
       "title": "Avoid using pickle for deserialization. Pickle is known to be insecure.",
       "message": "Avoid using pickle for deserialization. Pickle is known to be insecure.",
@@ -100,9 +102,9 @@
       },
       "vulnerability": {
         "cwe_ids": [
-          "CWE-502: Deserialization of Untrusted Data"
+          "CWE-502"
         ],
-        "cwe_id": "CWE-502: Deserialization of Untrusted Data"
+        "cwe_id": "CWE-502"
       },
       "references": [
         "https://docs.python.org/3/library/pickle.html"
@@ -110,10 +112,15 @@
       "tags": [
         "semgrep"
       ],
-      "fingerprint": "55fdab4f06546761da8b68ad20c61673eb1a8ec7b4f8985c28e4e780c89ea14b"
+      "fingerprint": "55fdab4f06546761da8b68ad20c61673eb1a8ec7b4f8985c28e4e780c89ea14b",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "python.lang.security.deserialization.avoid-pickle",
+        "severity": "WARNING",
+        "raw_ref": "/results/1"
+      }
     },
     {
-      "id": "finding-3",
       "type": "vulnerability",
       "title": "Use lazy logging format instead of f-string.",
       "message": "Use lazy logging format instead of f-string.",
@@ -134,7 +141,13 @@
       "tags": [
         "semgrep"
       ],
-      "fingerprint": "bcc37e7b26a404f875e74ae1c53fb62c43d00d0c853b3252f15ec11e74974d2a"
+      "fingerprint": "bcc37e7b26a404f875e74ae1c53fb62c43d00d0c853b3252f15ec11e74974d2a",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "python.lang.best-practice.logging-format",
+        "severity": "INFO",
+        "raw_ref": "/results/2"
+      }
     }
   ]
 }

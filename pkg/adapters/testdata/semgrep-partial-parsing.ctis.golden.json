@@ -13,8 +13,7 @@
     "version": "1.149.0",
     "vendor": "Semgrep, Inc.",
     "capabilities": [
-      "vulnerability",
-      "secret"
+      "sast"
     ]
   },
   "assets": [
@@ -23,17 +22,15 @@
       "type": "repository",
       "value": "github.com/example/shop",
       "name": "github.com/example/shop",
-      "criticality": "high",
       "properties": {
         "branch": "main",
         "commit_sha": "3f1c2a9e",
-        "source": "adapter_options"
+        "source": "import_options"
       }
     }
   ],
   "findings": [
     {
-      "id": "finding-1",
       "type": "vulnerability",
       "title": "exec",
       "message": "exec",
@@ -47,16 +44,24 @@
         "start_line": 3,
         "end_line": 3,
         "start_column": 20,
-        "end_column": 35,
-        "snippet": "requires login"
+        "end_column": 35
       },
       "tags": [
         "semgrep"
       ],
-      "fingerprint": "requires login"
+      "fingerprint": "eb7de1a66105556096b546e6d80ae6af5a6d6cd431610e9a0d0b08ccccb6b337",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "go-exec",
+        "severity": "WARNING",
+        "raw_ref": "/results/0"
+      },
+      "source_extra": {
+        "engine_kind": "OSS",
+        "validation_state": "NO_VALIDATOR"
+      }
     },
     {
-      "id": "finding-2",
       "type": "vulnerability",
       "title": "exec",
       "message": "exec",
@@ -70,13 +75,22 @@
         "start_line": 2,
         "end_line": 2,
         "start_column": 18,
-        "end_column": 28,
-        "snippet": "requires login"
+        "end_column": 28
       },
       "tags": [
         "semgrep"
       ],
-      "fingerprint": "requires login"
+      "fingerprint": "54c987d0319ef6332d420ce075cfe6f54ab96a52ddd47444d58cf4e0035ed304",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "js-exec",
+        "severity": "ERROR",
+        "raw_ref": "/results/1"
+      },
+      "source_extra": {
+        "engine_kind": "OSS",
+        "validation_state": "NO_VALIDATOR"
+      }
     }
   ]
 }

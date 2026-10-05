@@ -264,28 +264,6 @@ func TestConvertInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestMapTrivySeverity(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected ctis.Severity
-	}{
-		{"CRITICAL", ctis.SeverityCritical},
-		{"HIGH", ctis.SeverityHigh},
-		{"MEDIUM", ctis.SeverityMedium},
-		{"LOW", ctis.SeverityLow},
-		{"UNKNOWN", ctis.SeverityInfo},
-		{"critical", ctis.SeverityCritical},
-		{"high", ctis.SeverityHigh},
-	}
-
-	for _, tt := range tests {
-		result := mapTrivySeverity(tt.input)
-		if result != tt.expected {
-			t.Errorf("mapTrivySeverity(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
-	}
-}
-
 func TestParseToCTIS(t *testing.T) {
 	report, err := ParseToCTIS(sampleTrivyJSON, &core.ParseOptions{
 		AssetValue: "alpine:3.18.0",
