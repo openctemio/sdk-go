@@ -1,0 +1,188 @@
+{
+  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "assets": [
+    {
+      "id": "sbom-pkg:oci/shop-api@sha256%3A0000000000000000000000000000000000000000000000000000000000000001",
+      "name": "registry.example.com/shop/shop-api",
+      "properties": {
+        "component_type": "container",
+        "version": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+      },
+      "type": "container",
+      "value": "pkg:oci/shop-api@sha256%3A0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ],
+  "dependencies": [
+    {
+      "depends_on": [
+        "pkg:npm/qs@6.7.0"
+      ],
+      "ecosystem": "npm",
+      "id": "pkg:npm/express@4.17.1",
+      "licenses": [
+        "MIT"
+      ],
+      "name": "express",
+      "properties": {
+        "hash_sha-512": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "purl": "pkg:npm/express@4.17.1",
+      "relationship": "direct",
+      "type": "library",
+      "version": "4.17.1"
+    },
+    {
+      "ecosystem": "npm",
+      "id": "pkg:npm/qs@6.7.0",
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "name": "qs",
+      "purl": "pkg:npm/qs@6.7.0",
+      "relationship": "indirect",
+      "type": "library",
+      "version": "6.7.0"
+    },
+    {
+      "ecosystem": "deb",
+      "id": "pkg:deb/debian/openssl@3.0.11-1~deb12u1?arch=amd64&distro=debian-12",
+      "name": "openssl",
+      "purl": "pkg:deb/debian/openssl@3.0.11-1~deb12u1?arch=amd64&distro=debian-12",
+      "relationship": "direct",
+      "type": "library",
+      "version": "3.0.11-1~deb12u1"
+    }
+  ],
+  "findings": [
+    {
+      "asset_ref": "sbom-pkg:oci/shop-api@sha256%3A0000000000000000000000000000000000000000000000000000000000000001",
+      "description": "qs before 6.7.3 allows prototype pollution.",
+      "message": "qs before 6.7.3 allows prototype pollution.",
+      "native": {
+        "raw_ref": "/vulnerabilities/0/affects/0",
+        "scheme": "other",
+        "severity": "high",
+        "vuln_id": "CVE-2022-24999"
+      },
+      "references": [
+        "https://nvd.nist.gov/vuln/detail/CVE-2022-24999"
+      ],
+      "remediation": {
+        "recommendation": "Upgrade qs to 6.7.3 or later."
+      },
+      "rule_id": "CVE-2022-24999",
+      "rule_name": "CVE-2022-24999",
+      "scores": [
+        {
+          "label": "high",
+          "source": "NVD",
+          "system": "cvss",
+          "value": 7.5,
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+          "version": "3.1"
+        }
+      ],
+      "severity": "high",
+      "title": "CVE-2022-24999 in qs@6.7.0",
+      "type": "vulnerability",
+      "vulnerability": {
+        "affected_version": "6.7.0",
+        "cve_id": "CVE-2022-24999",
+        "cve_ids": [
+          "CVE-2022-24999"
+        ],
+        "cvss_score": 7.5,
+        "cvss_source": "nvd",
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+        "cvss_version": "3.1",
+        "cwe_id": "CWE-1321",
+        "cwe_ids": [
+          "CWE-1321"
+        ],
+        "data_source": {
+          "name": "NVD",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-24999"
+        },
+        "ecosystem": "npm",
+        "ids": [
+          {
+            "id": "CVE-2022-24999",
+            "type": "cve"
+          },
+          {
+            "id": "GHSA-hrpp-h998-j3pp",
+            "type": "ghsa"
+          }
+        ],
+        "modified_at": "2023-01-10T00:00:00Z",
+        "package": "qs",
+        "published_at": "2022-11-26T22:15:00Z",
+        "purl": "pkg:npm/qs@6.7.0"
+      }
+    },
+    {
+      "asset_ref": "sbom-pkg:oci/shop-api@sha256%3A0000000000000000000000000000000000000000000000000000000000000001",
+      "description": "Express.js Open Redirect in malformed URLs.",
+      "message": "Express.js Open Redirect in malformed URLs.",
+      "native": {
+        "raw_ref": "/vulnerabilities/2/affects/0",
+        "scheme": "other",
+        "severity": "medium",
+        "vuln_id": "GHSA-rv95-896h-c2vc"
+      },
+      "rule_id": "GHSA-rv95-896h-c2vc",
+      "rule_name": "GHSA-rv95-896h-c2vc",
+      "scores": [
+        {
+          "label": "medium",
+          "source": "GitHub",
+          "system": "cvss",
+          "value": 6.1,
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+          "version": "3.1"
+        }
+      ],
+      "severity": "medium",
+      "title": "GHSA-rv95-896h-c2vc in express@4.17.1",
+      "type": "vulnerability",
+      "vex": {
+        "source": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
+        "statement": "Reachable from the login redirect.",
+        "status": "affected"
+      },
+      "vulnerability": {
+        "affected_version": "4.17.1",
+        "cvss_score": 6.1,
+        "cvss_source": "vendor",
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+        "cvss_version": "3.1",
+        "ecosystem": "npm",
+        "ids": [
+          {
+            "id": "GHSA-rv95-896h-c2vc",
+            "type": "ghsa"
+          }
+        ],
+        "package": "express",
+        "purl": "pkg:npm/express@4.17.1"
+      }
+    }
+  ],
+  "metadata": {
+    "properties": {
+      "bom_serial_number": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
+      "bom_timestamp": "2026-09-30T10:00:00Z",
+      "bom_version": 1,
+      "cyclonedx_spec_version": "1.6",
+      "provenance": "<provenance>"
+    },
+    "source_type": "scanner"
+  },
+  "tool": {
+    "capabilities": [
+      "sca"
+    ],
+    "name": "file-import"
+  },
+  "version": "1.4"
+}

@@ -2,6 +2,7 @@ package importtool_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,9 @@ func TestImportTool_Golden(t *testing.T) {
 		{"nessus", map[string]string{"in/scan.nessus": "scan.nessus"}},
 		{"qualys", map[string]string{"in/detections.xml": "detections.xml", "in/kb.xml": "detections.kb.xml"}},
 		{"defectdojo", map[string]string{"in/findings.json": "findings.json"}},
+		{"cyclonedx", map[string]string{"in/image.cdx.json": "image.cdx.json"}},
+		{"spdx", map[string]string{"in/app.spdx.json": "app.spdx.json"}},
+		{"osv", map[string]string{"in/osv.json": "lockfiles.osv.json"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -46,8 +50,8 @@ func TestImportTool_Golden(t *testing.T) {
 			}
 			res := testkit.Run(t, importtool.New(), tool.Task{Inputs: inputs}, testkit.Options{Files: files})
 			res.RequireStatus(t, tool.StatusOK)
-			if len(res.Report.Findings) == 0 {
-				t.Fatal("no findings")
+			if len(res.Report.Findings) == 0 && len(res.Report.Dependencies) == 0 {
+				t.Fatal("no findings and no dependencies")
 			}
 			res.Golden(t, filepath.Join("testdata", c.name+".ctis.golden.json"))
 		})
@@ -150,5 +154,29 @@ func TestImportTool_Manifest(t *testing.T) {
 	}
 	if !bytes.Contains(m.Config, []byte(`"min_severity"`)) {
 		t.Fatalf("config schema: %s", m.Config)
+	}
+}
+
+// A VEX document produces no record: its statements go to the artifact,
+// for the platform to apply under its VEX mode.
+func TestImportTool_VEXGoesToTheArtifact(t *testing.T) {
+	res := testkit.Run(t, importtool.New(), tool.Task{Inputs: []tool.Input{input("vex", "image-vex.json")}},
+		testkit.Options{Files: map[string][]byte{"image-vex.json": fixture(t, "image-vex.json")}})
+	res.RequireStatus(t, tool.StatusOK)
+	if len(res.Report.Findings) != 0 || len(res.Report.Assets) != 0 {
+		t.Fatalf("a VEX document emitted %d findings and %d assets", len(res.Report.Findings), len(res.Report.Assets))
+	}
+	var doc struct {
+		Statements []struct {
+			VEX struct {
+				Status string `json:"status"`
+			} `json:"vex"`
+		} `json:"statements"`
+	}
+	if err := json.Unmarshal(res.Artifacts[importtool.VEXArtifact], &doc); err != nil {
+		t.Fatalf("artifact: %v", err)
+	}
+	if len(doc.Statements) == 0 || doc.Statements[0].VEX.Status == "" {
+		t.Fatalf("artifact holds no statement: %s", res.Artifacts[importtool.VEXArtifact])
 	}
 }
