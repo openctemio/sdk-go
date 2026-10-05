@@ -237,7 +237,7 @@ func (o *Outbox) worker(ctx context.Context, d Deliverer) {
 		if e == nil {
 			var timer <-chan time.Time
 			if !wake.IsZero() {
-				t := time.NewTimer(time.Until(wake))
+				t := time.NewTimer(wake.Sub(o.cfg.now())) // on the outbox clock nextLocked used
 				timer = t.C
 				select {
 				case <-ctx.Done():
