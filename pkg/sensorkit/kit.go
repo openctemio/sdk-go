@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/client"
@@ -263,6 +265,12 @@ type Kit struct {
 	handlers    map[string]core.CommandExecutor
 	middlewares []middleware
 	ran         bool
+
+	// localMu guards s.local after New: SetLocalPolicy may replace it while
+	// Run runs. executor and poller are where it is enforced (set by Run).
+	localMu  sync.Mutex
+	executor atomic.Pointer[core.DefaultCommandExecutor]
+	poller   atomic.Pointer[core.CommandPoller]
 }
 
 // New resolves the settings, checks them, connects the platform client and
@@ -432,6 +440,68 @@ func New(opts Options) (*Kit, error) {
 	// that reads it).
 	k.sensor.SetLocalPolicy(s.local)
 	return k, nil
+}
+
+// LocalPolicy returns the sensor-local policy in force.
+func (k *Kit) LocalPolicy() *core.LocalPolicy {
+	k.localMu.Lock()
+	defer k.localMu.Unlock()
+	return k.s.local
+}
+
+// SetLocalPolicy replaces the sensor-local policy wherever the kit enforces
+// or reports it: the poller's admission and kill switch, the executor's
+// checks, and the heartbeat and manifest report. Safe while Run runs; a
+// running command keeps the policy it was admitted under, except that a
+// kill switch engaged by the new policy stops it. Whatever else the sensor
+// handed the policy to (its own executors) it updates itself.
+func (k *Kit) SetLocalPolicy(lp *core.LocalPolicy) {
+	if lp == nil {
+		return
+	}
+	k.localMu.Lock()
+	k.s.local = lp
+	k.localMu.Unlock()
+	if k.sensor != nil {
+		k.sensor.SetLocalPolicy(lp)
+	}
+	if e := k.executor.Load(); e != nil {
+		e.SetLocalPolicy(lp)
+	}
+	if p := k.poller.Load(); p != nil {
+		p.SetLocalPolicy(lp)
+	}
+}
+
+// ReloadLocalPolicy re-reads the local policy with opts
+// (core.ReloadLocalPolicy) and applies the result with SetLocalPolicy: the
+// new policy, or, when it does not load, the previous one with the kill
+// switch engaged. It logs the outcome and returns the policy now in force
+// and the load error.
+func (k *Kit) ReloadLocalPolicy(opts core.LocalPolicyOptions) (*core.LocalPolicy, error) {
+	prev := k.LocalPolicy()
+	lp, err := core.ReloadLocalPolicy(prev, opts)
+	k.SetLocalPolicy(lp)
+	if err != nil {
+		_, _ = fmt.Fprintf(k.errw, "Error: local policy reload failed, every job is stopped until it is fixed: %v\n", err)
+		return lp, err
+	}
+	if prev.Digest() != lp.Digest() {
+		_, _ = fmt.Fprintf(k.out, "Local policy reloaded (%s -> %s): %s\n", orNone(prev.Digest()), orNone(lp.Digest()), lp.Describe())
+	} else {
+		_, _ = fmt.Fprintf(k.out, "Local policy reloaded, unchanged: %s\n", lp.Describe())
+	}
+	for _, w := range lp.Warnings() {
+		_, _ = fmt.Fprintf(k.errw, "Warning: %s\n", w)
+	}
+	return lp, nil
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
 }
 
 // loadLocalPolicy is Options.LocalPolicy, else the policy loaded from
@@ -792,7 +862,8 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// The local policy, behind the poller's admission check: targets
 	// (through the scan target policy), templates, callbacks, rate and
 	// run time.
-	executor.SetLocalPolicy(k.s.local)
+	executor.SetLocalPolicy(k.LocalPolicy())
+	k.executor.Store(executor)
 	if r := k.opts.CommandAssetResolver; r != nil {
 		executor.SetAssetResolver(r)
 	} else if r := k.opts.AssetResolver; r != nil {
@@ -866,7 +937,8 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	poller.SetCommandGate(k.sensor.CommandToolGate())
 	// The sensor-local policy decides first: admission before any executor
 	// or tool, and the local kill switch (api RFC-040 §5.7).
-	poller.SetLocalPolicy(k.s.local)
+	poller.SetLocalPolicy(k.LocalPolicy())
+	k.poller.Store(poller)
 
 	if p := k.opts.ScanTargetPolicy; p != nil && len(p.AllowedRoots) > 0 {
 		_, _ = fmt.Fprintf(out, "  Scan workspace: %s\n", strings.Join(p.AllowedRoots, string(filepath.ListSeparator)))
