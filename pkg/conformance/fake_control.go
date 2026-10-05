@@ -59,6 +59,14 @@ func (f *FakePlatform) control(w http.ResponseWriter, r *http.Request, rest stri
 			return true
 		}
 		f.manifestV2(w, body)
+	case rest == protov2.ConfigReportPath && r.Method == http.MethodPut:
+		f.mu.Lock()
+		on := f.configReport
+		f.mu.Unlock()
+		if !on {
+			return false
+		}
+		f.configReportV2(w, body)
 	case rest == protov2.KeysPath && r.Method == http.MethodPost:
 		f.mu.Lock()
 		f.keys++
@@ -80,9 +88,13 @@ func (f *FakePlatform) heartbeatV2(w http.ResponseWriter, body []byte) {
 	paused := f.Paused
 	var hb struct {
 		ManifestDigest string `json:"manifest_digest"`
+		ConfigReport   *struct {
+			Digest string `json:"digest"`
+		} `json:"config_report"`
 	}
 	_ = json.Unmarshal(body, &hb)
 	askManifest := f.Manifest && hb.ManifestDigest != "" && hb.ManifestDigest != f.digest
+	askConfig := f.configReport && hb.ConfigReport != nil && hb.ConfigReport.Digest != "" && hb.ConfigReport.Digest != f.configDigest
 	pending := 0
 	for _, id := range f.cmdQueue {
 		if f.commands[id] == "pending" {
@@ -99,6 +111,9 @@ func (f *FakePlatform) heartbeatV2(w http.ResponseWriter, body []byte) {
 	}
 	if askManifest && !paused {
 		resp.Actions = append(resp.Actions, "send_manifest")
+	}
+	if askConfig && !paused {
+		resp.Actions = append(resp.Actions, protov2.ActionSendConfigReport)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -140,6 +155,31 @@ func (f *FakePlatform) manifestV2(w http.ResponseWriter, body []byte) {
 	resp.Accepted.Capabilities = []string{}
 	resp.Accepted.Tools = names
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// configReportV2 stores a config report: 413 above the limit, 422 for a
+// schema other than 1, else its digest over the canonical JSON.
+func (f *FakePlatform) configReportV2(w http.ResponseWriter, body []byte) {
+	if len(body) > protov2.MaxConfigReportBytes {
+		f.problem(w, http.StatusRequestEntityTooLarge, protov2.ProblemContentTooLarge)
+		return
+	}
+	var m struct {
+		Schema int `json:"schema"`
+	}
+	if json.Unmarshal(body, &m) != nil || m.Schema != 1 {
+		f.problem(w, http.StatusUnprocessableEntity, protov2.ProblemSchemaInvalid)
+		return
+	}
+	sum := sha256.Sum256(body)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+	f.mu.Lock()
+	changed := digest != f.configDigest
+	f.configDigest = digest
+	f.configReports = append(f.configReports, append(json.RawMessage(nil), body...))
+	f.mu.Unlock()
+	writeJSON(w, http.StatusOK, protov2.ConfigReportResponse{ConfigReportDigest: digest, Changed: changed,
+		Ignored: []protov2.ManifestIgnored{}})
 }
 
 // manifestStateV2 answers GET /manifest: the stored digest and the policy.

@@ -518,6 +518,12 @@ type SensorStatus struct {
 	// the API client sends it only to a platform that lists the
 	// "local_policy" feature.
 	LocalPolicy *LocalPolicyReport `json:"local_policy,omitempty"`
+
+	// ConfigReport is the config report's digest (as the platform returned
+	// it), rollup and counts (BaseSensor.SetConfigReporter). nil reports
+	// nothing; the API client sends it only to a platform that lists the
+	// "config_report" feature.
+	ConfigReport *ConfigReportSummary `json:"config_report,omitempty"`
 }
 
 // =============================================================================
