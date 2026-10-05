@@ -293,6 +293,8 @@ func TestLocalPolicy_AdmitCommand(t *testing.T) {
 			"target": map[string]any{"address": "https://www.corp.example.com"}}), ""},
 		"validate port": {cmdWith("o", "validate", map[string]any{"executor_kind": "safe_check",
 			"target": map[string]any{"address": "www.corp.example.com:3389"}}), "ports.allow"},
+		"retest needs checks.allow": {cmdWith("r", "retest", map[string]any{"scanner": "nuclei", "targets": []string{"203.0.113.9"},
+			"items": []map[string]any{{"ref": "f", "target": "203.0.113.9", "kind": "finding"}}}), "checks.allow"},
 		"unreadable target":  {&Command{ID: "p", Type: "scan", Payload: []byte(`{"scanner":"nuclei","target":42}`)}, "payload"},
 		"unreadable payload": {&Command{ID: "q", Type: "scan", Payload: []byte(`["not an object"]`)}, "payload"},
 	} {
@@ -519,5 +521,27 @@ func TestLocalPolicy_DialContext(t *testing.T) {
 	var none *LocalPolicy
 	if _, err := none.CheckDial(ctx, "tcp", "169.254.169.254:80"); !isRule(err, "builtin") {
 		t.Fatalf("absent policy, metadata address: %v", err)
+	}
+}
+
+// A retest command is admitted like a scan: its type must be in
+// checks.allow, its tool in tools.allow and every target must pass.
+func TestLocalPolicy_AdmitRetest(t *testing.T) {
+	lp := mustPolicy(t, "apiVersion: openctem.io/sensor-policy/v1\ntargets:\n  allow: [\"203.0.113.0/24\"]\ntools:\n  allow: [nuclei]\nchecks:\n  allow: [scan, retest]\n")
+	ctx := context.Background()
+	retest := func(tool string, targets ...string) *Command {
+		return cmdWith("r", "retest", map[string]any{"scanner": tool, "targets": targets,
+			"items": []map[string]any{{"ref": "f", "target": targets[0], "kind": "finding"}}})
+	}
+	if err := lp.AdmitCommand(ctx, retest("nuclei", "203.0.113.9")); err != nil {
+		t.Fatalf("allowed retest refused: %v", err)
+	}
+	for name, cmd := range map[string]*Command{
+		"target outside targets.allow": retest("nuclei", "203.0.113.9", "198.51.100.1"),
+		"tool outside tools.allow":     retest("naabu", "203.0.113.9"),
+	} {
+		if err := lp.AdmitCommand(ctx, cmd); err == nil {
+			t.Errorf("%s: admitted", name)
+		}
 	}
 }

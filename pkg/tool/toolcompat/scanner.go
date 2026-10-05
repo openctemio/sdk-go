@@ -58,7 +58,22 @@ type toolScanner struct {
 	cfg ScannerConfig
 }
 
+// Retester is a scanner that also runs retest tasks of its tool (the
+// sensor's retest command): Retests reports whether the manifest declares
+// retest, RunRetest runs one retest task through the same host, admission
+// and options as a scan.
+type Retester interface {
+	core.Scanner
+	Retests() bool
+	RunRetest(ctx context.Context, task tool.Task) (*toolhost.Outcome, error)
+}
+
+// RetestCapability is the capability a sensor reports for a tool that can
+// retest: "retest:<tool>". The platform routes retest commands by it.
+func RetestCapability(name string) string { return "retest:" + strings.ToLower(name) }
+
 var (
+	_ Retester                    = (*toolScanner)(nil)
 	_ core.MultiTargetScanner     = (*toolScanner)(nil)
 	_ core.ToolContractProvider   = (*toolScanner)(nil)
 	_ core.SettingsSchemaProvider = (*toolScanner)(nil)
@@ -85,6 +100,32 @@ func (s *toolScanner) Capabilities() []string {
 		return l.Capabilities()
 	}
 	return append([]string(nil), s.m.Capabilities...)
+}
+
+// Retests reports whether the tool can retest (its manifest declares it).
+func (s *toolScanner) Retests() bool { return s.m.Retest }
+
+// RunRetest runs one retest task (tool.Task.Retest set) out of process.
+func (s *toolScanner) RunRetest(ctx context.Context, task tool.Task) (*toolhost.Outcome, error) {
+	if !s.m.Retest || !task.IsRetest() {
+		return nil, fmt.Errorf("%s: not a retest", s.m.Name)
+	}
+	return s.run(ctx, task)
+}
+
+// run runs one task through the host: a tool with a run section as its own
+// program (installed by the operator), else re-executed as a compiled-in
+// tool.
+func (s *toolScanner) run(ctx context.Context, task tool.Task) (*toolhost.Outcome, error) {
+	o := toolhost.RunOptions{Mode: s.cfg.Mode, Dir: s.cfg.Dir}
+	if s.cfg.Credentials != nil {
+		o.Credentials = s.cfg.Credentials()
+	}
+	if s.m.Run != nil {
+		o.Trusted = true // installed by the operator in an adapter directory
+		return s.cfg.Host.RunManifest(ctx, s.m, task, o)
+	}
+	return s.cfg.Host.RunBuiltin(ctx, s.t, task, o)
 }
 
 // IsInstalled: a bridged scanner answers for its engine; a tool with its
@@ -149,18 +190,7 @@ func (s *toolScanner) ScanTargets(ctx context.Context, targets []string, opts *c
 		}
 		task.Local = local
 	}
-	o := toolhost.RunOptions{Mode: s.cfg.Mode, Dir: s.cfg.Dir}
-	if s.cfg.Credentials != nil {
-		o.Credentials = s.cfg.Credentials()
-	}
-	var out *toolhost.Outcome
-	var err error
-	if s.m.Run != nil {
-		o.Trusted = true // installed by the operator in an adapter directory
-		out, err = s.cfg.Host.RunManifest(ctx, s.m, task, o)
-	} else {
-		out, err = s.cfg.Host.RunBuiltin(ctx, s.t, task, o)
-	}
+	out, err := s.run(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", s.m.Name, err)
 	}

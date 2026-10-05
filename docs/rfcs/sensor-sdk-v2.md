@@ -379,6 +379,24 @@ Rules the runtime enforces, because a verdict closes or reopens findings:
   retest did not finish"). An unreachable host can never read as fixed.
 - Details are cleaned, capped at 256 bytes and redacted like logs.
 
+Delivery. `sensorkit` reports capability `retest:<tool>` for every tool whose
+manifest declares retest and serves the platform's `retest` command:
+
+```json
+{"scanner": "nuclei", "retest_id": "…", "timeout_seconds": 120,
+ "targets": ["https://a.example/login"],
+ "items": [{"ref": "<finding id>", "target": "https://a.example/login", "kind": "finding",
+            "rule_id": "CVE-2024-1234", "fingerprint": "…"}]}
+```
+
+The command passes the same gates as a scan before anything runs: the
+platform's tool policy, the local policy's `checks.allow` (a policy that lists
+check types must list `retest`), `tools.allow` and every target. Each address
+becomes one task target, and an item on an address that is not a target fails
+the command. The timeout defaults to 2 minutes and is capped at 30. The command
+completes with `metadata.retest = {tool, status, verdicts: [{ref, verdict,
+detail}], error?}`.
+
 #### D.3.8 Minimal tool (Go, about 15 lines)
 
 ```go
