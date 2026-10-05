@@ -21,6 +21,8 @@
 // chosen at runtime (API URL from config, KEV/EPSS feed, bootstrap
 // token endpoint, command poller, lease endpoint) MUST use
 // SafeHTTPClient + ValidateURL, not &http.Client{} directly.
+//
+// Stability: Stable (docs/STABILITY.md).
 package httpsec
 
 import (

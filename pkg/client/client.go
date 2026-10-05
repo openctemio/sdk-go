@@ -1,4 +1,6 @@
 // Package client provides the OpenCTEM API client.
+//
+// Stability: Stable (docs/STABILITY.md).
 package client
 
 import (

@@ -22,6 +22,15 @@ holds today.
 | **Internal-bound** | Public today because other public packages use it; it moves under `internal/` before v1.0.0 (deprecated aliases for one minor). Do not import it from a sensor. |
 | **Deprecated** | Marked `Deprecated:` in its package documentation; removed in a later minor release with an upgrade note. |
 
+Every public package states its tier in its package comment
+(`Stability: <Tier> (docs/STABILITY.md).`, or a `Deprecated:` paragraph).
+The `api-compat` CI job (`scripts/check-api-compat.sh`) weighs each
+incompatible change against the PR's base by that tier: Stable and Frozen
+fail unless the PR is labelled `breaking-change` with a `### Upgrade notes`
+fragment in `changelog.d/`; Beta is a warning (write the upgrade note
+anyway); Internal-bound and Deprecated are listed only. A public package
+without a tier fails the job.
+
 | Package | Role | Tier |
 |---|---|---|
 | `pkg/sensorkit` | The runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain, preflight checks and the config report; runner mode (`CIRun`, `Kit.RunOnce`: CI OIDC exchange, uploads, gate verdict, api RFC-051) | Stable; runner mode Beta |

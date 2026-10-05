@@ -20,6 +20,9 @@
 //     credentials file).
 //
 // Everything else in the SDK uses sensor terms.
+//
+// Stability: Frozen (docs/STABILITY.md): no additions; removed when the
+// protocol it serves is sunset.
 package legacyv1
 
 // Protocol v1 routes (tenant sensors). The platform-sensor routes live under

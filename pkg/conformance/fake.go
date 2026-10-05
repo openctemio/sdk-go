@@ -12,6 +12,8 @@
 //   - The live suite (live_test.go), which runs the same contract against a
 //     real API: OPENCTEM_CONFORMANCE_URL and OPENCTEM_CONFORMANCE_KEY (a
 //     sensor key) select it; see the package README in the test file.
+//
+// Stability: Stable (docs/STABILITY.md).
 package conformance
 
 import (

@@ -8,6 +8,8 @@
 //
 // Design: https://github.com/openctemio/openctem/blob/develop/api/docs/rfcs/RFC-033-sensor-manifest.md
 // (config report section) and OpenCTEM research/26.
+//
+// Stability: Stable (docs/STABILITY.md).
 package settings
 
 import (

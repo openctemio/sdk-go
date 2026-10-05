@@ -1,5 +1,7 @@
 // Package mocks provides mock implementations for testing.
 // This follows AWS SDK, Google Cloud SDK patterns for testability.
+//
+// Stability: Stable (docs/STABILITY.md) until pkg/testkit replaces it.
 package mocks
 
 import (
