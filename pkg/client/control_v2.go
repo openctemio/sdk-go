@@ -173,6 +173,35 @@ func (c *Client) PutManifest(ctx context.Context, m *core.Manifest) (*core.Manif
 
 var _ core.ManifestPusher = (*Client)(nil)
 
+// PutConfigReport sends the sensor's config report (api RFC-033, config
+// report) when the platform lists "config_report" on hello;
+// core.ErrConfigReportUnsupported otherwise. The report must be finalized
+// (core.ConfigReport.Finalize): it carries no setting values and is at most
+// protov2.MaxConfigReportBytes. It implements core.ConfigReportPusher.
+func (c *Client) PutConfigReport(ctx context.Context, r *core.ConfigReport) (*core.ConfigReportAck, error) {
+	if r == nil {
+		return nil, errors.New("nil config report")
+	}
+	if ok, _ := c.controlV2(ctx, protov2.FeatureConfigReport); !ok {
+		return nil, core.ErrConfigReportUnsupported
+	}
+	var resp protov2.ConfigReportResponse
+	if _, err := c.v2JSON(ctx, http.MethodPut, protov2.PathPrefix+protov2.ConfigReportPath, r, &resp, nil, min(c.maxRetries, controlRetries)); err != nil {
+		if isRouteMissing(err) {
+			c.renegotiate() // listed on hello but not served
+			return nil, core.ErrConfigReportUnsupported
+		}
+		return nil, err
+	}
+	ack := &core.ConfigReportAck{Digest: resp.ConfigReportDigest, Changed: resp.Changed}
+	for _, i := range resp.Ignored {
+		ack.Ignored = append(ack.Ignored, core.ManifestIgnored{Path: i.Path, Value: i.Value, Reason: i.Reason})
+	}
+	return ack, nil
+}
+
+var _ core.ConfigReportPusher = (*Client)(nil)
+
 // GetManifestState re-reads the platform's view of the registered manifest
 // (GET /manifest, api RFC-033 §6.12): its digest, the policy as it stands
 // now and the heartbeat form. core.ErrManifestNotRegistered when the

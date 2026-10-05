@@ -121,7 +121,12 @@ type FakePlatform struct {
 	manifests []json.RawMessage
 	// localPolicy: hello lists "local_policy" (SetLocalPolicy).
 	localPolicy bool
-	digest      string
+	// configReport: hello lists "config_report" and PUT /config-report is
+	// served (SetConfigReport); configReports are the reports received.
+	configReport  bool
+	configReports []json.RawMessage
+	configDigest  string
+	digest        string
 	// policyTools, when set, is the policy's allowed_tools (else every
 	// tool of the manifest); slim answers omit_inventory (api RFC-033 §6.12).
 	policyTools   []string
@@ -160,6 +165,31 @@ func (f *FakePlatform) SetLocalPolicy(on bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.localPolicy = on
+}
+
+// SetConfigReport lists or stops listing the "config_report" feature on
+// hello and serves PUT /config-report (api RFC-033, config report): the
+// fake stores each report and asks for it again (send_config_report) when a
+// heartbeat names another digest.
+func (f *FakePlatform) SetConfigReport(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.configReport = on
+}
+
+// ConfigReports returns the config reports received, in order.
+func (f *FakePlatform) ConfigReports() []json.RawMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]json.RawMessage(nil), f.configReports...)
+}
+
+// ForgetConfigReport drops the stored config report digest, as a platform
+// that lost it: the next heartbeat naming one is asked to send it again.
+func (f *FakePlatform) ForgetConfigReport() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.configDigest = ""
 }
 
 // Manifests returns the manifests registered, in order.
@@ -632,6 +662,9 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 				protov2.FeatureSuppressions, protov2.FeatureFingerprints, protov2.FeatureKeys)
 			if f.Manifest {
 				features = append(features, protov2.FeatureManifest)
+			}
+			if f.configReport {
+				features = append(features, protov2.FeatureConfigReport)
 			}
 			if f.localPolicy {
 				features = append(features, protov2.FeatureLocalPolicy)

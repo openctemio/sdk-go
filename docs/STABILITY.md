@@ -14,7 +14,8 @@ tool-specific.
 | Package | Role | Status |
 |---|---|---|
 | `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries (`ToolRegistry`, `ParserRegistry`), the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | stable |
-| `pkg/sensorkit` | The runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain | stable |
+| `pkg/sensorkit` | The runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain, preflight checks and the config report | stable |
+| `pkg/sensorkit/settings` | The settings registry: every setting declared once (name, type, required, default, secret, description, docs link, validation); `docs/SETTINGS.md` is generated from it | stable |
 | `pkg/client` | Platform protocol client (v2 negotiated, v1 fallback) | stable |
 | `pkg/sensorproto/v2` | Protocol v2 wire types | stable |
 | `pkg/sensorproto/legacyv1` | Protocol v1 wire vocabulary | frozen (no additions) |
@@ -46,6 +47,12 @@ keep/move/remove decision before v1.0.0): `pkg/adapters`, `pkg/gitenv`,
 `pkg/shared/*`, `pkg/mocks`. Most have no importer in the sensor or the API.
 
 `pkg/internal/*` is private.
+
+**Config report ids are API.** The check ids (`identity.state_persistent`,
+`tool.<name>.binary`, ...), their codes and parameter names, and the setting
+names in the config report are what the platform explains and links docs
+to: a rename is a breaking change. New ids and codes are additive (the
+platform shows an unknown id as plain text without a fix).
 
 ## 2. Extending without an SDK release
 

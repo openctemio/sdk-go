@@ -21,7 +21,27 @@ const (
 	KeysPath              = "/keys"
 	// ManifestPath registers the sensor manifest (api RFC-033).
 	ManifestPath = "/manifest"
+	// ConfigReportPath takes the sensor's config report: its preflight
+	// checks and the presence of its settings (api RFC-033, config report).
+	ConfigReportPath = "/config-report"
 )
+
+// MaxConfigReportBytes is the most a config report may weigh; the platform
+// answers 413 content-too-large above it.
+const MaxConfigReportBytes = 64 << 10
+
+// ActionSendConfigReport is the heartbeat action asking a sensor whose
+// config_report digest the platform does not have to PUT the report again.
+const ActionSendConfigReport = "send_config_report"
+
+// ConfigReportResponse answers PUT /config-report: the digest the platform
+// computed over what it kept (echo it in the heartbeat's config_report),
+// whether it was new, and what was ignored.
+type ConfigReportResponse struct {
+	ConfigReportDigest string            `json:"config_report_digest"`
+	Changed            bool              `json:"changed"`
+	Ignored            []ManifestIgnored `json:"ignored"`
+}
 
 // Command transitions (POST CommandsPath/{command_id}/<action>).
 const (
@@ -70,6 +90,10 @@ const (
 	// and manifests (api RFC-040 §5.7). Without it a sensor sends none; it
 	// enforces its local policy either way.
 	FeatureLocalPolicy = "local_policy"
+	// FeatureConfigReport: PUT /config-report and the heartbeat's
+	// config_report summary (api RFC-033, config report). Without it a
+	// sensor sends neither.
+	FeatureConfigReport = "config_report"
 	// FeatureCapacity: claim-N (api RFC-046 §11, RFC-030 §5.9). A sensor
 	// that names it in X-OpenCTEM-Sensor-Features on GET /commands gets the
 	// commands already claimed for it (status acknowledged, lease set), at

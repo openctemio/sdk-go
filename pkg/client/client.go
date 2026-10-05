@@ -455,6 +455,10 @@ type HeartbeatRequest struct {
 	// LocalPolicy is the sensor-local policy report (api RFC-040 §5.7),
 	// sent only to a platform that lists the "local_policy" feature.
 	LocalPolicy *core.LocalPolicyReport `json:"local_policy,omitempty"`
+
+	// ConfigReport is the config report's digest, rollup and counts, sent
+	// only to a platform that lists the "config_report" feature.
+	ConfigReport *core.ConfigReportSummary `json:"config_report,omitempty"`
 }
 
 // MarshalJSON encodes the heartbeat. active_jobs is sent even when it is 0
@@ -772,6 +776,9 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus, e
 	// it reads it (an older one is never sent a member it does not know).
 	if status.LocalPolicy != nil && c.PlatformSupports(ctx, protov2.FeatureLocalPolicy) {
 		req.LocalPolicy = status.LocalPolicy
+	}
+	if status.ConfigReport != nil && c.PlatformSupports(ctx, protov2.FeatureConfigReport) {
+		req.ConfigReport = status.ConfigReport
 	}
 	ob := c.Outbox()
 	if ob != nil {
