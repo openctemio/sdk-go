@@ -24,6 +24,7 @@ type queueClient struct {
 	released map[string]string
 	results  map[string]string
 	errs     map[string]string
+	refusals map[string]*Refusal
 	limits   []int
 }
 
@@ -84,6 +85,10 @@ func (c *queueClient) ReportCommandResult(_ context.Context, id string, r *Comma
 		c.errs = map[string]string{}
 	}
 	c.errs[id] = r.Error
+	if c.refusals == nil {
+		c.refusals = map[string]*Refusal{}
+	}
+	c.refusals[id] = r.Refusal
 	return nil
 }
 

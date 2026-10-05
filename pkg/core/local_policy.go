@@ -89,6 +89,9 @@ var ErrRefusedByLocalPolicy = errors.New("refused by local policy")
 // and Detail the offending item. Its text is what the platform shows:
 // "refused by local policy: <rule>: <detail>".
 type LocalPolicyError struct {
+	// Layer is the policy layer that refused (RefusalLayer*); "" is the
+	// local policy.
+	Layer  string
 	Rule   string
 	Detail string
 }

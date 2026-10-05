@@ -45,9 +45,13 @@ func TestCommandPoller_LocalPolicyRefuses(t *testing.T) {
 		if c.results[id] != "failed" || !strings.HasPrefix(c.errs[id], "refused by local policy: "+rule+": ") {
 			t.Errorf("%s: result %q, error %q", id, c.results[id], c.errs[id])
 		}
+		// The structured refusal (research/25 D8) goes along.
+		if r := c.refusals[id]; r == nil || r.Layer != RefusalLayerLocal || r.Rule != rule {
+			t.Errorf("%s: refusal %+v, want local/%s", id, r, rule)
+		}
 	}
-	if c.results["ok"] != "completed" {
-		t.Errorf("ok: %q", c.results["ok"])
+	if c.results["ok"] != "completed" || c.refusals["ok"] != nil {
+		t.Errorf("ok: %q, refusal %+v", c.results["ok"], c.refusals["ok"])
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -87,6 +91,9 @@ func TestCommandPoller_KillSwitch(t *testing.T) {
 	c.mu.Lock()
 	if c.results["running"] != "failed" || !strings.HasPrefix(c.errs["running"], "refused by local policy: kill_switch") {
 		t.Fatalf("running command: %q %q", c.results["running"], c.errs["running"])
+	}
+	if r := c.refusals["running"]; r == nil || r.Rule != "kill_switch" {
+		t.Fatalf("running command refusal: %+v", r)
 	}
 	c.cmds["later"] = scanCmd("later", "normal", map[string]any{"scanner": "nuclei", "target": "203.0.113.9"})
 	c.order = append(c.order, "later")
