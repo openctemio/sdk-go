@@ -24,8 +24,7 @@
     "source_type": "scanner"
   },
   "tool": {
-    "name": "dotenv-check",
-    "version": "1.0.0"
+    "name": "dotenv-check"
   },
   "version": "1.3"
 }
