@@ -283,24 +283,22 @@ func guardedTransportVia(blocked func(net.IP) bool, proxies *sync.Map) *http.Tra
 		if err != nil {
 			return nil, err
 		}
-		var dialIP string
+		dialIPs := make([]string, 0, len(ips))
 		for _, ip := range ips {
 			if check(ip.IP) {
 				return nil, fmt.Errorf("ssrf guard: blocked IP %s for host %s", ip.IP, host)
 			}
-			if dialIP == "" {
-				dialIP = ip.IP.String()
-			}
+			dialIPs = append(dialIPs, ip.IP.String())
 		}
-		if dialIP == "" {
+		if len(dialIPs) == 0 {
 			return nil, fmt.Errorf("ssrf guard: no resolved IP for host %s", host)
 		}
-		// Dial the IP we just validated rather than the hostname, so a DNS
+		// Dial the IPs we just validated rather than the hostname, so a DNS
 		// rebinding resolver can't return a different (blocked) IP between the
 		// check above and the connect. For https the transport still sets SNI
 		// and verifies the cert against the original hostname, so this does not
 		// weaken TLS.
-		return baseDialer.DialContext(ctx, network, net.JoinHostPort(dialIP, port))
+		return dialValidated(ctx, baseDialer.DialContext, network, dialIPs, port)
 	}
 	return &http.Transport{
 		DialContext:           safeDialer,
@@ -465,4 +463,26 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// dialValidated tries the validated addresses in resolver order and returns
+// the first connection. A host with an IPv6 and an IPv4 address where only one
+// family is reachable (an IPv6 address on a host without IPv6 routing, or a
+// service bound to 127.0.0.1 behind a name that resolves to ::1 first) still
+// connects. Every address was already checked; none is dialled unchecked.
+func dialValidated(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error), network string, ips []string, port string) (net.Conn, error) {
+	var firstErr error
+	for _, ip := range ips {
+		conn, err := dial(ctx, network, net.JoinHostPort(ip, port))
+		if err == nil {
+			return conn, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, firstErr
 }
