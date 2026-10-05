@@ -258,8 +258,9 @@ type failedTarget struct {
 }
 
 // Report returns the assembled report. The tool's name is the manifest's
-// (a tool cannot claim to be another one); its version is what the tool
-// reported (the engine's), else the manifest's.
+// (a tool cannot claim to be another one); tool.version is what the tool
+// reported (the engine it runs). The adapter's own version is in the
+// provenance.
 func (a *Assembler) Report(now time.Time) *ctis.Report {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -288,9 +289,6 @@ func (a *Assembler) Report(now time.Time) *ctis.Report {
 		r.Tool = &ctis.Tool{}
 	}
 	r.Tool.Name = a.m.Name
-	if r.Tool.Version == "" {
-		r.Tool.Version = a.m.Version
-	}
 	var failed []failedTarget
 	for _, ref := range a.order {
 		if res, ok := a.results[ref]; ok && res.State == tool.StateFailed {
