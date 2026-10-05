@@ -317,7 +317,10 @@ type Kit struct {
 	parsers     []core.Parser
 	handlers    map[string]core.CommandExecutor
 	middlewares []middleware
-	ran         bool
+	// retests are the tools a sensor serves retests for itself
+	// (HandleRetest).
+	retests map[string]RetestFunc
+	ran     bool
 
 	reg *settingsreg.Registry
 	doc *doctor
@@ -1055,7 +1058,7 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	types := slices.Clone(defaultCommandTypes)
 	handlers := maps.Clone(k.handlers)
 	if _, custom := handlers[RetestCommandType]; !custom {
-		if rx := newRetestExecutor(scanners); rx != nil {
+		if rx := newRetestExecutor(scanners, k.retests); rx != nil {
 			handlers[RetestCommandType] = rx
 		}
 	}

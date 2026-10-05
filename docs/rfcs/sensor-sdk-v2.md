@@ -380,7 +380,9 @@ Rules the runtime enforces, because a verdict closes or reopens findings:
 - Details are cleaned, capped at 256 bytes and redacted like logs.
 
 Delivery. `sensorkit` reports capability `retest:<tool>` for every tool whose
-manifest declares retest and serves the platform's `retest` command:
+manifest declares retest (and for each tool a sensor registers with
+`Kit.HandleRetest(name, run)` when it runs that tool itself) and serves the
+platform's `retest` command:
 
 ```json
 {"scanner": "nuclei", "retest_id": "…", "timeout_seconds": 120,

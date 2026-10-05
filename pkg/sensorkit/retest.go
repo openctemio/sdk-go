@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
 	"github.com/openctemio/sdk-go/pkg/tool/toolcompat"
 )
@@ -52,24 +53,53 @@ type RetestResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// RetestFunc runs one retest task (tool.Task.Retest set) of a tool and
+// returns the host's outcome (toolhost.Host.RunBuiltin or RunManifest): a
+// sensor that runs its tools itself serves retests with it (HandleRetest).
+type RetestFunc func(ctx context.Context, task tool.Task) (*toolhost.Outcome, error)
+
+// HandleRetest makes the kit serve the platform's retest commands for tool
+// name with run, and report capability "retest:<name>" (the platform
+// routes retests of the tool's findings by it). For a sensor that runs its
+// tools itself; a contract tool added with AddTool that declares retest is
+// served without it. The command is admitted like a scan before run is
+// called (the platform's tool gate, the local policy's checks.allow,
+// tools.allow and every target); run must run the task through a toolhost
+// Host, which admits it again and enforces the retest rules. Call before
+// Run.
+func (k *Kit) HandleRetest(name string, run RetestFunc) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" || run == nil {
+		return
+	}
+	if k.retests == nil {
+		k.retests = map[string]RetestFunc{}
+	}
+	k.retests[name] = run
+	k.Tools().AddCapabilities(toolcompat.RetestCapability(name))
+}
+
 // retestExecutor runs retest commands with the tools that declare retest.
 type retestExecutor struct {
-	tools map[string]toolcompat.Retester
+	tools map[string]RetestFunc
 }
 
 // newRetestExecutor returns the executor of the scanners that can retest
-// (nil when none can).
-func newRetestExecutor(scanners []scannerEntry) *retestExecutor {
-	rx := &retestExecutor{tools: map[string]toolcompat.Retester{}}
+// and of the tools given to HandleRetest (nil when there is none).
+func newRetestExecutor(scanners []scannerEntry, handled map[string]RetestFunc) *retestExecutor {
+	rx := &retestExecutor{tools: map[string]RetestFunc{}}
 	for _, e := range scanners {
 		r, ok := e.s.(toolcompat.Retester)
 		if !ok || !r.Retests() {
 			continue
 		}
-		rx.tools[strings.ToLower(e.s.Name())] = r
+		rx.tools[strings.ToLower(e.s.Name())] = r.RunRetest
 		if e.as != "" {
-			rx.tools[strings.ToLower(e.as)] = r
+			rx.tools[strings.ToLower(e.as)] = r.RunRetest
 		}
+	}
+	for name, run := range handled {
+		rx.tools[name] = run
 	}
 	if len(rx.tools) == 0 {
 		return nil
@@ -104,7 +134,7 @@ func (x *retestExecutor) Execute(ctx context.Context, cmd *core.Command) (*core.
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	task.Deadline = time.Now().Add(timeout)
-	out, err := r.RunRetest(ctx, task)
+	out, err := r(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("retest: %w", err)
 	}
