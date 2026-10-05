@@ -1,6 +1,10 @@
 // Package epss provides EPSS (Exploit Prediction Scoring System) enrichment for CVEs.
 // EPSS provides data-driven estimates of the likelihood that a CVE will be exploited in the wild.
 // Data source: https://www.first.org/epss
+//
+// Deprecated: no sensor, platform or collector imports it; the platform
+// enriches findings with EPSS itself. Removal is planned for a later minor
+// release (docs/STABILITY.md).
 package epss
 
 import (
