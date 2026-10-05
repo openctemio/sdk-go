@@ -316,6 +316,8 @@ type Kit struct {
 	handlers    map[string]core.CommandExecutor
 	middlewares []middleware
 	ran         bool
+	// jobID makes Run run that one command and stop (RunJob).
+	jobID string
 
 	reg *settingsreg.Registry
 	doc *doctor
@@ -869,7 +871,13 @@ func (k *Kit) Run(ctx context.Context) error {
 	// capped backoff instead of exiting into a restart loop.
 	if k.client != nil && !waitForAcceptedKey(ctx, s.FirstHeartbeat, sleepCtx, out) {
 		_, _ = fmt.Fprintln(out, "Sensor stopped.")
+		if k.jobID != "" {
+			return errors.New("stopped before the job ran")
+		}
 		return nil
+	}
+	if k.jobID != "" {
+		return k.runOneJob(ctx, poller)
 	}
 
 	// pollerDone closes when the poller has drained.

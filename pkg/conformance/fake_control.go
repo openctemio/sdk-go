@@ -310,7 +310,16 @@ func (f *FakePlatform) transitionV2(w http.ResponseWriter, id, action string, bo
 
 // commandLocked is the answer of a transition: the command with its lease.
 func (f *FakePlatform) commandLocked(id, state string) protov2.Command {
-	out := protov2.Command{ID: id, Status: state, LeaseEpoch: f.cmdEpoch[id]}
+	typ, payload := "scan", json.RawMessage(`{"scanner":"fake"}`)
+	if t := f.cmdType[id]; t != "" {
+		typ = t
+	}
+	if p := f.cmdPayload[id]; len(p) > 0 {
+		payload = p
+	}
+	// As the platform does: a transition answers the whole command.
+	out := protov2.Command{ID: id, Type: typ, Priority: "normal", Status: state, Payload: payload,
+		LeaseEpoch: f.cmdEpoch[id]}
 	if state == "acknowledged" || state == "running" {
 		exp := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)
 		out.LeaseExpiresAt = &exp

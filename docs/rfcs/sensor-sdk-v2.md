@@ -539,6 +539,22 @@ Today's `sensorkit.Options` has about 45 fields that mirror environment settings
 
 Runner and daemon share the same kit, task pipeline and checks. Today the sensor has two runtimes (the kit for the daemon, a hand-written one-shot path with its own handlers); they merge.
 
+#### D.5.1a One job, then exit
+
+`Kit.RunJob(ctx, id)` runs the one platform command with that id and returns:
+a sensor started per job by a Kubernetes Job, an autoscaler or an operator
+(`SENSOR_JOB_ID`). It sets up everything `Run` sets up (identity, manifest,
+tools, local policy, outbox, heartbeats, which keep the lease and carry
+cancels), claims the command by id (`POST /commands/{id}/claim` answers the
+command), runs it through the same checks and executor as a polled command
+(kill switch, served types, expiry, local policy, the platform's tool gate),
+waits for the outbox to deliver its results and stops. It never polls for
+other work. The platform's claim decides who may run the command (tenant,
+holder, state); a command the sensor does not serve is released. A Job's
+outbox belongs on a persistent volume, or undelivered results are lost with
+the pod. No pool or autoscaling logic is in the platform yet (research
+trigger: the first deployment with more than one replica of a sensor).
+
 #### D.5.2 Minimal sensor (Go, about 20 lines)
 
 ```go
