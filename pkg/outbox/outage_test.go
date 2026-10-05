@@ -52,7 +52,11 @@ func TestOneHourOutageDeliversEachResultExactlyOnce(t *testing.T) {
 	dir := t.TempDir()
 	// Default MaxBytes, MaxAge (7 days) and back-off ceiling; a short base
 	// keeps the test fast.
-	mod := func(c *Config) { c.now = clock; c.BackoffBase = 5 * time.Millisecond; c.BackoffMax = 20 * time.Millisecond }
+	mod := func(c *Config) {
+		c.now = clock
+		c.BackoffBase = 5 * time.Millisecond
+		c.BackoffMax = 20 * time.Millisecond
+	}
 
 	p := &idempotentPlatform{down: true, stored: map[string]string{}}
 	o := openTest(t, dir, mod)
