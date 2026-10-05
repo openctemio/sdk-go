@@ -28,6 +28,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/retry"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
+	"github.com/openctemio/sdk-go/pkg/sensorsig"
 	"github.com/openctemio/sdk-go/pkg/useragent"
 )
 
@@ -38,6 +39,9 @@ type Client struct {
 	apiKey     string
 	sensorID   string // Sensor ID for tracking which sensor is pushing
 	httpClient *http.Client
+	// signed: requests are signed by the transport (Config.Signer); no
+	// bearer key is ever set.
+	signed bool
 	// ctl is the control client (heartbeats), built from httpClient on first
 	// use; controlTimeout bounds its requests (control_channel.go).
 	ctl            *http.Client
@@ -131,6 +135,11 @@ type Config struct {
 	// platform offers it, else v1), "v1" or "v2".
 	Protocol string `yaml:"protocol" json:"protocol"`
 
+	// Signer makes the client key-bound (api RFC-052): every request is
+	// signed with the sensor key (RFC 9421, pkg/sensorsig) and no bearer
+	// key is sent; APIKey is ignored.
+	Signer *sensorsig.Signer `yaml:"-" json:"-"`
+
 	// OutboxDir enables the durable outbox (see EnableOutbox) in that
 	// directory. New logs, and leaves the outbox off, when it cannot be
 	// opened; call EnableOutbox yourself to handle the error.
@@ -215,6 +224,11 @@ func New(cfg *Config) *Client {
 		compressionLevel: compressionLevel,
 		analyzer:         analyzer,
 		protocol:         protocol,
+	}
+	if cfg.Signer != nil {
+		c.signed = true
+		c.apiKey = ""
+		c.httpClient.Transport = &sensorsig.Transport{Signer: cfg.Signer, Base: c.httpClient.Transport}
 	}
 	if cfg.OutboxDir != "" || cfg.EnableRetryQueue {
 		ocfg := OutboxConfig{Dir: cfg.OutboxDir, MaxBytes: cfg.OutboxMaxBytes, MaxAge: cfg.OutboxMaxAge}
@@ -853,7 +867,7 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
+	c.setAuth(req)
 	req.Header.Set("User-Agent", c.userAgentHeader())
 
 	// Add Content-Encoding header if compressed
@@ -1048,8 +1062,26 @@ func (c *Client) SetAPIKey(key string) {
 // APIKeyHint names the client's API key in log lines without revealing it
 // (core.APIKeyHint: at most its first 8 characters).
 func (c *Client) APIKeyHint() string {
+	if c.signed {
+		if st, ok := c.httpClient.Transport.(*sensorsig.Transport); ok {
+			return core.KeyBoundHint(st.Signer.KeyID())
+		}
+	}
 	return core.APIKeyHint(c.getAPIKey())
 }
+
+// setAuth sets the bearer key; a key-bound client sends none (its
+// transport signs the request).
+func (c *Client) setAuth(req *http.Request) {
+	if c.signed {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
+}
+
+// KeyBound reports whether the client signs its requests with a sensor key
+// instead of sending a bearer key.
+func (c *Client) KeyBound() bool { return c.signed }
 
 // getAPIKey returns the current API key under a read lock.
 func (c *Client) getAPIKey() string {

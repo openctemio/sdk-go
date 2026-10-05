@@ -40,11 +40,14 @@ without a tier fails the job.
 | `pkg/tool/toolcompat` | Transitional bridges: a `core.Scanner` or `core.Collector` run as a tool of the contract (`FromScanner`, `FromCollector`), out of process; a contract tool served to the command executor (`AsScanner`) | Beta; removed once every in-tree scanner is ported |
 | `pkg/testkit` | Run a tool in-process with the runtime's rules; golden CTIS | Stable |
 | `pkg/sensorkit/toolhost` | The runtime side of the tool contract: runs one task out of process and checks, assembles and stamps its output | Beta |
+| `pkg/sensorkit/identity` | A key-bound sensor's identity on disk (permission-checked) and the interactive pairing client (api RFC-052) | Beta |
 | `pkg/sensorkit/executor` | Per-task tool sandbox behind a small backend interface (`Backend`, `TaskSpec`, `Status`) | Beta |
 | `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries, the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | Stable; its runtime internals are Internal-bound and its overlapping tool interfaces are replaced by the tool contract (RFC) |
 | `pkg/client` | Platform protocol client (protocol v2; v1 is retired) | Stable; its protocol internals are Internal-bound |
 | `pkg/sensorproto/v2` | Protocol v2 wire types | Frozen once protocol v3 ships; Stable until then |
 | `pkg/sensorproto/legacyv1` | Pre-sensor names still read from existing installations (AGENT_* settings, credentials file) and the platform-sensor header | Frozen |
+| `pkg/sensorproto/pairing` | Interactive pairing protocol (api RFC-052): wire types, commitment, SAS, codes, shared test vectors | Beta |
+| `pkg/sensorsig` | RFC 9421 request signatures of a key-bound sensor (api RFC-052 §4.3): signer, verifier, signing transport | Beta |
 | `pkg/ctis` | CTIS types: re-exports `github.com/openctemio/ctis` (generated aliases; the `ctis-parity` CI job fails when they are stale) | Stable, follows CTIS |
 | `pkg/httpsec` | SSRF-safe HTTP clients and URL validation | Stable |
 | `pkg/conformance` | Fake platform and the sensor conformance suite | Stable |
