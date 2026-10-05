@@ -707,7 +707,7 @@ func (c *Client) v2DoWith(ctx context.Context, method, path string, body []byte,
 		}
 	}
 	req.Header.Set("Accept", protov2.MediaTypeJSON+", "+protov2.MediaTypeProblem)
-	req.Header.Set("Authorization", "Bearer "+c.getAPIKey())
+	c.setAuth(req)
 	req.Header.Set("User-Agent", c.userAgentHeader())
 	for k, vs := range extra {
 		for _, v := range vs {
