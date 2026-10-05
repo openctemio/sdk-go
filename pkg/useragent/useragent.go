@@ -11,6 +11,8 @@
 // names itself once, at startup, with SetProduct; every SDK HTTP client in the
 // process then sends it. pkg/client also takes a per-client product
 // (client.Config.UserAgent, client.WithUserAgent).
+//
+// Stability: Stable (docs/STABILITY.md).
 package useragent
 
 import (

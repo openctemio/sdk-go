@@ -1,4 +1,8 @@
 // Package retry provides persistent retry queue functionality for failed API operations.
+//
+// Stability: Internal-bound (docs/STABILITY.md): public today because other
+// public packages use it; it moves under internal/ before v1.0.0. Do not
+// import it from a sensor.
 package retry
 
 import (

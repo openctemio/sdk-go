@@ -17,6 +17,8 @@
 //   - CheckFindingAssets / ErrNoAssetForFindings: every finding needs an
 //     asset of its own report (the rule protocol v2 ingest enforces).
 //   - NormalizeSARIFKind / NormalizeSARIFBaselineState.
+//
+// Stability: Stable (docs/STABILITY.md).
 package ctis
 
 //go:generate go run ./internal/genalias zz_generated_aliases.go

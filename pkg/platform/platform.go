@@ -52,6 +52,10 @@
 //	    PollTimeout: 30 * time.Second,
 //	})
 //	poller.Start(ctx)
+//
+// Stability: Internal-bound (docs/STABILITY.md): public today because other
+// public packages use it; it moves under internal/ before v1.0.0. Do not
+// import it from a sensor.
 package platform
 
 import (
