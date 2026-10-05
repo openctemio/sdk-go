@@ -110,7 +110,7 @@ func TestParseLocalPolicy_FailsClosed(t *testing.T) {
 		"empty":                  "",
 		"blank":                  "  \n# only a comment\n",
 		"no apiVersion":          "targets: {allow: [203.0.113.0/24]}\n",
-		"wrong apiVersion":       "apiVersion: openctem.io/sensor-policy/v2\n",
+		"wrong apiVersion":       "apiVersion: openctem.io/sensor-policy/v3\n",
 		"unknown top key":        head + "allow_everything: true\n",
 		"unknown nested key":     head + "targets: {allow: [203.0.113.0/24], allowed: []}\n",
 		"typo of a switch":       head + "allow_interact_sh: true\n",

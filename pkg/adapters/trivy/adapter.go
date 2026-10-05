@@ -1,4 +1,9 @@
 // Package trivy provides an adapter to convert Trivy JSON output to CTIS.
+//
+// Deprecated: the converters duplicate ctis.FromSARIF and the parsers the
+// sensor ships; no sensor, platform or collector imports them. Emit CTIS
+// from a tool (pkg/tool) or convert SARIF with the ctis module. Removal is
+// planned for a later minor release (docs/STABILITY.md).
 package trivy
 
 import (

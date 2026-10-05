@@ -1,4 +1,9 @@
 // Package nuclei provides an adapter to convert Nuclei JSONL output to CTIS.
+//
+// Deprecated: the converters duplicate ctis.FromSARIF and the parsers the
+// sensor ships; no sensor, platform or collector imports them. Emit CTIS
+// from a tool (pkg/tool) or convert SARIF with the ctis module. Removal is
+// planned for a later minor release (docs/STABILITY.md).
 package nuclei
 
 import (

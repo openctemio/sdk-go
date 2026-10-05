@@ -5,26 +5,55 @@ change. A new tool, a new flag, a new output format or a new platform
 feature must not need an SDK release. This page says what the SDK
 promises, how it grows without breaking anyone, and what moves out.
 
-## 1. The stable surface
+## 1. Stability tiers
 
 The SDK is the shared contract between the platform and every sensor or
 collector. It holds only what every one of them needs and nothing
-tool-specific.
+tool-specific. The direction of the public surface (one tool contract,
+one runtime, a small public API, everything else internal) is set by
+[docs/rfcs/sensor-sdk-v2.md](rfcs/sensor-sdk-v2.md); this page states what
+holds today.
 
-| Package | Role | Status |
+| Tier | Promise |
+|---|---|
+| **Stable** | No incompatible change within the major version (before v1.0.0: removal only after a released `Deprecated:` period, section 4). |
+| **Beta** | May change in a minor release, after one minor with a `Deprecated:` notice and an upgrade note. |
+| **Frozen** | No additions; removed when the protocol it serves is sunset. |
+| **Internal-bound** | Public today because other public packages use it; it moves under `internal/` before v1.0.0 (deprecated aliases for one minor). Do not import it from a sensor. |
+| **Deprecated** | Marked `Deprecated:` in its package documentation; removed in a later minor release with an upgrade note. |
+
+| Package | Role | Tier |
 |---|---|---|
-| `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries (`ToolRegistry`, `ParserRegistry`), the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | stable |
-| `pkg/sensorkit` | The runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain; runner mode (`CIRun`, `Kit.RunOnce`: CI OIDC exchange, uploads, gate verdict, api RFC-051) | stable; runner mode beta |
-| `pkg/client` | Platform protocol client (v2 negotiated, v1 fallback) | stable |
-| `pkg/sensorproto/v2` | Protocol v2 wire types | stable |
-| `pkg/sensorproto/legacyv1` | Protocol v1 wire vocabulary | frozen (no additions) |
-| `pkg/ctis` | CTIS types: re-exports `github.com/openctemio/ctis` (generated aliases; the `ctis-parity` CI job fails when they are stale) | stable, follows CTIS |
-| `pkg/outbox` | Durable, encrypted result queue | stable |
-| `pkg/httpsec` | SSRF-safe HTTP clients and URL validation | stable |
-| `pkg/resource` | Slot sizing from CPU, memory and tool cost | stable |
-| `pkg/conformance` | Fake platform and the sensor conformance suite | stable |
-| `pkg/platform` | Credentials file, key renewal (used by sensorkit) | stable for those parts; its bootstrap/lease client serves the removed platform mode and is a removal candidate |
-| `pkg/useragent`, `pkg/sdk` | Build identity on the wire | stable |
+| `pkg/sensorkit` | The runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain, preflight checks and the config report; runner mode (`CIRun`, `Kit.RunOnce`: CI OIDC exchange, uploads, gate verdict, api RFC-051) | Stable; runner mode Beta |
+| `pkg/sensorkit/settings` | The settings registry: every setting declared once (name, type, required, default, secret, description, docs link, validation); `docs/SETTINGS.md` is generated from it | Stable |
+| `pkg/sensorkit/executor` | Per-task tool sandbox behind a small backend interface (`Backend`, `TaskSpec`, `Status`) | Beta |
+| `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries, the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | Stable; its runtime internals are Internal-bound and its overlapping tool interfaces are replaced by the tool contract (RFC) |
+| `pkg/client` | Platform protocol client (v2 negotiated, v1 fallback) | Stable; its protocol internals are Internal-bound |
+| `pkg/sensorproto/v2` | Protocol v2 wire types | Frozen once protocol v3 ships; Stable until then |
+| `pkg/sensorproto/legacyv1` | Protocol v1 wire vocabulary | Frozen |
+| `pkg/ctis` | CTIS types: re-exports `github.com/openctemio/ctis` (generated aliases; the `ctis-parity` CI job fails when they are stale) | Stable, follows CTIS |
+| `pkg/httpsec` | SSRF-safe HTTP clients and URL validation | Stable |
+| `pkg/conformance` | Fake platform and the sensor conformance suite | Stable |
+| `pkg/useragent`, `pkg/sdk` | Build identity on the wire | Stable |
+| `pkg/outbox`, `pkg/resource`, `pkg/chunk`, `pkg/compress`, `pkg/retry`, `pkg/shared/*` | Runtime internals used by `client`, `core` and `sensorkit` | Internal-bound |
+| `pkg/platform` | Credentials file and key renewal (used by sensorkit); its bootstrap/lease client serves the removed platform mode | Internal-bound (credentials, key renewal); the bootstrap/lease client is a removal candidate |
+| `pkg/gitenv` | CI environment detection | Moves to the sensor (runner mode) |
+| `pkg/mocks` | Test doubles | Stable until `pkg/testkit` replaces it |
+
+**Deprecated** (no importer in the sensor, the platform or the asset
+collector; removal is planned for a later minor release, with an upgrade
+note in CHANGELOG.md):
+
+| Package | Replacement |
+|---|---|
+| `pkg/transport/grpc`, `proto/openctemio/v1` | none: no platform serves it. Removed in the next minor, which also drops the `google.golang.org/grpc` dependency. Sensor protocol v3 is generated from its own proto definitions. |
+| `pkg/adapters`, `pkg/adapters/{betterleaks,nuclei,sarif,semgrep,trivy,vuls}` | emit CTIS from a tool, or convert SARIF with the `ctis` module |
+| `pkg/pipeline`, `pkg/audit` | the outbox (through `sensorkit`) |
+| `pkg/credentials` | credentials by declaration in the tool contract |
+| `pkg/errors` | categorized tool errors in the tool contract |
+| `pkg/health`, `pkg/metrics`, `pkg/options` | preflight checks, the config report and the settings registry in `sensorkit` |
+| `pkg/enrichers/{epss,kev}` | the platform enriches findings itself |
+| `pkg/connectors`, `pkg/connectors/github`, `pkg/providers/github`, `pkg/scanners/tenable` | the connectors module (api RFC-049) |
 
 **Moved to the sensor** (removed in v0.17.0, deprecated in v0.16.0): the
 tool wrappers `pkg/scanners` (the registry),
@@ -33,19 +62,15 @@ tool wrappers `pkg/scanners` (the registry),
 and the CI-mode `pkg/handler` and `pkg/strategy`. Their code lives in
 `github.com/openctemio/sensor/internal/{scanners,recon,handler,strategy}`.
 Tool wrappers change whenever a tool does; they belong to the program that
-ships the tool binaries. What they use stays here: the safe-exec helpers
-(section 5), `pkg/adapters`, `pkg/gitenv` and `pkg/scanners/tenable` (the
-Nessus API client and converter).
-
-**Outside the stable surface** (no stability promise; each gets a
-keep/move/remove decision before v1.0.0): `pkg/adapters`, `pkg/gitenv`,
-`pkg/scanners/tenable`, `pkg/connectors`, `pkg/providers`,
-`pkg/enrichers`, `pkg/pipeline`, `pkg/chunk`, `pkg/compress`, `pkg/retry`
-(partly deprecated already), `pkg/errors`, `pkg/health`, `pkg/metrics`,
-`pkg/audit`, `pkg/credentials`, `pkg/options`, `pkg/transport/grpc`,
-`pkg/shared/*`, `pkg/mocks`. Most have no importer in the sensor or the API.
+ships the tool binaries.
 
 `pkg/internal/*` is private.
+
+**Config report ids are API.** The check ids (`identity.state_persistent`,
+`tool.<name>.binary`, ...), their codes and parameter names, and the setting
+names in the config report are what the platform explains and links docs
+to: a rename is a breaking change. New ids and codes are additive (the
+platform shows an unknown id as plain text without a fix).
 
 ## 2. Extending without an SDK release
 
@@ -126,7 +151,8 @@ A sensor can be pinned with `SENSOR_PROTOCOL=v1|v2|auto` (default `auto`).
 - Removal: mark `Deprecated:` (with the replacement) → keep it for at least
   one minor release → remove it in a later minor, with an upgrade note.
 - **v1.0.0** when (a) the deprecated tool packages are gone (done in v0.17.0),
-  (b) the packages "outside the stable surface" each have a decision, and
+  (b) every package has a tier (section 1) and the Deprecated and
+  Internal-bound ones are removed or moved under `internal/`, and
   (c) one further minor release has shipped with no breaking change and no
   `breaking-change` label. From v1.0.0 on, removals wait for v2.
 

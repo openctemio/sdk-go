@@ -4,6 +4,32 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Upgrade notes
+
+- **CTIS 1.4** (`pkg/ctis` follows `github.com/openctemio/ctis`): `ctis.SchemaVersion` changed from `"1.3"` to `"1.4"`, so `NewReport()` and every adapter now stamp `"version": "1.4"`. Reports declaring 1.0 to 1.3 are still accepted, decode strictly and validate. Code that compared a version against the literal `"1.3"` should use `ctis.SupportedSchemaVersions()` / `ctis.IsSupportedVersion()` (versions this SDK knows every member of) or `ctis.IsCompatibleVersion()` (any minor of major 1). The OpenCTEM API accepts the 1.4 stamp today; do not send the new 1.4 members until the API runs a ctis 1.4 build.
+
+### Deprecated
+
+- Packages with no importer in the sensor, the platform or the asset
+  collector are marked `Deprecated:` and will be removed in a later minor
+  release: `pkg/transport/grpc` and `proto/openctemio/v1` (removed in the
+  next minor, which drops the `google.golang.org/grpc` dependency),
+  `pkg/adapters/...`, `pkg/pipeline`, `pkg/audit`, `pkg/credentials`,
+  `pkg/errors`, `pkg/health`, `pkg/metrics`, `pkg/options`,
+  `pkg/enrichers/{epss,kev}`, `pkg/connectors/...`, `pkg/providers/github`
+  and `pkg/scanners/tenable`. `docs/STABILITY.md` lists the replacement of
+  each.
+
+### Documentation
+
+- `docs/rfcs/sensor-sdk-v2.md`: the accepted design for the next SDK
+  generation (one tool contract with a `tool.yaml` manifest, out-of-process
+  execution for every tool, adapter protocol v1 for any language, one
+  runtime, stability tiers, transport v3 behind the SDK). `docs/STABILITY.md`
+  now gives every package a tier (Stable, Beta, Frozen, Internal-bound,
+  Deprecated). The module description no longer lists scanner wrappers
+  (they moved to the sensor in v0.17.0).
+
 ### Added
 
 - **Runner mode with CI workload identity** (api RFC-051). `sensorkit.NewCIRun`
@@ -19,6 +45,90 @@ All notable changes to `github.com/openctemio/sdk-go`.
   runs the kit's scanners once, pushes through the run and returns the
   verdict. No token is printed, logged or put in an error; `CIRun.String`
   redacts it.
+
+- `pkg/ctis` re-exports the CTIS 1.4 interoperability members (`finding.native`, `scores`, `vex`, `source_lifecycle`, `source_extra`, `vulnerability.ids`, remediation solution metadata, `asset.identity_hints`) and their normalizers (`NormalizeNativeSeverity`, `NormalizeNativeStatus`, `NormalizeVEXStatus`, `NormalizeVEXJustification`, `NormalizeVulnerabilityID`, `PreferredVulnerabilityID`, `LocationKey`, `AllScores`, `SetSourceExtra`), plus `SupportedSchemaVersions` and `IsSupportedVersion`.
+- `executor.TaskSpec.Stdin`: a task can read its standard input (the
+  channel of the tool adapter protocol); pass the read end of an `os.Pipe`
+  so the task gets the descriptor itself. `executor.Status.NetworkEnforced`
+  says whether the backend itself confines a task to its network class;
+  the process backend records the class but does not enforce it, so it
+  reports false (untrusted tools need a backend that reports true).
+- **Per-task tool sandbox** (`pkg/sensorkit/executor`). Every tool run
+  (`core.ExecuteScanner`, `StreamScanner`, `BaseScanner`) goes through one
+  executor with a small backend interface (`Backend.Prepare` → `Task`:
+  `Start`, `Wait`, `Kill`, `Cleanup`) over a generic `TaskSpec` (argv,
+  environment, working directory, writable paths, limits, network class).
+  The `process` backend runs the task through a launcher (the program's own
+  binary, `executor.RunLauncherIfRequested` first in main) that, before the
+  tool starts: gives it a private throwaway directory (HOME, TMPDIR, XDG_*);
+  sets RLIMIT_DATA / NPROC / FSIZE / NOFILE / CORE (and CPU when asked);
+  sets no_new_privs; applies Landlock (writes only under the task directory
+  and the caller's `ExecConfig.WritePaths`; no read of the protected paths:
+  the sensor's credentials file, outbox and its key, local policy,
+  configuration); installs a seccomp filter (ptrace, mount and namespaces,
+  modules and kexec, keyrings, bpf, perf, clock changes, file handles,
+  userfaultfd refused; clone with namespace flags refused; other syscall
+  ABIs kill the task). The sensor process makes itself non-dumpable, so a
+  task under the same user cannot read its memory or environment through
+  /proc. `sensorkit` turns it on by default (`SENSOR_SANDBOX=auto`;
+  `required` refuses to start without every control; `off`), protects its
+  own files plus `Options.ProtectedPaths`, and logs what is enforced. Each
+  `ExecResult` carries the sandbox status it ran under. No Docker socket is
+  ever used.
+
+- **Preflight checks and the config report** (api RFC-033, config report;
+  OpenCTEM research/26). What a sensor used to print to stderr only is now
+  also a check result with a stable id, a status, a code and typed
+  parameters, delivered to a platform that lists the `config_report`
+  feature (`PUT /api/v2/sensor/config-report`, at most 64 KiB) and named by
+  digest on every heartbeat (`config_report`); the platform asks for it
+  again with the heartbeat action `send_config_report`. Reported by the kit:
+  a skipped tool and why (`tool.<name>.binary`: not_installed, broken,
+  check_error), a tool left out by `SENSOR_TOOLS` or the local policy
+  (`tool.<name>.selection`), a tool not registered (`tool.<name>.registration`),
+  no tool at all (`tools.available`), a state directory that does not
+  persist (`identity.state_persistent`), key renewal off or failed to start
+  (`identity.key_renewal`), scanners inheriting the proxy
+  (`network.scan_proxy_inherit`), OOM protection that failed
+  (`runtime.oom_protect`), legacy `AGENT_*` names (`config.alias_deprecated`),
+  unknown `SENSOR_*`/`OPENCTEM_SDK_*` names with a "did you mean"
+  (`config.env_unknown`, opt-in with `Options.ReportUnknownEnv`), the local
+  policy and its template keys (`policy.local`, `policy.template_keys`), a
+  stopped command poller (`runtime.command_poller`), and an unreadable
+  `SSL_CERT_FILE`/`SSL_CERT_DIR` (`platform.tls`), which Go used to ignore
+  silently (now also a start-up warning). A sensor adds its own with
+  `Kit.ReportCheck`; `Kit.ConfigReport` returns the report. New checks never
+  stop the sensor.
+- **Settings registry** (`pkg/sensorkit/settings`): each setting declared
+  once with its name, type, required, default, secret, description, docs
+  link and validation. The kit registers the SDK's settings
+  (`sensorkit.RegisterSDKSettings`); a sensor passes its own registry in
+  `Options.Settings`. `docs/SETTINGS.md` is generated from it.
+- **Secrets never leave the host.** The config report carries, per declared
+  setting, only whether it is set, its source (`env`, `option`, `default`,
+  `unset`), whether it is a secret and whether its value is valid: there is
+  no value member. Every free text and parameter is scrubbed of the secret
+  settings' values, the API key and URL credentials, control and bidi
+  characters are stripped, and every field is bounded
+  (`core.ConfigReport.Finalize`). The conformance fake serves the feature
+  (`SetConfigReport`, `ConfigReports`).
+- **Local policy schema v2; v1 frozen** (owner decision D13, api
+  research/25 §3.3). `openctem.io/sensor-policy/v1` never gains a key again
+  (a sensor refuses a key it does not know, so a new v1 key would stop every
+  older sensor). `openctem.io/sensor-policy/v2` reads every v1 key plus
+  `managed: {accept: bool}` (default true; false = the owner refuses
+  platform-managed policy documents, D11; `LocalPolicy.AcceptsManagedPolicy`).
+  The version is read first and the document then decoded strictly against
+  that version's keys: a v1 file with a v2 key is refused. The report gains
+  `schema` (the file's version) and `schemas` (the versions this SDK reads,
+  `core.LocalPolicySchemas`), and the summary `managed_accept`, so the
+  platform generates a recommended policy only in a version the sensor reads.
+- **Local policy reload** (D10). `core.ReloadLocalPolicy(prev, opts)`; on a
+  file that does not load, the result is the previous policy with the kill
+  switch engaged and a warning naming the error (never the previous policy
+  silently). `sensorkit.Kit.SetLocalPolicy` / `ReloadLocalPolicy` apply a
+  policy to the running poller, executor and heartbeat;
+  `Kit.ReloadLocalPolicyOnSIGHUP` reloads on every SIGHUP.
 
 - **Structured policy refusals** (api research/25 §3.6, D8). A command a
   policy refused (the local policy's admission or executor checks, the kill
@@ -40,6 +150,12 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `FaviconMMH3`, `JARM`, `ASN` and `CDNType` and emits a `certificate` asset
   per leaf (re-exported `TLSLeafInput`, `ASNInput`). The sensor maps httpx
   output onto them.
+
+### Changed
+
+- The absent-policy warning says what actually happens: "jobs may enable
+  out-of-band callbacks (interactsh), and custom templates run when
+  SENSOR_TEMPLATE_SIGNING_KEYS is set" (it said both "are allowed").
 
 ### Fixed
 

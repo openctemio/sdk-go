@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/client"
@@ -16,6 +18,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/platform"
 	"github.com/openctemio/sdk-go/pkg/resource"
+	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
 )
 
 // Options configure a Kit. The zero value is a server-controlled sensor that
@@ -159,6 +162,18 @@ type Options struct {
 	// WorkDir is where scans write; its free disk is part of the slot
 	// sizing (default StateDir).
 	WorkDir string
+	// Sandbox is how every tool run is confined (pkg/sensorkit/executor): "off",
+	// "auto" (the default: every control the host supports, the rest
+	// reported) or "required" (New fails unless all are enforced). Empty:
+	// SENSOR_SANDBOX, else auto. The sandbox needs the program to call
+	// executor.RunLauncherIfRequested first in main; without it, auto runs
+	// tools unconfined and says so.
+	Sandbox string
+	// ProtectedPaths are more paths no tool may read or write (the
+	// sensor's own configuration files, connector credentials). The kit
+	// protects its credentials file, outbox, outbox key and local policy
+	// itself.
+	ProtectedPaths []string
 	// AssetResolver names the asset a scan's findings belong to when the
 	// parser does not; CommandAssetResolver replaces it for dispatched scans.
 	AssetResolver        core.AssetResolver
@@ -167,6 +182,17 @@ type Options struct {
 	// IsInstalled said no, with checkErr. name is its As name, else its
 	// Name. nil: the check's error.
 	UnavailableReason func(ctx context.Context, name string, checkErr error) string
+
+	// Settings is the sensor's settings registry: the kit registers the
+	// SDK's settings into it; a sensor registers its own first. nil: a
+	// registry with the SDK's settings only. The config report carries
+	// each declared setting's presence (never its value).
+	Settings *settingsreg.Registry
+	// ReportUnknownEnv reports SENSOR_* and OPENCTEM_SDK_* environment
+	// variables no registered setting declares (config.env_unknown, with a
+	// "did you mean"). Set it only when the sensor registered all its
+	// settings, or its own names are reported as unknown.
+	ReportUnknownEnv bool
 
 	// Verbose logs every heartbeat and poll.
 	Verbose bool
@@ -263,6 +289,15 @@ type Kit struct {
 	handlers    map[string]core.CommandExecutor
 	middlewares []middleware
 	ran         bool
+
+	reg *settingsreg.Registry
+	doc *doctor
+
+	// localMu guards s.local after New: SetLocalPolicy may replace it while
+	// Run runs. executor and poller are where it is enforced (set by Run).
+	localMu  sync.Mutex
+	executor atomic.Pointer[core.DefaultCommandExecutor]
+	poller   atomic.Pointer[core.CommandPoller]
 }
 
 // New resolves the settings, checks them, connects the platform client and
@@ -273,6 +308,7 @@ func New(opts Options) (*Kit, error) {
 		return nil, err
 	}
 	k := &Kit{opts: opts, out: orStdout(opts.Stdout), errw: orStderr(opts.Stderr), handlers: map[string]core.CommandExecutor{}}
+	k.initSettings()
 	s := &k.s
 	s.apiURL = envOr(opts.APIURL, EnvAPIURL)
 	s.apiKey = envOr(opts.APIKey, EnvAPIKey)
@@ -329,6 +365,8 @@ func New(opts Options) (*Kit, error) {
 	proxies.report(k.out, k.errw, proxyOpts)
 
 	s.stateDir = ResolveStateDir(opts.StateDir)
+	k.preflightNew(proxies, proxyOpts)
+	k.checkState()
 
 	// The API key: a key renewed by an earlier run is in the state
 	// directory (the renewal retired the configured one), whether or not
@@ -370,24 +408,9 @@ func New(opts Options) (*Kit, error) {
 		}
 	}
 
-	if s.drainGrace, err = ResolveDrainGrace(); err != nil {
-		k.closeClient()
-		return nil, err
-	}
-	if opts.MaxJobs != 0 {
-		s.maxJobs, err = checkMaxJobs("MaxJobs", opts.MaxJobs)
-	} else {
-		s.maxJobs, err = ResolveMaxJobs(MaxJobsSetting{}, MaxJobsSetting{})
-	}
-	if err != nil {
-		k.closeClient()
-		return nil, err
-	}
-	if s.scannerPriority, err = ResolveScannerPriority(opts.ScannerPriority); err != nil {
-		k.closeClient()
-		return nil, err
-	}
-	if s.protectFromOOM, err = ResolveProtectFromOOM(opts.ProtectFromOOM); err != nil {
+	// The tool sandbox and the runtime limits (drain grace, slots, scanner
+	// priority, OOM protection).
+	if err := k.resolveRuntime(); err != nil {
 		k.closeClient()
 		return nil, err
 	}
@@ -432,6 +455,127 @@ func New(opts Options) (*Kit, error) {
 	// that reads it).
 	k.sensor.SetLocalPolicy(s.local)
 	return k, nil
+}
+
+// initSettings sets up the settings registry (the SDK's settings, the
+// ones the sensor set itself) and the preflight checks.
+func (k *Kit) initSettings() {
+	opts := k.opts
+	k.reg = opts.Settings
+	if k.reg == nil {
+		k.reg = settingsreg.New()
+	}
+	if !k.reg.Has(EnvAPIURL) {
+		RegisterSDKSettings(k.reg)
+	}
+	for name, v := range map[string]string{EnvAPIURL: opts.APIURL, EnvAPIKey: opts.APIKey, EnvSensorID: opts.SensorID,
+		EnvSensorName: opts.Name, EnvProtocol: opts.Protocol, EnvCACertFile: opts.CACertFile,
+		EnvTemplateSigningKeys: opts.TemplateSigningKeys, EnvControlProxy: opts.ControlProxy,
+		EnvContentProxy: opts.ContentProxy, EnvScanProxy: opts.ScanProxy, EnvStateDir: opts.StateDir,
+		core.EnvLocalPolicy: opts.LocalPolicyPath} {
+		if v != "" {
+			k.reg.MarkOption(name)
+		}
+	}
+	if opts.MaxJobs != 0 {
+		k.reg.MarkOption(EnvMaxJobs)
+	}
+	if opts.Tools != nil {
+		k.reg.MarkOption(EnvTools)
+	}
+	k.doc = newDoctor(k.reg, k.secretValues)
+}
+
+// LocalPolicy returns the sensor-local policy in force.
+func (k *Kit) LocalPolicy() *core.LocalPolicy {
+	k.localMu.Lock()
+	defer k.localMu.Unlock()
+	return k.s.local
+}
+
+// SetLocalPolicy replaces the sensor-local policy wherever the kit enforces
+// or reports it: the poller's admission and kill switch, the executor's
+// checks, and the heartbeat and manifest report. Safe while Run runs; a
+// running command keeps the policy it was admitted under, except that a
+// kill switch engaged by the new policy stops it. Whatever else the sensor
+// handed the policy to (its own executors) it updates itself.
+func (k *Kit) SetLocalPolicy(lp *core.LocalPolicy) {
+	if lp == nil {
+		return
+	}
+	k.localMu.Lock()
+	k.s.local = lp
+	k.localMu.Unlock()
+	if k.doc != nil {
+		k.reportLocalPolicyChecks(lp)
+	}
+	if k.sensor != nil {
+		k.sensor.SetLocalPolicy(lp)
+	}
+	if e := k.executor.Load(); e != nil {
+		e.SetLocalPolicy(lp)
+	}
+	if p := k.poller.Load(); p != nil {
+		p.SetLocalPolicy(lp)
+	}
+}
+
+// ReloadLocalPolicy re-reads the local policy with opts
+// (core.ReloadLocalPolicy) and applies the result with SetLocalPolicy: the
+// new policy, or, when it does not load, the previous one with the kill
+// switch engaged. It logs the outcome and returns the policy now in force
+// and the load error.
+func (k *Kit) ReloadLocalPolicy(opts core.LocalPolicyOptions) (*core.LocalPolicy, error) {
+	prev := k.LocalPolicy()
+	lp, err := core.ReloadLocalPolicy(prev, opts)
+	k.SetLocalPolicy(lp)
+	if err != nil {
+		_, _ = fmt.Fprintf(k.errw, "Error: local policy reload failed, every job is stopped until it is fixed: %v\n", err)
+		return lp, err
+	}
+	if prev.Digest() != lp.Digest() {
+		_, _ = fmt.Fprintf(k.out, "Local policy reloaded (%s -> %s): %s\n", orNone(prev.Digest()), orNone(lp.Digest()), lp.Describe())
+	} else {
+		_, _ = fmt.Fprintf(k.out, "Local policy reloaded, unchanged: %s\n", lp.Describe())
+	}
+	for _, w := range lp.Warnings() {
+		_, _ = fmt.Fprintf(k.errw, "Warning: %s\n", w)
+	}
+	return lp, nil
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
+}
+
+// resolveRuntime installs the tool sandbox (every tool run is confined and
+// cannot read the key, the outbox or the policy; pkg/sensorkit/executor) and
+// resolves the runtime limits.
+func (k *Kit) resolveRuntime() error {
+	s, opts := &k.s, k.opts
+	if err := k.setupSandbox(); err != nil {
+		return err
+	}
+	var err error
+	if s.drainGrace, err = ResolveDrainGrace(); err != nil {
+		return err
+	}
+	if opts.MaxJobs != 0 {
+		s.maxJobs, err = checkMaxJobs("MaxJobs", opts.MaxJobs)
+	} else {
+		s.maxJobs, err = ResolveMaxJobs(MaxJobsSetting{}, MaxJobsSetting{})
+	}
+	if err != nil {
+		return err
+	}
+	if s.scannerPriority, err = ResolveScannerPriority(opts.ScannerPriority); err != nil {
+		return err
+	}
+	s.protectFromOOM, err = ResolveProtectFromOOM(opts.ProtectFromOOM)
+	return err
 }
 
 // loadLocalPolicy is Options.LocalPolicy, else the policy loaded from
@@ -602,22 +746,13 @@ func (k *Kit) Run(ctx context.Context) error {
 	// Opt-in: the sensor itself is the OOM killer's last choice. Before any
 	// scanner starts; ApplyScannerPriority keeps scanners from inheriting it.
 	if k.s.protectFromOOM {
-		protectFromOOM(out, errw, writeSelfOOMScoreAdj)
+		code, summary := protectFromOOM(out, errw, writeSelfOOMScoreAdj)
+		k.oomCheck(true, code, summary)
+	} else {
+		k.oomCheck(false, "", "")
 	}
 
-	// Scheduled scans: the scanners installed now.
-	for _, e := range scanners {
-		installed, _, err := e.s.IsInstalled(ctx)
-		if err != nil || !installed {
-			_, _ = fmt.Fprintf(errw, "Warning: Scanner %s skipped: %s\n", e.label(), k.unavailableReason(ctx, e.label(), err))
-			continue
-		}
-		if err := s.AddScanner(e.s); err != nil {
-			_, _ = fmt.Fprintf(errw, "Error adding scanner %s: %v\n", e.label(), err)
-			continue
-		}
-		_, _ = fmt.Fprintf(out, "  Added scanner: %s\n", e.s.Name())
-	}
+	k.addScheduledScanners(ctx, scanners)
 	for _, c := range k.collectors {
 		if err := s.AddCollector(c); err != nil {
 			_, _ = fmt.Fprintf(errw, "Error adding collector %s: %v\n", c.Name(), err)
@@ -631,6 +766,7 @@ func (k *Kit) Run(ctx context.Context) error {
 	var renewal *platform.KeyRenewManager
 	if k.s.key.autoRenew && k.client != nil {
 		m, err := startKeyRenewal(ctx, &k.s, k.client, out)
+		k.keyRenewalCheck(err)
 		if err != nil {
 			_, _ = fmt.Fprintf(errw, "Warning: key auto-renew failed to start: %v\n", err)
 		} else {
@@ -639,6 +775,7 @@ func (k *Kit) Run(ctx context.Context) error {
 		}
 	} else if k.client != nil && k.s.key.why != "" {
 		_, _ = fmt.Fprintf(out, "  Key auto-renew: %s\n", k.s.key.why)
+		k.keyRenewalCheck(nil)
 	}
 	defer func() {
 		if renewal != nil {
@@ -666,12 +803,17 @@ func (k *Kit) Run(ctx context.Context) error {
 	// concurrency cap (api RFC-029 §4.3.1).
 	if k.client != nil {
 		s.SetCapabilityReporter(&capabilityReporter{tools: reg, content: k.opts.Content})
+		// The config report goes to a platform that takes it, with its
+		// digest on every heartbeat.
+		s.SetConfigReporter(core.ConfigReporterFunc(k.ConfigReport))
 	}
 
 	var poller *core.CommandPoller
 	if k.s.commands && k.client != nil {
 		poller = k.newPoller(scanners, doorbell)
+		k.ReportCheck(core.ConfigCheck{ID: CheckCommandPoller, Status: core.CheckPass, Code: "running"})
 	}
+	k.printPreflight()
 
 	// Connection check: the first heartbeat, sent after the poller is set
 	// up (it carries the load report) and before the poller starts, so the
@@ -690,6 +832,8 @@ func (k *Kit) Run(ctx context.Context) error {
 			defer close(pollerDone)
 			if err := poller.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				_, _ = fmt.Fprintf(errw, "Command poller error: %v\n", err)
+				k.ReportCheck(core.ConfigCheck{ID: CheckCommandPoller, Status: core.CheckFail, Code: "stopped",
+					Blocks: []string{core.BlockAll}, Summary: "the command poller stopped: " + err.Error()})
 			}
 		}()
 	} else {
@@ -743,23 +887,65 @@ func (k *Kit) Run(ctx context.Context) error {
 	return nil
 }
 
+// addScheduledScanners adds the scanners installed now to the scheduled
+// scans and records each one's binary check and whether any is available.
+func (k *Kit) addScheduledScanners(ctx context.Context, scanners []scannerEntry) {
+	s, out, errw := k.sensor, k.out, k.errw
+	available := 0
+	for _, e := range scanners {
+		installed, _, err := e.s.IsInstalled(ctx)
+		if err != nil || !installed {
+			reason := k.unavailableReason(ctx, e.label(), err)
+			_, _ = fmt.Fprintf(errw, "Warning: Scanner %s skipped: %s\n", e.label(), reason)
+			k.toolBinaryCheck(e, false, err, reason)
+			continue
+		}
+		available++
+		k.toolBinaryCheck(e, true, nil, "")
+		if err := s.AddScanner(e.s); err != nil {
+			_, _ = fmt.Fprintf(errw, "Error adding scanner %s: %v\n", e.label(), err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "  Added scanner: %s\n", e.s.Name())
+	}
+	if len(k.scanners) > 0 || len(k.collectors) == 0 {
+		if available > 0 {
+			k.ReportCheck(core.ConfigCheck{ID: CheckToolsAvailable, Status: core.CheckPass, Code: "ok",
+				Params: map[string]core.ConfigParam{"count": core.ParamInt(int64(available))}})
+		} else {
+			k.ReportCheck(core.ConfigCheck{ID: CheckToolsAvailable, Status: core.CheckFail, Code: "none",
+				Params: map[string]core.ConfigParam{"count": core.ParamInt(0)}, Keys: []string{EnvTools},
+				Blocks: []string{core.BlockScan}, Summary: "no scanner is installed and allowed on this sensor"})
+		}
+	}
+}
+
 // inventory registers the scanners the sensor runs: those SENSOR_TOOLS and
 // the local policy's tools.allow let through, in the order added. The rest
 // are neither run nor reported, so the platform routes no job for them here.
 func (k *Kit) inventory(reg *core.ToolRegistry) []scannerEntry {
 	var scanners []scannerEntry
 	for _, e := range k.scanners {
+		params := map[string]core.ConfigParam{"tool": core.ParamName(e.label())}
 		if !k.allowed(e) {
 			_, _ = fmt.Fprintf(k.errw, "Note: scanner %s is not in %s; it is not run\n", e.label(), EnvTools)
+			k.ReportCheck(core.ConfigCheck{ID: ToolCheckID(e.label(), "selection"), Status: core.CheckSkip,
+				Code: "not_selected", Params: params, Keys: []string{EnvTools}})
 			continue
 		}
 		if !k.s.local.AllowsTool(e.label()) && !k.s.local.AllowsTool(e.s.Name()) {
 			_, _ = fmt.Fprintf(k.errw, "Note: scanner %s is not in the local policy's tools.allow; it is not run\n", e.label())
+			k.ReportCheck(core.ConfigCheck{ID: ToolCheckID(e.label(), "selection"), Status: core.CheckSkip,
+				Code: "policy_excluded", Params: params, Keys: []string{core.EnvLocalPolicy}})
 			continue
 		}
 		scanners = append(scanners, e)
-		if err := reg.RegisterScanner(e.s, e.caps...); err != nil && k.s.verbose {
-			_, _ = fmt.Fprintf(k.errw, "Warning: scanner %s is not reported to the platform: %v\n", e.label(), err)
+		if err := reg.RegisterScanner(e.s, e.caps...); err != nil {
+			if k.s.verbose {
+				_, _ = fmt.Fprintf(k.errw, "Warning: scanner %s is not reported to the platform: %v\n", e.label(), err)
+			}
+			k.ReportCheck(core.ConfigCheck{ID: ToolCheckID(e.label(), "registration"), Status: core.CheckError,
+				Code: "register_failed", Params: params, Summary: err.Error()})
 		}
 	}
 	return scanners
@@ -792,7 +978,8 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// The local policy, behind the poller's admission check: targets
 	// (through the scan target policy), templates, callbacks, rate and
 	// run time.
-	executor.SetLocalPolicy(k.s.local)
+	executor.SetLocalPolicy(k.LocalPolicy())
+	k.executor.Store(executor)
 	if r := k.opts.CommandAssetResolver; r != nil {
 		executor.SetAssetResolver(r)
 	} else if r := k.opts.AssetResolver; r != nil {
@@ -866,7 +1053,8 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	poller.SetCommandGate(k.sensor.CommandToolGate())
 	// The sensor-local policy decides first: admission before any executor
 	// or tool, and the local kill switch (api RFC-040 §5.7).
-	poller.SetLocalPolicy(k.s.local)
+	poller.SetLocalPolicy(k.LocalPolicy())
+	k.poller.Store(poller)
 
 	if p := k.opts.ScanTargetPolicy; p != nil && len(p.AllowedRoots) > 0 {
 		_, _ = fmt.Fprintf(out, "  Scan workspace: %s\n", strings.Join(p.AllowedRoots, string(filepath.ListSeparator)))

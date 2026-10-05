@@ -1,4 +1,8 @@
 // Package connectors provides base implementations and utilities for external system connectors.
+//
+// Deprecated: no sensor, platform or collector imports it; vendor
+// integrations move to the connectors module (api RFC-049). Removal is
+// planned for a later minor release (docs/STABILITY.md).
 package connectors
 
 import (
