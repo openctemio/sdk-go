@@ -456,7 +456,7 @@ func TestNew_Errors(t *testing.T) {
 		want string
 		code int
 	}{
-		{name: "no key", opts: func(o *Options) { o.APIKey = "" }, want: "needs the platform URL and a sensor API key; missing: [API_KEY]", code: ExitUsage},
+		{name: "no URL", opts: func(o *Options) { o.APIURL = "" }, want: "missing: [API_URL]", code: ExitUsage},
 		{name: "drain grace", env: map[string]string{EnvDrainGrace: "lots"}, want: "SENSOR_DRAIN_GRACE", code: ExitUsage},
 		{name: "max jobs", env: map[string]string{EnvMaxJobs: "0"}, want: "SENSOR_MAX_JOBS=0", code: ExitUsage},
 		{name: "max jobs option", opts: func(o *Options) { o.MaxJobs = 101 }, want: "MaxJobs=101", code: ExitUsage},
