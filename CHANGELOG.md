@@ -28,6 +28,12 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- `executor.TaskSpec.Stdin`: a task can read its standard input (the
+  channel of the tool adapter protocol); pass the read end of an `os.Pipe`
+  so the task gets the descriptor itself. `executor.Status.NetworkEnforced`
+  says whether the backend itself confines a task to its network class;
+  the process backend records the class but does not enforce it, so it
+  reports false (untrusted tools need a backend that reports true).
 - **Per-task tool sandbox** (`pkg/sensorkit/executor`). Every tool run
   (`core.ExecuteScanner`, `StreamScanner`, `BaseScanner`) goes through one
   executor with a small backend interface (`Backend.Prepare` → `Task`:
