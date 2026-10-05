@@ -109,7 +109,8 @@ const (
 	// KindCommandResult is the completion or failure of a platform command.
 	// It is delivered only after every older report of the same command.
 	KindCommandResult Kind = "command_result"
-	// KindChunk is one protocol v1 chunk of a large report (pkg/chunk).
+	// KindChunk was a protocol v1 chunk of a large report. Protocol v1 is
+	// retired: such an item left in an outbox is not delivered.
 	KindChunk Kind = "chunk"
 )
 

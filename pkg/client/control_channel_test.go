@@ -33,7 +33,7 @@ func TestHeartbeat_OwnConnectionPool(t *testing.T) {
 	defer srv.Close()
 	defer close(block)
 
-	c := New(&Config{BaseURL: srv.URL, APIKey: "k", Protocol: ProtocolV1, MaxRetries: 1, RetryDelay: time.Millisecond})
+	c := New(&Config{BaseURL: srv.URL, APIKey: "k", MaxRetries: 1, RetryDelay: time.Millisecond})
 	// One connection to the platform for the data plane, held by the upload.
 	c.httpClient.Transport.(*http.Transport).MaxConnsPerHost = 1
 	go func() {
@@ -63,7 +63,7 @@ func TestHeartbeat_RetriedOnceAtMost(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
-	c := New(&Config{BaseURL: srv.URL, APIKey: "k", Protocol: ProtocolV1, MaxRetries: 3, RetryDelay: time.Millisecond})
+	c := New(&Config{BaseURL: srv.URL, APIKey: "k", MaxRetries: 3, RetryDelay: time.Millisecond})
 	if err := c.SendHeartbeat(context.Background(), controlTestStatus()); err == nil {
 		t.Fatal("want the error")
 	}
@@ -84,7 +84,7 @@ func TestHeartbeat_ControlTimeout(t *testing.T) {
 	}))
 	defer srv.Close()
 	defer close(release)
-	c := New(&Config{BaseURL: srv.URL, APIKey: "k", Protocol: ProtocolV1, Timeout: 30 * time.Second,
+	c := New(&Config{BaseURL: srv.URL, APIKey: "k", Timeout: 30 * time.Second,
 		ControlTimeout: 150 * time.Millisecond, RetryDelay: time.Millisecond})
 	start := time.Now()
 	if err := c.SendHeartbeat(context.Background(), controlTestStatus()); err == nil {

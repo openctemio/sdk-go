@@ -4,7 +4,7 @@
 // It has two halves:
 //
 //   - FakePlatform, a control plane that implements the v2 results contract
-//     (RFC-026 §3) strictly and the v1 routes a sensor uses, records every
+//     (RFC-026 §3) strictly and the v2 control plane (RFC-029), records every
 //     request and can be told to fail in each §3.8 class. The SDK's own
 //     tests run against it: they check the SDK sends the right headers and
 //     digest, retries only what it should, splits on 413, never resends a
@@ -34,7 +34,6 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
-	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
@@ -108,7 +107,6 @@ type FakePlatform struct {
 	seq       int
 	requests  []Request
 	reports   map[string]*StoredReport
-	v1Reports []*ctis.Report
 	commands  map[string]string // id -> "pending" | "acknowledged" | "running" | "completed" | "failed"
 	cmdErrors map[string]string
 	cmdResult map[string]json.RawMessage
@@ -221,11 +219,15 @@ func (f *FakePlatform) Releases() []Release {
 	return append([]Release(nil), f.released...)
 }
 
-// NewFakePlatform starts a fake platform. Close it with Close.
+// NewFakePlatform starts a fake platform. Close it with Close. v2 false is a
+// platform without sensor protocol v2 (every v2 route answers 404), against
+// which the SDK must fail with ErrV2Unsupported; v2 true serves results and
+// the RFC-029 control plane (SetControl(false) leaves only results).
 func NewFakePlatform(v2 bool) *FakePlatform {
 	f := &FakePlatform{
 		APIKey:    "rda_conformance",
 		V2:        v2,
+		Control:   v2,
 		Limits:    protov2.DefaultLimits(),
 		reports:   map[string]*StoredReport{},
 		commands:  map[string]string{},
@@ -370,13 +372,6 @@ func (f *FakePlatform) Reports() map[string]*StoredReport {
 	return out
 }
 
-// V1Reports returns the reports received on the v1 ingest route.
-func (f *FakePlatform) V1Reports() []*ctis.Report {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]*ctis.Report(nil), f.v1Reports...)
-}
-
 // HeartbeatOutbox returns the outbox objects heartbeats carried.
 func (f *FakePlatform) HeartbeatOutbox() []json.RawMessage {
 	f.mu.Lock()
@@ -384,7 +379,7 @@ func (f *FakePlatform) HeartbeatOutbox() []json.RawMessage {
 	return append([]json.RawMessage(nil), f.outbox...)
 }
 
-// Heartbeats returns the heartbeat bodies received, v1 and v2, in order.
+// Heartbeats returns the heartbeat bodies received, in order.
 func (f *FakePlatform) Heartbeats() []json.RawMessage {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -407,7 +402,7 @@ type HeartbeatBuild struct {
 }
 
 // HeartbeatBuilds returns the "sdk" and "sensor" blocks of every heartbeat
-// received, v1 and v2, in order.
+// received, in order.
 func (f *FakePlatform) HeartbeatBuilds() []HeartbeatBuild {
 	beats := f.Heartbeats()
 	out := make([]HeartbeatBuild, len(beats))
@@ -430,8 +425,7 @@ func (f *FakePlatform) recordHeartbeat(body []byte) {
 	f.beats = append(f.beats, append(json.RawMessage(nil), body...))
 }
 
-// AcceptedFindings counts the findings of committed v2 reports plus v1
-// reports.
+// AcceptedFindings counts the findings of committed reports.
 func (f *FakePlatform) AcceptedFindings() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -443,14 +437,11 @@ func (f *FakePlatform) AcceptedFindings() int {
 			}
 		}
 	}
-	for _, r := range f.v1Reports {
-		n += len(r.Findings)
-	}
 	return n
 }
 
 // AcceptedReports returns the reports the fake accepted: every segment of
-// each committed v2 report, then the v1 reports.
+// each committed report.
 func (f *FakePlatform) AcceptedReports() []*ctis.Report {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -462,7 +453,7 @@ func (f *FakePlatform) AcceptedReports() []*ctis.Report {
 			}
 		}
 	}
-	return append(out, f.v1Reports...)
+	return out
 }
 
 type recorder struct {
@@ -543,12 +534,6 @@ func (f *FakePlatform) route(w http.ResponseWriter, r *http.Request, body []byte
 	v2 := f.V2
 	f.mu.Unlock()
 	switch {
-	case strings.HasPrefix(p, legacyv1.PathPrefix+"/"):
-		if !f.authed(r) {
-			http.Error(w, `{"code":"UNAUTHORIZED","message":"Invalid API key"}`, http.StatusUnauthorized)
-			return
-		}
-		f.v1(w, r, body)
 	case strings.HasPrefix(p, protov2.PathPrefix+"/"):
 		if !v2 {
 			http.NotFound(w, r)
@@ -562,84 +547,6 @@ func (f *FakePlatform) route(w http.ResponseWriter, r *http.Request, body []byte
 	default:
 		http.NotFound(w, r)
 	}
-}
-
-func (f *FakePlatform) v1(w http.ResponseWriter, r *http.Request, body []byte) {
-	p := strings.TrimPrefix(r.URL.Path, legacyv1.PathPrefix)
-	switch {
-	case p == "/heartbeat":
-		f.mu.Lock()
-		f.recordHeartbeat(body)
-		v2 := f.V2
-		f.mu.Unlock()
-		if v2 && protov2HasFeature(r.Header.Values(legacyv1.HeaderSensorFeatures), protov2.FeatureResultsV2) {
-			w.Header().Set(protov2.HeaderProtocolAdvert, "2")
-		}
-		w.Header().Set("Content-Type", "application/json")
-		encodeJSON(w, map[string]string{legacyv1.FieldSensorID: "s1", "status": "ok", "tenant_id": "t1"})
-	case p == "/ingest":
-		raw, err := decodeBody(r.Header.Get("Content-Encoding"), body)
-		var rep ctis.Report
-		if err == nil {
-			err = json.Unmarshal(raw, &rep)
-		}
-		if err != nil {
-			http.Error(w, `{"message":"bad report"}`, http.StatusBadRequest)
-			return
-		}
-		f.mu.Lock()
-		f.v1Reports = append(f.v1Reports, &rep)
-		f.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		encodeJSON(w, map[string]int{"findings_created": len(rep.Findings), "assets_created": len(rep.Assets)})
-	case strings.HasPrefix(p, "/commands/"):
-		parts := strings.Split(strings.TrimPrefix(p, "/commands/"), "/")
-		if len(parts) != 2 {
-			http.NotFound(w, r)
-			return
-		}
-		id, action := parts[0], parts[1]
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		state, ok := f.commands[id]
-		if !ok {
-			http.Error(w, `{"message":"command not found"}`, http.StatusNotFound)
-			return
-		}
-		switch action {
-		case "complete", "fail":
-			if state != "running" {
-				http.Error(w, `{"message":"command must be running to complete"}`, http.StatusConflict)
-				return
-			}
-			if action == "complete" {
-				f.commands[id] = "completed"
-			} else {
-				var b struct {
-					ErrorMessage string `json:"error_message"`
-				}
-				_ = json.Unmarshal(body, &b)
-				f.commands[id] = "failed"
-				f.cmdErrors[id] = b.ErrorMessage
-			}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{}`)
-	default:
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{}`)
-	}
-}
-
-func protov2HasFeature(values []string, feature string) bool {
-	for _, v := range values {
-		for _, f := range strings.Split(v, ",") {
-			if strings.EqualFold(strings.TrimSpace(f), feature) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (f *FakePlatform) problem(w http.ResponseWriter, status int, t protov2.ProblemType) {

@@ -72,12 +72,13 @@ const (
 // Header names.
 const (
 	// HeaderProtocol is on every v2 response.
-	HeaderProtocol = "OpenCTEM-Protocol"
-	// HeaderProtocolAdvert is how a v1 heartbeat response advertises v2 to a
-	// sensor that announced FeatureResultsV2.
-	HeaderProtocolAdvert = "X-OpenCTEM-Protocol"
-	HeaderContentDigest  = "Content-Digest"
-	HeaderRetryAfter     = "Retry-After"
+	HeaderProtocol      = "OpenCTEM-Protocol"
+	HeaderContentDigest = "Content-Digest"
+	HeaderRetryAfter    = "Retry-After"
+	// HeaderSensorFeatures lists optional request features a sensor asks
+	// for (comma-separated, case-insensitive), e.g. FeatureCapacity on a
+	// poll (claim-N).
+	HeaderSensorFeatures = "X-OpenCTEM-Sensor-Features"
 	// HeaderLeaseEpoch is the lease epoch (Command.LeaseEpoch) a sensor
 	// holds a command under, sent on complete and fail: the platform
 	// refuses the change when the command was claimed again since (api
@@ -85,10 +86,6 @@ const (
 	// state.
 	HeaderLeaseEpoch = "X-OpenCTEM-Lease-Epoch"
 )
-
-// FeatureResultsV2 is the feature a sensor names in the v1
-// X-OpenCTEM-Sensor-Features header to learn whether the server speaks v2.
-const FeatureResultsV2 = "results-v2"
 
 // FeatureResults is the hello feature of the results resource.
 const FeatureResults = "results"

@@ -129,7 +129,7 @@ one, the new key wins. Every heartbeat also carries the process's
 |---|---|---|
 | Platform | `API_URL`, `API_KEY`, `SENSOR_ID` | required to run commands (exit 2 with what is missing) |
 | Name | `SENSOR_NAME` | `sensor-<hostname>` |
-| Protocol | `SENSOR_PROTOCOL` = `auto`, `v1`, `v2` | `auto` |
+| Protocol | `SENSOR_PROTOCOL` = `auto`, `v2` (same; `v1` is retired and refused) | `auto` |
 | Concurrency cap | `SENSOR_MAX_JOBS` (1-100) | none: slots follow CPU, memory and tool cost |
 | Tool allowlist | `SENSOR_TOOLS` (comma-separated) | none |
 | Drain grace | `SENSOR_DRAIN_GRACE` (1s-1h) | 30s |
@@ -236,7 +236,7 @@ it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
 | `pkg/enrichers` | Data enrichment (CVE, NVD) |
 | `pkg/audit` | Structured audit logging for sensor operations |
 | `pkg/platform` | Components for running sensors in platform mode |
-| `pkg/sensorproto/legacyv1` | Protocol v1 wire vocabulary (frozen) and migration of pre-sensor settings |
+| `pkg/sensorproto/legacyv1` | Migration of pre-sensor settings and credentials (frozen) |
 | `pkg/ctis` | Common Threat Intelligence Schema (CTIS) types |
 
 ## Examples

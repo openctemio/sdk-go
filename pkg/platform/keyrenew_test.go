@@ -171,41 +171,27 @@ func TestPlatformClient_RenewKeyV2(t *testing.T) {
 }
 
 // Against a platform without the v2 route (404, not a problem document) the
-// renewal uses protocol v1, with X-Agent-ID as v1 expects.
-func TestPlatformClient_RenewKeyFallsBackToV1(t *testing.T) {
-	exp := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
+// renewal is ErrRenewUnsupported: protocol v1 is retired, nothing is sent to
+// /api/v1/agent/renew.
+func TestPlatformClient_RenewKeyWithoutV2IsUnsupported(t *testing.T) {
 	var paths []string
-	var gotSensor string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
-		if r.URL.Path != "/api/v1/agent/renew" {
-			http.NotFound(w, r)
-			return
-		}
-		gotSensor = r.Header.Get("X-Agent-ID")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"api_key":"rda_fresh","expires_at":"` + exp.Format(time.RFC3339) + `"}`))
+		http.NotFound(w, r)
 	}))
 	defer srv.Close()
 
 	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "rda_old", SensorID: "sensor-1"})
-	out, err := c.RenewKey(context.Background())
-	if err != nil {
-		t.Fatalf("RenewKey: %v", err)
+	if _, err := c.RenewKey(context.Background()); !errors.Is(err, ErrRenewUnsupported) {
+		t.Fatalf("err = %v, want ErrRenewUnsupported", err)
 	}
-	if out.APIKey != "rda_fresh" {
-		t.Errorf("expected rda_fresh, got %q", out.APIKey)
-	}
-	if len(paths) != 2 || paths[0] != "/api/v2/sensor/keys" || paths[1] != "/api/v1/agent/renew" {
-		t.Errorf("requests %v", paths)
-	}
-	if gotSensor != "sensor-1" {
-		t.Errorf("expected X-Agent-ID sensor-1 on v1, got %q", gotSensor)
+	if len(paths) != 1 || paths[0] != "/api/v2/sensor/keys" {
+		t.Errorf("requests %v, want only /api/v2/sensor/keys", paths)
 	}
 }
 
-// A refused v2 renewal (a problem document) does not fall back: v1 would
-// refuse the same key, and without a TTL a second renewal is never safe.
+// A refused renewal (a problem document) is a RenewError: without a TTL a
+// second renewal is never safe.
 func TestPlatformClient_RenewKeyRefusedDoesNotFallBack(t *testing.T) {
 	var n int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

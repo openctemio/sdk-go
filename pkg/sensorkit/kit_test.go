@@ -307,34 +307,6 @@ func (f execFunc) Execute(ctx context.Context, cmd *core.Command) (*core.Command
 	return f(ctx, cmd)
 }
 
-// Against a platform without protocol v2 everything goes over v1.
-func TestRun_V1Fallback(t *testing.T) {
-	f := conformance.NewFakePlatform(false)
-	t.Cleanup(f.Close)
-	opts, _, _ := baseOptions(t, f)
-	k, err := New(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	k.AddScanner(&testScanner{name: "kit-tool", installed: true})
-	stop := runKit(t, k)
-	waitFor(t, "a v1 poll", func() bool { return len(f.RequestsTo("GET", "/api/v1/agent/commands")) > 0 })
-	if err := stop(); err != nil {
-		t.Fatal(err)
-	}
-	if len(f.RequestsTo("POST", "/api/v1/agent/heartbeat")) == 0 {
-		t.Fatal("no v1 heartbeat")
-	}
-	for _, r := range f.Requests() {
-		if strings.HasPrefix(r.Path, "/api/v2/") && r.Path != "/api/v2/sensor/hello" {
-			t.Errorf("v2 request to a v1 platform: %s", r.Path)
-		}
-	}
-	if hb := lastBeat(t, f); len(hb.Tools) != 1 || hb.Tools[0].Name != "kit-tool" {
-		t.Fatalf("v1 heartbeat tools: %+v", hb.Tools)
-	}
-}
-
 // Shutdown drains: a command still running after the drain grace is
 // stopped and handed back to the platform; Run then returns nil.
 func TestRun_DrainReleasesRunningCommand(t *testing.T) {
@@ -456,7 +428,7 @@ func TestNew_Errors(t *testing.T) {
 		want string
 		code int
 	}{
-		{name: "no key", opts: func(o *Options) { o.APIKey = "" }, want: "needs the platform URL and a sensor API key; missing: [API_KEY]", code: ExitUsage},
+		{name: "no URL", opts: func(o *Options) { o.APIURL = "" }, want: "missing: [API_URL]", code: ExitUsage},
 		{name: "drain grace", env: map[string]string{EnvDrainGrace: "lots"}, want: "SENSOR_DRAIN_GRACE", code: ExitUsage},
 		{name: "max jobs", env: map[string]string{EnvMaxJobs: "0"}, want: "SENSOR_MAX_JOBS=0", code: ExitUsage},
 		{name: "max jobs option", opts: func(o *Options) { o.MaxJobs = 101 }, want: "MaxJobs=101", code: ExitUsage},

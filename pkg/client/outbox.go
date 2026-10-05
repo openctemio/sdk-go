@@ -299,56 +299,46 @@ func (c *Client) deliverReport(ctx context.Context, d *outbox.Delivery) (any, er
 	if assetsOnly {
 		r.Findings = nil
 	}
-	useV2, _, err := c.resultsProtocol(ctx)
-	if err != nil {
+	if _, err := c.resultsHello(ctx); err != nil {
 		if errors.Is(err, ErrV2Unsupported) {
-			return nil, outbox.Permanent(0, err.Error(), nil, err)
+			// Not a verdict on the report: it stays queued until the
+			// platform serves protocol v2 results again.
+			return nil, err
 		}
 		return nil, classify(err)
 	}
-	if useV2 {
-		var prog *V2Progress
-		if len(d.State.Progress) > 0 {
-			var p V2Progress
-			if json.Unmarshal(d.State.Progress, &p) == nil {
-				prog = &p
+	var prog *V2Progress
+	if len(d.State.Progress) > 0 {
+		var p V2Progress
+		if json.Unmarshal(d.State.Progress, &p) == nil {
+			prog = &p
+		}
+	}
+	st, err := c.PushResultsV2(ctx, &r, &V2PushOptions{
+		ReportID:  d.Meta.ReportID,
+		CommandID: d.Meta.CommandID,
+		Progress:  prog,
+		OnProgress: func(p V2Progress) error {
+			b, err := json.Marshal(p)
+			if err != nil {
+				return err
 			}
-		}
-		st, err := c.PushResultsV2(ctx, &r, &V2PushOptions{
-			ReportID:  d.Meta.ReportID,
-			CommandID: d.Meta.CommandID,
-			Progress:  prog,
-			OnProgress: func(p V2Progress) error {
-				b, err := json.Marshal(p)
-				if err != nil {
-					return err
-				}
-				return d.SaveProgress(b)
-			},
-			Logf: c.v2Logf(),
-		})
-		if err == nil {
-			return v2PushResult(st), nil
-		}
-		var ve *V2Error
-		switch {
-		case errors.Is(err, ErrV2NoTool):
-			return nil, outbox.Permanent(0, err.Error(), nil, err)
-		case errors.As(err, &ve) && c.protocol == ProtocolAuto && ve.routeMissing():
-			c.forceV1(false) // the platform lost its v2 routes: use v1 now
-		case errors.As(err, &ve) && c.protocol == ProtocolAuto && ve.ProblemName() == protov2.ProblemScopeDenied:
-			c.forceV1(true) // this sensor may not use v2 (platform sensor)
-		default:
-			return nil, classify(err)
-		}
+			return d.SaveProgress(b)
+		},
+		Logf: c.v2Logf(),
+	})
+	if err == nil {
+		return v2PushResult(st), nil
 	}
-	// Protocol v1. A replay after a lost response is deduplicated by the
-	// server's finding fingerprints: best effort, not exact.
-	res, err := c.pushReportV1(ctx, &r, assetsOnly, d.Meta.CommandID, 0)
-	if err != nil {
-		return nil, classify(err)
+	if errors.Is(err, ErrV2NoTool) {
+		return nil, outbox.Permanent(0, err.Error(), nil, err)
 	}
-	return res, nil
+	if isRouteMissing(err) {
+		// The platform stopped serving the v2 results route: keep the
+		// report queued and ask hello again.
+		return nil, c.v2Missing(err)
+	}
+	return nil, classify(err)
 }
 
 func v2PushResult(st *protov2.Status) *core.PushResult {
@@ -416,7 +406,7 @@ func classify(err error) error {
 	if errors.As(err, &he) {
 		switch {
 		case he.StatusCode == http.StatusUnauthorized || he.StatusCode == http.StatusForbidden:
-			// v1 answers both for a key it no longer accepts (core.AuthGate
+			// Both mean a key the platform no longer accepts (core.AuthGate
 			// treats them alike).
 			return outbox.Unauthorized(err)
 		case he.StatusCode == http.StatusTooManyRequests || he.StatusCode == http.StatusServiceUnavailable:
