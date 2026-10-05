@@ -49,6 +49,7 @@ type Checker struct {
 	depIDs      map[string]bool
 	quarantined map[string]int
 	invalid     int
+	targets     map[string]bool
 }
 
 // NewChecker returns a checker for m's limits and produces.
@@ -56,7 +57,17 @@ func NewChecker(m tool.Manifest) *Checker {
 	_, _, maxBytes, maxRecords := m.Resources.Limits()
 	return &Checker{m: m, maxRecords: maxRecords, maxBytes: maxBytes,
 		assetIDs: map[string]bool{}, findingIDs: map[string]bool{}, depIDs: map[string]bool{},
-		quarantined: map[string]int{}}
+		quarantined: map[string]int{}, targets: map[string]bool{}}
+}
+
+// AllowTarget lets an asset that is one of the task's targets (same type
+// and value) through without being in produces: a converter that files
+// findings on the scanned target emits it, and it is the task's input,
+// not new output.
+func (c *Checker) AllowTarget(typ, value string) {
+	c.mu.Lock()
+	c.targets[typ+"\x00"+value] = true
+	c.mu.Unlock()
 }
 
 // Stats are what the checker refused.
@@ -128,7 +139,10 @@ func (c *Checker) TargetAsset(a ctis.Asset) (ctis.Asset, error) {
 }
 
 func (c *Checker) asset(a ctis.Asset) (ctis.Asset, error) {
-	if !c.m.Declares(tool.KindAsset, string(a.Type)) {
+	c.mu.Lock()
+	isTarget := c.targets[string(a.Type)+"\x00"+a.Value]
+	c.mu.Unlock()
+	if !isTarget && !c.m.Declares(tool.KindAsset, string(a.Type)) {
 		return a, c.quarantine(tool.KindAsset + ":" + string(a.Type))
 	}
 	return c.checkAsset(a)

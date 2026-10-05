@@ -45,6 +45,9 @@ func NewAssembler(m tool.Manifest, task tool.Task, c *Checker) *Assembler {
 			a.order = append(a.order, t.Ref)
 		}
 		a.targets[t.Ref] = t
+		if t.Type != "" {
+			c.AllowTarget(t.Type, t.Value)
+		}
 	}
 	return a
 }
