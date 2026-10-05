@@ -327,7 +327,35 @@ variables, which may hold `user:password` (scanners stop getting them with
 follow `SENSOR_CONTENT_PROXY`), and the tools' own namespaces, such as
 `TRIVY_PASSWORD` or `PDCP_API_KEY`, which are that tool's credentials.
 
-### 7. API Client Transport
+### 7. Per-task tool sandbox (`pkg/sensorkit/executor`)
+
+Every tool run goes through one executor. A backend takes a generic task
+(argv, environment, working directory, writable paths, limits, network class)
+and runs it; it knows nothing about the tool. The `process` backend re-executes
+the program's own binary as a launcher (call `executor.RunLauncherIfRequested()`
+first thing in `main`), which confines itself and then becomes the tool:
+
+| Control | What it stops |
+|---|---|
+| Private task directory (HOME, TMPDIR, XDG_*), removed after the task | leftovers between tasks, writes into the sensor's home |
+| RLIMIT_DATA, RLIMIT_NPROC (the user's current count plus the task's allowance), RLIMIT_FSIZE, RLIMIT_NOFILE, RLIMIT_CORE=0, RLIMIT_CPU when set | memory exhaustion, fork bombs, disk filling, core dumps of secrets |
+| no_new_privs | setuid and file-capability escalation |
+| Landlock (Linux 5.13+; works under Docker's default seccomp profile) | writes outside the task directory and the declared write paths; reads of the protected paths (credentials file, outbox and its key, local policy, configuration), including through symlinks that lead into them |
+| seccomp filter | ptrace, process_vm_*, mount/namespaces (also clone with namespace flags; clone3 answers ENOSYS), kernel modules, kexec, keyrings, bpf, perf, clock changes, file handles, userfaultfd; a syscall from another ABI kills the task |
+| Process group, killed whole on timeout or cancel | stray children |
+| The sensor is non-dumpable | reading its memory, environment or open files through /proc |
+
+Modes (`SENSOR_SANDBOX` for sensorkit): `auto` (default) enforces what the
+host supports and logs what it cannot; `required` refuses to start unless
+every control is enforced; `off` runs tools as plain child processes. Each
+`ExecResult.Sandbox` records what the run was under. Residual risks: without a
+separate user per task, a task can still send signals to processes of the same
+user (Landlock signal scoping needs Linux 6.12), and a task that escapes its
+process group with `setsid` is bounded by its rlimits but not killed with the
+group. The sandbox never uses a Docker socket; future backends (a Kubernetes
+Pod per task, a rootless container) plug in behind the same interface.
+
+### 8. API Client Transport
 
 - API clients (`pkg/client`, `pkg/platform`) refuse HTTP redirects; the API
   never issues them and following one would forward the bearer key.
