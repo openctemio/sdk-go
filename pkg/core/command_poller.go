@@ -78,6 +78,9 @@ type CommandResult struct {
 	FindingsCount int                    `json:"findings_count"`
 	Error         string                 `json:"error,omitempty"`
 	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	// Refusal is set when a policy refused the command (RefusalOf): it was
+	// never run, or was stopped by the kill switch.
+	Refusal *Refusal `json:"refusal,omitempty"`
 }
 
 // GetCommandsResponse is the response from GetCommands.
@@ -923,7 +926,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 		if err := (*g)(cmd); err != nil {
 			fmt.Printf("[command-poller] Refusing command %s: %v\n", cmd.ID, err)
 			if rerr := p.client.ReportCommandResult(ctx, cmd.ID, &CommandResult{
-				Status: "failed", Error: err.Error(), CompletedAt: time.Now(),
+				Status: "failed", Error: err.Error(), CompletedAt: time.Now(), Refusal: RefusalOf(err),
 			}); rerr != nil && p.verbose.Load() {
 				fmt.Printf("[command-poller] Failed to report refused command %s: %v\n", cmd.ID, rerr)
 			}
@@ -970,6 +973,9 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 	if err != nil {
 		reportResult.Status = "failed"
 		reportResult.Error = err.Error()
+		// The executor's own policy checks (allow_interactsh, custom
+		// templates, targets) refuse with a *LocalPolicyError too.
+		reportResult.Refusal = RefusalOf(err)
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Command %s failed: %v\n", cmd.ID, err)
 		}
@@ -1001,7 +1007,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 func (p *CommandPoller) refuseCommand(ctx context.Context, cmd *Command, err error) {
 	fmt.Printf("[command-poller] Refusing command %s: %v\n", cmd.ID, err)
 	if rerr := p.client.ReportCommandResult(ctx, cmd.ID, &CommandResult{
-		Status: "failed", Error: err.Error(), CompletedAt: time.Now(),
+		Status: "failed", Error: err.Error(), CompletedAt: time.Now(), Refusal: RefusalOf(err),
 	}); rerr != nil {
 		fmt.Printf("[command-poller] Failed to report refused command %s: %v\n", cmd.ID, rerr)
 	}
