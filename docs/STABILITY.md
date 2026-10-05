@@ -28,7 +28,7 @@ holds today.
 | `pkg/sensorkit/settings` | The settings registry: every setting declared once (name, type, required, default, secret, description, docs link, validation); `docs/SETTINGS.md` is generated from it | Stable |
 | `pkg/tool` | The tool contract: `tool.yaml` manifest, `Run(ctx, task)`, emitter, categorized errors (docs/rfcs/sensor-sdk-v2.md) | Stable |
 | `pkg/tool/adapter` | Adapter protocol v1, the tool side (`Serve`, `Dispatch`) | Stable |
-| `pkg/tool/toolcompat` | Transitional bridges: a `core.Scanner` or `core.Collector` run as a tool of the contract (`FromScanner`, `FromCollector`), out of process | Beta; removed once every in-tree scanner is ported |
+| `pkg/tool/toolcompat` | Transitional bridges: a `core.Scanner` or `core.Collector` run as a tool of the contract (`FromScanner`, `FromCollector`), out of process; a contract tool served to the command executor (`AsScanner`) | Beta; removed once every in-tree scanner is ported |
 | `pkg/testkit` | Run a tool in-process with the runtime's rules; golden CTIS | Stable |
 | `pkg/sensorkit/toolhost` | The runtime side of the tool contract: runs one task out of process and checks, assembles and stamps its output | Beta |
 | `pkg/sensorkit/executor` | Per-task tool sandbox behind a small backend interface (`Backend`, `TaskSpec`, `Status`) | Beta |

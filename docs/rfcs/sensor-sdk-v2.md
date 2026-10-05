@@ -522,6 +522,8 @@ func (k *Kit) Run(ctx context.Context) error                          // daemon 
 func (k *Kit) RunOnce(ctx context.Context, r RunRequest) (*RunReport, error) // runner mode (CI)
 ```
 
+As implemented in S1-6 (before `Main` and the settings-only `Options`): `Options.Tools` already names the operator's tool allow-list (`SENSOR_TOOLS`), so compiled-in tools are added with `Kit.AddTool(t)` (a legacy scanner through `toolcompat.FromScanner`); `Options.AdapterDirs` (`SENSOR_ADAPTER_DIRS`) loads operator-installed `tool.yaml` files, only from files no other user can change and only with a run section; `Options.ToolCredentials` supplies the operator's credentials, of which only the declared ones are delivered, inside the task's run message on the adapter's stdin (never the environment, argv or a file another task could read). Each tool is served to the existing command executor through `toolcompat.AsScanner`, so the outbox, scheduling, heartbeat and manifest paths are unchanged; every task is admitted (`toolhost.Admit`) against the local policy in force and runs out of process.
+
 Today's `sensorkit.Options` has about 45 fields that mirror environment settings. In v1 those are settings in the registry (resolved from flags > env > file > default, with provenance and doctor checks), and `Options` keeps only what must be code. One way to configure means one place to validate and one place to report.
 
 `Main` gives every sensor the same command line:
