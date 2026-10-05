@@ -57,6 +57,21 @@ All notable changes to `github.com/openctemio/sdk-go`.
   config, declared credentials only, record checks, quarantine of
   undeclared output, caps, report assembly and provenance); `Normalize` and
   `Golden` for golden CTIS files.
+
+- **Runner mode with CI workload identity** (api RFC-051). `sensorkit.NewCIRun`
+  detects a GitHub Actions job allowed `id-token: write` or a GitLab CI job
+  with an `id_tokens` variable (`OPENCTEM_ID_TOKEN` by default) when
+  `OPENCTEM_TENANT_ID` is set, asks the CI provider for the job's OIDC token
+  (audience `OPENCTEM_OIDC_AUDIENCE`, default `openctem:tenant:<id>`) and
+  exchanges it at the first use for a run token that lives at most 15 minutes
+  (`POST /api/v1/ci/oidc/exchange`); on GitHub it renews the token for the
+  same run before it expires. `CIRun` is a `core.Pusher` (uploads go to
+  `/api/v1/ci/runs/{id}/results`), and `BaselineDiff` and `Evaluate` ask the
+  platform's gate for the verdict; `WriteVerdict` prints it. `Kit.RunOnce`
+  runs the kit's scanners once, pushes through the run and returns the
+  verdict. No token is printed, logged or put in an error; `CIRun.String`
+  redacts it.
+
 - `pkg/ctis` re-exports the CTIS 1.4 interoperability members (`finding.native`, `scores`, `vex`, `source_lifecycle`, `source_extra`, `vulnerability.ids`, remediation solution metadata, `asset.identity_hints`) and their normalizers (`NormalizeNativeSeverity`, `NormalizeNativeStatus`, `NormalizeVEXStatus`, `NormalizeVEXJustification`, `NormalizeVulnerabilityID`, `PreferredVulnerabilityID`, `LocationKey`, `AllScores`, `SetSourceExtra`), plus `SupportedSchemaVersions` and `IsSupportedVersion`.
 - `executor.TaskSpec.Stdin`: a task can read its standard input (the
   channel of the tool adapter protocol); pass the read end of an `os.Pipe`
