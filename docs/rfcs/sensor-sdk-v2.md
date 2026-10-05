@@ -264,7 +264,7 @@ A tool that discovers new targets (a crawler, a subdomain enumerator) emits them
 
 ```go
 type Context interface {
-	context.Context                       // cancelled on cancel, deadline or kill switch
+	context.Context                       // canceled on cancel, deadline or kill switch
 
 	Log() *slog.Logger                    // structured; secrets redacted; bounded rate and size
 	Progress(done, total int, msg string) // throttled by the runtime
@@ -321,7 +321,7 @@ const (
 	NotFound          Class = "not_found"
 	ToolError         Class = "tool_error"         // the tool failed; not retried by default
 	// Set by the runtime only:
-	Timeout, Cancelled, ResourceExhausted, OutputRejected, ToolCrashed Class = …
+	Timeout, Canceled, ResourceExhausted, OutputRejected, ToolCrashed Class = …
 )
 
 type Error struct {
@@ -342,7 +342,7 @@ func Failed(err error) error
 
 A plain `error` returned from `Run` is `tool_error`. The classes map one to one onto the connector taxonomy of RFC-049 (`invalid_config`↔`invalid_input`, `unreachable`↔`target_unreachable`/`transient`, `blocked_by_policy`↔`refused_by_policy`, `upstream_error`↔`transient`), so connector runs and tool runs report errors the same way.
 
-Task outcome: `ok` (every target done), `partial` (some targets failed or output was capped), `failed`, `cancelled`.
+Task outcome: `ok` (every target done), `partial` (some targets failed or output was capped), `failed`, `canceled`.
 
 #### D.3.7 Execution classes
 
@@ -453,7 +453,7 @@ Adapter → runtime:
 | `target_status` | `target`, `status: done|failed|skipped`, `error?: {class, detail}` | coverage |
 | `artifact` | `name`, `media_type`, `path` (relative to workdir), `sha256`, `size` | runtime opens it beneath the workdir (no symlink escape), checks size and digest |
 | `heartbeat` | — | keeps a quiet adapter alive under `idle_timeout` |
-| `result` | `status: ok|partial|failed|cancelled`, `error?: {class, retryable, retry_after_ms, detail}`, `stats` | final; exit 0 afterwards |
+| `result` | `status: ok|partial|failed|canceled`, `error?: {class, retryable, retry_after_ms, detail}`, `stats` | final; exit 0 afterwards |
 
 Exiting without `result` is `tool_crashed`. A `result` claiming `ok` while targets were never reported is downgraded to `partial` by the runtime.
 
