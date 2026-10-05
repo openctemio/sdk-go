@@ -1,6 +1,10 @@
 // Package kev provides KEV (Known Exploited Vulnerabilities) enrichment.
 // KEV is maintained by CISA and lists vulnerabilities known to be actively exploited.
 // Data source: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+//
+// Deprecated: no sensor, platform or collector imports it; the platform
+// enriches findings with KEV itself. Removal is planned for a later minor
+// release (docs/STABILITY.md).
 package kev
 
 import (

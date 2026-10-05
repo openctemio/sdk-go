@@ -1,5 +1,9 @@
 // Package options provides functional options pattern for SDK configuration.
 // This follows AWS SDK, gRPC, and other industry-standard Go SDKs.
+//
+// Deprecated: no sensor, platform or collector imports it; sensors are
+// configured through the sensorkit settings registry. Removal is planned for
+// a later minor release (docs/STABILITY.md).
 package options
 
 import (
