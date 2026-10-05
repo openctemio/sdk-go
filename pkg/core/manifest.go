@@ -96,6 +96,10 @@ type ManifestTool struct {
 	// version and digest only; the platform fetches a schema it does not
 	// have by digest. Absent for a tool without settings.
 	Settings *ManifestToolSettings `json:"settings,omitempty"`
+	// Contract names the tool's tool.yaml manifest by digest, with the
+	// fields the platform plans with (class, tier, network, consumes,
+	// produces). Absent for a tool not ported to the tool contract.
+	Contract *ToolContract `json:"contract,omitempty"`
 }
 
 // ManifestToolSettings is a tool's settings schema as the manifest names
@@ -210,6 +214,7 @@ func BuildManifest(status *SensorStatus, res *resource.HostResources, model stri
 			ts := *t.Settings
 			mt.Settings = &ts
 		}
+		mt.Contract = t.Contract.clone()
 		for _, c := range t.Content {
 			mt.Content = append(mt.Content, ManifestContent{Name: c.Name, Version: c.Version, Digest: c.Digest,
 				Source: c.Source, Managed: c.Managed})

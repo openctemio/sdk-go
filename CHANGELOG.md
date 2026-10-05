@@ -6,6 +6,12 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **Tool manifests in the sensor manifest.** A scanner ported to the tool
+  contract implements `core.ToolContractProvider`; the registry reports its
+  `core.ToolContract` (`tool.Manifest.Contract()`: manifest digest, version,
+  class, tier, network, consumes, produces) as `tools[].contract` in the
+  sensor manifest (not on the heartbeat). A platform that does not know the
+  member ignores it.
 - **Adapter protocol v1 and the tool host.** `pkg/tool/adapter` is the
   tool side (newline-delimited JSON on stdin/stdout, one task per process):
   `Serve(tool)` for a tool shipped as its own binary (`--describe` prints
