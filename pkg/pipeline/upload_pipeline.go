@@ -1,4 +1,8 @@
 // Package pipeline provides async pipeline for separating scan and upload.
+//
+// Deprecated: no sensor, platform or collector imports it; the outbox
+// (pkg/outbox, through sensorkit) delivers results. Removal is planned for a
+// later minor release (docs/STABILITY.md).
 package pipeline
 
 import (

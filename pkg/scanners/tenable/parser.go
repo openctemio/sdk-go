@@ -6,6 +6,11 @@
 // local Nessus/Tenable appliance, parses the export here, and pushes the CTIS
 // report back. Both Nessus Pro and Tenable.sc emit the same NessusClientData_v2
 // format, so one parser serves both.
+//
+// Deprecated: no sensor, platform or collector imports it; the Tenable.sc
+// integration lives in the sensor and moves to the connectors module (api
+// RFC-049). Removal is planned for a later minor release
+// (docs/STABILITY.md).
 package tenable
 
 import (

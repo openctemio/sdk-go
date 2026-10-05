@@ -1,3 +1,7 @@
+// Deprecated: no platform serves this service and nothing generates code
+// from it. It is removed in the next minor release together with
+// pkg/transport/grpc (docs/STABILITY.md). Sensor protocol v3 is defined by
+// its own proto files.
 syntax = "proto3";
 
 package openctemio.v1;

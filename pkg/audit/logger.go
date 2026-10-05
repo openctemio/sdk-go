@@ -5,6 +5,10 @@
 // - Debugging and troubleshooting
 // - Compliance and audit trails
 // - Remote log collection (when configured)
+//
+// Deprecated: no sensor, platform or collector imports it; it serves only
+// the removed platform-mode client in pkg/platform. Removal is planned for a
+// later minor release (docs/STABILITY.md).
 package audit
 
 import (

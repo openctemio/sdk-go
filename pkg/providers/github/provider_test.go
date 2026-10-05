@@ -3,7 +3,7 @@ package github
 import (
 	"testing"
 
-	"github.com/openctemio/sdk-go/pkg/connectors/github"
+	"github.com/openctemio/sdk-go/pkg/connectors/github" //nolint:staticcheck // deprecated together with this package
 )
 
 func TestRepoAsset_SCMRepoID(t *testing.T) {
