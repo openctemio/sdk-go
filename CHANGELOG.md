@@ -6,6 +6,29 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **Per-task tool sandbox** (`pkg/executor`). Every tool run
+  (`core.ExecuteScanner`, `StreamScanner`, `BaseScanner`) goes through one
+  executor with a small backend interface (`Backend.Prepare` → `Task`:
+  `Start`, `Wait`, `Kill`, `Cleanup`) over a generic `TaskSpec` (argv,
+  environment, working directory, writable paths, limits, network class).
+  The `process` backend runs the task through a launcher (the program's own
+  binary, `executor.RunLauncherIfRequested` first in main) that, before the
+  tool starts: gives it a private throwaway directory (HOME, TMPDIR, XDG_*);
+  sets RLIMIT_DATA / NPROC / FSIZE / NOFILE / CORE (and CPU when asked);
+  sets no_new_privs; applies Landlock (writes only under the task directory
+  and the caller's `ExecConfig.WritePaths`; no read of the protected paths:
+  the sensor's credentials file, outbox and its key, local policy,
+  configuration); installs a seccomp filter (ptrace, mount and namespaces,
+  modules and kexec, keyrings, bpf, perf, clock changes, file handles,
+  userfaultfd refused; clone with namespace flags refused; other syscall
+  ABIs kill the task). The sensor process makes itself non-dumpable, so a
+  task under the same user cannot read its memory or environment through
+  /proc. `sensorkit` turns it on by default (`SENSOR_SANDBOX=auto`;
+  `required` refuses to start without every control; `off`), protects its
+  own files plus `Options.ProtectedPaths`, and logs what is enforced. Each
+  `ExecResult` carries the sandbox status it ran under. No Docker socket is
+  ever used.
+
 - **HTTP probe results keep what they learned about the server** (api
   research/22 E5). `core.LiveHost` gains `TLS` (`core.TLSLeaf`: the leaf
   certificate's subject, SANs, issuer, serial, validity and SHA-256
