@@ -42,7 +42,7 @@ type RegistrationRequest struct {
 
 // RegistrationResponse contains the response from sensor registration.
 type RegistrationResponse struct {
-	// SensorID is protocol v1's "agent_id" (legacyv1.FieldSensorID).
+	// SensorID is the pre-rename "agent_id" key (legacyv1.FieldSensorID).
 	SensorID  string `json:"agent_id"`
 	APIKey    string `json:"api_key"`    // Only returned once - store securely!
 	APIPrefix string `json:"api_prefix"` // Prefix for display/logging (safe to log)
@@ -87,7 +87,7 @@ type BootstrapConfig struct {
 // /api/v1/platform/register (bootstrap tokens were never built; api RFC-032
 // §3.4). Sensors authenticate with the API key an administrator issues;
 // enrollment tokens (api RFC-032 Phase 2) replace this flow. Kept so code
-// that compiles against it keeps compiling, until the protocol v1 sunset.
+// that compiles against it keeps compiling, until it is removed.
 type Bootstrapper struct {
 	baseURL        string
 	bootstrapToken string
@@ -389,7 +389,7 @@ func (s *FileCredentialStore) Exists() bool {
 // /api/v1/platform/register (bootstrap tokens were never built; api RFC-032
 // §3.4). Sensors authenticate with the API key an administrator issues;
 // enrollment tokens (api RFC-032 Phase 2) replace this flow. Kept so code
-// that compiles against it keeps compiling, until the protocol v1 sunset.
+// that compiles against it keeps compiling, until it is removed.
 func EnsureRegistered(ctx context.Context, config *EnsureRegisteredConfig) (*SensorCredentials, error) {
 	path, err := ResolveCredentialsFile(config.CredentialsFile)
 	if err != nil {

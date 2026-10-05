@@ -11,7 +11,7 @@ Setup & health checklist shows each one's presence, never its value.
 | [`API_KEY`](https://docs.openctem.io/sensor/settings#API_KEY) | string | yes |  | yes | The sensor's API key. |
 | [`SENSOR_ID`](https://docs.openctem.io/sensor/settings#SENSOR_ID) | string |  |  |  | The sensor's id, when the key is not bound to one. |
 | [`SENSOR_NAME`](https://docs.openctem.io/sensor/settings#SENSOR_NAME) | string |  | `sensor-<hostname>` |  | The sensor's name on the platform. |
-| [`SENSOR_PROTOCOL`](https://docs.openctem.io/sensor/settings#SENSOR_PROTOCOL) | enum |  | `auto` |  | Sensor protocol. |
+| [`SENSOR_PROTOCOL`](https://docs.openctem.io/sensor/settings#SENSOR_PROTOCOL) | enum |  | `auto` |  | Sensor protocol (v2; v1 is retired and refused). |
 | [`SENSOR_CA_CERT_FILE`](https://docs.openctem.io/sensor/settings#SENSOR_CA_CERT_FILE) | path |  |  |  | PEM file with the platform's private CA (or a TLS-inspecting proxy's CA). |
 | [`SSL_CERT_FILE`](https://docs.openctem.io/sensor/settings#SSL_CERT_FILE) | path |  |  |  | System trust store file override (read by the Go runtime and the scanners). |
 | [`SSL_CERT_DIR`](https://docs.openctem.io/sensor/settings#SSL_CERT_DIR) | path |  |  |  | System trust store directory override. |

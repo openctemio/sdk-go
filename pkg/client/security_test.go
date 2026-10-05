@@ -112,7 +112,7 @@ func TestCommandEndpoints_EscapeIDs(t *testing.T) {
 	if err := c.AcknowledgeCommand(context.Background(), "../../admin/users?x=1"); err != nil {
 		t.Fatal(err)
 	}
-	want := "/api/v1/agent/commands/..%2F..%2Fadmin%2Fusers%3Fx=1/acknowledge"
+	want := "/api/v2/sensor/commands/..%2F..%2Fadmin%2Fusers%3Fx=1/claim"
 	if gotPath != want {
 		t.Errorf("path = %q, want %q", gotPath, want)
 	}
@@ -152,17 +152,17 @@ func TestCommandPoller_SkipsExpiredCommands(t *testing.T) {
 	served := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agent/commands":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v2/sensor/commands":
 			mu.Lock()
 			first := !served
 			served = true
 			mu.Unlock()
 			if first {
-				_ = json.NewEncoder(w).Encode(commands)
+				_ = json.NewEncoder(w).Encode(map[string]any{"commands": commands})
 				return
 			}
-			_, _ = w.Write([]byte(`[]`))
-		case strings.HasSuffix(r.URL.Path, "/acknowledge"):
+			_, _ = w.Write([]byte(`{"commands":[]}`))
+		case strings.HasSuffix(r.URL.Path, "/claim"):
 			mu.Lock()
 			acked = append(acked, strings.Split(r.URL.Path, "/")[5])
 			mu.Unlock()

@@ -352,58 +352,44 @@ func TestV2_PartiallyAcceptedReportIsNotResent(t *testing.T) {
 
 // --- protocol selection ----------------------------------------------------
 
-func TestAuto_FallsBackToV1OnAnOldPlatform(t *testing.T) {
+// Protocol v1 is retired: against a platform without protocol v2 the client
+// answers ErrV2Unsupported and sends nothing to /api/v1/agent.
+func TestAuto_OldPlatformIsUnsupported(t *testing.T) {
 	f := NewFakePlatform(false)
 	defer f.Close()
 	c := newClient(t, f, client.ProtocolAuto)
-	if err := c.SendHeartbeat(context.Background(), &core.SensorStatus{Name: "s", Status: core.SensorStateRunning}); err != nil {
-		t.Fatal(err)
+	if err := c.SendHeartbeat(context.Background(), &core.SensorStatus{Name: "s", Status: core.SensorStateRunning}); !errors.Is(err, client.ErrV2Unsupported) {
+		t.Fatalf("heartbeat: %v", err)
 	}
-	res, err := c.PushFindings(context.Background(), report("semgrep", 1, 3))
-	if err != nil || res.FindingsCreated != 3 {
-		t.Fatalf("res=%+v err=%v", res, err)
+	if _, err := c.PushFindings(context.Background(), report("semgrep", 1, 3)); !errors.Is(err, client.ErrV2Unsupported) {
+		t.Fatalf("push: %v", err)
 	}
-	if len(f.V1Reports()) != 1 || len(f.Reports()) != 0 {
-		t.Fatal("not delivered over v1")
+	if _, err := c.ResultsProtocol(context.Background()); !errors.Is(err, client.ErrV2Unsupported) {
+		t.Fatalf("results protocol: %v", err)
 	}
-	if p, _ := c.ResultsProtocol(context.Background()); p != client.ProtocolV1 {
-		t.Fatalf("protocol = %s", p)
-	}
+	assertNoV1(t, f)
 }
 
-func TestAuto_UsesV2WhenAdvertised(t *testing.T) {
+func TestAuto_UsesV2(t *testing.T) {
 	f := NewFakePlatform(true)
 	defer f.Close()
 	c := newClient(t, f, client.ProtocolAuto)
 	if err := c.SendHeartbeat(context.Background(), &core.SensorStatus{Name: "s", Status: core.SensorStateRunning}); err != nil {
 		t.Fatal(err)
 	}
-	hb := f.RequestsTo(http.MethodPost, "/api/v1/agent/heartbeat")
-	if !protov2HasFeature(hb[0].Header.Values("X-OpenCTEM-Sensor-Features"), protov2.FeatureResultsV2) {
-		t.Fatal("heartbeat did not ask about v2")
+	if len(f.RequestsTo(http.MethodPost, protov2.PathPrefix+protov2.HeartbeatPath)) != 1 {
+		t.Fatalf("requests %v", paths(f.Requests()))
 	}
 	if _, err := c.PushFindings(context.Background(), report("semgrep", 1, 1)); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Reports()) != 1 || len(f.V1Reports()) != 0 {
+	if len(f.Reports()) != 1 {
 		t.Fatal("not delivered over v2")
 	}
-}
-
-func TestV1Mode_NeverTouchesV2(t *testing.T) {
-	f := NewFakePlatform(true)
-	defer f.Close()
-	c := newClient(t, f, client.ProtocolV1)
-	_ = c.SendHeartbeat(context.Background(), &core.SensorStatus{Name: "s"})
-	if _, err := c.PushFindings(context.Background(), report("semgrep", 1, 1)); err != nil {
-		t.Fatal(err)
+	if p, err := c.ResultsProtocol(context.Background()); err != nil || p != client.ProtocolV2 {
+		t.Fatalf("protocol = %s, %v", p, err)
 	}
-	if n := len(f.RequestsTo("", protov2.PathPrefix)); n != 0 {
-		t.Fatalf("%d v2 requests in v1 mode", n)
-	}
-	if v := f.RequestsTo("", "/api/v1/agent/heartbeat")[0].Header.Values("X-OpenCTEM-Sensor-Features"); len(v) != 0 {
-		t.Fatalf("v1 mode announced features %v", v)
-	}
+	assertNoV1(t, f)
 }
 
 func TestV2Forced_FailsAgainstAnOldPlatform(t *testing.T) {
@@ -715,17 +701,21 @@ func TestOutbox_GoneCommandSendsResultsUnsolicited(t *testing.T) {
 	}
 }
 
-func TestOutbox_V1PlatformGetsTheQueueOverV1(t *testing.T) {
+// Against a platform without protocol v2 a queued report is kept (not dead-
+// lettered, not sent over v1) until the platform serves v2.
+func TestOutbox_OldPlatformKeepsTheQueue(t *testing.T) {
 	f := NewFakePlatform(false)
 	defer f.Close()
 	c := newClient(t, f, client.ProtocolAuto)
 	enableOutbox(t, c, t.TempDir())
-	if _, err := c.PushFindings(context.Background(), report("semgrep", 1, 3)); err != nil {
-		t.Fatal(err)
+	res, err := c.PushFindings(context.Background(), report("semgrep", 1, 3))
+	if err != nil || !res.Queued {
+		t.Fatalf("res=%+v err=%v, want queued", res, err)
 	}
-	if len(f.V1Reports()) != 1 {
-		t.Fatal("not delivered over v1")
+	if st := c.Outbox().Stats(); st.PendingCount != 1 || st.DeadLetterCount != 0 {
+		t.Fatalf("outbox %+v, want the report pending", st)
 	}
+	assertNoV1(t, f)
 }
 
 var _ = outbox.KindReport
