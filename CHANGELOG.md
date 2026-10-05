@@ -4,6 +4,28 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Deprecated
+
+- Packages with no importer in the sensor, the platform or the asset
+  collector are marked `Deprecated:` and will be removed in a later minor
+  release: `pkg/transport/grpc` and `proto/openctemio/v1` (removed in the
+  next minor, which drops the `google.golang.org/grpc` dependency),
+  `pkg/adapters/...`, `pkg/pipeline`, `pkg/audit`, `pkg/credentials`,
+  `pkg/errors`, `pkg/health`, `pkg/metrics`, `pkg/options`,
+  `pkg/enrichers/{epss,kev}`, `pkg/connectors/...`, `pkg/providers/github`
+  and `pkg/scanners/tenable`. `docs/STABILITY.md` lists the replacement of
+  each.
+
+### Documentation
+
+- `docs/rfcs/sensor-sdk-v2.md`: the accepted design for the next SDK
+  generation (one tool contract with a `tool.yaml` manifest, out-of-process
+  execution for every tool, adapter protocol v1 for any language, one
+  runtime, stability tiers, transport v3 behind the SDK). `docs/STABILITY.md`
+  now gives every package a tier (Stable, Beta, Frozen, Internal-bound,
+  Deprecated). The module description no longer lists scanner wrappers
+  (they moved to the sensor in v0.17.0).
+
 ### Added
 
 - **Per-task tool sandbox** (`pkg/sensorkit/executor`). Every tool run

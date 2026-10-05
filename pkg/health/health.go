@@ -1,6 +1,10 @@
 // Package health provides health check endpoints for the OpenCTEM SDK.
 // It supports Kubernetes-style readiness and liveness probes, and
 // allows registering custom health checks for dependencies.
+//
+// Deprecated: no sensor, platform or collector imports it; sensorkit reports
+// health through preflight checks and the config report. Removal is planned
+// for a later minor release (docs/STABILITY.md).
 package health
 
 import (

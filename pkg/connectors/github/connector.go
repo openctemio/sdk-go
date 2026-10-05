@@ -1,4 +1,8 @@
 // Package github provides a GitHub connector for the OpenCTEM SDK.
+//
+// Deprecated: no sensor, platform or collector imports it; vendor
+// integrations move to the connectors module (api RFC-049). Removal is
+// planned for a later minor release (docs/STABILITY.md).
 package github
 
 import (
@@ -9,7 +13,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/openctemio/sdk-go/pkg/connectors"
+	"github.com/openctemio/sdk-go/pkg/connectors" //nolint:staticcheck // deprecated together with this package
 	"github.com/openctemio/sdk-go/pkg/core"
 )
 

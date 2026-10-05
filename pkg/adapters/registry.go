@@ -1,5 +1,10 @@
 // Package adapters provides a registry for scanner output adapters.
 // Each adapter converts a specific scanner's output format to CTIS.
+//
+// Deprecated: the converters duplicate ctis.FromSARIF and the parsers the
+// sensor ships; no sensor, platform or collector imports them. Emit CTIS
+// from a tool (pkg/tool) or convert SARIF with the ctis module. Removal is
+// planned for a later minor release (docs/STABILITY.md).
 package adapters
 
 import (
@@ -10,11 +15,11 @@ import (
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 
-	"github.com/openctemio/sdk-go/pkg/adapters/betterleaks"
-	"github.com/openctemio/sdk-go/pkg/adapters/nuclei"
-	"github.com/openctemio/sdk-go/pkg/adapters/semgrep"
-	"github.com/openctemio/sdk-go/pkg/adapters/trivy"
-	"github.com/openctemio/sdk-go/pkg/adapters/vuls"
+	"github.com/openctemio/sdk-go/pkg/adapters/betterleaks" //nolint:staticcheck // deprecated together with this package
+	"github.com/openctemio/sdk-go/pkg/adapters/nuclei"      //nolint:staticcheck // deprecated together with this package
+	"github.com/openctemio/sdk-go/pkg/adapters/semgrep"     //nolint:staticcheck // deprecated together with this package
+	"github.com/openctemio/sdk-go/pkg/adapters/trivy"       //nolint:staticcheck // deprecated together with this package
+	"github.com/openctemio/sdk-go/pkg/adapters/vuls"        //nolint:staticcheck // deprecated together with this package
 )
 
 // Registry manages registered scanner adapters.
