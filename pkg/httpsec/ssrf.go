@@ -469,7 +469,7 @@ func isLoopbackHost(host string) bool {
 // the first connection. A host with an IPv6 and an IPv4 address where only one
 // family is reachable (an IPv6 address on a host without IPv6 routing, or a
 // service bound to 127.0.0.1 behind a name that resolves to ::1 first) still
-// connects. Every address was already checked; none is dialled unchecked.
+// connects. Every address was already checked; none is dialed unchecked.
 func dialValidated(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error), network string, ips []string, port string) (net.Conn, error) {
 	var firstErr error
 	for _, ip := range ips {
