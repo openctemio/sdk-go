@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
@@ -96,12 +97,17 @@ func TestResolveProtocol(t *testing.T) {
 	if p, err := ResolveProtocol("", ""); err != nil || p != "auto" {
 		t.Fatalf("default = %q, %v", p, err)
 	}
-	t.Setenv(EnvProtocol, "V1")
-	if p, _ := ResolveProtocol("", "v2"); p != "v1" {
+	t.Setenv(EnvProtocol, "V2")
+	if p, _ := ResolveProtocol("", "auto"); p != "v2" {
 		t.Fatalf("env over config = %q", p)
 	}
-	if p, _ := ResolveProtocol("v2", ""); p != "v2" {
+	if p, _ := ResolveProtocol("auto", ""); p != "auto" {
 		t.Fatalf("explicit over env = %q", p)
+	}
+	// Protocol v1 is retired: the setting is refused with a usable message.
+	t.Setenv(EnvProtocol, "v1")
+	if _, err := ResolveProtocol("", ""); !errors.Is(err, client.ErrProtocolV1Retired) || !strings.Contains(err.Error(), EnvProtocol) {
+		t.Fatalf("v1 accepted: %v", err)
 	}
 	t.Setenv(EnvProtocol, "v3")
 	if _, err := ResolveProtocol("", ""); err == nil || !strings.Contains(err.Error(), EnvProtocol) {

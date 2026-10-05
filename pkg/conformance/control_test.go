@@ -1,9 +1,8 @@
 package conformance
 
-// api RFC-029: the SDK uses protocol v2 for every feature the platform lists
-// on hello, never sends X-Agent-ID on v2, and falls back to v1 per feature
-// against a platform that does not list it (api v0.8: results only; before
-// that: nothing on v2).
+// api RFC-029: the SDK speaks protocol v2 for the whole sensor surface, never
+// sends X-Agent-ID, and never falls back to the retired protocol v1: a
+// platform that does not serve a v2 route answers client.ErrV2Unsupported.
 
 import (
 	"context"
@@ -16,7 +15,6 @@ import (
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/platform"
-	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
@@ -84,11 +82,11 @@ func TestControl_EverythingOnV2WithoutAgentHeader(t *testing.T) {
 		if !strings.HasPrefix(r.Path, protov2.PathPrefix+"/") {
 			t.Errorf("%s %s: not a protocol v2 path", r.Method, r.Path)
 		}
-		if r.Header.Get(legacyv1.HeaderSensorID) != "" {
-			t.Errorf("%s %s carries %s", r.Method, r.Path, legacyv1.HeaderSensorID)
+		if r.Header.Get("X-Agent-ID") != "" {
+			t.Errorf("%s %s carries X-Agent-ID", r.Method, r.Path)
 		}
-		if r.Header.Get(legacyv1.HeaderSensorFeatures) != "" {
-			t.Errorf("%s %s carries %s", r.Method, r.Path, legacyv1.HeaderSensorFeatures)
+		if r.Header.Get(protov2.HeaderSensorFeatures) != "" {
+			t.Errorf("%s %s carries %s", r.Method, r.Path, protov2.HeaderSensorFeatures)
 		}
 	}
 	if got := c.ProtocolFeatures(); len(got) != 6 {
@@ -99,52 +97,51 @@ func TestControl_EverythingOnV2WithoutAgentHeader(t *testing.T) {
 	}
 }
 
-// An api v0.8 platform lists only results on v2: results go v2, the rest v1.
-func TestControl_MixedPlatformUsesV1ForUnlistedFeatures(t *testing.T) {
-	f := NewFakePlatform(true) // Control off
+// A platform that serves only v2 results (api v0.8): the control plane is
+// ErrV2Unsupported; nothing goes to the retired protocol v1.
+func TestControl_ResultsOnlyPlatformIsUnsupported(t *testing.T) {
+	f := NewFakePlatform(true)
+	f.SetControl(false)
 	defer f.Close()
-	f.OpenCommand("cmd-1")
 	c := newClient(t, f, client.ProtocolAuto)
 	ctx := context.Background()
-	if err := c.SendHeartbeat(ctx, status()); err != nil {
-		t.Fatal(err)
+	if err := c.SendHeartbeat(ctx, status()); !errors.Is(err, client.ErrV2Unsupported) {
+		t.Fatalf("heartbeat: %v, want ErrV2Unsupported", err)
 	}
 	if _, err := c.PushFindings(ctx, report("semgrep", 1, 1)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.ReportCommandResult(ctx, "cmd-1", &core.CommandResult{Status: "completed"}); err != nil {
-		t.Fatal(err)
-	}
-	if len(f.RequestsTo(http.MethodPost, legacyv1.PathHeartbeat)) != 1 ||
-		len(f.RequestsTo(http.MethodPut, protov2.PathPrefix+protov2.ResultsPath)) != 1 ||
-		len(f.RequestsTo(http.MethodPost, legacyv1.PathCommands+"/cmd-1/complete")) != 1 {
-		t.Fatalf("requests %v", paths(f.Requests()))
-	}
-	if st, _ := f.CommandState("cmd-1"); st != "completed" {
-		t.Fatalf("state %q", st)
-	}
-	// v2 mode requires v2 results only; the heartbeat keeps working on v1.
-	c2 := newClient(t, f, client.ProtocolV2)
-	if err := c2.SendHeartbeat(ctx, status()); err != nil {
-		t.Fatalf("v2 mode against a results-only platform: %v", err)
-	}
+	assertNoV1(t, f)
 }
 
-// A platform without v2: everything on v1 after one hello probe.
-func TestControl_OldPlatformGetsV1(t *testing.T) {
+// A platform without protocol v2: every call is ErrV2Unsupported, and no
+// request goes to /api/v1/agent.
+func TestControl_OldPlatformIsUnsupported(t *testing.T) {
 	f := NewFakePlatform(false)
 	defer f.Close()
 	c := newClient(t, f, client.ProtocolAuto)
 	ctx := context.Background()
-	if err := c.SendHeartbeat(ctx, status()); err != nil {
-		t.Fatal(err)
+	if err := c.SendHeartbeat(ctx, status()); !errors.Is(err, client.ErrV2Unsupported) {
+		t.Fatalf("heartbeat: %v", err)
 	}
-	if _, err := c.GetSuppressions(ctx); err != nil && !client.IsNotFoundError(err) {
-		t.Logf("suppressions on the fake v1: %v", err)
+	if _, err := c.GetSuppressions(ctx); !errors.Is(err, client.ErrV2Unsupported) {
+		t.Fatalf("suppressions: %v", err)
 	}
+	if _, err := c.PushFindings(ctx, report("semgrep", 1, 1)); !errors.Is(err, client.ErrV2Unsupported) {
+		t.Fatalf("push: %v", err)
+	}
+	if err := c.AcknowledgeCommand(ctx, "cmd-1"); !errors.Is(err, client.ErrV2Unsupported) {
+		t.Fatalf("claim: %v", err)
+	}
+	assertNoV1(t, f)
+}
+
+// assertNoV1 fails when any request went to the retired protocol v1.
+func assertNoV1(t *testing.T, f *FakePlatform) {
+	t.Helper()
 	for _, r := range f.Requests() {
-		if strings.HasPrefix(r.Path, protov2.PathPrefix) && r.Path != protov2.PathPrefix+protov2.HelloPath {
-			t.Errorf("v2 request %s %s against a v1 platform", r.Method, r.Path)
+		if strings.HasPrefix(r.Path, "/api/v1/agent") {
+			t.Errorf("request %s %s to the retired protocol v1", r.Method, r.Path)
 		}
 	}
 }
@@ -210,7 +207,7 @@ func TestControl_GoneCommand(t *testing.T) {
 
 // v2 tells a disabled sensor to pause with a 200: the doorbell-aware call
 // returns the pause action; the plain heartbeat (connection test) reports a
-// refused key, as v1's 401 did.
+// refused key.
 func TestControl_PausedSensor(t *testing.T) {
 	f := newControlFake(t)
 	f.SetPaused(true)
@@ -257,8 +254,8 @@ func TestControl_FingerprintsAreSplitAtTheLimit(t *testing.T) {
 }
 
 // A platform that listed a feature but lost the route (404 without a problem)
-// gets the call on v1 and is asked hello again.
-func TestControl_RouteMissingFallsBackToV1(t *testing.T) {
+// answers ErrV2Unsupported and is asked hello again; no fall-back to v1.
+func TestControl_RouteMissingIsUnsupported(t *testing.T) {
 	f := newControlFake(t)
 	f.SetFault(func(r *http.Request, _ int) *FaultAnswer {
 		if r.URL.Path == protov2.PathPrefix+protov2.HeartbeatPath {
@@ -267,12 +264,10 @@ func TestControl_RouteMissingFallsBackToV1(t *testing.T) {
 		return nil
 	})
 	c := newClient(t, f, client.ProtocolAuto)
-	if err := c.SendHeartbeat(context.Background(), status()); err != nil {
-		t.Fatal(err)
+	if err := c.SendHeartbeat(context.Background(), status()); !errors.Is(err, client.ErrV2Unsupported) {
+		t.Fatalf("heartbeat: %v", err)
 	}
-	if len(f.RequestsTo(http.MethodPost, legacyv1.PathHeartbeat)) != 1 {
-		t.Fatalf("requests %v", paths(f.Requests()))
-	}
+	assertNoV1(t, f)
 }
 
 func paths(rs []Request) []string {

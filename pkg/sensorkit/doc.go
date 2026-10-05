@@ -16,7 +16,7 @@
 // SENSOR_SCAN_PROXY, HTTP(S)_PROXY / NO_PROXY; the pre-rename AGENT_* names with a
 // deprecation warning), refuses settings it would misread with a clear
 // message and exit code (ExitCode), and connects the platform client
-// (protocol v2 negotiated on hello, v1 for what the platform does not offer;
+// (protocol v2, features negotiated on hello;
 // SSRF-guarded HTTP, pkg/httpsec) with its durable outbox. Every setting is
 // also an Options field, which wins over the environment.
 //

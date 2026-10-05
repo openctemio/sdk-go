@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
@@ -27,7 +26,7 @@ func claimNServer(t *testing.T, features []string) (*httptest.Server, func() []s
 				MediaTypes: []string{protov2.MediaTypeCTIS}, Limits: protov2.DefaultLimits()})
 			return
 		}
-		feat := r.Header.Get(legacyv1.HeaderSensorFeatures)
+		feat := r.Header.Get(protov2.HeaderSensorFeatures)
 		mu.Lock()
 		asked = append(asked, feat)
 		mu.Unlock()
