@@ -148,6 +148,12 @@ type TaskSpec struct {
 	Limits Limits
 	// Network is the network class (see NetworkClass).
 	Network NetworkClass
+	// Stdin is the task's standard input (nil: none). A tool that speaks
+	// the adapter protocol reads its messages from it. Pass an *os.File
+	// (the read end of an os.Pipe) so the process gets the descriptor
+	// itself: any other reader is copied by a goroutine that Wait waits
+	// for.
+	Stdin io.Reader
 	// Stdout and Stderr receive the task's output.
 	Stdout, Stderr io.Writer
 	// Hooks let the caller adjust the process (process backend only).
@@ -215,6 +221,13 @@ type Status struct {
 	Seccomp    bool `json:"seccomp"`
 	NoNewPrivs bool `json:"no_new_privs"`
 	Rlimits    bool `json:"rlimits"`
+	// NetworkEnforced is true when the backend itself confines the task to
+	// its network class (a per-task network namespace or policy). The
+	// process backend records the class but does not enforce it, so it is
+	// false there; the sensor's target guard and egress settings apply
+	// instead. Code from outside the project must not run on a backend
+	// without it.
+	NetworkEnforced bool `json:"network_enforced"`
 	// Missing lists the controls this host could not enforce, and why.
 	Missing []string `json:"missing,omitempty"`
 }
