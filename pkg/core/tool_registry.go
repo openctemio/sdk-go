@@ -68,6 +68,31 @@ type ToolSpec struct {
 	// RFC-038); nil: nothing. The manifest names it by version and digest,
 	// and a scan receives the effective values as ScanOptions.Settings.
 	Settings *SettingsSchema
+	// Contract is the tool's tool-contract manifest, by digest and the
+	// fields the platform plans with (sdk-go docs/rfcs/sensor-sdk-v2.md);
+	// nil for a tool not ported to the contract.
+	Contract *ToolContract
+}
+
+// ToolContract names a tool's tool.yaml manifest (pkg/tool) in the sensor
+// manifest: its canonical digest and the fields the platform plans with.
+// The runtime enforces exactly this manifest. Build it with
+// tool.Manifest.Contract.
+type ToolContract struct {
+	APIVersion string   `json:"api_version"`
+	Digest     string   `json:"digest"`
+	Version    string   `json:"version"`
+	Class      string   `json:"class"`
+	Tier       string   `json:"tier"`
+	Network    string   `json:"network,omitempty"`
+	Consumes   []string `json:"consumes,omitempty"`
+	Produces   []string `json:"produces"`
+}
+
+// ToolContractProvider is a scanner ported to the tool contract: the
+// registry reports its contract with the tool.
+type ToolContractProvider interface {
+	ToolContract() *ToolContract
 }
 
 // Default probe settings.
@@ -233,6 +258,9 @@ func (r *ToolRegistry) Register(spec ToolSpec) error {
 			if t.spec.Settings == nil {
 				t.spec.Settings = spec.Settings
 			}
+			if t.spec.Contract == nil {
+				t.spec.Contract = spec.Contract
+			}
 			return nil
 		}
 	}
@@ -262,6 +290,9 @@ func (r *ToolRegistry) RegisterScanner(s Scanner, extraCaps ...string) error {
 	}
 	if p, ok := s.(SettingsSchemaProvider); ok {
 		spec.Settings = p.SettingsSchema()
+	}
+	if p, ok := s.(ToolContractProvider); ok {
+		spec.Contract = p.ToolContract()
 	}
 	return r.Register(spec)
 }
@@ -491,7 +522,7 @@ func (r *ToolRegistry) CapabilityReport(ctx context.Context) CapabilityReport {
 			stale = append(stale, t)
 		}
 		info := ToolInfo{Name: t.spec.Name, Kind: t.spec.Kind, Version: t.version, Installed: t.installed,
-			Settings: t.spec.Settings.ManifestSettings()}
+			Settings: t.spec.Settings.ManifestSettings(), Contract: t.spec.Contract.clone()}
 		if len(t.spec.Capabilities) > 0 {
 			info.Capabilities = slices.Clone(t.spec.Capabilities)
 		}
@@ -550,4 +581,14 @@ func probeTool(ctx context.Context, spec ToolSpec, timeout time.Duration) (bool,
 		version = spec.Version
 	}
 	return true, version
+}
+
+func (c *ToolContract) clone() *ToolContract {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.Consumes = slices.Clone(c.Consumes)
+	out.Produces = slices.Clone(c.Produces)
+	return &out
 }

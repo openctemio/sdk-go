@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	"gopkg.in/yaml.v3"
 )
 
@@ -182,6 +183,16 @@ func (m Manifest) Canonical() ([]byte, error) {
 		return nil, err
 	}
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
+// Contract names the manifest in the sensor manifest (core.ToolContract):
+// its digest and the fields the platform plans with.
+func (m Manifest) Contract() *core.ToolContract {
+	m = m.withDefaults()
+	return &core.ToolContract{
+		APIVersion: m.APIVersion, Digest: m.Digest(), Version: m.Version, Class: string(m.Class), Tier: string(m.Tier),
+		Network: string(m.Permissions.Network), Consumes: slices.Clone(m.Consumes), Produces: slices.Clone(m.Produces),
+	}
 }
 
 // Produce kinds.

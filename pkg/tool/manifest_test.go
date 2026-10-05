@@ -290,3 +290,14 @@ func TestByteSizeAndDuration(t *testing.T) {
 		t.Error("bad duration accepted")
 	}
 }
+
+func TestContractNamesTheManifest(t *testing.T) {
+	m, err := LoadManifest([]byte(baseYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := m.Contract()
+	if c.Digest != m.Digest() || c.Class != "target-scan" || c.Network != "none" || len(c.Produces) != 2 {
+		t.Fatalf("contract %+v", c)
+	}
+}

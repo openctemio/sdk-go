@@ -37,6 +37,9 @@ type ToolInfo struct {
 	// Settings names the tool's settings schema (ToolSpec.Settings) for the
 	// manifest. It is not part of the heartbeat.
 	Settings *ManifestToolSettings `json:"-"`
+	// Contract is the tool's tool-contract manifest (ToolSpec.Contract);
+	// it travels in the manifest only, not on the heartbeat.
+	Contract *ToolContract `json:"-"`
 }
 
 // CapabilityReport is what a sensor reports it can do.
