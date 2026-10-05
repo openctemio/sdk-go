@@ -217,6 +217,9 @@ func validate(ctx context.Context, t tool.Tool, m tool.Manifest, task tool.Task)
 	case len(bytes.TrimSpace(task.Config)) > 0 && string(bytes.TrimSpace(task.Config)) != "{}" && string(bytes.TrimSpace(task.Config)) != "null":
 		fail("/config", "the tool takes no configuration")
 	}
+	if ierr := toolrt.CheckRetest(m, task); ierr != nil {
+		fail("/retest", ierr.Detail)
+	}
 	if v, ok := t.(tool.Validator); ok && res.OK {
 		if err := v.Validate(ctx, task); err != nil {
 			fail("", tool.CapDetail(err.Error()))
@@ -298,5 +301,8 @@ func safeRun(t tool.Tool, ctx tool.Context, task tool.Task) (err *tool.Error) {
 			err = &tool.Error{Class: tool.ToolError, Detail: fmt.Sprintf("panic: %v", r)}
 		}
 	}()
-	return tool.AsError(t.Run(ctx, task))
+	if ierr := toolrt.CheckRetest(t.Manifest().Normalized(), task); ierr != nil {
+		return ierr
+	}
+	return tool.AsError(toolrt.Invoke(t, ctx, task))
 }

@@ -63,7 +63,7 @@ var echoTool = tool.New(tool.Manifest{
 
 func TestMain(m *testing.M) {
 	executor.RunLauncherIfRequested()
-	adapter.Dispatch(echoTool, dialTool)
+	adapter.Dispatch(echoTool, dialTool, retestTool)
 	if mode := os.Getenv("TOOLHOST_HOSTILE"); mode != "" {
 		os.Exit(hostile(mode))
 	}
@@ -95,6 +95,9 @@ func hostile(mode string) int {
 	if mode == "liar" {
 		m.Permissions.Network = tool.NetVendor
 		m.Class = tool.Connector
+	}
+	if mode == "retest-liar" {
+		m.Retest = true
 	}
 	mb, _ := json.Marshal(m.Normalized())
 	handshake := func() map[string]any {
@@ -152,6 +155,12 @@ func hostile(mode string) int {
 		send(`{"v":1,"type":"target_status","target":"t1","status":"done"}`)
 		send(`{"v":1,"type":"target_status","target":"t9","status":"done"}`)
 		send(`{"v":1,"type":"result","status":"ok","error":{"class":"tool_crashed"}}`)
+	case "retest-liar":
+		handshake()
+		send(`{"v":1,"type":"record","kind":"finding","target":"t1","data":{"type":"misconfiguration","title":"sneaked in","severity":"low"}}`)
+		send(`{"v":1,"type":"verdict","item":"not-in-task","verdict":"fixed"}`)
+		send(`{"v":1,"type":"verdict","item":"f1","verdict":"fixed","detail":"never reached it"}`)
+		send(`{"v":1,"type":"result","status":"ok"}`)
 	case "claims-ok":
 		handshake()
 		send(`{"v":1,"type":"result","status":"ok"}`)
@@ -417,7 +426,7 @@ func TestAdapterSchemaMatchesWire(t *testing.T) {
 	}
 	want := []string{toolwire.TypeHello, toolwire.TypeDescribe, toolwire.TypeValidate, toolwire.TypeRun, toolwire.TypeCancel,
 		toolwire.TypeManifest, toolwire.TypeValidation, toolwire.TypeLog, toolwire.TypeProgress, toolwire.TypeRecord,
-		toolwire.TypeReportInfo, toolwire.TypeTargetStatus, toolwire.TypeArtifact, toolwire.TypeHeartbeat, toolwire.TypeResult}
+		toolwire.TypeReportInfo, toolwire.TypeTargetStatus, toolwire.TypeArtifact, toolwire.TypeHeartbeat, toolwire.TypeVerdict, toolwire.TypeResult}
 	if strings.Join(sch.Properties.Type.Enum, ",") != strings.Join(want, ",") {
 		t.Fatalf("schema types %v, wire types %v", sch.Properties.Type.Enum, want)
 	}

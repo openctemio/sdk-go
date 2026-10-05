@@ -34,12 +34,25 @@ type Assembler struct {
 	targetAssets map[string]string
 	results      map[string]*TargetResult
 	info         *tool.ReportInfo
+
+	// items are the items of a retest task by ref; verdicts what the tool
+	// said about them.
+	items     map[string]tool.RetestItem
+	itemOrder []string
+	verdicts  map[string]tool.RetestVerdict
 }
 
 // NewAssembler starts the report of task.
 func NewAssembler(m tool.Manifest, task tool.Task, c *Checker) *Assembler {
 	a := &Assembler{m: m, checker: c, targets: map[string]tool.Target{},
-		targetAssets: map[string]string{}, results: map[string]*TargetResult{}}
+		targetAssets: map[string]string{}, results: map[string]*TargetResult{},
+		items: map[string]tool.RetestItem{}, verdicts: map[string]tool.RetestVerdict{}}
+	for _, it := range task.Retest {
+		if _, dup := a.items[it.Ref]; !dup {
+			a.itemOrder = append(a.itemOrder, it.Ref)
+		}
+		a.items[it.Ref] = it
+	}
 	for _, t := range task.Targets {
 		if _, dup := a.targets[t.Ref]; !dup {
 			a.order = append(a.order, t.Ref)

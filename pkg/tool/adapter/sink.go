@@ -120,6 +120,10 @@ func (s *sink) Log(level slog.Level, msg string, attrs map[string]any) {
 	_ = s.w.Write(toolwire.Log{Envelope: toolwire.Env(toolwire.TypeLog), Level: lv, Msg: msg, Fields: attrs})
 }
 
+func (s *sink) Verdict(ref string, v tool.Verdict, detail string) {
+	_ = s.w.Write(toolwire.VerdictMsg{Envelope: toolwire.Env(toolwire.TypeVerdict), Item: ref, Verdict: v, Detail: detail})
+}
+
 // Artifact creates <workdir>/artifacts/<name>; closing it announces the
 // file with its size and digest.
 func (s *sink) Artifact(name, mediaType string) (io.WriteCloser, error) {

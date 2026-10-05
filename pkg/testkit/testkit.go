@@ -73,6 +73,10 @@ type Result struct {
 	Logs    []LogEntry
 	// Artifacts by name.
 	Artifacts map[string][]byte
+	// Verdicts of a retest task, one per item, as the runtime reports them
+	// (no verdict, or Fixed on a target not reported done or in a task that
+	// did not finish, is Unverifiable).
+	Verdicts []tool.RetestVerdict
 }
 
 // Run runs tl on task in-process. The task's ID defaults to "test-task".
@@ -100,6 +104,9 @@ func Run(t testing.TB, tl tool.Tool, task tool.Task, opts ...Options) *Result {
 	sink := &sink{asm: asm, artifacts: map[string]*bytes.Buffer{}}
 	res := &Result{}
 	runErr := configError(m, task)
+	if runErr == nil {
+		runErr = toolrt.CheckRetest(m, task)
+	}
 	if runErr == nil {
 		secrets := map[string]tool.Secret{}
 		for _, c := range m.Permissions.Credentials {
@@ -129,6 +136,7 @@ func Run(t testing.TB, tl tool.Tool, task tool.Task, opts ...Options) *Result {
 	}
 	res.Err = runErr
 	res.Status = asm.Status(runErr)
+	res.Verdicts = asm.Verdicts(runErr)
 	res.Report = asm.Report(time.Now().UTC())
 	res.Stats = asm.Checker().Stats()
 	toolrt.Stamp(res.Report, toolrt.Provenance{
@@ -184,7 +192,7 @@ func safeRun(tl tool.Tool, ctx tool.Context, task tool.Task) (err *tool.Error) {
 			err = &tool.Error{Class: tool.ToolCrashed, Retryable: true, Detail: fmt.Sprintf("panic: %v", r)}
 		}
 	}()
-	return tool.AsError(tl.Run(ctx, task))
+	return tool.AsError(toolrt.Invoke(tl, ctx, task))
 }
 
 // RequireStatus fails the test unless the run ended with st.
@@ -316,6 +324,8 @@ func (s *sink) Target(ref string, st tool.TargetState, err *tool.Error) {
 }
 
 func (s *sink) Progress(int, int, string) {}
+
+func (s *sink) Verdict(ref string, v tool.Verdict, detail string) { _ = s.asm.Verdict(ref, v, detail) }
 
 func (s *sink) Log(level slog.Level, msg string, attrs map[string]any) {
 	s.mu.Lock()
