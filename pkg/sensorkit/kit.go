@@ -16,6 +16,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/platform"
 	"github.com/openctemio/sdk-go/pkg/resource"
+	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
 )
 
 // Options configure a Kit. The zero value is a server-controlled sensor that
@@ -168,6 +169,17 @@ type Options struct {
 	// Name. nil: the check's error.
 	UnavailableReason func(ctx context.Context, name string, checkErr error) string
 
+	// Settings is the sensor's settings registry: the kit registers the
+	// SDK's settings into it; a sensor registers its own first. nil: a
+	// registry with the SDK's settings only. The config report carries
+	// each declared setting's presence (never its value).
+	Settings *settingsreg.Registry
+	// ReportUnknownEnv reports SENSOR_* and OPENCTEM_SDK_* environment
+	// variables no registered setting declares (config.env_unknown, with a
+	// "did you mean"). Set it only when the sensor registered all its
+	// settings, or its own names are reported as unknown.
+	ReportUnknownEnv bool
+
 	// Verbose logs every heartbeat and poll.
 	Verbose bool
 	// Stdout and Stderr receive the kit's log lines (default os.Stdout and
@@ -263,6 +275,9 @@ type Kit struct {
 	handlers    map[string]core.CommandExecutor
 	middlewares []middleware
 	ran         bool
+
+	reg *settingsreg.Registry
+	doc *doctor
 }
 
 // New resolves the settings, checks them, connects the platform client and
@@ -273,6 +288,7 @@ func New(opts Options) (*Kit, error) {
 		return nil, err
 	}
 	k := &Kit{opts: opts, out: orStdout(opts.Stdout), errw: orStderr(opts.Stderr), handlers: map[string]core.CommandExecutor{}}
+	k.initSettings()
 	s := &k.s
 	s.apiURL = envOr(opts.APIURL, EnvAPIURL)
 	s.apiKey = envOr(opts.APIKey, EnvAPIKey)
@@ -329,6 +345,8 @@ func New(opts Options) (*Kit, error) {
 	proxies.report(k.out, k.errw, proxyOpts)
 
 	s.stateDir = ResolveStateDir(opts.StateDir)
+	k.preflightNew(proxies, proxyOpts)
+	k.checkState()
 
 	// The API key: a key renewed by an earlier run is in the state
 	// directory (the renewal retired the configured one), whether or not
@@ -432,6 +450,35 @@ func New(opts Options) (*Kit, error) {
 	// that reads it).
 	k.sensor.SetLocalPolicy(s.local)
 	return k, nil
+}
+
+// initSettings sets up the settings registry (the SDK's settings, the
+// ones the sensor set itself) and the preflight checks.
+func (k *Kit) initSettings() {
+	opts := k.opts
+	k.reg = opts.Settings
+	if k.reg == nil {
+		k.reg = settingsreg.New()
+	}
+	if !k.reg.Has(EnvAPIURL) {
+		RegisterSDKSettings(k.reg)
+	}
+	for name, v := range map[string]string{EnvAPIURL: opts.APIURL, EnvAPIKey: opts.APIKey, EnvSensorID: opts.SensorID,
+		EnvSensorName: opts.Name, EnvProtocol: opts.Protocol, EnvCACertFile: opts.CACertFile,
+		EnvTemplateSigningKeys: opts.TemplateSigningKeys, EnvControlProxy: opts.ControlProxy,
+		EnvContentProxy: opts.ContentProxy, EnvScanProxy: opts.ScanProxy, EnvStateDir: opts.StateDir,
+		core.EnvLocalPolicy: opts.LocalPolicyPath} {
+		if v != "" {
+			k.reg.MarkOption(name)
+		}
+	}
+	if opts.MaxJobs != 0 {
+		k.reg.MarkOption(EnvMaxJobs)
+	}
+	if opts.Tools != nil {
+		k.reg.MarkOption(EnvTools)
+	}
+	k.doc = newDoctor(k.reg, k.secretValues)
 }
 
 // loadLocalPolicy is Options.LocalPolicy, else the policy loaded from
@@ -602,22 +649,13 @@ func (k *Kit) Run(ctx context.Context) error {
 	// Opt-in: the sensor itself is the OOM killer's last choice. Before any
 	// scanner starts; ApplyScannerPriority keeps scanners from inheriting it.
 	if k.s.protectFromOOM {
-		protectFromOOM(out, errw, writeSelfOOMScoreAdj)
+		code, summary := protectFromOOM(out, errw, writeSelfOOMScoreAdj)
+		k.oomCheck(true, code, summary)
+	} else {
+		k.oomCheck(false, "", "")
 	}
 
-	// Scheduled scans: the scanners installed now.
-	for _, e := range scanners {
-		installed, _, err := e.s.IsInstalled(ctx)
-		if err != nil || !installed {
-			_, _ = fmt.Fprintf(errw, "Warning: Scanner %s skipped: %s\n", e.label(), k.unavailableReason(ctx, e.label(), err))
-			continue
-		}
-		if err := s.AddScanner(e.s); err != nil {
-			_, _ = fmt.Fprintf(errw, "Error adding scanner %s: %v\n", e.label(), err)
-			continue
-		}
-		_, _ = fmt.Fprintf(out, "  Added scanner: %s\n", e.s.Name())
-	}
+	k.addScheduledScanners(ctx, scanners)
 	for _, c := range k.collectors {
 		if err := s.AddCollector(c); err != nil {
 			_, _ = fmt.Fprintf(errw, "Error adding collector %s: %v\n", c.Name(), err)
@@ -631,6 +669,7 @@ func (k *Kit) Run(ctx context.Context) error {
 	var renewal *platform.KeyRenewManager
 	if k.s.key.autoRenew && k.client != nil {
 		m, err := startKeyRenewal(ctx, &k.s, k.client, out)
+		k.keyRenewalCheck(err)
 		if err != nil {
 			_, _ = fmt.Fprintf(errw, "Warning: key auto-renew failed to start: %v\n", err)
 		} else {
@@ -639,6 +678,7 @@ func (k *Kit) Run(ctx context.Context) error {
 		}
 	} else if k.client != nil && k.s.key.why != "" {
 		_, _ = fmt.Fprintf(out, "  Key auto-renew: %s\n", k.s.key.why)
+		k.keyRenewalCheck(nil)
 	}
 	defer func() {
 		if renewal != nil {
@@ -666,12 +706,17 @@ func (k *Kit) Run(ctx context.Context) error {
 	// concurrency cap (api RFC-029 §4.3.1).
 	if k.client != nil {
 		s.SetCapabilityReporter(&capabilityReporter{tools: reg, content: k.opts.Content})
+		// The config report goes to a platform that takes it, with its
+		// digest on every heartbeat.
+		s.SetConfigReporter(core.ConfigReporterFunc(k.ConfigReport))
 	}
 
 	var poller *core.CommandPoller
 	if k.s.commands && k.client != nil {
 		poller = k.newPoller(scanners, doorbell)
+		k.ReportCheck(core.ConfigCheck{ID: CheckCommandPoller, Status: core.CheckPass, Code: "running"})
 	}
+	k.printPreflight()
 
 	// Connection check: the first heartbeat, sent after the poller is set
 	// up (it carries the load report) and before the poller starts, so the
@@ -690,6 +735,8 @@ func (k *Kit) Run(ctx context.Context) error {
 			defer close(pollerDone)
 			if err := poller.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				_, _ = fmt.Fprintf(errw, "Command poller error: %v\n", err)
+				k.ReportCheck(core.ConfigCheck{ID: CheckCommandPoller, Status: core.CheckFail, Code: "stopped",
+					Blocks: []string{core.BlockAll}, Summary: "the command poller stopped: " + err.Error()})
 			}
 		}()
 	} else {
@@ -743,23 +790,65 @@ func (k *Kit) Run(ctx context.Context) error {
 	return nil
 }
 
+// addScheduledScanners adds the scanners installed now to the scheduled
+// scans and records each one's binary check and whether any is available.
+func (k *Kit) addScheduledScanners(ctx context.Context, scanners []scannerEntry) {
+	s, out, errw := k.sensor, k.out, k.errw
+	available := 0
+	for _, e := range scanners {
+		installed, _, err := e.s.IsInstalled(ctx)
+		if err != nil || !installed {
+			reason := k.unavailableReason(ctx, e.label(), err)
+			_, _ = fmt.Fprintf(errw, "Warning: Scanner %s skipped: %s\n", e.label(), reason)
+			k.toolBinaryCheck(e, false, err, reason)
+			continue
+		}
+		available++
+		k.toolBinaryCheck(e, true, nil, "")
+		if err := s.AddScanner(e.s); err != nil {
+			_, _ = fmt.Fprintf(errw, "Error adding scanner %s: %v\n", e.label(), err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "  Added scanner: %s\n", e.s.Name())
+	}
+	if len(k.scanners) > 0 || len(k.collectors) == 0 {
+		if available > 0 {
+			k.ReportCheck(core.ConfigCheck{ID: CheckToolsAvailable, Status: core.CheckPass, Code: "ok",
+				Params: map[string]core.ConfigParam{"count": core.ParamInt(int64(available))}})
+		} else {
+			k.ReportCheck(core.ConfigCheck{ID: CheckToolsAvailable, Status: core.CheckFail, Code: "none",
+				Params: map[string]core.ConfigParam{"count": core.ParamInt(0)}, Keys: []string{EnvTools},
+				Blocks: []string{core.BlockScan}, Summary: "no scanner is installed and allowed on this sensor"})
+		}
+	}
+}
+
 // inventory registers the scanners the sensor runs: those SENSOR_TOOLS and
 // the local policy's tools.allow let through, in the order added. The rest
 // are neither run nor reported, so the platform routes no job for them here.
 func (k *Kit) inventory(reg *core.ToolRegistry) []scannerEntry {
 	var scanners []scannerEntry
 	for _, e := range k.scanners {
+		params := map[string]core.ConfigParam{"tool": core.ParamName(e.label())}
 		if !k.allowed(e) {
 			_, _ = fmt.Fprintf(k.errw, "Note: scanner %s is not in %s; it is not run\n", e.label(), EnvTools)
+			k.ReportCheck(core.ConfigCheck{ID: ToolCheckID(e.label(), "selection"), Status: core.CheckSkip,
+				Code: "not_selected", Params: params, Keys: []string{EnvTools}})
 			continue
 		}
 		if !k.s.local.AllowsTool(e.label()) && !k.s.local.AllowsTool(e.s.Name()) {
 			_, _ = fmt.Fprintf(k.errw, "Note: scanner %s is not in the local policy's tools.allow; it is not run\n", e.label())
+			k.ReportCheck(core.ConfigCheck{ID: ToolCheckID(e.label(), "selection"), Status: core.CheckSkip,
+				Code: "policy_excluded", Params: params, Keys: []string{core.EnvLocalPolicy}})
 			continue
 		}
 		scanners = append(scanners, e)
-		if err := reg.RegisterScanner(e.s, e.caps...); err != nil && k.s.verbose {
-			_, _ = fmt.Fprintf(k.errw, "Warning: scanner %s is not reported to the platform: %v\n", e.label(), err)
+		if err := reg.RegisterScanner(e.s, e.caps...); err != nil {
+			if k.s.verbose {
+				_, _ = fmt.Fprintf(k.errw, "Warning: scanner %s is not reported to the platform: %v\n", e.label(), err)
+			}
+			k.ReportCheck(core.ConfigCheck{ID: ToolCheckID(e.label(), "registration"), Status: core.CheckError,
+				Code: "register_failed", Params: params, Summary: err.Error()})
 		}
 	}
 	return scanners

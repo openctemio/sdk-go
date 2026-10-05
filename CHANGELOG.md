@@ -6,6 +6,43 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **Preflight checks and the config report** (api RFC-033, config report;
+  OpenCTEM research/26). What a sensor used to print to stderr only is now
+  also a check result with a stable id, a status, a code and typed
+  parameters, delivered to a platform that lists the `config_report`
+  feature (`PUT /api/v2/sensor/config-report`, at most 64 KiB) and named by
+  digest on every heartbeat (`config_report`); the platform asks for it
+  again with the heartbeat action `send_config_report`. Reported by the kit:
+  a skipped tool and why (`tool.<name>.binary`: not_installed, broken,
+  check_error), a tool left out by `SENSOR_TOOLS` or the local policy
+  (`tool.<name>.selection`), a tool not registered (`tool.<name>.registration`),
+  no tool at all (`tools.available`), a state directory that does not
+  persist (`identity.state_persistent`), key renewal off or failed to start
+  (`identity.key_renewal`), scanners inheriting the proxy
+  (`network.scan_proxy_inherit`), OOM protection that failed
+  (`runtime.oom_protect`), legacy `AGENT_*` names (`config.alias_deprecated`),
+  unknown `SENSOR_*`/`OPENCTEM_SDK_*` names with a "did you mean"
+  (`config.env_unknown`, opt-in with `Options.ReportUnknownEnv`), the local
+  policy and its template keys (`policy.local`, `policy.template_keys`), a
+  stopped command poller (`runtime.command_poller`), and an unreadable
+  `SSL_CERT_FILE`/`SSL_CERT_DIR` (`platform.tls`), which Go used to ignore
+  silently (now also a start-up warning). A sensor adds its own with
+  `Kit.ReportCheck`; `Kit.ConfigReport` returns the report. New checks never
+  stop the sensor.
+- **Settings registry** (`pkg/sensorkit/settings`): each setting declared
+  once with its name, type, required, default, secret, description, docs
+  link and validation. The kit registers the SDK's settings
+  (`sensorkit.RegisterSDKSettings`); a sensor passes its own registry in
+  `Options.Settings`. `docs/SETTINGS.md` is generated from it.
+- **Secrets never leave the host.** The config report carries, per declared
+  setting, only whether it is set, its source (`env`, `option`, `default`,
+  `unset`), whether it is a secret and whether its value is valid: there is
+  no value member. Every free text and parameter is scrubbed of the secret
+  settings' values, the API key and URL credentials, control and bidi
+  characters are stripped, and every field is bounded
+  (`core.ConfigReport.Finalize`). The conformance fake serves the feature
+  (`SetConfigReport`, `ConfigReports`).
+
 - **HTTP probe results keep what they learned about the server** (api
   research/22 E5). `core.LiveHost` gains `TLS` (`core.TLSLeaf`: the leaf
   certificate's subject, SANs, issuer, serial, validity and SHA-256
