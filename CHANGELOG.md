@@ -6,6 +6,30 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **Local policy schema v2; v1 frozen** (owner decision D13, api
+  research/25 §3.3). `openctem.io/sensor-policy/v1` never gains a key again
+  (a sensor refuses a key it does not know, so a new v1 key would stop every
+  older sensor). `openctem.io/sensor-policy/v2` reads every v1 key plus
+  `managed: {accept: bool}` (default true; false = the owner refuses
+  platform-managed policy documents, D11; `LocalPolicy.AcceptsManagedPolicy`).
+  The version is read first and the document then decoded strictly against
+  that version's keys: a v1 file with a v2 key is refused. The report gains
+  `schema` (the file's version) and `schemas` (the versions this SDK reads,
+  `core.LocalPolicySchemas`), and the summary `managed_accept`, so the
+  platform generates a recommended policy only in a version the sensor reads.
+- **Local policy reload** (D10). `core.ReloadLocalPolicy(prev, opts)`; on a
+  file that does not load, the result is the previous policy with the kill
+  switch engaged and a warning naming the error (never the previous policy
+  silently). `sensorkit.Kit.SetLocalPolicy` / `ReloadLocalPolicy` apply a
+  policy to the running poller, executor and heartbeat;
+  `Kit.ReloadLocalPolicyOnSIGHUP` reloads on every SIGHUP.
+
+### Changed
+
+- The absent-policy warning says what actually happens: "jobs may enable
+  out-of-band callbacks (interactsh), and custom templates run when
+  SENSOR_TEMPLATE_SIGNING_KEYS is set" (it said both "are allowed").
+
 - **HTTP probe results keep what they learned about the server** (api
   research/22 E5). `core.LiveHost` gains `TLS` (`core.TLSLeaf`: the leaf
   certificate's subject, SANs, issuer, serial, validity and SHA-256
