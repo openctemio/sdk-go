@@ -348,11 +348,7 @@ func New(opts Options) (*Kit, error) {
 
 	if s.commands && !opts.Standalone {
 		// No API key: the sensor is key-bound (paired), or pairs below.
-		key := s.apiKey
-		if key == "" {
-			key = "key-bound"
-		}
-		if err := CheckCredentials(s.apiURL, key, opts.CredentialsHelp); err != nil {
+		if err := CheckDaemonCredentials(s.apiURL, opts.CredentialsHelp); err != nil {
 			return nil, err
 		}
 	}

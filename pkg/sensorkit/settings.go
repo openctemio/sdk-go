@@ -321,6 +321,14 @@ func CheckCredentials(apiURL, apiKey string, help CredentialsHelp) error {
 	return usageError(e)
 }
 
+// CheckDaemonCredentials is CheckCredentials for a sensor that may be
+// key-bound (api RFC-052): only the platform URL is required, since a
+// sensor without an API key uses its paired identity or pairs on first
+// start.
+func CheckDaemonCredentials(apiURL string, help CredentialsHelp) error {
+	return CheckCredentials(apiURL, "key-bound", help)
+}
+
 // ResolveStateDir is where the sensor keeps local state (the API key it
 // renews, the tool cost history): explicit, else SENSOR_STATE_DIR, else
 // /var/lib/openctem/state when writable (the images create it; mount a
