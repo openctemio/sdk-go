@@ -90,6 +90,10 @@ type BaseSensor struct {
 	// localPolicy is the sensor-local policy every heartbeat and manifest
 	// reports (SetLocalPolicy); nil reports nothing.
 	localPolicy atomic.Pointer[LocalPolicy]
+
+	// configReport is the delivery state of the config report
+	// (config_report_sync.go).
+	configReport configReportState
 }
 
 // LocalPolicyPausedMessage is the heartbeat message while the sensor
@@ -837,6 +841,7 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 	a.withLocalPolicy(status)
 	mctx, cancel := context.WithTimeout(ctx, manifestSyncTimeout)
 	a.syncManifest(mctx, status)
+	a.syncConfigReport(mctx, status)
 	cancel()
 	sent := time.Now()
 	status.Control = a.control.stats(sent, sent.Sub(start), next)
@@ -879,6 +884,7 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 	rtt := time.Since(sent)
 	a.doorbell.Handle(hints)
 	a.manifestAsked(hints)
+	a.configReportAsked(hints)
 	if hints.NextHeartbeat > 0 {
 		next = hints.NextHeartbeat
 	}
