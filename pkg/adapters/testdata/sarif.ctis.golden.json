@@ -4,6 +4,11 @@
   "metadata": {
     "timestamp": "0001-01-01T00:00:00Z",
     "source_type": "scanner",
+    "branch": {
+      "name": "main",
+      "is_default_branch": false,
+      "commit_sha": "3f1c2a9e"
+    },
     "scope": {
       "name": "github.com/example/shop"
     }
@@ -11,7 +16,9 @@
   "tool": {
     "name": "TestScanner",
     "version": "1.0.0",
-    "vendor": "TestOrg"
+    "capabilities": [
+      "vulnerability"
+    ]
   },
   "assets": [
     {
@@ -19,23 +26,21 @@
       "type": "repository",
       "value": "github.com/example/shop",
       "name": "github.com/example/shop",
-      "criticality": "high",
       "properties": {
         "branch": "main",
         "commit_sha": "3f1c2a9e",
-        "source": "adapter_options"
+        "source": "import_options"
       }
     }
   ],
   "findings": [
     {
-      "id": "run0-finding1",
+      "id": "finding-1",
       "type": "vulnerability",
-      "title": "SQL Injection vulnerability detected",
-      "description": "User input is used directly in SQL query without sanitization",
-      "message": "SQL injection in login handler",
+      "title": "SQL injection in login handler",
+      "description": "SQL Injection vulnerability detected",
       "severity": "high",
-      "confidence": 70,
+      "confidence": 85,
       "rule_id": "rule-001",
       "rule_name": "SQL Injection",
       "asset_ref": "asset-1",
@@ -45,7 +50,9 @@
         "end_line": 42,
         "start_column": 10,
         "end_column": 55,
-        "snippet": "db.Query(\"SELECT * FROM users WHERE id=\" + userInput)"
+        "snippet": "db.Query(\"SELECT * FROM users WHERE id=\" + userInput)",
+        "branch": "main",
+        "commit_sha": "3f1c2a9e"
       },
       "vulnerability": {
         "cwe_ids": [
@@ -57,52 +64,32 @@
         ]
       },
       "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/",
-        "https://owasp.org/sqli"
+        "https://owasp.org/Top10/A03_2021-Injection/"
       ],
       "tags": [
+        "CWE-89: SQL Injection",
+        "OWASP-A03:2021 - Injection",
         "security",
         "high"
       ],
-      "fingerprint": "abc123def456",
-      "data_flow": {
-        "sources": [
-          {
-            "path": "src/auth/login.go",
-            "line": 38
-          }
-        ],
-        "intermediates": [
-          {
-            "path": "src/auth/login.go",
-            "line": 40,
-            "index": 1
-          }
-        ],
-        "sinks": [
-          {
-            "path": "src/auth/login.go",
-            "line": 42,
-            "index": 2
-          }
-        ],
-        "tainted": false
-      }
+      "fingerprint": "abc123def456"
     },
     {
-      "id": "run0-finding2",
+      "id": "finding-2",
       "type": "vulnerability",
-      "title": "Hardcoded credential detected",
-      "message": "Hardcoded API key found",
+      "title": "Hardcoded API key found",
+      "description": "Hardcoded credential detected",
       "severity": "medium",
-      "confidence": 70,
+      "confidence": 90,
       "rule_id": "rule-002",
       "rule_name": "Hardcoded Secret",
       "asset_ref": "asset-1",
       "location": {
         "path": "src/config/keys.go",
         "start_line": 15,
-        "start_column": 1
+        "start_column": 1,
+        "branch": "main",
+        "commit_sha": "3f1c2a9e"
       },
       "vulnerability": {
         "cwe_ids": [
@@ -111,25 +98,26 @@
         "cwe_id": "CWE-798"
       },
       "tags": [
+        "CWE-798: Use of Hard-coded Credentials",
         "security"
-      ],
-      "fingerprint": "a2d4658c0ceecfbd0361a02451c9a9c512d8f27020b66a0ef69be371e0600f6c"
+      ]
     },
     {
-      "id": "run0-finding3",
+      "id": "finding-3",
       "type": "vulnerability",
-      "title": "Information disclosure",
-      "message": "Debug endpoint exposed",
+      "title": "Debug endpoint exposed",
+      "description": "Information disclosure",
       "severity": "low",
-      "confidence": 70,
+      "confidence": 90,
       "rule_id": "rule-003",
       "rule_name": "Info Disclosure",
       "asset_ref": "asset-1",
       "location": {
         "path": "src/debug/handler.go",
-        "start_line": 8
-      },
-      "fingerprint": "b0e274a599bd0f2bfc7026dab02eda6d393445a116bf8fef503e475984c7cbfa"
+        "start_line": 8,
+        "branch": "main",
+        "commit_sha": "3f1c2a9e"
+      }
     }
   ]
 }

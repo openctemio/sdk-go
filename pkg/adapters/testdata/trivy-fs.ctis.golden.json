@@ -12,7 +12,7 @@
     "name": "trivy",
     "vendor": "Aqua Security",
     "capabilities": [
-      "vulnerability",
+      "sca",
       "misconfiguration",
       "secret"
     ]
@@ -23,17 +23,15 @@
       "type": "repository",
       "value": "github.com/example/shop",
       "name": "github.com/example/shop",
-      "criticality": "high",
       "properties": {
         "branch": "main",
         "commit_sha": "3f1c2a9e",
-        "source": "adapter_options"
+        "source": "import_options"
       }
     }
   ],
   "findings": [
     {
-      "id": "finding-1",
       "type": "vulnerability",
       "title": "golang.org/x/crypto/ssh: Misuse of ServerConfig.PublicKeyCallback may cause authorization bypass",
       "description": "Applications and libraries which misuse the ServerConfig.PublicKeyCallback callback may be susceptible to an authorization bypass.",
@@ -42,9 +40,23 @@
       "asset_ref": "asset-1",
       "vulnerability": {
         "cve_id": "CVE-2024-45337",
+        "cve_ids": [
+          "CVE-2024-45337"
+        ],
         "package": "golang.org/x/crypto",
         "affected_version": "v0.30.0",
-        "fixed_version": "0.31.0"
+        "fixed_version": "0.31.0",
+        "ids": [
+          {
+            "type": "cve",
+            "id": "CVE-2024-45337"
+          }
+        ]
+      },
+      "remediation": {
+        "recommendation": "Upgrade golang.org/x/crypto to 0.31.0",
+        "fix_available": true,
+        "solution_type": "upgrade"
       },
       "references": [
         "https://avd.aquasec.com/nvd/cve-2024-45337"
@@ -53,10 +65,17 @@
         "trivy",
         "go.mod"
       ],
-      "fingerprint": "9e6a6997907f3f9292cad0f4beda5b459f22b5f030f81277a016800d8d1af88a"
+      "fingerprint": "9e6a6997907f3f9292cad0f4beda5b459f22b5f030f81277a016800d8d1af88a",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "CVE-2024-45337",
+        "severity": "CRITICAL"
+      },
+      "source_extra": {
+        "target": "go.mod"
+      }
     },
     {
-      "id": "finding-2",
       "type": "secret",
       "title": "AWS Access Key ID",
       "severity": "critical",
@@ -65,17 +84,26 @@
       "location": {
         "path": "deploy/config.env",
         "start_line": 3,
-        "end_line": 3
+        "end_line": 3,
+        "snippet": "AWS_ACCESS_KEY_ID=********************"
       },
       "secret": {
-        "secret_type": "AWS"
+        "secret_type": "aws_key"
       },
       "tags": [
         "trivy",
         "secret",
         "deploy/config.env"
       ],
-      "fingerprint": "66c64296cec604b03406bae377b3b01ec0636e6d64c0f65b5da4d4255745c054"
+      "fingerprint": "66c64296cec604b03406bae377b3b01ec0636e6d64c0f65b5da4d4255745c054",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "aws-access-key-id",
+        "severity": "CRITICAL"
+      },
+      "source_extra": {
+        "category": "AWS"
+      }
     }
   ]
 }

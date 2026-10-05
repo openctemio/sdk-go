@@ -10,7 +10,7 @@
     "vendor": "ProjectDiscovery",
     "info_url": "https://github.com/projectdiscovery/nuclei",
     "capabilities": [
-      "vulnerability"
+      "dast"
     ]
   },
   "assets": [
@@ -35,7 +35,6 @@
   ],
   "findings": [
     {
-      "id": "finding-1",
       "type": "vulnerability",
       "title": "Apache RCE",
       "description": "Remote code execution in Apache HTTP Server.",
@@ -49,13 +48,22 @@
       },
       "vulnerability": {
         "cve_id": "CVE-2023-1234",
+        "cve_ids": [
+          "CVE-2023-1234"
+        ],
         "cwe_ids": [
           "CWE-78"
         ],
         "cwe_id": "CWE-78",
         "cvss_version": "3.1",
         "cvss_score": 9.8,
-        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        "ids": [
+          {
+            "type": "cve",
+            "id": "CVE-2023-1234"
+          }
+        ]
       },
       "remediation": {
         "recommendation": "Upgrade Apache to version 2.4.58 or later."
@@ -72,10 +80,27 @@
         "nuclei",
         "http"
       ],
-      "fingerprint": "ead2725aa7347fea093b8b952f114242a64cf55aeb95ded7f1555dd5ec897886"
+      "fingerprint": "ead2725aa7347fea093b8b952f114242a64cf55aeb95ded7f1555dd5ec897886",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "cve-2023-1234",
+        "severity": "critical",
+        "raw_ref": "line 1"
+      },
+      "scores": [
+        {
+          "system": "cvss",
+          "version": "3.1",
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+          "value": 9.8,
+          "source": "nuclei-templates"
+        }
+      ],
+      "source_extra": {
+        "matcher_name": "body"
+      }
     },
     {
-      "id": "finding-2",
       "type": "vulnerability",
       "title": "Apache HTTP Server Detection",
       "description": "Apache HTTP Server was detected.",
@@ -93,10 +118,15 @@
         "nuclei",
         "http"
       ],
-      "fingerprint": "da0374e50c79cf07707f83ad0084ee3340fb24f033ab2f1f3ba91d5904549f32"
+      "fingerprint": "da0374e50c79cf07707f83ad0084ee3340fb24f033ab2f1f3ba91d5904549f32",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "tech-detect",
+        "severity": "info",
+        "raw_ref": "line 2"
+      }
     },
     {
-      "id": "finding-3",
       "type": "vulnerability",
       "title": "Expired SSL Certificate",
       "description": "The SSL certificate has expired.",
@@ -115,13 +145,17 @@
         "ssl",
         "tls",
         "expired",
-        "nuclei",
-        "ssl"
+        "nuclei"
       ],
-      "fingerprint": "3219f7ffe6d9eef3175c2f4df98170ea3e8a0ab724ef8f3defe083215522d7b4"
+      "fingerprint": "3219f7ffe6d9eef3175c2f4df98170ea3e8a0ab724ef8f3defe083215522d7b4",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "ssl-expired",
+        "severity": "high",
+        "raw_ref": "line 3"
+      }
     },
     {
-      "id": "finding-4",
       "type": "vulnerability",
       "title": "Grafana Login Panel",
       "message": "Grafana Login Panel at http://10.0.0.7:3000/login",
@@ -138,7 +172,13 @@
         "nuclei",
         "http"
       ],
-      "fingerprint": "c9853fec4857cd75b9ade6680fd55f926ced93a9a40500cdc5795e3ab3b5815e"
+      "fingerprint": "c9853fec4857cd75b9ade6680fd55f926ced93a9a40500cdc5795e3ab3b5815e",
+      "native": {
+        "scheme": "other",
+        "vuln_id": "exposed-panel-grafana",
+        "severity": "info",
+        "raw_ref": "line 4"
+      }
     }
   ]
 }

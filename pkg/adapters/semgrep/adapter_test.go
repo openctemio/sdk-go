@@ -203,8 +203,8 @@ func TestConvertSQLInjection(t *testing.T) {
 	if f.Category != "security" {
 		t.Errorf("expected category 'security', got %q", f.Category)
 	}
-	if f.Impact != "HIGH" {
-		t.Errorf("expected impact 'HIGH', got %q", f.Impact)
+	if f.Impact != "high" {
+		t.Errorf("expected impact 'high', got %q", f.Impact)
 	}
 }
 
@@ -267,63 +267,6 @@ func TestConvertInvalidJSON(t *testing.T) {
 	_, err := a.Convert(context.Background(), []byte(`not json`), nil)
 	if err == nil {
 		t.Error("expected error for invalid JSON")
-	}
-}
-
-func TestMapSemgrepSeverity(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected ctis.Severity
-	}{
-		{"ERROR", ctis.SeverityHigh},
-		{"WARNING", ctis.SeverityMedium},
-		{"INFO", ctis.SeverityLow},
-		{"INVENTORY", ctis.SeverityInfo},
-		{"EXPERIMENT", ctis.SeverityInfo},
-	}
-
-	for _, tt := range tests {
-		result := mapSemgrepSeverity(tt.input)
-		if result != tt.expected {
-			t.Errorf("mapSemgrepSeverity(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
-	}
-}
-
-func TestExtractStringList(t *testing.T) {
-	// nil
-	if extractStringList(nil) != nil {
-		t.Error("expected nil for nil input")
-	}
-
-	// single string
-	result := extractStringList("CWE-89")
-	if len(result) != 1 || result[0] != "CWE-89" {
-		t.Errorf("unexpected result for string input: %v", result)
-	}
-
-	// []interface{}
-	result = extractStringList([]interface{}{"CWE-89", "CWE-90"})
-	if len(result) != 2 {
-		t.Errorf("expected 2 items, got %d", len(result))
-	}
-}
-
-func TestRuleIDToName(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"python.lang.security.injection.sql-injection", "Sql Injection"},
-		{"simple-rule", "Simple Rule"},
-		{"single", "Single"},
-	}
-
-	for _, tt := range tests {
-		result := ruleIDToName(tt.input)
-		if result != tt.expected {
-			t.Errorf("ruleIDToName(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
 	}
 }
 

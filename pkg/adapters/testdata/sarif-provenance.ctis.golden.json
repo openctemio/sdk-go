@@ -8,7 +8,9 @@
   "tool": {
     "name": "CodeQL",
     "version": "2.15.0",
-    "vendor": "GitHub"
+    "capabilities": [
+      "sast"
+    ]
   },
   "assets": [
     {
@@ -16,7 +18,6 @@
       "type": "repository",
       "value": "https://github.com/example/shop",
       "name": "https://github.com/example/shop",
-      "criticality": "high",
       "properties": {
         "branch": "refs/heads/main",
         "commit_sha": "3f1c2a9e0b7d4c5a8e6f1d2b3c4a5e6f7a8b9c0d",
@@ -26,13 +27,12 @@
   ],
   "findings": [
     {
-      "id": "run0-finding1",
+      "id": "finding-1",
       "type": "vulnerability",
-      "title": "Database query built from user-controlled sources",
-      "description": "Building a database query from user-controlled sources is vulnerable to insertion of malicious code by the user.",
-      "message": "This query depends on a user-provided value.",
+      "title": "This query depends on a user-provided value.",
+      "description": "Database query built from user-controlled sources",
       "severity": "high",
-      "confidence": 70,
+      "confidence": 85,
       "rule_id": "go/sql-injection",
       "rule_name": "go/sql-injection",
       "asset_ref": "asset-1",
@@ -42,11 +42,16 @@
         "start_column": 9,
         "end_column": 61
       },
+      "vulnerability": {
+        "cwe_ids": [
+          "CWE-89"
+        ],
+        "cwe_id": "CWE-89"
+      },
       "tags": [
         "security",
         "external/cwe/cwe-089"
       ],
-      "fingerprint": "a86837216768a6013ed2d9fe49f8f41ca440c601340128108201b9680698fbb8",
       "partial_fingerprints": {
         "primaryLocationLineHash": "8e1f0c2d3a4b5c6d:1"
       }

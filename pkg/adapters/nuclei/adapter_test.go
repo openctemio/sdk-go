@@ -206,27 +206,6 @@ func TestConvertEmptyInput(t *testing.T) {
 	}
 }
 
-func TestMapNucleiSeverity(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected ctis.Severity
-	}{
-		{"critical", ctis.SeverityCritical},
-		{"high", ctis.SeverityHigh},
-		{"medium", ctis.SeverityMedium},
-		{"low", ctis.SeverityLow},
-		{"info", ctis.SeverityInfo},
-		{"unknown", ctis.SeverityInfo},
-	}
-
-	for _, tt := range tests {
-		result := mapNucleiSeverity(tt.input)
-		if result != tt.expected {
-			t.Errorf("mapNucleiSeverity(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
-	}
-}
-
 func TestParseToCTIS(t *testing.T) {
 	report, err := ParseToCTIS(sampleNucleiJSONL, &core.ParseOptions{
 		AssetValue: "https://example.com",

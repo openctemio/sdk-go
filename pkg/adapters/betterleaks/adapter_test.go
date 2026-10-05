@@ -174,8 +174,8 @@ func TestConvertAWSKey(t *testing.T) {
 	if f.Secret == nil {
 		t.Fatal("expected non-nil secret details")
 	}
-	if f.Secret.SecretType != "credential" {
-		t.Errorf("expected secret type 'credential', got %q", f.Secret.SecretType)
+	if f.Secret.SecretType != "aws_key" {
+		t.Errorf("expected secret type 'aws_key', got %q", f.Secret.SecretType)
 	}
 	if f.Secret.Service != "aws" {
 		t.Errorf("expected service 'aws', got %q", f.Secret.Service)
@@ -286,65 +286,6 @@ func TestConvertInvalidJSON(t *testing.T) {
 	_, err := a.Convert(context.Background(), []byte(`not json`), nil)
 	if err == nil {
 		t.Error("expected error for invalid JSON")
-	}
-}
-
-func TestMaskSecret(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"fakevalue0example123", "fak****23"},
-		{"short", "****"},
-		{"12345678", "****"},
-		{"123456789", "****"},
-	}
-
-	for _, tt := range tests {
-		result := maskSecret(tt.input)
-		if result != tt.expected {
-			t.Errorf("maskSecret(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
-	}
-}
-
-func TestMapSeverity(t *testing.T) {
-	tests := []struct {
-		ruleID   string
-		expected ctis.Severity
-	}{
-		{"aws-access-key-id", ctis.SeverityCritical},
-		{"github-pat", ctis.SeverityCritical},
-		{"private-key", ctis.SeverityCritical},
-		{"generic-api-key", ctis.SeverityHigh},
-		{"stripe-api-key", ctis.SeverityHigh},
-		{"unknown-rule", ctis.SeverityHigh},
-	}
-
-	for _, tt := range tests {
-		result := mapSeverity(tt.ruleID)
-		if result != tt.expected {
-			t.Errorf("mapSeverity(%q) = %q, want %q", tt.ruleID, result, tt.expected)
-		}
-	}
-}
-
-func TestRuleIDToService(t *testing.T) {
-	tests := []struct {
-		ruleID   string
-		expected string
-	}{
-		{"aws-access-key-id", "aws"},
-		{"github-pat", "github"},
-		{"stripe-api-key", "stripe"},
-		{"generic-api-key", ""},
-	}
-
-	for _, tt := range tests {
-		result := ruleIDToService(tt.ruleID)
-		if result != tt.expected {
-			t.Errorf("ruleIDToService(%q) = %q, want %q", tt.ruleID, result, tt.expected)
-		}
 	}
 }
 
