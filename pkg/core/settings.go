@@ -606,6 +606,20 @@ func (t *ToolSettings) SchemaVersion() int {
 	return t.version
 }
 
+// Values returns a copy of the effective values by key (numbers as
+// json.Number), for a tool that takes its settings as one document (the
+// tool contract's task configuration). nil for nil settings.
+func (t *ToolSettings) Values() map[string]any {
+	if t == nil {
+		return nil
+	}
+	out := make(map[string]any, len(t.values))
+	for k, v := range t.values {
+		out[k] = v
+	}
+	return out
+}
+
 func (t *ToolSettings) get(key string) (any, bool) {
 	if t == nil {
 		return nil, false

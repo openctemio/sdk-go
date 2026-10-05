@@ -100,6 +100,18 @@ type Options struct {
 	// it the sensor warns and runs unprotected. Scanners never inherit the
 	// protection. true wins over the environment.
 	ProtectFromOOM bool
+	// AdapterDirs are directories of tools the operator installed, each a
+	// tool.yaml with its program (adapter protocol v1 or the exec profile):
+	// <dir>/tool.yaml and <dir>/<name>/tool.yaml. nil reads
+	// SENSOR_ADAPTER_DIRS. A manifest is loaded only from files no other
+	// user can change and only with a run section; every task runs out of
+	// process like a compiled-in tool (see AddTool).
+	AdapterDirs []string
+	// ToolCredentials returns the credentials the operator stored for a
+	// contract tool, by credential name (nil: none). Only those the tool's
+	// manifest declares are delivered, inside the task's run message,
+	// never in the environment, argv or a file another task can read.
+	ToolCredentials func(tool string) map[string]string
 	// Tools is an operator allowlist of tool names (SENSOR_TOOLS): scanners
 	// whose name (or As name) is not in it are neither run nor reported. nil
 	// reads SENSOR_TOOLS; an empty non-nil slice sets no allowlist.
@@ -298,6 +310,8 @@ type Kit struct {
 	localMu  sync.Mutex
 	executor atomic.Pointer[core.DefaultCommandExecutor]
 	poller   atomic.Pointer[core.CommandPoller]
+
+	kitTools
 }
 
 // New resolves the settings, checks them, connects the platform client and
@@ -725,6 +739,9 @@ func (k *Kit) Run(ctx context.Context) error {
 		s.SetAssetResolver(k.opts.AssetResolver)
 	}
 
+	// Tools the operator installed (adapter directories), after the
+	// sensor's own: a name the sensor provides is never replaced.
+	k.loadAdapterTools()
 	// The tool inventory: every allowed scanner, installed or not, in the
 	// order added; the heartbeat probes them.
 	reg := s.Tools()
