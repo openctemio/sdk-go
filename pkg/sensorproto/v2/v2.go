@@ -10,6 +10,8 @@
 // Import it with an alias, as the api does:
 //
 //	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
+//
+// Stability: Stable (docs/STABILITY.md); Frozen once protocol v3 ships.
 package v2
 
 import (

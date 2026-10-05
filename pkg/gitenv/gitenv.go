@@ -1,6 +1,9 @@
 // Package gitenv provides auto-detection and abstraction for CI/CD environments.
 // It detects GitHub Actions, GitLab CI, and other CI systems from environment variables
 // and provides a unified interface for accessing repository and commit information.
+//
+// Stability: Internal-bound (docs/STABILITY.md): CI environment detection
+// moves to the sensor (runner mode). Do not import it from a new sensor.
 package gitenv
 
 import (

@@ -33,6 +33,10 @@
 // jitter behind a circuit breaker; Wake (the platform answered a heartbeat
 // again) drains at once; Unauthorized pauses all delivery until Wake or
 // Resume.
+//
+// Stability: Internal-bound (docs/STABILITY.md): public today because other
+// public packages use it; it moves under internal/ before v1.0.0. Do not
+// import it from a sensor.
 package outbox
 
 import (

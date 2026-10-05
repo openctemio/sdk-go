@@ -4,6 +4,10 @@
 // IMPORTANT: This package is shared between sdk and api.
 // Any changes to fingerprint algorithms must be backward compatible
 // or coordinated across both projects.
+//
+// Stability: Internal-bound (docs/STABILITY.md): public today because other
+// public packages use it; it moves under internal/ before v1.0.0. Do not
+// import it from a sensor.
 package fingerprint
 
 import (

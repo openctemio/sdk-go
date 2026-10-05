@@ -34,4 +34,7 @@
 // AddParser, HandleCommand and UseCommandMiddleware. pkg/core stays
 // available for anything the kit does not cover (Kit.Sensor, Kit.Tools,
 // Kit.Client).
+//
+// Stability: Stable (docs/STABILITY.md); runner mode (CIRun, Kit.RunOnce) is
+// Beta.
 package sensorkit

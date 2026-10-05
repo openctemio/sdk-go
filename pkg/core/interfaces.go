@@ -1,5 +1,7 @@
 // Package core provides the core interfaces and base implementations for the OpenCTEM Scanner SDK.
 // Tenants can implement these interfaces to create custom scanners, collectors, and sensors.
+//
+// Stability: Stable (docs/STABILITY.md).
 package core
 
 import (

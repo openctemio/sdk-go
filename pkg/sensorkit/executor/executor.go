@@ -30,6 +30,8 @@
 // Mode "auto" (the default for a sensor) enforces what the kernel and the
 // container allow and reports what it could not; "required" refuses to run
 // tasks without every control; "off" runs tasks as plain child processes.
+//
+// Stability: Beta (docs/STABILITY.md).
 package executor
 
 import (

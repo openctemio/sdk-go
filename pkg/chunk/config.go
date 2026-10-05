@@ -28,6 +28,10 @@
 //	}
 //
 //	manager.Start(ctx) // Start background upload
+//
+// Stability: Internal-bound (docs/STABILITY.md): public today because other
+// public packages use it; it moves under internal/ before v1.0.0. Do not
+// import it from a sensor.
 package chunk
 
 import (

@@ -1,4 +1,6 @@
 // Package sdk identifies this SDK: its name and release version.
+//
+// Stability: Stable (docs/STABILITY.md).
 package sdk
 
 // Name is the SDK's product name, as sensors report it to the platform

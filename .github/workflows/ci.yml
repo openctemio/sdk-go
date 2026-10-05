@@ -118,10 +118,12 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
 
-  # Exported-API compatibility (api RFC-029 §8.6): a sensor built against the
-  # last release must build against this change. Any incompatible change to an
-  # exported identifier fails unless the PR is labelled breaking-change (and
-  # a changelog.d/ fragment says how to upgrade under "### Upgrade notes").
+  # Exported-API compatibility (api RFC-029 §8.6), weighed by stability tier
+  # (docs/STABILITY.md; every package comment states its tier): an
+  # incompatible change to a Stable or Frozen package fails unless the PR is
+  # labelled breaking-change (and a changelog.d/ fragment says how to upgrade
+  # under "### Upgrade notes"); a Beta change is a warning; Internal-bound and
+  # Deprecated packages are ignored. A package without a tier fails.
   api-compat:
     runs-on: ubuntu-latest
     steps:
@@ -138,18 +140,26 @@ jobs:
       - name: Install apidiff
         run: go install golang.org/x/exp/cmd/apidiff@v0.0.0-20260908205506-85c1c2202aba
 
+      - name: Tests of the compatibility check
+        run: bash scripts/test-api-compat.sh
+
       # Gate on THIS change only: compare with the PR base (origin/<base>), so an
       # intended break that already merged with its breaking-change label does
-      # not fail every later PR until the next release. Pushes still compare
-      # with the latest release.
+      # not fail every later PR until the next release. A push to main compares
+      # with the latest release as a report: every change on main passed this
+      # gate as a PR, so its breaks are declared (warnings, not a red main).
       - name: Compare with the base branch (PR) or the latest release (push)
         if: ${{ !contains(github.event.pull_request.labels.*.name, 'breaking-change') }}
+        env:
+          API_COMPAT_BREAKING_DECLARED: ${{ github.event_name == 'push' && '1' || '0' }}
         run: scripts/check-api-compat.sh ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
 
-      - name: Compare with the latest release (breaking change declared)
+      - name: Compare with the base branch (breaking change declared)
         if: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') }}
+        env:
+          API_COMPAT_BREAKING_DECLARED: '1'
         run: |
-          scripts/check-api-compat.sh ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }} || echo "::warning::incompatible API change declared with the breaking-change label"
+          scripts/check-api-compat.sh ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
           grep -qs '^### Upgrade notes' changelog.d/*.md || { echo "::error::breaking-change needs a changelog.d/<slug>.md fragment with an '### Upgrade notes' section"; exit 1; }
 
   # The sensor (github.com/openctemio/sensor, main) must build against this
