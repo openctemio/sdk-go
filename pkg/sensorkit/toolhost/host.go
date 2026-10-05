@@ -16,6 +16,11 @@
 //   - a CLI that writes CTIS or SARIF, with no code (RunManifest,
 //     run.profile exec).
 //
+// Before anything starts, every task is admitted (Admit): the manifest's
+// permissions intersected with the sensor-local policy (Host.Policy). A
+// target the policy refuses is removed from the task and reported skipped
+// (refused_by_policy); the tool never receives it.
+//
 // Whatever the tool does on its side, the host checks every message and
 // record again: protocol limits (1 MiB lines, an invalid-message budget,
 // the idle timeout and the task timeout), CTIS validity, the manifest's
@@ -87,6 +92,9 @@ type Host struct {
 	// Logger receives the tools' log lines, redacted (nil: kept in the
 	// Outcome only).
 	Logger *slog.Logger
+	// Policy admits every task before it starts (see Admit): the
+	// sensor-local policy. nil admits by the manifest alone.
+	Policy Policy
 }
 
 // RunOptions adjust one task.
@@ -111,6 +119,9 @@ type RunOptions struct {
 	// Dir is the manifest's directory: a relative program in run.argv is
 	// resolved against it.
 	Dir string
+	// Mode is the sensor mode the task runs in (daemon or runner; "": not
+	// checked against the manifest's modes).
+	Mode tool.Mode
 }
 
 // TargetOutcome is one target's outcome.
@@ -219,11 +230,17 @@ type prepared struct {
 	secrets []string
 	workdir string
 	asm     *toolrt.Assembler
+	// refused are the targets the policy refused (never sent to the tool).
+	refused []TargetOutcome
+	// timeout is the task's run time after admission.
+	timeout time.Duration
 }
 
-// prepare checks the manifest, the task (targets, config) and the
-// credentials, and makes the task directory.
-func (h *Host) prepare(m tool.Manifest, task tool.Task, o RunOptions) (*prepared, *tool.Error, error) {
+// prepare checks the manifest and the task (targets, config), admits it
+// against the policy, checks the credentials and makes the task directory.
+// Nothing exists on disk and no credential is read before the task is
+// admitted.
+func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o RunOptions) (*prepared, *tool.Error, error) {
 	if err := m.Validate(); err != nil {
 		return nil, nil, err
 	}
@@ -238,7 +255,12 @@ func (h *Host) prepare(m tool.Manifest, task tool.Task, o RunOptions) (*prepared
 		return nil, ierr, nil
 	}
 	task.Config = cfg
-	p := &prepared{m: m, task: task}
+	adm, ierr := Admit(ctx, m, task, h.Policy, o.Mode)
+	if ierr != nil {
+		return nil, ierr, nil
+	}
+	task = adm.Task
+	p := &prepared{m: m, task: task, refused: adm.Refused, timeout: adm.Timeout}
 	for _, req := range m.Permissions.Credentials {
 		v, ok := o.Credentials[req.Name]
 		if !ok || v == "" {
@@ -375,7 +397,7 @@ type session struct {
 // run runs an adapter-protocol task.
 func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOptions, argv []string, execution string) (*Outcome, error) {
 	start := time.Now()
-	p, ierr, err := h.prepare(m, task, o)
+	p, ierr, err := h.prepare(ctx, m, task, o)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +432,8 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	}
 	defer func() { _ = t.Cleanup() }()
 
-	timeout, idle, _, maxRecords := m.Resources.Limits()
+	_, idle, _, maxRecords := m.Resources.Limits()
+	timeout := p.timeout
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if !task.Deadline.IsZero() {
@@ -798,7 +821,20 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 		}
 		out.Targets = append(out.Targets, to)
 	}
+	p.addRefused(out)
 	s.h.stamp(out, p.m, p.task, execution)
+}
+
+// addRefused reports the targets the policy refused; a task that ran on
+// the rest is at best partial.
+func (p *prepared) addRefused(out *Outcome) {
+	if len(p.refused) == 0 {
+		return
+	}
+	out.Targets = append(out.Targets, p.refused...)
+	if out.Status == tool.StatusOK {
+		out.Status = tool.StatusPartial
+	}
 }
 
 func (s *session) invalidMessages() int { return max(s.invalid, 0) }
