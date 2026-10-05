@@ -74,10 +74,8 @@ func applyLandlock(deny, write []string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	for _, p := range readable {
-		if err := addPathRule(rs, p, llReadRights&handled); err != nil {
-			return 0, err
-		}
+	if err := addReadable(rs, readable, llReadRights&handled); err != nil {
+		return 0, err
 	}
 	for _, p := range write {
 		if under(p, deny) {
@@ -100,6 +98,18 @@ func applyLandlock(deny, write []string) (int, error) {
 
 // addPathRule allows access beneath path (for a file, the file rights in
 // access only).
+// addReadable grants read on each path. A path that disappeared since the
+// launcher listed its directory (a sibling task's temporary file in /tmp)
+// is skipped: it grants nothing, and must not fail the task.
+func addReadable(rs int, paths []string, access uint64) error {
+	for _, p := range paths {
+		if err := addPathRule(rs, p, access); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
 func addPathRule(rs int, path string, access uint64) error {
 	fd, err := unix.Open(path, unix.O_PATH|unix.O_CLOEXEC, 0)
 	if err != nil {
