@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openctemio/sdk-go/pkg/audit"
+	"github.com/openctemio/sdk-go/pkg/audit" //nolint:staticcheck // the removed platform-mode client; removed with it
 	"github.com/openctemio/sdk-go/pkg/chunk"
 	"github.com/openctemio/sdk-go/pkg/ctis"
-	"github.com/openctemio/sdk-go/pkg/pipeline"
+	"github.com/openctemio/sdk-go/pkg/pipeline" //nolint:staticcheck // the removed platform-mode client; removed with it
 	"github.com/openctemio/sdk-go/pkg/resource"
 )
 
