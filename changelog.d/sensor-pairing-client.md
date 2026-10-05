@@ -13,7 +13,9 @@
 - The kit: a sensor started without `API_KEY` uses its paired identity, or
   pairs on first start and then runs (`Options.NoAutoPair` stops it
   instead). `SENSOR_CA_FINGERPRINT` pins the platform's TLS chain;
-  `SENSOR_PLATFORM_KEY` pins the platform's pairing key.
+  `SENSOR_PLATFORM_KEY` pins the platform's pairing key. With a CA pin,
+  `API_URL` must use a host name; an IP address is warned about in the
+  config report (`platform.ca_pin_host`).
 
 ### Security
 

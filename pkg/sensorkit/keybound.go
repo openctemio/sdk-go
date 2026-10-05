@@ -10,15 +10,44 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
 	"github.com/openctemio/sdk-go/pkg/sensorsig"
 )
+
+// checkCAPinHost warns when SENSOR_CA_FINGERPRINT is set but API_URL names
+// the platform by an IP address: a pinned connection needs a host name to
+// check the certificate against (httpsec.ErrPinnedCANoServerName), so every
+// platform request would fail.
+func (k *Kit) checkCAPinHost() {
+	if len(httpsec.APIPinnedCA()) == 0 || !PinnedURLHasIPHost(k.s.apiURL) {
+		return
+	}
+	msg := EnvCAFingerprint + " is set but " + EnvAPIURL + " uses an IP address; a pinned platform CA needs a host name " +
+		"(the name in the platform certificate), so platform requests will fail"
+	_, _ = fmt.Fprintf(k.errw, "WARNING: %s\n", msg)
+	k.ReportCheck(core.ConfigCheck{ID: CheckCAPinHost, Status: core.CheckWarn, Code: "ip_url_with_pin",
+		Params: map[string]core.ConfigParam{"name": core.ParamName(EnvAPIURL)}, Summary: msg})
+}
+
+// PinnedURLHasIPHost reports whether rawURL names its host by an IP
+// address (which a pinned platform CA cannot be checked against).
+func PinnedURLHasIPHost(rawURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	_, err = netip.ParseAddr(u.Hostname())
+	return err == nil
+}
 
 // validCAFingerprint validates SENSOR_CA_FINGERPRINT.
 func validCAFingerprint(v string) error {

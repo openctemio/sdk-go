@@ -13,7 +13,7 @@ Setup & health checklist shows each one's presence, never its value.
 | [`SENSOR_NAME`](https://docs.openctem.io/sensor/settings#SENSOR_NAME) | string |  | `sensor-<hostname>` |  | The sensor's name on the platform. |
 | [`SENSOR_PROTOCOL`](https://docs.openctem.io/sensor/settings#SENSOR_PROTOCOL) | enum |  | `auto` |  | Sensor protocol. |
 | [`SENSOR_CA_CERT_FILE`](https://docs.openctem.io/sensor/settings#SENSOR_CA_CERT_FILE) | path |  |  |  | PEM file with the platform's private CA (or a TLS-inspecting proxy's CA). |
-| [`SENSOR_CA_FINGERPRINT`](https://docs.openctem.io/sensor/settings#SENSOR_CA_FINGERPRINT) | string |  |  |  | SHA-256 fingerprint of the platform's CA certificate (from the install snippet); pins platform TLS to it. |
+| [`SENSOR_CA_FINGERPRINT`](https://docs.openctem.io/sensor/settings#SENSOR_CA_FINGERPRINT) | string |  |  |  | SHA-256 fingerprint of the platform's CA certificate (from the install snippet); pins platform TLS to it. API_URL must then use a host name, not an IP address. |
 | [`SENSOR_PLATFORM_KEY`](https://docs.openctem.io/sensor/settings#SENSOR_PLATFORM_KEY) | string |  |  |  | Thumbprint of the platform's pairing key (from the install snippet); pairing refuses another key. |
 | [`SSL_CERT_FILE`](https://docs.openctem.io/sensor/settings#SSL_CERT_FILE) | path |  |  |  | System trust store file override (read by the Go runtime and the scanners). |
 | [`SSL_CERT_DIR`](https://docs.openctem.io/sensor/settings#SSL_CERT_DIR) | path |  |  |  | System trust store directory override. |

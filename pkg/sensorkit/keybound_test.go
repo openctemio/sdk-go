@@ -86,7 +86,7 @@ func TestNew_CAFingerprint(t *testing.T) {
 	f := conformance.NewFakePlatform(true)
 	t.Cleanup(f.Close)
 	t.Cleanup(func() { httpsec.SetAPIPinnedCA(nil) })
-	opts, _, _ := baseOptions(t, f)
+	opts, _, errw := baseOptions(t, f)
 	t.Setenv(EnvCAFingerprint, "not-hex")
 	if _, err := New(opts); err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), EnvCAFingerprint) {
 		t.Fatalf("bad fingerprint: %v", err)
@@ -99,5 +99,13 @@ func TestNew_CAFingerprint(t *testing.T) {
 	k.closeClient()
 	if len(httpsec.APIPinnedCA()) != 32 {
 		t.Fatal("the pin was not set")
+	}
+	// The fake platform listens on 127.0.0.1: an IP URL with a pin is
+	// warned about (the pinned connection needs a host name).
+	if !strings.Contains(errw.String(), "uses an IP address") {
+		t.Fatalf("no IP-URL warning: %s", errw.String())
+	}
+	if PinnedURLHasIPHost("https://platform.example") || !PinnedURLHasIPHost("https://[::1]:8443") {
+		t.Fatal("PinnedURLHasIPHost")
 	}
 }

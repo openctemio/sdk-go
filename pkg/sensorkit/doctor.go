@@ -35,6 +35,7 @@ const (
 	CheckStatePersistent      = "identity.state_persistent"
 	CheckKeyRenewal           = "identity.key_renewal"
 	CheckScanProxyInherit     = "network.scan_proxy_inherit"
+	CheckCAPinHost            = "platform.ca_pin_host"
 	CheckOOMProtect           = "runtime.oom_protect"
 	CheckAliasDeprecated      = "config.alias_deprecated"
 	CheckEnvUnknown           = "config.env_unknown"
@@ -227,7 +228,7 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 		settingsreg.Setting{Name: EnvCACertFile, Type: settingsreg.Path, Group: "platform", Validate: readableFile,
 			Description: "PEM file with the platform's private CA (or a TLS-inspecting proxy's CA)."},
 		settingsreg.Setting{Name: EnvCAFingerprint, Type: settingsreg.String, Group: "platform", Validate: validCAFingerprint,
-			Description: "SHA-256 fingerprint of the platform's CA certificate (from the install snippet); pins platform TLS to it."},
+			Description: "SHA-256 fingerprint of the platform's CA certificate (from the install snippet); pins platform TLS to it. API_URL must then use a host name, not an IP address."},
 		settingsreg.Setting{Name: EnvPlatformKey, Type: settingsreg.String, Group: "identity",
 			Description: "Thumbprint of the platform's pairing key (from the install snippet); pairing refuses another key."},
 		settingsreg.Setting{Name: EnvSSLCertFile, Type: settingsreg.Path, Group: "platform", Validate: readableFile,
@@ -330,6 +331,7 @@ func readableDir(v string) error {
 // the local policy.
 func (k *Kit) preflightNew(proxies Proxies, proxyOpts ProxyOptions) {
 	k.checkTrustFiles()
+	k.checkCAPinHost()
 	for _, rv := range legacyv1.SensorRenamedEnv {
 		r := [2]string{rv.Old, rv.New}
 		if _, ok := os.LookupEnv(r[0]); ok {
