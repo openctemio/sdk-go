@@ -12,4 +12,4 @@
 
 ### Fixed: guarded clients try every validated address
 
-- The SSRF-guarded dialer resolved every address of a host, checked them all, and then dialled only the first. A platform or target name with an IPv6 and an IPv4 address failed to connect when only one family was reachable. It now tries the validated addresses in resolver order; no unchecked address is ever dialled.
+- The SSRF-guarded dialer resolved every address of a host, checked them all, and then dialed only the first. A platform or target name with an IPv6 and an IPv4 address failed to connect when only one family was reachable. It now tries the validated addresses in resolver order; no unchecked address is ever dialed.
