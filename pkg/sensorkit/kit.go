@@ -159,6 +159,18 @@ type Options struct {
 	// WorkDir is where scans write; its free disk is part of the slot
 	// sizing (default StateDir).
 	WorkDir string
+	// Sandbox is how every tool run is confined (pkg/executor): "off",
+	// "auto" (the default: every control the host supports, the rest
+	// reported) or "required" (New fails unless all are enforced). Empty:
+	// SENSOR_SANDBOX, else auto. The sandbox needs the program to call
+	// executor.RunLauncherIfRequested first in main; without it, auto runs
+	// tools unconfined and says so.
+	Sandbox string
+	// ProtectedPaths are more paths no tool may read or write (the
+	// sensor's own configuration files, connector credentials). The kit
+	// protects its credentials file, outbox, outbox key and local policy
+	// itself.
+	ProtectedPaths []string
 	// AssetResolver names the asset a scan's findings belong to when the
 	// parser does not; CommandAssetResolver replaces it for dispatched scans.
 	AssetResolver        core.AssetResolver
@@ -368,6 +380,13 @@ func New(opts Options) (*Kit, error) {
 		if s.verbose {
 			_, _ = fmt.Fprintf(k.out, "  Sensor protocol: %s\n", protocol)
 		}
+	}
+
+	// Every tool run is confined (pkg/executor) and cannot read the key,
+	// the outbox or the policy.
+	if err := k.setupSandbox(); err != nil {
+		k.closeClient()
+		return nil, err
 	}
 
 	if s.drainGrace, err = ResolveDrainGrace(); err != nil {
