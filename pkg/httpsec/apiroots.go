@@ -57,8 +57,11 @@ func LoadCAFile(path string) (*x509.CertPool, error) {
 var errNoCertificate = errors.New("no PEM certificate in the file")
 
 // apiTLSConfig is the TLS configuration of a new API client: nil (Go's
-// defaults) unless SetAPIRootCAs set a pool.
+// defaults) unless SetAPIRootCAs set a pool; a pin (SetAPIPinnedCA) wins.
 func apiTLSConfig() *tls.Config {
+	if pin := APIPinnedCA(); len(pin) > 0 {
+		return pinnedTLSConfig(pin)
+	}
 	pool := APIRootCAs()
 	if pool == nil {
 		return nil
