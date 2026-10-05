@@ -1,0 +1,435 @@
+{
+  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "assets": [
+    {
+      "id": "host-db01.example.com",
+      "identity_hints": {
+        "agent_id": "a1b2c3d4-0000-4000-8000-000000000020",
+        "cloud_resource_id": "i-0fedcba9876543210",
+        "fqdn": "db01.example.com",
+        "netbios_name": "DB01",
+        "os_cpe": "cpe:/o:canonical:ubuntu_linux:22.04::~~lts~~~"
+      },
+      "name": "db01.example.com",
+      "properties": {
+        "cloud_provider": "AWS",
+        "cloud_service": "VM",
+        "dns_domain": "example.com",
+        "dns_hostname": "db01",
+        "fqdn": "db01.example.com",
+        "ip_address": "192.0.2.20",
+        "ipv6_address": "2001:db8::20",
+        "last_pc_scanned_at": "2025-10-01T00:00:00Z",
+        "last_scan_at": "2025-10-05T07:00:00Z",
+        "last_vm_auth_scanned_at": "2025-10-05T07:00:00Z",
+        "last_vm_scan_duration_s": "812",
+        "last_vm_scanned_at": "2025-10-05T07:00:00Z",
+        "network_id": "0",
+        "os": "Ubuntu 22.04.4 LTS",
+        "qualys_asset_criticality_score": "4",
+        "qualys_asset_id": "2000001",
+        "qualys_asset_risk_score": "620",
+        "qualys_host_id": "100001",
+        "qualys_trurisk_score": "640",
+        "tracking_method": "AGENT"
+      },
+      "tags": [
+        "Production",
+        "Databases"
+      ],
+      "type": "host",
+      "value": "db01.example.com"
+    },
+    {
+      "id": "host-198.51.100.21",
+      "name": "198.51.100.21",
+      "properties": {
+        "ip_address": "198.51.100.21",
+        "os": "Windows Server 2019",
+        "qualys_host_id": "100002",
+        "tracking_method": "IP"
+      },
+      "type": "ip_address",
+      "value": "198.51.100.21"
+    }
+  ],
+  "findings": [
+    {
+      "asset_ref": "host-db01.example.com",
+      "category": "General remote services",
+      "description": "The SSH transport protocol with some extensions allows a man-in-the-middle to drop messages.\nThe remote host negotiates an affected cipher.",
+      "evidence": "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.4\nLogin: [redacted]\npassword = [redacted]",
+      "native": {
+        "detection_type": "confirmed",
+        "family": "General remote services",
+        "instance_id": "9000000001",
+        "raw_ref": "HOST[db01.example.com]/DETECTION[QID=38909,port=22,protocol=tcp]",
+        "scheme": "qualys",
+        "severity": "4",
+        "status": "Re-Opened",
+        "vuln_id": "38909"
+      },
+      "network": {
+        "host": "db01.example.com",
+        "port": 22,
+        "protocol": "tcp",
+        "service": "ssh"
+      },
+      "references": [
+        "https://nvd.nist.gov/vuln/detail/CVE-2023-48795",
+        "https://www.example.com/bid/108000",
+        "https://www.example.com/exploits/0001"
+      ],
+      "remediation": {
+        "advisories": [
+          {
+            "id": "USN-6560-1",
+            "source": "vendor",
+            "url": "https://ubuntu.com/security/notices/USN-6560-1"
+          }
+        ],
+        "fix_available": true,
+        "patch_published_at": "2023-12-18T00:00:00Z",
+        "recommendation": "Upgrade OpenSSH.\nRefer to USN-6560-1.",
+        "solution_type": "patch"
+      },
+      "rule_id": "38909",
+      "rule_name": "SSH Prefix Truncation Vulnerability (Terrapin)",
+      "scores": [
+        {
+          "label": "high",
+          "source": "qualys",
+          "system": "vendor",
+          "value": 72
+        },
+        {
+          "source": "nvd",
+          "system": "cvss",
+          "value": 5.9,
+          "vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N",
+          "version": "3.1"
+        },
+        {
+          "source": "service",
+          "system": "cvss",
+          "value": 4.3,
+          "vector": "AV:N/AC:M/Au:N/C:N/I:P/A:N",
+          "version": "2.0"
+        }
+      ],
+      "severity": "high",
+      "source_extra": {
+        "affect_exploitable_config": "0",
+        "affect_running_kernel": "0",
+        "affect_running_service": "1",
+        "affected_software": "openbsd openssh",
+        "code_modified_datetime": "2025-07-30T00:00:00Z",
+        "compliance": "PCI 6.2: Install vendor security patches.",
+        "consequence": "An attacker on the path can downgrade connection security.",
+        "consequence_comment": "Local note on consequence.",
+        "cvss2_temporal": "3.4",
+        "cvss3_temporal": "5.3",
+        "detection_info": "Checks the negotiated ciphers.",
+        "diagnosis_comment": "Local note on diagnosis.",
+        "discovery_additional_info": "Patch Available, Exploit Available",
+        "discovery_auth_types": "Unix",
+        "discovery_remote": "1",
+        "exploits": "The Exploit-DB: CVE-2023-48795",
+        "first_reopened_datetime": "2025-07-01T00:00:00Z",
+        "is_disabled": "0",
+        "is_ignored": "0",
+        "last_processed_datetime": "2025-10-05T08:00:00Z",
+        "last_reopened_datetime": "2025-07-01T00:00:00Z",
+        "last_test_datetime": "2025-10-05T07:00:00Z",
+        "last_update_datetime": "2025-10-05T08:00:00Z",
+        "malware": "Example AV: EXAMPLE-MW-1 (Trojan, High)",
+        "patchable": "1",
+        "pci_flag": "1",
+        "pci_reasons": "CVSS v3 score is 4.0 or higher",
+        "qds_factors": "CVSS=5.9\nepss=0.96",
+        "solution_comment": "Local note on solution.",
+        "ssl": "0",
+        "technology": "OpenSSH",
+        "times_reopened": "1",
+        "type": "Confirmed",
+        "vuln_type": "Vulnerability"
+      },
+      "source_lifecycle": {
+        "first_found": "2025-01-10T00:00:00Z",
+        "last_fixed": "2025-06-01T00:00:00Z",
+        "last_found": "2025-10-05T07:00:00Z",
+        "state": "reopened",
+        "times_found": 41
+      },
+      "status": "open",
+      "tags": [
+        "exploit_public",
+        "patch_available",
+        "cisa_known_exploited_vulns",
+        "pci"
+      ],
+      "title": "SSH Prefix Truncation Vulnerability (Terrapin)",
+      "type": "vulnerability",
+      "vulnerability": {
+        "cve_id": "CVE-2023-48795",
+        "cve_ids": [
+          "CVE-2023-48795"
+        ],
+        "cvss_score": 5.9,
+        "cvss_source": "vendor",
+        "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N",
+        "cvss_version": "3.1",
+        "exploit_available": true,
+        "ids": [
+          {
+            "id": "CVE-2023-48795",
+            "type": "cve"
+          },
+          {
+            "id": "BID-108000",
+            "source": "bid",
+            "type": "vendor"
+          }
+        ],
+        "in_cisa_kev": true,
+        "modified_at": "2025-08-01T00:00:00Z",
+        "published_at": "2023-12-19T00:00:00Z"
+      }
+    },
+    {
+      "asset_ref": "host-db01.example.com",
+      "category": "Database",
+      "confidence": 50,
+      "description": "The installed version may be affected.",
+      "evidence": "Package installed version: postgresql-14 14.10",
+      "native": {
+        "detection_type": "potential",
+        "family": "Database",
+        "instance_id": "9000000002",
+        "raw_ref": "HOST[db01.example.com]/DETECTION[QID=105943,port=,protocol=]",
+        "scheme": "qualys",
+        "severity": "3",
+        "status": "New",
+        "vuln_id": "105943"
+      },
+      "references": [
+        "https://nvd.nist.gov/vuln/detail/CVE-2024-0985"
+      ],
+      "remediation": {
+        "recommendation": "No vendor fix is listed for this version."
+      },
+      "rule_id": "105943",
+      "rule_name": "PostgreSQL Multiple Vulnerabilities",
+      "scores": [
+        {
+          "source": "qualys",
+          "system": "cvss",
+          "value": 8,
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:U/C:H/I:H/A:H",
+          "version": "3.1"
+        }
+      ],
+      "severity": "medium",
+      "source_extra": {
+        "patchable": "0",
+        "type": "Potential",
+        "vuln_type": "Potential Vulnerability"
+      },
+      "source_lifecycle": {
+        "first_found": "2025-10-05T07:00:00Z",
+        "last_found": "2025-10-05T07:00:00Z",
+        "state": "new",
+        "times_found": 1
+      },
+      "status": "open",
+      "title": "PostgreSQL Multiple Vulnerabilities",
+      "type": "vulnerability",
+      "vulnerability": {
+        "cve_id": "CVE-2024-0985",
+        "cve_ids": [
+          "CVE-2024-0985"
+        ],
+        "cvss_score": 8,
+        "cvss_source": "vendor",
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:U/C:H/I:H/A:H",
+        "cvss_version": "3.1",
+        "ids": [
+          {
+            "id": "CVE-2024-0985",
+            "type": "cve"
+          }
+        ],
+        "published_at": "2024-02-08T00:00:00Z"
+      }
+    },
+    {
+      "asset_ref": "host-db01.example.com",
+      "category": "Information gathering",
+      "description": "The time it took to scan the host.",
+      "evidence": "Host scan time - 812 seconds",
+      "native": {
+        "detection_type": "info",
+        "family": "Information gathering",
+        "instance_id": "9000000003",
+        "raw_ref": "HOST[db01.example.com]/DETECTION[QID=45038,port=,protocol=]",
+        "scheme": "qualys",
+        "severity": "1",
+        "status": "Active",
+        "vuln_id": "45038"
+      },
+      "rule_id": "45038",
+      "rule_name": "Host Scan Time - Scanner",
+      "severity": "info",
+      "source_extra": {
+        "type": "Info",
+        "vuln_type": "Information Gathered"
+      },
+      "source_lifecycle": {
+        "state": "active"
+      },
+      "status": "open",
+      "title": "Host Scan Time - Scanner",
+      "type": "vulnerability"
+    },
+    {
+      "asset_ref": "host-db01.example.com",
+      "native": {
+        "detection_type": "confirmed",
+        "instance_id": "9000000004",
+        "raw_ref": "HOST[db01.example.com]/DETECTION[QID=999999,port=443,protocol=tcp]",
+        "scheme": "qualys",
+        "severity": "5",
+        "status": "Fixed",
+        "vuln_id": "999999"
+      },
+      "network": {
+        "host": "db01.example.com",
+        "port": 443,
+        "protocol": "tcp"
+      },
+      "rule_id": "999999",
+      "severity": "critical",
+      "source_extra": {
+        "ssl": "1",
+        "type": "Confirmed"
+      },
+      "source_lifecycle": {
+        "first_found": "2025-02-01T00:00:00Z",
+        "last_fixed": "2025-09-15T00:00:00Z",
+        "last_found": "2025-09-01T00:00:00Z",
+        "state": "fixed",
+        "times_found": 12
+      },
+      "status": "resolved",
+      "title": "Qualys QID 999999",
+      "type": "vulnerability"
+    },
+    {
+      "asset_ref": "host-198.51.100.21",
+      "category": "Windows",
+      "description": "The SMBv1 server mishandles specially crafted packets.",
+      "evidence": "%windir%\\system32\\srv.sys Version is 10.0.17763.1\nUser: [redacted]",
+      "native": {
+        "detection_type": "confirmed",
+        "family": "Windows",
+        "instance_id": "9000000005",
+        "raw_ref": "HOST[198.51.100.21]/DETECTION[QID=91345,port=445,protocol=tcp]",
+        "scheme": "qualys",
+        "severity": "5",
+        "status": "Active",
+        "vuln_id": "91345"
+      },
+      "network": {
+        "host": "198.51.100.21",
+        "port": 445,
+        "protocol": "tcp"
+      },
+      "references": [
+        "https://nvd.nist.gov/vuln/detail/CVE-2017-0144"
+      ],
+      "remediation": {
+        "advisories": [
+          {
+            "id": "MS17-010",
+            "source": "vendor"
+          }
+        ],
+        "fix_available": true,
+        "recommendation": "Apply MS17-010.",
+        "solution_type": "patch"
+      },
+      "rule_id": "91345",
+      "rule_name": "Microsoft SMB Server Remote Code Execution Vulnerability (MS17-010)",
+      "scores": [
+        {
+          "source": "nvd",
+          "system": "cvss",
+          "value": 8.1,
+          "vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H",
+          "version": "3.0"
+        },
+        {
+          "source": "service",
+          "system": "cvss",
+          "value": 9.3,
+          "vector": "AV:N/AC:M/Au:N/C:C/I:C/A:C",
+          "version": "2.0"
+        }
+      ],
+      "severity": "critical",
+      "source_extra": {
+        "patchable": "1",
+        "type": "Confirmed",
+        "vuln_type": "Vulnerability"
+      },
+      "source_lifecycle": {
+        "first_found": "2025-03-01T00:00:00Z",
+        "last_found": "2025-10-05T07:00:00Z",
+        "state": "active",
+        "times_found": 30
+      },
+      "status": "open",
+      "tags": [
+        "zero_day",
+        "active_attacks",
+        "malware",
+        "wormable"
+      ],
+      "title": "Microsoft SMB Server Remote Code Execution Vulnerability (MS17-010)",
+      "type": "vulnerability",
+      "vulnerability": {
+        "cve_id": "CVE-2017-0144",
+        "cve_ids": [
+          "CVE-2017-0144"
+        ],
+        "cvss_score": 8.1,
+        "cvss_source": "vendor",
+        "cvss_vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        "cvss_version": "3.0",
+        "exploit_available": true,
+        "ids": [
+          {
+            "id": "CVE-2017-0144",
+            "type": "cve"
+          }
+        ],
+        "published_at": "2017-03-14T00:00:00Z"
+      }
+    }
+  ],
+  "metadata": {
+    "properties": {
+      "generated_at": "2025-10-05T08:30:00Z",
+      "provenance": "<provenance>"
+    },
+    "source_type": "scanner"
+  },
+  "tool": {
+    "capabilities": [
+      "va"
+    ],
+    "name": "file-import",
+    "vendor": "Qualys"
+  },
+  "version": "1.4"
+}

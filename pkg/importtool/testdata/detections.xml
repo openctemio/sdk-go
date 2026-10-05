@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE HOST_LIST_VM_DETECTION_OUTPUT SYSTEM "https://qualysapi.qualys.com/api/2.0/fo/asset/host/vm/detection/host_list_vm_detection_output.dtd">
+<!-- Synthetic sample: documentation addresses (RFC 5737), example.com names. -->
+<HOST_LIST_VM_DETECTION_OUTPUT>
+  <RESPONSE>
+    <DATETIME>2025-10-05T08:30:00Z</DATETIME>
+    <HOST_LIST>
+      <HOST>
+        <ID>100001</ID>
+        <ASSET_ID>2000001</ASSET_ID>
+        <IP>192.0.2.20</IP>
+        <IPV6>2001:db8::20</IPV6>
+        <TRACKING_METHOD>AGENT</TRACKING_METHOD>
+        <NETWORK_ID>0</NETWORK_ID>
+        <OS><![CDATA[Ubuntu 22.04.4 LTS]]></OS>
+        <OS_CPE><![CDATA[cpe:/o:canonical:ubuntu_linux:22.04::~~lts~~~]]></OS_CPE>
+        <DNS><![CDATA[db01.example.com]]></DNS>
+        <DNS_DATA>
+          <HOSTNAME><![CDATA[db01]]></HOSTNAME>
+          <DOMAIN><![CDATA[example.com]]></DOMAIN>
+          <FQDN><![CDATA[db01.example.com]]></FQDN>
+        </DNS_DATA>
+        <CLOUD_PROVIDER>AWS</CLOUD_PROVIDER>
+        <CLOUD_SERVICE>VM</CLOUD_SERVICE>
+        <CLOUD_RESOURCE_ID><![CDATA[i-0fedcba9876543210]]></CLOUD_RESOURCE_ID>
+        <EC2_INSTANCE_ID><![CDATA[i-0fedcba9876543210]]></EC2_INSTANCE_ID>
+        <NETBIOS><![CDATA[DB01]]></NETBIOS>
+        <QG_HOSTID><![CDATA[a1b2c3d4-0000-4000-8000-000000000020]]></QG_HOSTID>
+        <LAST_SCAN_DATETIME>2025-10-05T07:00:00Z</LAST_SCAN_DATETIME>
+        <LAST_VM_SCANNED_DATE>2025-10-05T07:00:00Z</LAST_VM_SCANNED_DATE>
+        <LAST_VM_SCANNED_DURATION>812</LAST_VM_SCANNED_DURATION>
+        <LAST_VM_AUTH_SCANNED_DATE>2025-10-05T07:00:00Z</LAST_VM_AUTH_SCANNED_DATE>
+        <LAST_VM_AUTH_SCANNED_DURATION>812</LAST_VM_AUTH_SCANNED_DURATION>
+        <LAST_PC_SCANNED_DATE>2025-10-01T00:00:00Z</LAST_PC_SCANNED_DATE>
+        <ASSET_RISK_SCORE>620</ASSET_RISK_SCORE>
+        <TRURISK_SCORE>640</TRURISK_SCORE>
+        <ASSET_CRITICALITY_SCORE>4</ASSET_CRITICALITY_SCORE>
+        <OWNER><![CDATA[Jane Example]]></OWNER>
+        <COMMENTS><![CDATA[call Jane before patching]]></COMMENTS>
+        <TAGS>
+          <TAG>
+            <TAG_ID>777</TAG_ID>
+            <NAME><![CDATA[Production]]></NAME>
+          </TAG>
+          <TAG>
+            <TAG_ID>778</TAG_ID>
+            <NAME><![CDATA[Databases]]></NAME>
+          </TAG>
+        </TAGS>
+        <METADATA>
+          <EC2>
+            <ATTRIBUTE>
+              <NAME><![CDATA[latest/meta-data/placement/availability-zone]]></NAME>
+              <LAST_STATUS>Success</LAST_STATUS>
+              <VALUE><![CDATA[us-east-1a]]></VALUE>
+              <LAST_SUCCESS_DATE>2025-10-05T07:00:00Z</LAST_SUCCESS_DATE>
+            </ATTRIBUTE>
+          </EC2>
+        </METADATA>
+        <DETECTION_LIST>
+          <DETECTION>
+            <UNIQUE_VULN_ID>9000000001</UNIQUE_VULN_ID>
+            <QID>38909</QID>
+            <TYPE>Confirmed</TYPE>
+            <SEVERITY>4</SEVERITY>
+            <PORT>22</PORT>
+            <PROTOCOL>tcp</PROTOCOL>
+            <FQDN><![CDATA[db01.example.com]]></FQDN>
+            <SSL>0</SSL>
+            <INSTANCE><![CDATA[]]></INSTANCE>
+            <RESULTS><![CDATA[SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.4
+Login: qscan
+password = Pa55w0rd-not-real]]></RESULTS>
+            <STATUS>Re-Opened</STATUS>
+            <FIRST_FOUND_DATETIME>2025-01-10T00:00:00Z</FIRST_FOUND_DATETIME>
+            <LAST_FOUND_DATETIME>2025-10-05T07:00:00Z</LAST_FOUND_DATETIME>
+            <TIMES_FOUND>41</TIMES_FOUND>
+            <LAST_TEST_DATETIME>2025-10-05T07:00:00Z</LAST_TEST_DATETIME>
+            <LAST_UPDATE_DATETIME>2025-10-05T08:00:00Z</LAST_UPDATE_DATETIME>
+            <LAST_FIXED_DATETIME>2025-06-01T00:00:00Z</LAST_FIXED_DATETIME>
+            <FIRST_REOPENED_DATETIME>2025-07-01T00:00:00Z</FIRST_REOPENED_DATETIME>
+            <LAST_REOPENED_DATETIME>2025-07-01T00:00:00Z</LAST_REOPENED_DATETIME>
+            <TIMES_REOPENED>1</TIMES_REOPENED>
+            <SERVICE><![CDATA[ssh]]></SERVICE>
+            <IS_IGNORED>0</IS_IGNORED>
+            <IS_DISABLED>0</IS_DISABLED>
+            <AFFECT_RUNNING_KERNEL>0</AFFECT_RUNNING_KERNEL>
+            <AFFECT_RUNNING_SERVICE>1</AFFECT_RUNNING_SERVICE>
+            <AFFECT_EXPLOITABLE_CONFIG>0</AFFECT_EXPLOITABLE_CONFIG>
+            <LAST_PROCESSED_DATETIME>2025-10-05T08:00:00Z</LAST_PROCESSED_DATETIME>
+            <QDS severity="HIGH">72</QDS>
+            <QDS_FACTORS>
+              <QDS_FACTOR name="CVSS"><![CDATA[5.9]]></QDS_FACTOR>
+              <QDS_FACTOR name="epss"><![CDATA[0.96]]></QDS_FACTOR>
+            </QDS_FACTORS>
+          </DETECTION>
+          <DETECTION>
+            <UNIQUE_VULN_ID>9000000002</UNIQUE_VULN_ID>
+            <QID>105943</QID>
+            <TYPE>Potential</TYPE>
+            <SEVERITY>3</SEVERITY>
+            <RESULTS><![CDATA[Package installed version: postgresql-14 14.10]]></RESULTS>
+            <STATUS>New</STATUS>
+            <FIRST_FOUND_DATETIME>2025-10-05T07:00:00Z</FIRST_FOUND_DATETIME>
+            <LAST_FOUND_DATETIME>2025-10-05T07:00:00Z</LAST_FOUND_DATETIME>
+            <TIMES_FOUND>1</TIMES_FOUND>
+          </DETECTION>
+          <DETECTION>
+            <UNIQUE_VULN_ID>9000000003</UNIQUE_VULN_ID>
+            <QID>45038</QID>
+            <TYPE>Info</TYPE>
+            <SEVERITY>1</SEVERITY>
+            <RESULTS><![CDATA[Host scan time - 812 seconds]]></RESULTS>
+            <STATUS>Active</STATUS>
+          </DETECTION>
+          <DETECTION>
+            <UNIQUE_VULN_ID>9000000004</UNIQUE_VULN_ID>
+            <QID>999999</QID>
+            <TYPE>Confirmed</TYPE>
+            <SEVERITY>5</SEVERITY>
+            <PORT>443</PORT>
+            <PROTOCOL>tcp</PROTOCOL>
+            <SSL>1</SSL>
+            <STATUS>Fixed</STATUS>
+            <FIRST_FOUND_DATETIME>2025-02-01T00:00:00Z</FIRST_FOUND_DATETIME>
+            <LAST_FOUND_DATETIME>2025-09-01T00:00:00Z</LAST_FOUND_DATETIME>
+            <LAST_FIXED_DATETIME>2025-09-15T00:00:00Z</LAST_FIXED_DATETIME>
+            <TIMES_FOUND>12</TIMES_FOUND>
+          </DETECTION>
+        </DETECTION_LIST>
+      </HOST>
+      <HOST>
+        <ID>100002</ID>
+        <IP>198.51.100.21</IP>
+        <TRACKING_METHOD>IP</TRACKING_METHOD>
+        <OS><![CDATA[Windows Server 2019]]></OS>
+        <DETECTION_LIST>
+          <DETECTION>
+            <UNIQUE_VULN_ID>9000000005</UNIQUE_VULN_ID>
+            <QID>91345</QID>
+            <TYPE>Confirmed</TYPE>
+            <SEVERITY>5</SEVERITY>
+            <PORT>445</PORT>
+            <PROTOCOL>tcp</PROTOCOL>
+            <RESULTS><![CDATA[%windir%\system32\srv.sys Version is 10.0.17763.1
+User: EXAMPLE\qscan]]></RESULTS>
+            <STATUS>Active</STATUS>
+            <FIRST_FOUND_DATETIME>2025-03-01T00:00:00Z</FIRST_FOUND_DATETIME>
+            <LAST_FOUND_DATETIME>2025-10-05T07:00:00Z</LAST_FOUND_DATETIME>
+            <TIMES_FOUND>30</TIMES_FOUND>
+          </DETECTION>
+        </DETECTION_LIST>
+      </HOST>
+    </HOST_LIST>
+    <WARNING>
+      <CODE>1980</CODE>
+      <TEXT>1000 record limit exceeded. Use URL to get next batch of results.</TEXT>
+      <URL><![CDATA[https://qualysapi.qualys.example/api/2.0/fo/asset/host/vm/detection/?action=list&id_min=100003]]></URL>
+    </WARNING>
+  </RESPONSE>
+</HOST_LIST_VM_DETECTION_OUTPUT>
