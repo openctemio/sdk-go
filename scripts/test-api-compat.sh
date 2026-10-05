@@ -46,7 +46,7 @@ check() { # name want-rc [env...] -- expect-substring
 	shift 3
 	local out rc
 	set +e
-	out="$(cd "$m" && env "$@" bash scripts/check-api-compat.sh v0.1.0 2>&1)"
+	out="$(cd "$m" && env -u GITHUB_ACTIONS "$@" bash scripts/check-api-compat.sh v0.1.0 2>&1)"
 	rc=$?
 	set -e
 	if [ "$rc" != "$want" ] || [[ "$out" != *"$needle"* ]]; then
