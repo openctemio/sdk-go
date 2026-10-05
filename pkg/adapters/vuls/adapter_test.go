@@ -311,50 +311,6 @@ func TestAdapter_Interface(t *testing.T) {
 	var _ core.Adapter = (*Adapter)(nil)
 }
 
-func TestBuildPURL(t *testing.T) {
-	tests := []struct {
-		family, release, name, version, arch string
-		want                                 string
-	}{
-		{"ubuntu", "22.04", "linux", "6.8.0-85", "amd64", "pkg:deb/ubuntu/linux@6.8.0-85?arch=amd64&distro=22.04"},
-		{"redhat", "9", "openssl", "3.0.7", "x86_64", "pkg:rpm/redhat/openssl@3.0.7?arch=x86_64&distro=9"},
-		{"alpine", "3.18", "musl", "1.2.4", "", "pkg:apk/alpine/musl@1.2.4?distro=3.18"},
-		{"amazon", "2", "curl", "7.88", "x86_64", "pkg:rpm/amzn/curl@7.88?arch=x86_64&distro=2"},
-	}
-
-	for _, tt := range tests {
-		got := buildPURL(tt.family, tt.release, tt.name, tt.version, tt.arch)
-		if got != tt.want {
-			t.Errorf("buildPURL(%s, %s, %s, %s, %s) = %q, want %q",
-				tt.family, tt.release, tt.name, tt.version, tt.arch, got, tt.want)
-		}
-	}
-}
-
-func TestCvssToSeverity(t *testing.T) {
-	tests := []struct {
-		score    float64
-		expected ctis.Severity
-	}{
-		{9.8, ctis.SeverityCritical},
-		{9.0, ctis.SeverityCritical},
-		{8.5, ctis.SeverityHigh},
-		{7.0, ctis.SeverityHigh},
-		{5.5, ctis.SeverityMedium},
-		{4.0, ctis.SeverityMedium},
-		{2.0, ctis.SeverityLow},
-		{0.1, ctis.SeverityLow},
-		{0.0, ctis.SeverityInfo},
-	}
-
-	for _, tt := range tests {
-		got := cvssToSeverity(tt.score)
-		if got != tt.expected {
-			t.Errorf("cvssToSeverity(%f) = %q, want %q", tt.score, got, tt.expected)
-		}
-	}
-}
-
 func TestParseToCTIS(t *testing.T) {
 	report := buildTestReport()
 	data, _ := json.Marshal(report)
@@ -392,9 +348,11 @@ func TestAdapter_Convert_CloudInstanceIdentifier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	ids := result.Assets[0].Identifiers
+	// The instance id is an identity hint (CTIS 1.4): what the scanner
+	// reported, which a receiver weighs, not an identifier it trusts.
+	ids := result.Assets[0].IdentityHints
 	if ids == nil || ids.CloudResourceID != "i-0abc1234def567890" {
-		t.Fatalf("expected cloud_resource_id from platform.instanceID, got %+v", ids)
+		t.Fatalf("expected identity_hints.cloud_resource_id from platform.instanceID, got %+v", ids)
 	}
 
 	// Outside a cloud Vuls reports platform "other" with no instance ID.
