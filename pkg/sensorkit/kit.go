@@ -408,31 +408,9 @@ func New(opts Options) (*Kit, error) {
 		}
 	}
 
-	// Every tool run is confined (pkg/sensorkit/executor) and cannot read the key,
-	// the outbox or the policy.
-	if err := k.setupSandbox(); err != nil {
-		k.closeClient()
-		return nil, err
-	}
-
-	if s.drainGrace, err = ResolveDrainGrace(); err != nil {
-		k.closeClient()
-		return nil, err
-	}
-	if opts.MaxJobs != 0 {
-		s.maxJobs, err = checkMaxJobs("MaxJobs", opts.MaxJobs)
-	} else {
-		s.maxJobs, err = ResolveMaxJobs(MaxJobsSetting{}, MaxJobsSetting{})
-	}
-	if err != nil {
-		k.closeClient()
-		return nil, err
-	}
-	if s.scannerPriority, err = ResolveScannerPriority(opts.ScannerPriority); err != nil {
-		k.closeClient()
-		return nil, err
-	}
-	if s.protectFromOOM, err = ResolveProtectFromOOM(opts.ProtectFromOOM); err != nil {
+	// The tool sandbox and the runtime limits (drain grace, slots, scanner
+	// priority, OOM protection).
+	if err := k.resolveRuntime(); err != nil {
 		k.closeClient()
 		return nil, err
 	}
@@ -571,6 +549,33 @@ func orNone(s string) string {
 		return "none"
 	}
 	return s
+}
+
+// resolveRuntime installs the tool sandbox (every tool run is confined and
+// cannot read the key, the outbox or the policy; pkg/sensorkit/executor) and
+// resolves the runtime limits.
+func (k *Kit) resolveRuntime() error {
+	s, opts := &k.s, k.opts
+	if err := k.setupSandbox(); err != nil {
+		return err
+	}
+	var err error
+	if s.drainGrace, err = ResolveDrainGrace(); err != nil {
+		return err
+	}
+	if opts.MaxJobs != 0 {
+		s.maxJobs, err = checkMaxJobs("MaxJobs", opts.MaxJobs)
+	} else {
+		s.maxJobs, err = ResolveMaxJobs(MaxJobsSetting{}, MaxJobsSetting{})
+	}
+	if err != nil {
+		return err
+	}
+	if s.scannerPriority, err = ResolveScannerPriority(opts.ScannerPriority); err != nil {
+		return err
+	}
+	s.protectFromOOM, err = ResolveProtectFromOOM(opts.ProtectFromOOM)
+	return err
 }
 
 // loadLocalPolicy is Options.LocalPolicy, else the policy loaded from
