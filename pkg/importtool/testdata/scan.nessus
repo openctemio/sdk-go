@@ -1,0 +1,190 @@
+<?xml version="1.0" ?>
+<!-- Synthetic sample: documentation addresses (RFC 5737), example.com names. -->
+<NessusClientData_v2>
+<Policy><policyName>Internal credentialed</policyName>
+<Preferences><ServerPreferences>
+<preference><name>TARGET</name><value>192.0.2.10,198.51.100.7</value></preference>
+<preference><name>plugin_set</name><value>10180;19506</value></preference>
+</ServerPreferences>
+<PluginsPreferences>
+<item><pluginName>SSH settings</pluginName><pluginId>14273</pluginId><fullName>SSH settings[entry]:SSH user name :</fullName><preferenceName>SSH user name :</preferenceName><preferenceType>entry</preferenceType><preferenceValues>svc-scan</preferenceValues><selectedValue>svc-scan</selectedValue></item>
+<item><pluginName>SSH settings</pluginName><pluginId>14273</pluginId><fullName>SSH settings[password]:SSH password (unsafe!) :</fullName><preferenceName>SSH password (unsafe!) :</preferenceName><preferenceType>password</preferenceType><preferenceValues>hunter2-not-real</preferenceValues><selectedValue>hunter2-not-real</selectedValue></item>
+</PluginsPreferences>
+</Preferences>
+<FamilySelection><FamilyItem><FamilyName>Ubuntu Local Security Checks</FamilyName><Status>enabled</Status></FamilyItem></FamilySelection>
+</Policy>
+<Report name="Weekly internal" xmlns:cm="http://www.nessus.org/cm">
+<ReportHost name="192.0.2.10"><HostProperties>
+<tag name="HOST_END_TIMESTAMP">1759651200</tag>
+<tag name="HOST_END">Sun Oct  5 08:00:00 2025</tag>
+<tag name="LastAuthenticatedResults">1759651200</tag>
+<tag name="patch-summary-total-cves">2</tag>
+<tag name="cpe-0">cpe:/o:canonical:ubuntu_linux:22.04 -&gt; Canonical Ubuntu Linux 22.04</tag>
+<tag name="cpe-1">cpe:/a:openbsd:openssh:8.9p1 -&gt; OpenBSD OpenSSH 8.9p1</tag>
+<tag name="system-type">general-purpose</tag>
+<tag name="operating-system">Linux Kernel 5.15.0-91-generic on Ubuntu 22.04
+Linux Kernel 5.15 on Ubuntu</tag>
+<tag name="operating-system-conf">100</tag>
+<tag name="operating-system-method">LinuxDistribution</tag>
+<tag name="os">linux</tag>
+<tag name="Credentialed_Scan">true</tag>
+<tag name="local-checks-proto">ssh</tag>
+<tag name="ssh-login-used">svc-scan</tag>
+<tag name="ssh-auth-meth">password</tag>
+<tag name="mac-address">00:00:5E:00:53:01
+00:00:5E:00:53:02</tag>
+<tag name="netbios-name">APP01</tag>
+<tag name="host-fqdn">app01.example.com</tag>
+<tag name="host-rdns">app01.example.com</tag>
+<tag name="host-ip">192.0.2.10</tag>
+<tag name="bios-uuid">4C4C4544-0000-1000-8000-000000000001</tag>
+<tag name="aws-instance-instanceId">i-0123456789abcdef0</tag>
+<tag name="aws-instance-region">us-east-1</tag>
+<tag name="nessus-agent-uuid">7d9a4c2e-0000-4000-8000-000000000001</tag>
+<tag name="traceroute-hop-0">192.0.2.1</tag>
+<tag name="HOST_START_TIMESTAMP">1759647600</tag>
+<tag name="HOST_START">Sun Oct  5 07:00:00 2025</tag>
+</HostProperties>
+<ReportItem port="0" svc_name="general" protocol="tcp" severity="0" pluginID="19506" pluginName="Nessus Scan Information" pluginFamily="Settings">
+<agent>all</agent>
+<description>This plugin displays information about the Nessus scan.</description>
+<fname>scan_info.nasl</fname>
+<plugin_modification_date>2025/09/30</plugin_modification_date>
+<plugin_name>Nessus Scan Information</plugin_name>
+<plugin_publication_date>2005/08/26</plugin_publication_date>
+<plugin_type>summary</plugin_type>
+<risk_factor>None</risk_factor>
+<script_version>1.120</script_version>
+<solution>n/a</solution>
+<synopsis>This plugin displays information about the Nessus scan.</synopsis>
+<plugin_output>Information about this scan :
+
+Nessus version : 10.9.1
+Scan name : Weekly internal
+Credentialed checks : yes, as 'svc-scan' via ssh
+User: svc-scan
+password: hunter2-not-real
+Scan duration : 3600 sec
+</plugin_output>
+</ReportItem>
+<ReportItem port="22" svc_name="ssh" protocol="tcp" severity="3" pluginID="187201" pluginName="Ubuntu 22.04 LTS : OpenSSH vulnerabilities (USN-6560-1)" pluginFamily="Ubuntu Local Security Checks">
+<agent>unix</agent>
+<cpe>cpe:/a:openbsd:openssh
+cpe:/o:canonical:ubuntu_linux:22.04</cpe>
+<cve>CVE-2023-48795</cve>
+<cve>CVE-2023-51385</cve>
+<cvss3_base_score>8.1</cvss3_base_score>
+<cvss3_temporal_score>7.1</cvss3_temporal_score>
+<cvss3_temporal_vector>CVSS:3.0/E:U/RL:O/RC:C</cvss3_temporal_vector>
+<cvss3_vector>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H</cvss3_vector>
+<cvss4_base_score>7.7</cvss4_base_score>
+<cvss4_vector>CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N</cvss4_vector>
+<cvss_base_score>6.8</cvss_base_score>
+<cvss_vector>CVSS2#AV:N/AC:M/Au:N/C:P/I:P/A:P</cvss_vector>
+<cvss_score_source>CVE-2023-51385</cvss_score_source>
+<description>The remote Ubuntu 22.04 LTS host has packages installed that are affected by multiple vulnerabilities as referenced in the USN-6560-1 advisory.</description>
+<epss_score>0.9671</epss_score>
+<exploit_available>true</exploit_available>
+<exploit_code_maturity>Functional</exploit_code_maturity>
+<exploitability_ease>Exploits are available</exploitability_ease>
+<fname>ubuntu_USN-6560-1.nasl</fname>
+<patch_publication_date>2023/12/19</patch_publication_date>
+<plugin_modification_date>2025/08/27</plugin_modification_date>
+<plugin_name>Ubuntu 22.04 LTS : OpenSSH vulnerabilities (USN-6560-1)</plugin_name>
+<plugin_publication_date>2023/12/19</plugin_publication_date>
+<plugin_type>local</plugin_type>
+<risk_factor>High</risk_factor>
+<script_version>1.9</script_version>
+<see_also>https://ubuntu.com/security/notices/USN-6560-1</see_also>
+<solution>Update the affected packages.</solution>
+<synopsis>The remote Ubuntu host is missing one or more security updates.</synopsis>
+<threat_intensity_last_28>Low</threat_intensity_last_28>
+<threat_recency>8 to 30 days</threat_recency>
+<threat_sources_last_28>Social Media</threat_sources_last_28>
+<vpr_score>6.1</vpr_score>
+<vuln_publication_date>2023/12/18</vuln_publication_date>
+<xref>USN:6560-1</xref>
+<xref>IAVA:2023-A-0701</xref>
+<xref>CWE:354</xref>
+<xref>CISA-KNOWN-EXPLOITED:2026/01/08</xref>
+<plugin_output>
+  - Installed package : openssh-client_1:8.9p1-3ubuntu0.4
+  - Fixed package     : openssh-client_1:8.9p1-3ubuntu0.6
+</plugin_output>
+</ReportItem>
+<ReportItem port="0" svc_name="general" protocol="tcp" severity="2" pluginID="21157" pluginName="Unix Compliance Checks" pluginFamily="Policy Compliance">
+<compliance>true</compliance>
+<fname>unix_compliance_check.nbin</fname>
+<plugin_name>Unix Compliance Checks</plugin_name>
+<plugin_type>local</plugin_type>
+<risk_factor>None</risk_factor>
+<cm:compliance-check-name>5.2.10 Ensure SSH root login is disabled</cm:compliance-check-name>
+<cm:compliance-check-id>a1b2c3d4e5f60718293a4b5c6d7e8f90</cm:compliance-check-id>
+<cm:compliance-control-id>c0ffee00c0ffee00c0ffee00c0ffee00</cm:compliance-control-id>
+<cm:compliance-result>FAILED</cm:compliance-result>
+<cm:compliance-info>Disallowing root logins over SSH requires administrators to authenticate with their own account.</cm:compliance-info>
+<cm:compliance-actual-value>The command returned :
+
+permitrootlogin yes</cm:compliance-actual-value>
+<cm:compliance-policy-value>expect: ^[\s]*permitrootlogin[\s]+no</cm:compliance-policy-value>
+<cm:compliance-solution>Set PermitRootLogin no in /etc/ssh/sshd_config.</cm:compliance-solution>
+<cm:compliance-see-also>https://workbench.cisecurity.org/files/0000</cm:compliance-see-also>
+<cm:compliance-reference>800-53|AC-6(2),CSCv8|5.4</cm:compliance-reference>
+<cm:compliance-audit-file>CIS_Ubuntu_22.04_Server_L1_v1.0.0.audit</cm:compliance-audit-file>
+<cm:compliance-benchmark-name>CIS Ubuntu Linux 22.04 LTS</cm:compliance-benchmark-name>
+<cm:compliance-benchmark-version>1.0.0</cm:compliance-benchmark-version>
+<cm:compliance-benchmark-profile>Level 1 - Server</cm:compliance-benchmark-profile>
+<cm:compliance-full-id>0000000000000000000000000000000000000000000000000000000000000000</cm:compliance-full-id>
+<cm:compliance-functional-id>c0ffee00c0</cm:compliance-functional-id>
+<cm:compliance-uname>svc-scan</cm:compliance-uname>
+<cm:compliance-source>custom</cm:compliance-source>
+</ReportItem>
+</ReportHost>
+<ReportHost name="198.51.100.7"><HostProperties>
+<tag name="HOST_END">Sun Oct  5 08:10:00 2025</tag>
+<tag name="host-ip">198.51.100.7</tag>
+<tag name="Credentialed_Scan">false</tag>
+<tag name="operating-system">Microsoft Windows Server 2019</tag>
+<tag name="netbios-name">FILESRV</tag>
+<tag name="smb-login-used">EXAMPLE\svc-scan</tag>
+<tag name="HOST_START">Sun Oct  5 08:00:00 2025</tag>
+</HostProperties>
+<ReportItem port="445" svc_name="cifs" protocol="tcp" severity="4" pluginID="97833" pluginName="MS17-010: Security Update for Microsoft Windows SMB Server (4013389) (ETERNALBLUE) (ETERNALCHAMPION) (ETERNALROMANCE) (ETERNALSYNERGY) (WannaCry) (EternalRocks) (Petya) (uncredentialed check)" pluginFamily="Windows">
+<bid>96703</bid>
+<bid>96704</bid>
+<cve>CVE-2017-0143</cve>
+<cve>CVE-2017-0144</cve>
+<cvss3_base_score>8.1</cvss3_base_score>
+<cvss3_vector>CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H</cvss3_vector>
+<cvss_base_score>9.3</cvss_base_score>
+<cvss_vector>CVSS2#AV:N/AC:M/Au:N/C:C/I:C/A:C</cvss_vector>
+<description>The remote Windows host is affected by multiple vulnerabilities in Microsoft Server Message Block 1.0 (SMBv1).</description>
+<exploit_available>true</exploit_available>
+<exploit_framework_metasploit>true</exploit_framework_metasploit>
+<metasploit_name>MS17-010 EternalBlue SMB Remote Windows Kernel Pool Corruption</metasploit_name>
+<exploited_by_malware>true</exploited_by_malware>
+<in_the_news>true</in_the_news>
+<msft>MS17-010</msft>
+<mskb>4012212</mskb>
+<cisa-known-exploited>2022/05/03</cisa-known-exploited>
+<iava>2017-A-0065</iava>
+<cert>867968</cert>
+<patch_publication_date>2017/03/14</patch_publication_date>
+<plugin_publication_date>2017/03/20</plugin_publication_date>
+<risk_factor>Critical</risk_factor>
+<see_also>https://learn.microsoft.com/en-us/security-updates/securitybulletins/2017/ms17-010
+https://www.example.com/wannacry-analysis</see_also>
+<solution>Apply the patches in Microsoft Security Bulletin MS17-010.</solution>
+<synopsis>The remote Windows host is affected by multiple vulnerabilities.</synopsis>
+<stig_severity>I</stig_severity>
+<unsupported_by_vendor>true</unsupported_by_vendor>
+<vpr_score>9.9</vpr_score>
+<xref>MSFT:MS17-010</xref>
+<xref>EDB-ID:41891</xref>
+<xref>CWE:20</xref>
+<plugin_output>Sent: 00000000ff534d4272
+Received: 00000000ff534d4272</plugin_output>
+</ReportItem>
+</ReportHost>
+</Report>
+</NessusClientData_v2>

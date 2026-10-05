@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE KNOWLEDGE_BASE_VULN_LIST_OUTPUT SYSTEM "https://qualysapi.qualys.com/api/2.0/fo/knowledge_base/vuln/knowledge_base_vuln_list_output.dtd">
+<!-- Synthetic KnowledgeBase entries for the QIDs of detections.xml, plus one
+     entry no detection names. Texts are written for this sample. -->
+<KNOWLEDGE_BASE_VULN_LIST_OUTPUT>
+  <RESPONSE>
+    <DATETIME>2025-10-05T08:35:00Z</DATETIME>
+    <VULN_LIST>
+      <VULN>
+        <QID>12345</QID>
+        <VULN_TYPE>Vulnerability</VULN_TYPE>
+        <SEVERITY_LEVEL>2</SEVERITY_LEVEL>
+        <TITLE><![CDATA[Not detected anywhere]]></TITLE>
+        <CATEGORY>General remote services</CATEGORY>
+      </VULN>
+      <VULN>
+        <QID>38909</QID>
+        <VULN_TYPE>Vulnerability</VULN_TYPE>
+        <SEVERITY_LEVEL>4</SEVERITY_LEVEL>
+        <TITLE><![CDATA[SSH Prefix Truncation Vulnerability (Terrapin)]]></TITLE>
+        <CATEGORY>General remote services</CATEGORY>
+        <TECHNOLOGY><![CDATA[OpenSSH]]></TECHNOLOGY>
+        <DETECTION_INFO><![CDATA[Checks the negotiated <b>ciphers</b>.]]></DETECTION_INFO>
+        <LAST_CUSTOMIZATION>
+          <DATETIME>2025-01-01T00:00:00Z</DATETIME>
+          <USER_LOGIN>exmpl_ab1</USER_LOGIN>
+        </LAST_CUSTOMIZATION>
+        <LAST_SERVICE_MODIFICATION_DATETIME>2025-08-01T00:00:00Z</LAST_SERVICE_MODIFICATION_DATETIME>
+        <PUBLISHED_DATETIME>2023-12-19T00:00:00Z</PUBLISHED_DATETIME>
+        <CODE_MODIFIED_DATETIME>2025-07-30T00:00:00Z</CODE_MODIFIED_DATETIME>
+        <BUGTRAQ_LIST>
+          <BUGTRAQ>
+            <ID><![CDATA[108000]]></ID>
+            <URL><![CDATA[https://www.example.com/bid/108000]]></URL>
+          </BUGTRAQ>
+        </BUGTRAQ_LIST>
+        <PATCHABLE>1</PATCHABLE>
+        <PATCH_PUBLISHED_DATE>2023-12-18T00:00:00Z</PATCH_PUBLISHED_DATE>
+        <SOFTWARE_LIST>
+          <SOFTWARE>
+            <PRODUCT><![CDATA[openssh]]></PRODUCT>
+            <VENDOR><![CDATA[openbsd]]></VENDOR>
+          </SOFTWARE>
+        </SOFTWARE_LIST>
+        <VENDOR_REFERENCE_LIST>
+          <VENDOR_REFERENCE>
+            <ID><![CDATA[USN-6560-1]]></ID>
+            <URL><![CDATA[https://ubuntu.com/security/notices/USN-6560-1]]></URL>
+          </VENDOR_REFERENCE>
+        </VENDOR_REFERENCE_LIST>
+        <CVE_LIST>
+          <CVE>
+            <ID><![CDATA[CVE-2023-48795]]></ID>
+            <URL><![CDATA[https://nvd.nist.gov/vuln/detail/CVE-2023-48795]]></URL>
+          </CVE>
+        </CVE_LIST>
+        <DIAGNOSIS><![CDATA[The SSH transport protocol with some extensions allows a man-in-the-middle to drop messages.<P>The remote host negotiates an affected cipher.]]></DIAGNOSIS>
+        <DIAGNOSIS_COMMENT><![CDATA[Local note on diagnosis.]]></DIAGNOSIS_COMMENT>
+        <CONSEQUENCE><![CDATA[An attacker on the path can downgrade connection security.]]></CONSEQUENCE>
+        <CONSEQUENCE_COMMENT><![CDATA[Local note on consequence.]]></CONSEQUENCE_COMMENT>
+        <SOLUTION><![CDATA[Upgrade OpenSSH.<br/>Refer to <A HREF="https://ubuntu.com/security/notices/USN-6560-1" TARGET="_blank">USN-6560-1</A>.]]></SOLUTION>
+        <SOLUTION_COMMENT><![CDATA[Local note on solution.]]></SOLUTION_COMMENT>
+        <COMPLIANCE_LIST>
+          <COMPLIANCE>
+            <TYPE><![CDATA[PCI]]></TYPE>
+            <SECTION><![CDATA[6.2]]></SECTION>
+            <DESCRIPTION><![CDATA[Install vendor security patches.]]></DESCRIPTION>
+          </COMPLIANCE>
+        </COMPLIANCE_LIST>
+        <CORRELATION>
+          <EXPLOITS>
+            <EXPLT_SRC>
+              <SRC_NAME><![CDATA[The Exploit-DB]]></SRC_NAME>
+              <EXPLT_LIST>
+                <EXPLT>
+                  <REF><![CDATA[CVE-2023-48795]]></REF>
+                  <DESC><![CDATA[Terrapin attack proof of concept]]></DESC>
+                  <LINK><![CDATA[https://www.example.com/exploits/0001]]></LINK>
+                </EXPLT>
+              </EXPLT_LIST>
+            </EXPLT_SRC>
+          </EXPLOITS>
+          <MALWARE>
+            <MW_SRC>
+              <SRC_NAME><![CDATA[Example AV]]></SRC_NAME>
+              <MW_LIST>
+                <MW_INFO>
+                  <MW_ID><![CDATA[EXAMPLE-MW-1]]></MW_ID>
+                  <MW_TYPE><![CDATA[Trojan]]></MW_TYPE>
+                  <MW_PLATFORM><![CDATA[Linux]]></MW_PLATFORM>
+                  <MW_ALIAS><![CDATA[Example.Alias]]></MW_ALIAS>
+                  <MW_RATING><![CDATA[High]]></MW_RATING>
+                  <MW_LINK><![CDATA[https://www.example.com/mw/1]]></MW_LINK>
+                </MW_INFO>
+              </MW_LIST>
+            </MW_SRC>
+          </MALWARE>
+        </CORRELATION>
+        <CVSS>
+          <BASE source="service">4.3</BASE>
+          <TEMPORAL>3.4</TEMPORAL>
+          <VECTOR_STRING>CVSS:2.0/AV:N/AC:M/Au:N/C:N/I:P/A:N/E:POC/RL:OF/RC:C</VECTOR_STRING>
+          <ACCESS>
+            <VECTOR>3</VECTOR>
+            <COMPLEXITY>2</COMPLEXITY>
+          </ACCESS>
+          <IMPACT>
+            <CONFIDENTIALITY>1</CONFIDENTIALITY>
+            <INTEGRITY>2</INTEGRITY>
+            <AVAILABILITY>1</AVAILABILITY>
+          </IMPACT>
+          <AUTHENTICATION>1</AUTHENTICATION>
+          <EXPLOITABILITY>2</EXPLOITABILITY>
+          <REMEDIATION_LEVEL>1</REMEDIATION_LEVEL>
+          <REPORT_CONFIDENCE>3</REPORT_CONFIDENCE>
+        </CVSS>
+        <CVSS_V3>
+          <BASE source="nvd">5.9</BASE>
+          <TEMPORAL>5.3</TEMPORAL>
+          <VECTOR_STRING>CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N</VECTOR_STRING>
+          <CVSS3_VERSION>3.1</CVSS3_VERSION>
+          <ATTACK_VECTOR>Network</ATTACK_VECTOR>
+          <ATTACK_COMPLEXITY>High</ATTACK_COMPLEXITY>
+          <PRIVILEGES_REQUIRED>None</PRIVILEGES_REQUIRED>
+          <USER_INTERACTION>None</USER_INTERACTION>
+          <SCOPE>Unchanged</SCOPE>
+          <IMPACT>
+            <CONFIDENTIALITY>None</CONFIDENTIALITY>
+            <INTEGRITY>High</INTEGRITY>
+            <AVAILABILITY>None</AVAILABILITY>
+          </IMPACT>
+          <EXPLOIT_CODE_MATURITY>Proof of Concept</EXPLOIT_CODE_MATURITY>
+          <REMEDIATION_LEVEL>Official Fix</REMEDIATION_LEVEL>
+          <REPORT_CONFIDENCE>Confirmed</REPORT_CONFIDENCE>
+        </CVSS_V3>
+        <PCI_FLAG>1</PCI_FLAG>
+        <PCI_REASONS>
+          <PCI_REASON><![CDATA[CVSS v3 score is 4.0 or higher]]></PCI_REASON>
+        </PCI_REASONS>
+        <THREAT_INTELLIGENCE>
+          <THREAT_INTEL id="5"><![CDATA[Exploit_Public]]></THREAT_INTEL>
+          <THREAT_INTEL id="7"><![CDATA[Patch_Available]]></THREAT_INTEL>
+          <THREAT_INTEL id="12"><![CDATA[Cisa_Known_Exploited_Vulns]]></THREAT_INTEL>
+        </THREAT_INTELLIGENCE>
+        <SUPPORTED_MODULES><![CDATA[Agent,Scanner]]></SUPPORTED_MODULES>
+        <DISCOVERY>
+          <REMOTE>1</REMOTE>
+          <AUTH_TYPE_LIST>
+            <AUTH_TYPE>Unix</AUTH_TYPE>
+          </AUTH_TYPE_LIST>
+          <ADDITIONAL_INFO><![CDATA[Patch Available, Exploit Available]]></ADDITIONAL_INFO>
+        </DISCOVERY>
+        <IS_DISABLED>0</IS_DISABLED>
+        <CHANGE_LOG_LIST>
+          <CHANGE_LOG_INFO>
+            <CHANGE_DATE>2025-08-01T00:00:00Z</CHANGE_DATE>
+            <COMMENTS><![CDATA[Updated detection.]]></COMMENTS>
+          </CHANGE_LOG_INFO>
+        </CHANGE_LOG_LIST>
+        <AUTOMATIC_PCI_FAIL>0</AUTOMATIC_PCI_FAIL>
+      </VULN>
+      <VULN>
+        <QID>105943</QID>
+        <VULN_TYPE>Potential Vulnerability</VULN_TYPE>
+        <SEVERITY_LEVEL>3</SEVERITY_LEVEL>
+        <TITLE><![CDATA[PostgreSQL Multiple Vulnerabilities]]></TITLE>
+        <CATEGORY>Database</CATEGORY>
+        <PUBLISHED_DATETIME>2024-02-08T00:00:00Z</PUBLISHED_DATETIME>
+        <PATCHABLE>0</PATCHABLE>
+        <CVE_LIST>
+          <CVE>
+            <ID><![CDATA[CVE-2024-0985]]></ID>
+            <URL><![CDATA[https://nvd.nist.gov/vuln/detail/CVE-2024-0985]]></URL>
+          </CVE>
+        </CVE_LIST>
+        <DIAGNOSIS><![CDATA[The installed version may be affected.]]></DIAGNOSIS>
+        <SOLUTION><![CDATA[No vendor fix is listed for this version.]]></SOLUTION>
+        <CVSS_V3>
+          <BASE>8.0</BASE>
+          <VECTOR_STRING>CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:U/C:H/I:H/A:H</VECTOR_STRING>
+        </CVSS_V3>
+      </VULN>
+      <VULN>
+        <QID>45038</QID>
+        <VULN_TYPE>Information Gathered</VULN_TYPE>
+        <SEVERITY_LEVEL>1</SEVERITY_LEVEL>
+        <TITLE><![CDATA[Host Scan Time - Scanner]]></TITLE>
+        <CATEGORY>Information gathering</CATEGORY>
+        <DIAGNOSIS><![CDATA[The time it took to scan the host.]]></DIAGNOSIS>
+      </VULN>
+      <VULN>
+        <QID>91345</QID>
+        <VULN_TYPE>Vulnerability</VULN_TYPE>
+        <SEVERITY_LEVEL>5</SEVERITY_LEVEL>
+        <TITLE><![CDATA[Microsoft SMB Server Remote Code Execution Vulnerability (MS17-010)]]></TITLE>
+        <CATEGORY>Windows</CATEGORY>
+        <PUBLISHED_DATETIME>2017-03-14T00:00:00Z</PUBLISHED_DATETIME>
+        <PATCHABLE>1</PATCHABLE>
+        <VENDOR_REFERENCE_LIST>
+          <VENDOR_REFERENCE>
+            <ID><![CDATA[MS17-010]]></ID>
+            <URL><![CDATA[javascript:alert(1)]]></URL>
+          </VENDOR_REFERENCE>
+        </VENDOR_REFERENCE_LIST>
+        <CVE_LIST>
+          <CVE>
+            <ID><![CDATA[CVE-2017-0144]]></ID>
+            <URL><![CDATA[https://nvd.nist.gov/vuln/detail/CVE-2017-0144]]></URL>
+          </CVE>
+        </CVE_LIST>
+        <DIAGNOSIS><![CDATA[The SMBv1 server mishandles specially crafted packets.]]></DIAGNOSIS>
+        <SOLUTION><![CDATA[Apply MS17-010.]]></SOLUTION>
+        <CVSS>
+          <BASE source="service">9.3</BASE>
+          <VECTOR_STRING>CVSS:2.0/AV:N/AC:M/Au:N/C:C/I:C/A:C</VECTOR_STRING>
+        </CVSS>
+        <CVSS_V3>
+          <BASE source="nvd">8.1</BASE>
+          <VECTOR_STRING>CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H</VECTOR_STRING>
+        </CVSS_V3>
+        <THREAT_INTELLIGENCE>
+          <THREAT_INTEL id="1"><![CDATA[Zero_Day]]></THREAT_INTEL>
+          <THREAT_INTEL id="3"><![CDATA[Active_Attacks]]></THREAT_INTEL>
+          <THREAT_INTEL id="8"><![CDATA[Malware]]></THREAT_INTEL>
+          <THREAT_INTEL id="9"><![CDATA[Wormable]]></THREAT_INTEL>
+        </THREAT_INTELLIGENCE>
+      </VULN>
+    </VULN_LIST>
+  </RESPONSE>
+</KNOWLEDGE_BASE_VULN_LIST_OUTPUT>

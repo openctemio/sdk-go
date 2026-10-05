@@ -43,6 +43,9 @@ type Options struct {
 	Secrets map[string]string
 	// Timeout bounds the run (default: the manifest's timeout).
 	Timeout time.Duration
+	// Files are written to the task's directory before the run, by path
+	// relative to it, as the runtime places a parser's inputs.
+	Files map[string][]byte
 }
 
 // LogEntry is one message the tool logged (already redacted).
@@ -104,8 +107,21 @@ func Run(t testing.TB, tl tool.Tool, task tool.Task, opts ...Options) *Result {
 				secrets[c.Name] = tool.NewSecret(v)
 			}
 		}
+		workdir := t.TempDir()
+		for name, data := range o.Files {
+			if !filepath.IsLocal(name) {
+				t.Fatalf("testkit: file %q is not a path inside the task directory", name)
+			}
+			p := filepath.Join(workdir, name)
+			if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+				t.Fatalf("testkit: %v", err)
+			}
+			if err := os.WriteFile(p, data, 0o600); err != nil {
+				t.Fatalf("testkit: %v", err)
+			}
+		}
 		tctx := toolrt.NewContext(ctx, toolrt.ContextConfig{Manifest: m, Task: task, Sink: sink,
-			Secrets: secrets, Workdir: t.TempDir()})
+			Secrets: secrets, Workdir: workdir})
 		runErr = safeRun(tl, tctx, task)
 	}
 	if runErr != nil && ctx.Err() == context.DeadlineExceeded && runErr.Class != tool.Timeout {

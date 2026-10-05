@@ -1,0 +1,92 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-09-30T10:00:00Z",
+    "tools": {
+      "components": [
+        { "type": "application", "name": "example-sbom-tool", "version": "1.0.0" }
+      ]
+    },
+    "component": {
+      "bom-ref": "pkg:oci/shop-api@sha256%3A0000000000000000000000000000000000000000000000000000000000000001",
+      "type": "container",
+      "name": "registry.example.com/shop/shop-api",
+      "version": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+      "purl": "pkg:oci/shop-api@sha256%3A0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "pkg:npm/express@4.17.1",
+      "type": "library",
+      "name": "express",
+      "version": "4.17.1",
+      "purl": "pkg:npm/express@4.17.1",
+      "licenses": [ { "license": { "id": "MIT" } } ],
+      "hashes": [ { "alg": "SHA-512", "content": "0000000000000000000000000000000000000000000000000000000000000000" } ]
+    },
+    {
+      "bom-ref": "pkg:npm/qs@6.7.0",
+      "type": "library",
+      "name": "qs",
+      "version": "6.7.0",
+      "purl": "pkg:npm/qs@6.7.0",
+      "licenses": [ { "expression": "BSD-3-Clause" } ]
+    },
+    {
+      "bom-ref": "pkg:deb/debian/openssl@3.0.11-1~deb12u1?arch=amd64&distro=debian-12",
+      "type": "library",
+      "name": "openssl",
+      "version": "3.0.11-1~deb12u1",
+      "purl": "pkg:deb/debian/openssl@3.0.11-1~deb12u1?arch=amd64&distro=debian-12"
+    }
+  ],
+  "dependencies": [
+    { "ref": "pkg:oci/shop-api@sha256%3A0000000000000000000000000000000000000000000000000000000000000001", "dependsOn": ["pkg:npm/express@4.17.1", "pkg:deb/debian/openssl@3.0.11-1~deb12u1?arch=amd64&distro=debian-12"] },
+    { "ref": "pkg:npm/express@4.17.1", "dependsOn": ["pkg:npm/qs@6.7.0"] },
+    { "ref": "pkg:npm/qs@6.7.0", "dependsOn": [] }
+  ],
+  "vulnerabilities": [
+    {
+      "id": "CVE-2022-24999",
+      "source": { "name": "NVD", "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-24999" },
+      "references": [ { "id": "GHSA-hrpp-h998-j3pp", "source": { "name": "GitHub", "url": "https://github.com/advisories/GHSA-hrpp-h998-j3pp" } } ],
+      "ratings": [
+        { "source": { "name": "NVD" }, "score": 7.5, "severity": "high", "method": "CVSSv31", "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H" }
+      ],
+      "cwes": [1321],
+      "description": "qs before 6.7.3 allows prototype pollution.",
+      "recommendation": "Upgrade qs to 6.7.3 or later.",
+      "published": "2022-11-26T22:15:00Z",
+      "updated": "2023-01-10T00:00:00Z",
+      "affects": [ { "ref": "pkg:npm/qs@6.7.0" } ]
+    },
+    {
+      "id": "CVE-2023-5678",
+      "ratings": [
+        { "source": { "name": "debian" }, "severity": "low", "method": "other" }
+      ],
+      "description": "Excessive time spent in DH check / generation with large Q parameter value.",
+      "analysis": {
+        "state": "not_affected",
+        "justification": "code_not_reachable",
+        "detail": "The service never generates or checks DH parameters.",
+        "lastUpdated": "2026-09-01T00:00:00Z"
+      },
+      "affects": [ { "ref": "pkg:deb/debian/openssl@3.0.11-1~deb12u1?arch=amd64&distro=debian-12" } ]
+    },
+    {
+      "id": "GHSA-rv95-896h-c2vc",
+      "ratings": [
+        { "source": { "name": "GitHub" }, "score": 6.1, "severity": "medium", "method": "CVSSv31", "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N" }
+      ],
+      "description": "Express.js Open Redirect in malformed URLs.",
+      "analysis": { "state": "exploitable", "detail": "Reachable from the login redirect." },
+      "affects": [ { "ref": "pkg:npm/express@4.17.1" } ]
+    }
+  ]
+}
