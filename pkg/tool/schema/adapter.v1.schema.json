@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openctem.io/schema/adapter/v1/message.schema.json",
+  "title": "OpenCTEM adapter protocol v1 message",
+  "description": "One line of adapter protocol v1: newline-delimited JSON (UTF-8, at most 1 MiB per line) on the tool's stdin (runtime to adapter) and stdout (adapter to runtime), one task per process; stderr is free-form diagnostics. Unknown message types are ignored after the handshake; unknown members are ignored except inside record data, which is CTIS and decoded strictly. Order: runtime hello, adapter hello, describe/manifest (the manifest without its run section must equal the tool.yaml), optional validate/validation, run, then adapter messages until result. Credentials arrive only in the run message, only those the manifest declares.",
+  "type": "object",
+  "required": ["v", "type"],
+  "properties": {
+    "v": {"const": 1},
+    "type": {"enum": ["hello", "describe", "validate", "run", "cancel", "manifest", "validation", "log", "progress", "record", "report_info", "target_status", "artifact", "heartbeat", "result"]}
+  },
+  "allOf": [
+    {"if": {"properties": {"type": {"const": "run"}}}, "then": {"required": ["task"], "properties": {"task": {"$ref": "#/$defs/runTask"}}}},
+    {"if": {"properties": {"type": {"const": "validate"}}}, "then": {"required": ["task"]}},
+    {"if": {"properties": {"type": {"const": "cancel"}}}, "then": {"properties": {"reason": {"type": "string"}}}},
+    {"if": {"properties": {"type": {"const": "manifest"}}}, "then": {"required": ["manifest"], "properties": {"manifest": {"type": "object"}}}},
+    {"if": {"properties": {"type": {"const": "validation"}}}, "then": {"required": ["ok"], "properties": {"ok": {"type": "boolean"}, "errors": {"type": "array", "items": {"type": "object", "properties": {"path": {"type": "string"}, "message": {"type": "string"}}}}}}},
+    {"if": {"properties": {"type": {"const": "log"}}}, "then": {"required": ["level", "msg"], "properties": {"level": {"enum": ["debug", "info", "warn", "error"]}, "msg": {"type": "string"}, "fields": {"type": "object"}}}},
+    {"if": {"properties": {"type": {"const": "progress"}}}, "then": {"required": ["done", "total"], "properties": {"done": {"type": "integer", "minimum": 0}, "total": {"type": "integer", "minimum": 0}, "msg": {"type": "string"}}}},
+    {"if": {"properties": {"type": {"const": "record"}}}, "then": {"required": ["kind", "data"], "properties": {"kind": {"enum": ["asset", "finding", "dependency"]}, "target": {"type": "string"}, "data": {"type": "object", "description": "One CTIS asset, finding or dependency."}}}},
+    {"if": {"properties": {"type": {"const": "report_info"}}}, "then": {"required": ["info"], "properties": {"info": {"type": "object", "properties": {"tool": {"type": "object"}, "metadata": {"type": "object"}, "properties": {"type": "object"}}}}}},
+    {"if": {"properties": {"type": {"const": "target_status"}}}, "then": {"required": ["target", "status"], "properties": {"target": {"type": "string"}, "status": {"enum": ["done", "failed", "skipped"]}, "error": {"$ref": "#/$defs/error"}}}},
+    {"if": {"properties": {"type": {"const": "artifact"}}}, "then": {"required": ["name", "media_type", "path", "sha256", "size"], "properties": {"name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}, "media_type": {"type": "string"}, "path": {"type": "string", "description": "Relative to the task directory; a symlink or a path leaving it is refused."}, "sha256": {"type": "string"}, "size": {"type": "integer", "minimum": 0}}}},
+    {"if": {"properties": {"type": {"const": "result"}}}, "then": {"required": ["status"], "properties": {"status": {"enum": ["ok", "partial", "failed", "canceled"]}, "error": {"$ref": "#/$defs/error"}, "stats": {"type": "object"}}}}
+  ],
+  "$defs": {
+    "error": {
+      "type": "object",
+      "required": ["class"],
+      "properties": {
+        "class": {"enum": ["invalid_input", "target_unreachable", "refused_by_policy", "transient", "rate_limited", "auth_failed", "permission_denied", "not_found", "tool_error"]},
+        "retryable": {"type": "boolean"},
+        "retry_after_ms": {"type": "integer", "minimum": 0},
+        "detail": {"type": "string", "maxLength": 256}
+      }
+    },
+    "runTask": {
+      "type": "object",
+      "required": ["id", "workdir"],
+      "properties": {
+        "id": {"type": "string"},
+        "attempt": {"type": "integer"},
+        "deadline": {"type": "string", "format": "date-time"},
+        "targets": {"type": "array", "items": {"type": "object", "required": ["ref", "value"], "properties": {"ref": {"type": "string"}, "type": {"type": "string"}, "value": {"type": "string"}, "attrs": {"type": "object", "additionalProperties": {"type": "string"}}}}},
+        "config": {"type": "object"},
+        "inputs": {"type": "array"},
+        "repo": {"type": "object"},
+        "scope": {"type": "object"},
+        "local": {"description": "Configuration a sensor supplies to a tool compiled into it; absent for other adapters."},
+        "workdir": {"type": "string"},
+        "credentials": {"type": "array", "items": {"type": "object", "required": ["name", "value"], "properties": {"name": {"type": "string"}, "value": {"type": "string"}}}}
+      }
+    }
+  }
+}

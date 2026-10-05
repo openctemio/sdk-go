@@ -6,6 +6,25 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **Adapter protocol v1 and the tool host.** `pkg/tool/adapter` is the
+  tool side (newline-delimited JSON on stdin/stdout, one task per process):
+  `Serve(tool)` for a tool shipped as its own binary (`--describe` prints
+  its manifest), `Dispatch(tools...)` for tools compiled into a sensor,
+  which the runtime re-executes as `<sensor> __openctem-tool <name>`. While
+  it serves, stdout is the protocol only (tool code printing goes to
+  stderr) and the process is non-dumpable. `pkg/sensorkit/toolhost` (Beta)
+  is the runtime side: `RunBuiltin` and `RunManifest` (adapter or the
+  zero-code `exec` profile for a CLI that writes CTIS or SARIF) run one task
+  in the Executor sandbox and check everything again: 1 MiB lines, an
+  invalid-message budget, idle and task timeouts, `describe` equal to the
+  manifest, CTIS validity, `produces` (quarantine), record and byte caps
+  (the tool is stopped), control and bidi characters, artifacts confined to
+  the task directory (no symlink escape, size and digest checked), a
+  graceful cancel then a kill. Only declared credentials are delivered,
+  inside the run message, and their values are masked in logs and stderr.
+  The report gets runtime-stamped provenance. An untrusted adapter runs
+  only on a backend that enforces its network class. JSON Schemas:
+  `tool.AdapterProtocolJSONSchema()`.
 - **Tool contract** (`pkg/tool`, docs/rfcs/sensor-sdk-v2.md): one contract
   for every workload a sensor runs. A `Manifest` (the `tool.yaml` file,
   `apiVersion: openctem.io/tool/v1`, read strictly by `LoadManifest`)
