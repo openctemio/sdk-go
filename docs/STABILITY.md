@@ -45,6 +45,8 @@ without a tier fails the job.
 | `pkg/client` | Platform protocol client (v2 negotiated, v1 fallback) | Stable; its protocol internals are Internal-bound |
 | `pkg/sensorproto/v2` | Protocol v2 wire types | Frozen once protocol v3 ships; Stable until then |
 | `pkg/sensorproto/legacyv1` | Protocol v1 wire vocabulary | Frozen |
+| `pkg/sensorproto/pairing` | Interactive pairing protocol (api RFC-052): wire types, commitment, SAS, codes, shared test vectors | Beta |
+| `pkg/sensorsig` | RFC 9421 request signatures of a key-bound sensor (api RFC-052 §4.3): signer, verifier, signing transport | Beta |
 | `pkg/ctis` | CTIS types: re-exports `github.com/openctemio/ctis` (generated aliases; the `ctis-parity` CI job fails when they are stale) | Stable, follows CTIS |
 | `pkg/httpsec` | SSRF-safe HTTP clients and URL validation | Stable |
 | `pkg/conformance` | Fake platform and the sensor conformance suite | Stable |
