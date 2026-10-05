@@ -14,7 +14,7 @@ tool-specific.
 | Package | Role | Status |
 |---|---|---|
 | `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries (`ToolRegistry`, `ParserRegistry`), the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | stable |
-| `pkg/sensorkit` | The runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain | stable |
+| `pkg/sensorkit` | The runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain; runner mode (`CIRun`, `Kit.RunOnce`: CI OIDC exchange, uploads, gate verdict, api RFC-051) | stable; runner mode beta |
 | `pkg/client` | Platform protocol client (v2 negotiated, v1 fallback) | stable |
 | `pkg/sensorproto/v2` | Protocol v2 wire types | stable |
 | `pkg/sensorproto/legacyv1` | Protocol v1 wire vocabulary | frozen (no additions) |

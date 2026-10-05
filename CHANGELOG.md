@@ -6,6 +6,20 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **Runner mode with CI workload identity** (api RFC-051). `sensorkit.NewCIRun`
+  detects a GitHub Actions job allowed `id-token: write` or a GitLab CI job
+  with an `id_tokens` variable (`OPENCTEM_ID_TOKEN` by default) when
+  `OPENCTEM_TENANT_ID` is set, asks the CI provider for the job's OIDC token
+  (audience `OPENCTEM_OIDC_AUDIENCE`, default `openctem:tenant:<id>`) and
+  exchanges it at the first use for a run token that lives at most 15 minutes
+  (`POST /api/v1/ci/oidc/exchange`); on GitHub it renews the token for the
+  same run before it expires. `CIRun` is a `core.Pusher` (uploads go to
+  `/api/v1/ci/runs/{id}/results`), and `BaselineDiff` and `Evaluate` ask the
+  platform's gate for the verdict; `WriteVerdict` prints it. `Kit.RunOnce`
+  runs the kit's scanners once, pushes through the run and returns the
+  verdict. No token is printed, logged or put in an error; `CIRun.String`
+  redacts it.
+
 - **Structured policy refusals** (api research/25 §3.6, D8). A command a
   policy refused (the local policy's admission or executor checks, the kill
   switch, the platform's tool gate) is reported with
