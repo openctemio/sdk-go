@@ -921,6 +921,37 @@ type LiveHost struct {
 	TLSVersion    string   `json:"tls_version,omitempty"`    // TLS version
 	Redirect      string   `json:"redirect,omitempty"`       // Final redirect URL
 	ResponseTime  int64    `json:"response_time_ms"`         // Response time in ms
+
+	// What the probe learned about the server (all optional; the values are
+	// chosen by the scanned server and bounded by ctis.ConvertReconToCTIS).
+	CDNType     string   `json:"cdn_type,omitempty"`     // cdn, waf or cloud
+	TLS         *TLSLeaf `json:"tls,omitempty"`          // Leaf certificate of the TLS handshake
+	FaviconMMH3 string   `json:"favicon_mmh3,omitempty"` // mmh3 favicon hash (signed 32-bit decimal)
+	JARM        string   `json:"jarm,omitempty"`         // JARM TLS server fingerprint
+	ASN         *ASN     `json:"asn,omitempty"`          // Autonomous system of the host's address
+}
+
+// TLSLeaf is the leaf certificate an HTTP probe saw in a TLS handshake.
+type TLSLeaf struct {
+	SubjectCN         string    `json:"subject_cn,omitempty"`
+	SANs              []string  `json:"sans,omitempty"`
+	IssuerCN          string    `json:"issuer_cn,omitempty"`
+	IssuerOrg         string    `json:"issuer_org,omitempty"`
+	SerialNumber      string    `json:"serial_number,omitempty"`
+	NotBefore         time.Time `json:"not_before,omitempty"`
+	NotAfter          time.Time `json:"not_after,omitempty"`
+	FingerprintSHA256 string    `json:"fingerprint_sha256,omitempty"` // Identity of the certificate
+	SelfSigned        bool      `json:"self_signed,omitempty"`
+	Expired           bool      `json:"expired,omitempty"`
+	Wildcard          bool      `json:"wildcard,omitempty"`
+	Mismatched        bool      `json:"mismatched,omitempty"` // Names do not cover the probed host
+}
+
+// ASN is an autonomous system.
+type ASN struct {
+	Number  string `json:"number,omitempty"`  // "AS13335"
+	Org     string `json:"org,omitempty"`     // Holder name
+	Country string `json:"country,omitempty"` // ISO 3166-1 alpha-2
 }
 
 // DiscoveredURL represents a discovered URL/endpoint.

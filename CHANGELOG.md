@@ -4,6 +4,17 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ## Unreleased
 
+### Added
+
+- **HTTP probe results keep what they learned about the server** (api
+  research/22 E5). `core.LiveHost` gains `TLS` (`core.TLSLeaf`: the leaf
+  certificate's subject, SANs, issuer, serial, validity and SHA-256
+  fingerprint), `FaviconMMH3`, `JARM`, `ASN` (`core.ASN`) and `CDNType`.
+  `pkg/ctis` follows ctis to the commit that adds `LiveHostInput.TLS`,
+  `FaviconMMH3`, `JARM`, `ASN` and `CDNType` and emits a `certificate` asset
+  per leaf (re-exported `TLSLeafInput`, `ASNInput`). The sensor maps httpx
+  output onto them.
+
 ### Fixed
 
 - **Cancels reach a sensor without the doorbell** (api RFC-046 §8). A
