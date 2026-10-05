@@ -1,0 +1,347 @@
+{
+  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "assets": [
+    {
+      "id": "host-shop.example.com",
+      "name": "shop.example.com",
+      "type": "domain",
+      "value": "shop.example.com"
+    },
+    {
+      "id": "host-www.example.com",
+      "name": "www.example.com",
+      "type": "domain",
+      "value": "www.example.com"
+    },
+    {
+      "id": "unclassified-example-pentest-tool-import",
+      "name": "example-pentest-tool-import",
+      "type": "unclassified",
+      "value": "example-pentest-tool-import"
+    },
+    {
+      "id": "host-203.0.113.40",
+      "name": "203.0.113.40",
+      "type": "ip_address",
+      "value": "203.0.113.40"
+    }
+  ],
+  "findings": [
+    {
+      "asset_ref": "host-shop.example.com",
+      "description": "The q parameter is echoed without encoding.",
+      "evidence": "<script>alert(1)</script>",
+      "native": {
+        "detection_type": "confirmed",
+        "instance_id": "scan-42-finding-7",
+        "raw_ref": "/findings/0",
+        "scheme": "defectdojo",
+        "severity": "High",
+        "status": "verified",
+        "vuln_id": "xss-reflected"
+      },
+      "network": {
+        "host": "shop.example.com",
+        "port": 443,
+        "protocol": "tcp",
+        "service": "https"
+      },
+      "occurrence_count": 3,
+      "references": [
+        "https://owasp.org/www-community/attacks/xss/"
+      ],
+      "remediation": {
+        "effort": "low",
+        "recommendation": "Encode output in the HTML body context."
+      },
+      "rule_id": "xss-reflected",
+      "rule_name": "Reflected cross-site scripting in search",
+      "scores": [
+        {
+          "source": "defectdojo",
+          "system": "cvss",
+          "value": 6.1,
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+          "version": "3.1"
+        }
+      ],
+      "severity": "high",
+      "source_extra": {
+        "dynamic_finding": "true",
+        "endpoint": "https://shop.example.com:443/search?q=test#results",
+        "impact": "An attacker can run script in a victim's browser.",
+        "param": "q",
+        "planned_remediation_date": "2025-12-01",
+        "planned_remediation_version": "3.2.0",
+        "references": "https://owasp.org/www-community/attacks/xss/\nSee also the internal wiki page.",
+        "service": "storefront",
+        "severity_justification": "Session theft on an authenticated page.",
+        "static_finding": "false",
+        "steps_to_reproduce": "1. Open /search?q=<script>alert(1)</script>",
+        "under_review": "false"
+      },
+      "source_lifecycle": {
+        "first_found": "2025-09-01T00:00:00Z",
+        "state": "active"
+      },
+      "status": "open",
+      "tags": [
+        "web",
+        "xss"
+      ],
+      "title": "Reflected cross-site scripting in search",
+      "type": "vulnerability",
+      "vulnerability": {
+        "cvss_score": 6.1,
+        "cvss_source": "vendor",
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+        "cvss_version": "3.1",
+        "cwe_id": "CWE-79",
+        "cwe_ids": [
+          "CWE-79"
+        ]
+      }
+    },
+    {
+      "asset_ref": "host-www.example.com",
+      "description": "The q parameter is echoed without encoding.",
+      "evidence": "<script>alert(1)</script>",
+      "native": {
+        "detection_type": "confirmed",
+        "instance_id": "scan-42-finding-7",
+        "raw_ref": "/findings/0",
+        "scheme": "defectdojo",
+        "severity": "High",
+        "status": "verified",
+        "vuln_id": "xss-reflected"
+      },
+      "network": {
+        "host": "www.example.com",
+        "port": 443,
+        "protocol": "tcp",
+        "service": "https"
+      },
+      "occurrence_count": 3,
+      "references": [
+        "https://owasp.org/www-community/attacks/xss/"
+      ],
+      "remediation": {
+        "effort": "low",
+        "recommendation": "Encode output in the HTML body context."
+      },
+      "rule_id": "xss-reflected",
+      "rule_name": "Reflected cross-site scripting in search",
+      "scores": [
+        {
+          "source": "defectdojo",
+          "system": "cvss",
+          "value": 6.1,
+          "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+          "version": "3.1"
+        }
+      ],
+      "severity": "high",
+      "source_extra": {
+        "dynamic_finding": "true",
+        "endpoint": "https://www.example.com:443/search?q=test",
+        "impact": "An attacker can run script in a victim's browser.",
+        "param": "q",
+        "planned_remediation_date": "2025-12-01",
+        "planned_remediation_version": "3.2.0",
+        "references": "https://owasp.org/www-community/attacks/xss/\nSee also the internal wiki page.",
+        "service": "storefront",
+        "severity_justification": "Session theft on an authenticated page.",
+        "static_finding": "false",
+        "steps_to_reproduce": "1. Open /search?q=<script>alert(1)</script>",
+        "under_review": "false"
+      },
+      "source_lifecycle": {
+        "first_found": "2025-09-01T00:00:00Z",
+        "state": "active"
+      },
+      "status": "open",
+      "tags": [
+        "web",
+        "xss"
+      ],
+      "title": "Reflected cross-site scripting in search",
+      "type": "vulnerability",
+      "vulnerability": {
+        "cvss_score": 6.1,
+        "cvss_source": "vendor",
+        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+        "cvss_version": "3.1",
+        "cwe_id": "CWE-79",
+        "cwe_ids": [
+          "CWE-79"
+        ]
+      }
+    },
+    {
+      "asset_ref": "unclassified-example-pentest-tool-import",
+      "description": "User input reaches a SQL string.",
+      "location": {
+        "path": "app/reports/export.py",
+        "start_line": 118
+      },
+      "native": {
+        "raw_ref": "/findings/1",
+        "scheme": "defectdojo",
+        "severity": "Critical",
+        "status": "active",
+        "vuln_id": "python.sqlalchemy.security.sql-injection"
+      },
+      "rule_id": "python.sqlalchemy.security.sql-injection",
+      "rule_name": "SQL injection in report export",
+      "severity": "critical",
+      "source_extra": {
+        "dynamic_finding": "false",
+        "sast_sink_object": "cursor.execute",
+        "sast_source_file_path": "app/reports/views.py",
+        "sast_source_line": "101",
+        "sast_source_object": "request.args['from']",
+        "static_finding": "true"
+      },
+      "source_lifecycle": {
+        "first_found": "2025-08-15T00:00:00Z",
+        "state": "active"
+      },
+      "status": "open",
+      "title": "SQL injection in report export",
+      "type": "vulnerability",
+      "vulnerability": {
+        "cwe_id": "CWE-89",
+        "cwe_ids": [
+          "CWE-89"
+        ]
+      }
+    },
+    {
+      "asset_ref": "unclassified-example-pentest-tool-import",
+      "description": "The installed lodash is vulnerable.",
+      "native": {
+        "raw_ref": "/findings/2",
+        "scheme": "defectdojo",
+        "severity": "Medium",
+        "status": "active"
+      },
+      "remediation": {
+        "fix_available": true
+      },
+      "scores": [
+        {
+          "source": "defectdojo",
+          "system": "cvss",
+          "value": 7.7,
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:H/SC:N/SI:N/SA:N",
+          "version": "4.0"
+        },
+        {
+          "source": "first",
+          "system": "epss",
+          "value": 0.0123
+        },
+        {
+          "source": "first",
+          "system": "epss_percentile",
+          "value": 0.851
+        }
+      ],
+      "severity": "medium",
+      "source_extra": {
+        "ransomware_used": "Unknown"
+      },
+      "source_lifecycle": {
+        "state": "active"
+      },
+      "status": "open",
+      "title": "lodash prototype pollution",
+      "type": "vulnerability",
+      "vulnerability": {
+        "affected_version": "4.17.15",
+        "cve_id": "CVE-2020-8203",
+        "cve_ids": [
+          "CVE-2020-8203"
+        ],
+        "cvss_score": 7.7,
+        "cvss_source": "vendor",
+        "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:H/SC:N/SI:N/SA:N",
+        "cvss_version": "4.0",
+        "epss_percentile": 0.851,
+        "epss_score": 0.0123,
+        "fixed_version": "4.17.19",
+        "ids": [
+          {
+            "id": "CVE-2020-8203",
+            "type": "cve"
+          },
+          {
+            "id": "GHSA-p6mc-m468-83gw",
+            "type": "ghsa"
+          }
+        ],
+        "package": "lodash",
+        "published_at": "2020-07-15T00:00:00Z"
+      }
+    },
+    {
+      "asset_ref": "host-203.0.113.40",
+      "description": "TLS 1.0 is enabled.",
+      "native": {
+        "raw_ref": "/findings/3",
+        "scheme": "defectdojo",
+        "severity": "Low",
+        "status": "false_positive"
+      },
+      "network": {
+        "host": "203.0.113.40",
+        "port": 8443,
+        "protocol": "tcp"
+      },
+      "severity": "low",
+      "source_extra": {
+        "kev_date": "2024-01-01",
+        "mitigated": "2025-09-20T10:00:00Z"
+      },
+      "source_lifecycle": {
+        "last_fixed": "2025-09-20T10:00:00Z"
+      },
+      "status": "false_positive",
+      "title": "Outdated TLS configuration",
+      "type": "vulnerability",
+      "vulnerability": {
+        "exploit_available": true,
+        "in_cisa_kev": true
+      }
+    },
+    {
+      "asset_ref": "unclassified-example-pentest-tool-import",
+      "native": {
+        "raw_ref": "/findings/5",
+        "scheme": "defectdojo",
+        "severity": "Severe",
+        "status": "is_mitigated"
+      },
+      "severity": "medium",
+      "source_lifecycle": {
+        "state": "fixed"
+      },
+      "status": "resolved",
+      "title": "Unknown severity label",
+      "type": "vulnerability"
+    }
+  ],
+  "metadata": {
+    "properties": {
+      "description": "Synthetic sample: example.com hosts and made-up findings.",
+      "provenance": "<provenance>",
+      "scan_type": "Generic Findings Import"
+    },
+    "source_type": "scanner"
+  },
+  "tool": {
+    "name": "file-import",
+    "version": "2.4.1"
+  },
+  "version": "1.4"
+}

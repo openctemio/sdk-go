@@ -1,0 +1,79 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://vex.example.com/public/vex-2025-0042",
+  "author": "Example Platform Security",
+  "role": "Document Creator",
+  "timestamp": "2025-09-20T12:00:00Z",
+  "last_updated": "2025-09-21T08:30:00Z",
+  "version": 2,
+  "tooling": "vexctl/0.3.0",
+  "statements": [
+    {
+      "@id": "https://vex.example.com/public/vex-2025-0042#s1",
+      "version": 1,
+      "vulnerability": {
+        "@id": "https://nvd.nist.gov/vuln/detail/CVE-2025-1111",
+        "name": "CVE-2025-1111",
+        "description": "Heap overflow in the TIFF decoder of libexample.",
+        "aliases": ["GHSA-cfgh-jmpq-rvwx", "GO-2025-3001"]
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/web-frontend@sha256%3A0000000000000000000000000000000000000000000000000000000000000001?repository_url=registry.example.com/web",
+          "identifiers": { "purl": "pkg:oci/web-frontend@sha256%3A0000000000000000000000000000000000000000000000000000000000000001?repository_url=registry.example.com/web" },
+          "hashes": { "sha-256": "0000000000000000000000000000000000000000000000000000000000000001" },
+          "subcomponents": [
+            { "@id": "pkg:golang/example.com/libexample@v1.4.2" }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The image never decodes TIFF input.",
+      "timestamp": "2025-09-20T12:00:00Z",
+      "supplier": "Example Platform"
+    },
+    {
+      "vulnerability": { "name": "CVE-2025-2222" },
+      "products": [
+        { "@id": "cpe:2.3:a:example:api_server:3.2.0:*:*:*:*:*:*:*" },
+        { "@id": "api-server-3.2", "identifiers": { "cpe23": "cpe:2.3:a:example:api_server:3.2.1:*:*:*:*:*:*:*", "cpe22": "cpe:/a:example:api_server:3.2.1" } }
+      ],
+      "status": "affected",
+      "action_statement": "Upgrade to 3.3.0.",
+      "action_statement_timestamp": "2025-09-21T08:00:00Z",
+      "status_notes": "Exploitable only with the debug endpoint enabled.",
+      "last_updated": "2025-09-21T08:30:00Z"
+    },
+    {
+      "vulnerability": { "name": "CVE-2025-3333" },
+      "products": [ { "@id": "pkg:npm/example-ui@5.0.1", "identifiers": { "purl": "pkg:npm/example-ui@5.0.1" } } ],
+      "status": "fixed"
+    },
+    {
+      "vulnerability": { "name": "CVE-2025-4444" },
+      "products": [ { "@id": "pkg:npm/example-ui@5.0.1" } ],
+      "status": "under_investigation"
+    },
+    {
+      "vulnerability": { "name": "CVE-2025-5555" },
+      "products": [ { "@id": "pkg:npm/example-ui@5.0.1" } ],
+      "status": "not_affected"
+    },
+    {
+      "vulnerability": { "name": "CVE-2025-6666" },
+      "products": [ { "@id": "pkg:npm/example-ui@5.0.1" } ],
+      "status": "exploited_maybe"
+    },
+    {
+      "vulnerability": { "name": "not an id" },
+      "products": [ { "@id": "pkg:npm/example-ui@5.0.1" } ],
+      "status": "fixed"
+    },
+    {
+      "vulnerability": { "name": "CVE-2025-7777" },
+      "products": [],
+      "status": "fixed"
+    }
+  ]
+}
