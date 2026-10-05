@@ -47,9 +47,8 @@ type Options struct {
 	// SensorID is the sensor's id, when the key is not bound to one
 	// (SENSOR_ID).
 	SensorID string
-	// Protocol is the sensor protocol: auto, v1 or v2 (SENSOR_PROTOCOL;
-	// default auto: v2 for everything the platform offers on hello, v1 for
-	// the rest).
+	// Protocol is the sensor protocol: auto or v2, which are the same
+	// (SENSOR_PROTOCOL). v1 is retired and refused.
 	Protocol string
 	// Timeout bounds one request to the platform (default 30s).
 	Timeout time.Duration

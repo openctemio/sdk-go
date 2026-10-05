@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/audit" //nolint:staticcheck // the removed platform-mode client; removed with it
-	"github.com/openctemio/sdk-go/pkg/chunk"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/pipeline" //nolint:staticcheck // the removed platform-mode client; removed with it
 	"github.com/openctemio/sdk-go/pkg/resource"
@@ -54,20 +53,6 @@ func (m *mockPipelineUploader) getUploads() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.uploads
-}
-
-// mockChunkUploader implements chunk.Uploader for testing
-type mockChunkUploader struct {
-	uploadFunc func(ctx context.Context, data *chunk.ChunkData) error
-	uploads    int
-}
-
-func (m *mockChunkUploader) UploadChunk(ctx context.Context, data *chunk.ChunkData) error {
-	m.uploads++
-	if m.uploadFunc != nil {
-		return m.uploadFunc(ctx, data)
-	}
-	return nil
 }
 
 func TestSensorBuilder_WithResourceController(t *testing.T) {
@@ -150,35 +135,6 @@ func TestSensorBuilder_WithPipeline(t *testing.T) {
 	}
 }
 
-func TestSensorBuilder_WithChunkManager(t *testing.T) {
-	// Create temp directory for chunk storage
-	tmpDir, err := os.MkdirTemp("", "sensor-chunk-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	executor := &mockJobExecutor{}
-	chunkUploader := &mockChunkUploader{}
-
-	chunkConfig := chunk.DefaultConfig()
-	chunkConfig.OutboxDir = filepath.Join(tmpDir, "chunks")
-
-	sensor, err := NewSensorBuilder().
-		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
-		WithExecutor(executor).
-		WithChunkManager(chunkConfig, chunkUploader).
-		Build()
-
-	if err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	if sensor.ChunkManager() == nil {
-		t.Error("Expected chunk manager to be created")
-	}
-}
-
 func TestSensorBuilder_FullIntegration(t *testing.T) {
 	// Create temp directories
 	tmpDir, err := os.MkdirTemp("", "sensor-full-test-*")
@@ -189,11 +145,6 @@ func TestSensorBuilder_FullIntegration(t *testing.T) {
 
 	executor := &mockJobExecutor{}
 	pipelineUploader := &mockPipelineUploader{}
-	chunkUploader := &mockChunkUploader{}
-
-	chunkConfig := chunk.DefaultConfig()
-	chunkConfig.OutboxDir = filepath.Join(tmpDir, "chunks")
-
 	sensor, err := NewSensorBuilder().
 		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
 		WithExecutor(executor).
@@ -212,7 +163,6 @@ func TestSensorBuilder_FullIntegration(t *testing.T) {
 			QueueSize: 100,
 			Workers:   2,
 		}, pipelineUploader).
-		WithChunkManager(chunkConfig, chunkUploader).
 		Build()
 
 	if err != nil {
@@ -228,9 +178,6 @@ func TestSensorBuilder_FullIntegration(t *testing.T) {
 	}
 	if sensor.Pipeline() == nil {
 		t.Error("Expected pipeline to be created")
-	}
-	if sensor.ChunkManager() == nil {
-		t.Error("Expected chunk manager to be created")
 	}
 }
 
@@ -285,53 +232,6 @@ func TestPlatformSensor_SubmitReport(t *testing.T) {
 
 	if pipelineUploader.getUploads() != 1 {
 		t.Errorf("Expected 1 upload, got %d", pipelineUploader.getUploads())
-	}
-}
-
-func TestPlatformSensor_NeedsChunking(t *testing.T) {
-	// Create temp directory
-	tmpDir, err := os.MkdirTemp("", "sensor-chunk-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	executor := &mockJobExecutor{}
-	chunkUploader := &mockChunkUploader{}
-
-	chunkConfig := chunk.DefaultConfig()
-	chunkConfig.OutboxDir = filepath.Join(tmpDir, "chunks")
-	chunkConfig.MinFindingsForChunking = 10 // Low threshold for testing
-
-	sensor, err := NewSensorBuilder().
-		WithCredentials("http://localhost:8080", "test-api-key", "test-sensor-id").
-		WithExecutor(executor).
-		WithChunkManager(chunkConfig, chunkUploader).
-		Build()
-
-	if err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-
-	// Small report - shouldn't need chunking
-	smallReport := &ctis.Report{
-		Tool:     &ctis.Tool{Name: "test-tool"},
-		Findings: []ctis.Finding{{Title: "Finding 1"}},
-	}
-	if sensor.NeedsChunking(smallReport) {
-		t.Error("Small report should not need chunking")
-	}
-
-	// Large report - should need chunking
-	largeReport := &ctis.Report{
-		Tool:     &ctis.Tool{Name: "test-tool"},
-		Findings: make([]ctis.Finding, 20), // 20 findings > threshold of 10
-	}
-	for i := range largeReport.Findings {
-		largeReport.Findings[i].Title = "Finding"
-	}
-	if !sensor.NeedsChunking(largeReport) {
-		t.Error("Large report should need chunking")
 	}
 }
 

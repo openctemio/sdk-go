@@ -71,8 +71,8 @@ func CommandActionPath(commandID, action string) string {
 }
 
 // Hello features of the control plane (FeatureResults is the results
-// resource). A sensor uses v2 for a listed feature and protocol v1 for the
-// rest.
+// resource). A platform that does not list one a call needs does not serve
+// it (protocol v1 is retired; there is no fall-back).
 const (
 	FeatureHeartbeat    = "heartbeat"
 	FeatureCommands     = "commands"
@@ -201,9 +201,6 @@ type Deprecation struct {
 	DeprecatedAt time.Time `json:"deprecated_at"`
 	SunsetAt     time.Time `json:"sunset_at"`
 }
-
-// DeprecationProtocolV1 is the hello key of protocol v1's deprecation.
-const DeprecationProtocolV1 = "protocol_v1"
 
 // Heartbeat status values.
 const (

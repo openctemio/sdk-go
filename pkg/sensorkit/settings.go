@@ -252,8 +252,8 @@ func ResolveProtectFromOOM(explicit bool) (bool, error) {
 }
 
 // ResolveProtocol returns the sensor protocol: explicit (a flag), else
-// SENSOR_PROTOCOL, else configured, else auto (v2 for everything the
-// platform offers on hello, v1 for the rest).
+// SENSOR_PROTOCOL, else configured, else auto. auto and v2 both mean
+// protocol v2; v1 is retired and refused (client.ErrProtocolV1Retired).
 func ResolveProtocol(explicit, configured string) (string, error) {
 	v := firstNonEmpty(explicit, os.Getenv(EnvProtocol), configured)
 	p, err := client.ParseProtocol(v)

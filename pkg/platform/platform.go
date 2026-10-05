@@ -8,7 +8,7 @@
 // registration calls in this package target /api/v1/platform/* routes that
 // the open-source OpenCTEM API does not serve; against an OSS API they fail
 // with 404. Self-hosted sensors should use pkg/client together with
-// core.CommandPoller (the /api/v1/agent/* routes) instead.
+// core.CommandPoller (protocol v2, /api/v2/sensor/*) instead.
 //
 // Security note: jobs received through JobPoller are handed to the
 // caller-supplied executor as-is. This package does not validate job

@@ -2,11 +2,10 @@ package client
 
 // Protocol v2 control plane (api RFC-029,
 // docs/rfcs/RFC-029-sensor-protocol-v2-and-sdk-stability.md): heartbeat,
-// commands, suppressions, fingerprint queries. The public methods of Client
-// pick v2 per feature (controlV2) and fall back to protocol v1 against a
-// platform that does not list the feature on hello, so a sensor gets v2 by
-// upgrading the SDK, with no code change. Identity is the key alone: v2
-// requests carry no X-Agent-ID.
+// commands, suppressions, fingerprint queries. Protocol v2 is the only
+// sensor protocol (v1 is retired): a platform that does not serve a route
+// answers ErrV2Unsupported (v2Missing), never a fall-back to an older
+// protocol. Identity is the key alone.
 
 import (
 	"bytes"
@@ -16,20 +15,18 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
-	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
 // controlError is a non-2xx answer of a v2 control-plane route. It unwraps to
 // both a *V2Error (the problem) and an *HTTPError, so callers that classify
 // errors with IsHTTPError, IsAuthenticationError, IsRateLimitError or
-// core.AuthFailureStatus see the same thing they saw on protocol v1.
+// core.AuthFailureStatus work on every route.
 type controlError struct {
 	v2   *V2Error
 	http *HTTPError
@@ -124,8 +121,8 @@ func isRouteMissing(err error) bool {
 // Heartbeat
 // =============================================================================
 
-// heartbeatV2 sends POST /heartbeat with the v1 heartbeat body. The answer's
-// hint members have their v1 names, so core.ParseHeartbeatHints reads it.
+// heartbeatV2 sends POST /heartbeat. core.ParseHeartbeatHints reads the
+// answer's hint members.
 func (c *Client) heartbeatV2(ctx context.Context, req *HeartbeatRequest) ([]byte, *protov2.HeartbeatResponse, error) {
 	var raw json.RawMessage
 	if _, err := c.v2JSON(ctx, http.MethodPost, protov2.PathPrefix+protov2.HeartbeatPath, req, &raw, nil, min(c.maxRetries, controlRetries)); err != nil {
@@ -140,7 +137,7 @@ func (c *Client) heartbeatV2(ctx context.Context, req *HeartbeatRequest) ([]byte
 // lists "manifest" on hello; core.ErrManifestUnsupported otherwise. It
 // implements core.ManifestPusher.
 func (c *Client) PutManifest(ctx context.Context, m *core.Manifest) (*core.ManifestAck, error) {
-	if ok, _ := c.controlV2(ctx, protov2.FeatureManifest); !ok {
+	if !c.PlatformSupports(ctx, protov2.FeatureManifest) {
 		return nil, core.ErrManifestUnsupported
 	}
 	// The local policy report goes only to a platform that announces it.
@@ -182,7 +179,7 @@ func (c *Client) PutConfigReport(ctx context.Context, r *core.ConfigReport) (*co
 	if r == nil {
 		return nil, errors.New("nil config report")
 	}
-	if ok, _ := c.controlV2(ctx, protov2.FeatureConfigReport); !ok {
+	if !c.PlatformSupports(ctx, protov2.FeatureConfigReport) {
 		return nil, core.ErrConfigReportUnsupported
 	}
 	var resp protov2.ConfigReportResponse
@@ -208,7 +205,7 @@ var _ core.ConfigReportPusher = (*Client)(nil)
 // platform has none, core.ErrManifestUnsupported when it does not serve
 // manifests. It implements core.ManifestStateReader.
 func (c *Client) GetManifestState(ctx context.Context) (*core.ManifestAck, error) {
-	if ok, _ := c.controlV2(ctx, protov2.FeatureManifest); !ok {
+	if !c.PlatformSupports(ctx, protov2.FeatureManifest) {
 		return nil, core.ErrManifestUnsupported
 	}
 	var resp protov2.ManifestStateResponse
@@ -237,10 +234,10 @@ func policyOf(p *protov2.ManifestPolicy) *core.ManifestPolicy {
 }
 
 // errPausedHeartbeat is what SendHeartbeat (which does not act on the
-// doorbell) returns for a disabled sensor on v2: v2 answers a disabled
-// sensor's heartbeat with 200 and the pause action, v1 answered 401. A
-// caller that ignores hints, such as a one-shot run's connection test, must
-// still learn that the key is not accepted.
+// doorbell) returns for a disabled sensor: v2 answers a disabled sensor's
+// heartbeat with 200 and the pause action. A caller that ignores hints, such
+// as a one-shot run's connection test, must still learn that the key is not
+// accepted.
 func errPausedHeartbeat() error {
 	return &controlError{
 		v2:   &V2Error{Status: http.StatusUnauthorized, Body: "the platform disabled this sensor (heartbeat answered pause)"},
@@ -258,8 +255,7 @@ func (c *Client) claimOnPoll(ctx context.Context) bool {
 	if c.noClaimOnPoll {
 		return false
 	}
-	ok, _ := c.controlV2(ctx, protov2.FeatureCapacity)
-	return ok
+	return c.PlatformSupports(ctx, protov2.FeatureCapacity)
 }
 
 func (c *Client) pollCommandsV2(ctx context.Context, limit int) ([]Command, error) {
@@ -270,7 +266,7 @@ func (c *Client) pollCommandsV2(ctx context.Context, limit int) ([]Command, erro
 	// the same command.
 	var extra http.Header
 	if c.claimOnPoll(ctx) {
-		extra = http.Header{legacyv1.HeaderSensorFeatures: []string{protov2.FeatureCapacity}}
+		extra = http.Header{protov2.HeaderSensorFeatures: []string{protov2.FeatureCapacity}}
 	}
 	if _, err := c.v2JSON(ctx, http.MethodGet, path, nil, &list, extra, c.maxRetries); err != nil {
 		return nil, err
@@ -399,24 +395,4 @@ func (c *Client) baselineDiffV2(ctx context.Context, repository, baseBranch stri
 		out = append(out, resp.NewFingerprints...)
 	}
 	return out, nil
-}
-
-// =============================================================================
-// Protocol v1 deprecation notice
-// =============================================================================
-
-var deprecationOnce sync.Once
-
-// noteV1Deprecation prints, once per process, that the platform answered a
-// protocol v1 request with a Deprecation header (api RFC-029 §5.2). The SDK
-// only uses v1 when the platform does not offer the feature on v2, or when
-// SENSOR_PROTOCOL=v1 forces it.
-func (c *Client) noteV1Deprecation(hdr http.Header) {
-	if hdr == nil || hdr.Get("Deprecation") == "" {
-		return
-	}
-	deprecationOnce.Do(func() {
-		fmt.Fprintf(os.Stderr, "[openctem] WARNING: the platform deprecated sensor protocol v1 (Sunset: %s); "+
-			"this sensor still uses it (SENSOR_PROTOCOL=%s). Use protocol auto or v2.\n", hdr.Get("Sunset"), c.protocol)
-	})
 }
