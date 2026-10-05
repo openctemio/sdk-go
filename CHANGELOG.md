@@ -32,6 +32,31 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
+- **Tool contract** (`pkg/tool`, docs/rfcs/sensor-sdk-v2.md): one contract
+  for every workload a sensor runs. A `Manifest` (the `tool.yaml` file,
+  `apiVersion: openctem.io/tool/v1`, read strictly by `LoadManifest`)
+  declares the execution class (target-scan, connector, parser, enricher),
+  tier, consumes/produces from the CTIS vocabulary, a configuration schema
+  in the settings-schema subset (no secret fields), permissions (network,
+  vendor hosts, filesystem, credentials, Linux capabilities), resources,
+  self-test fixtures and, for a tool that is its own program, how to start
+  it (`run.argv` with a closed set of placeholders and never a shell; the
+  zero-code `exec` profile). `Manifest.Validate` enforces the cross-field
+  rules (T2 only for target scans, class against network, placeholders
+  against the config schema); `Digest` is over the canonical JSON;
+  `ManifestJSONSchema` is the JSON Schema for editors and other languages.
+  `tool.New[C]` builds a tool from a manifest and a typed run function (the
+  config schema derived from C's struct tags when the manifest has none;
+  `secret:"true"` refused). `Context` gives a running tool a validating
+  `Emitter`, a redacting logger, progress, per-target outcomes, artifacts,
+  declared credentials only (`Secret` never prints its value) and an HTTP
+  client that reaches only what the network permission allows and never a
+  metadata address. Errors are categorized (`ErrorClass`, `Error`,
+  `Unreachable`, `Retry`, `RateLimit`, `Refused`, `Invalid`, `Failed`).
+- **`pkg/testkit`**: run a tool in-process with the runtime's rules (strict
+  config, declared credentials only, record checks, quarantine of
+  undeclared output, caps, report assembly and provenance); `Normalize` and
+  `Golden` for golden CTIS files.
 - `pkg/ctis` re-exports the CTIS 1.4 interoperability members (`finding.native`, `scores`, `vex`, `source_lifecycle`, `source_extra`, `vulnerability.ids`, remediation solution metadata, `asset.identity_hints`) and their normalizers (`NormalizeNativeSeverity`, `NormalizeNativeStatus`, `NormalizeVEXStatus`, `NormalizeVEXJustification`, `NormalizeVulnerabilityID`, `PreferredVulnerabilityID`, `LocationKey`, `AllScores`, `SetSourceExtra`), plus `SupportedSchemaVersions` and `IsSupportedVersion`.
 - `executor.TaskSpec.Stdin`: a task can read its standard input (the
   channel of the tool adapter protocol); pass the read end of an `os.Pipe`

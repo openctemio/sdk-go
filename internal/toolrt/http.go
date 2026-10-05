@@ -1,0 +1,132 @@
+package toolrt
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/openctemio/sdk-go/pkg/tool"
+)
+
+// ErrHostNotAllowed is the error of a request to a host the tool's network
+// permission does not allow.
+var ErrHostNotAllowed = errors.New("host not allowed by the tool's network permission")
+
+// NewHTTPClient returns the client of tool.Context.HTTP: it reaches the
+// task's targets (targets, egress-proxy), the vendor hosts (vendor) or
+// nothing (none), re-checks every redirect, and never dials a link-local
+// or cloud-metadata address whatever a name resolves to.
+func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
+	m = m.Normalized()
+	allowed := map[string]bool{}
+	switch m.Permissions.Network {
+	case tool.NetTargets, tool.NetEgressProxy:
+		for _, t := range task.Targets {
+			if h := strings.ToLower(t.Host()); h != "" {
+				allowed[h] = true
+			}
+		}
+	case tool.NetVendor:
+		for _, h := range m.Permissions.VendorHosts {
+			for _, v := range vendorHosts(h, task.Config) {
+				allowed[strings.ToLower(v)] = true
+			}
+		}
+	}
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	tr := &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			if !allowed[strings.ToLower(host)] {
+				return nil, fmt.Errorf("%w: %s", ErrHostNotAllowed, host)
+			}
+			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if err != nil {
+				return nil, err
+			}
+			lastErr := fmt.Errorf("no address for %s", host)
+			for _, ip := range ips {
+				if MetadataIP(ip.IP) {
+					lastErr = fmt.Errorf("%w: %s resolves to %s (link-local or metadata)", ErrHostNotAllowed, host, ip.IP)
+					continue
+				}
+				conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
+				if err == nil {
+					return conn, nil
+				}
+				lastErr = err
+			}
+			return nil, lastErr
+		},
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		MaxIdleConnsPerHost:   4,
+		IdleConnTimeout:       30 * time.Second,
+	}
+	return &http.Client{
+		Transport: tr,
+		Timeout:   5 * time.Minute,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("too many redirects")
+			}
+			if !allowed[strings.ToLower(req.URL.Hostname())] {
+				return fmt.Errorf("%w: redirect to %s", ErrHostNotAllowed, req.URL.Hostname())
+			}
+			return nil
+		},
+	}
+}
+
+// vendorHosts resolves a vendor host entry: a host[:port], or
+// ${config.<key>} naming a URL or host in the configuration.
+func vendorHosts(entry string, config json.RawMessage) []string {
+	if key, ok := strings.CutPrefix(entry, "${config."); ok {
+		key = strings.TrimSuffix(key, "}")
+		var cfg map[string]any
+		if json.Unmarshal(config, &cfg) != nil {
+			return nil
+		}
+		v, _ := cfg[key].(string)
+		if v == "" {
+			return nil
+		}
+		if u, err := url.Parse(v); err == nil && u.Host != "" {
+			return []string{u.Hostname()}
+		}
+		return []string{v}
+	}
+	if h, _, err := net.SplitHostPort(entry); err == nil {
+		return []string{h}
+	}
+	return []string{entry}
+}
+
+var metadataIPs = []net.IP{
+	net.ParseIP("169.254.169.254"), net.ParseIP("fd00:ec2::254"), net.ParseIP("100.100.100.200"),
+	net.ParseIP("168.63.129.16"),
+}
+
+// MetadataIP reports whether ip is link-local or a known cloud metadata
+// address. Tool traffic never goes there.
+func MetadataIP(ip net.IP) bool {
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	for _, m := range metadataIPs {
+		if m.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
