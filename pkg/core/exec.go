@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openctemio/sdk-go/pkg/executor"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 )
 
 // =============================================================================
@@ -30,7 +30,7 @@ type ExecConfig struct {
 	// call returns ErrScannerOutputTooLarge.
 	MaxOutputBytes int64
 	// WritePaths are paths the scanner may write besides its private task
-	// directory, when the task sandbox is on (pkg/executor): an output
+	// directory, when the task sandbox is on (pkg/sensorkit/executor): an output
 	// file's directory, a cache the scanner owns. Everything else is
 	// read-only to it.
 	WritePaths []string
@@ -46,7 +46,7 @@ type ExecResult struct {
 	Stderr     []byte
 	DurationMs int64
 	Error      error
-	// Sandbox is the protection the scanner ran under (pkg/executor).
+	// Sandbox is the protection the scanner ran under (pkg/sensorkit/executor).
 	Sandbox executor.Status
 }
 
@@ -93,7 +93,7 @@ func runScanner(ctx context.Context, cfg *ExecConfig, stdoutLine, stderrLine fun
 
 	// Allowlisted environment only (see scanner_env.go): the sensor's API key
 	// and other credentials must not leak into scanner processes. The task
-	// runs on the executor (pkg/executor): in its sandbox when the sensor
+	// runs on the executor (pkg/sensorkit/executor): in its sandbox when the sensor
 	// turned it on, else as a plain child process as before.
 	//
 	// Writers, not pipes read by our own goroutines: exec copies the output

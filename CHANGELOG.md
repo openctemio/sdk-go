@@ -6,7 +6,7 @@ All notable changes to `github.com/openctemio/sdk-go`.
 
 ### Added
 
-- **Per-task tool sandbox** (`pkg/executor`). Every tool run
+- **Per-task tool sandbox** (`pkg/sensorkit/executor`). Every tool run
   (`core.ExecuteScanner`, `StreamScanner`, `BaseScanner`) goes through one
   executor with a small backend interface (`Backend.Prepare` → `Task`:
   `Start`, `Wait`, `Kill`, `Cleanup`) over a generic `TaskSpec` (argv,

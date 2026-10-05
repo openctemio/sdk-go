@@ -159,7 +159,7 @@ type Options struct {
 	// WorkDir is where scans write; its free disk is part of the slot
 	// sizing (default StateDir).
 	WorkDir string
-	// Sandbox is how every tool run is confined (pkg/executor): "off",
+	// Sandbox is how every tool run is confined (pkg/sensorkit/executor): "off",
 	// "auto" (the default: every control the host supports, the rest
 	// reported) or "required" (New fails unless all are enforced). Empty:
 	// SENSOR_SANDBOX, else auto. The sandbox needs the program to call
@@ -382,7 +382,7 @@ func New(opts Options) (*Kit, error) {
 		}
 	}
 
-	// Every tool run is confined (pkg/executor) and cannot read the key,
+	// Every tool run is confined (pkg/sensorkit/executor) and cannot read the key,
 	// the outbox or the policy.
 	if err := k.setupSandbox(); err != nil {
 		k.closeClient()

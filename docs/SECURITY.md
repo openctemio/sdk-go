@@ -327,7 +327,7 @@ variables, which may hold `user:password` (scanners stop getting them with
 follow `SENSOR_CONTENT_PROXY`), and the tools' own namespaces, such as
 `TRIVY_PASSWORD` or `PDCP_API_KEY`, which are that tool's credentials.
 
-### 7. Per-task tool sandbox (`pkg/executor`)
+### 7. Per-task tool sandbox (`pkg/sensorkit/executor`)
 
 Every tool run goes through one executor. A backend takes a generic task
 (argv, environment, working directory, writable paths, limits, network class)

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/openctemio/sdk-go/pkg/core"
-	"github.com/openctemio/sdk-go/pkg/executor"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 )
 
 // Every scanner the SDK runs (core.ExecuteScanner) goes through the

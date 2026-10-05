@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/openctemio/sdk-go/pkg/executor"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/outbox"
 )
 
