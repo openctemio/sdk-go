@@ -24,11 +24,17 @@ All notable changes to `github.com/openctemio/sdk-go`.
   policy to the running poller, executor and heartbeat;
   `Kit.ReloadLocalPolicyOnSIGHUP` reloads on every SIGHUP.
 
-### Changed
-
-- The absent-policy warning says what actually happens: "jobs may enable
-  out-of-band callbacks (interactsh), and custom templates run when
-  SENSOR_TEMPLATE_SIGNING_KEYS is set" (it said both "are allowed").
+- **Structured policy refusals** (api research/25 §3.6, D8). A command a
+  policy refused (the local policy's admission or executor checks, the kill
+  switch, the platform's tool gate) is reported with
+  `core.CommandResult.Refusal` (`core.Refusal{Layer, Rule, Detail}`; layers
+  `builtin`, `local`, `managed`, `scope`, `platform_tool_gate`). The client
+  sends it as `refusal` on v2 `POST /commands/{id}/fail` when the platform's
+  hello lists the new feature `refusal` (`protov2.FeatureRefusal`), so the
+  platform re-queues routed work to another sensor; the failure text is
+  unchanged. `core.RefusalOf(err)` builds it; `LocalPolicyError` gains
+  `Layer`. Values are bounded: unknown layers become `local`, malformed rules
+  `unknown`, details lose control and bidi characters and stop at 512 bytes.
 
 - **HTTP probe results keep what they learned about the server** (api
   research/22 E5). `core.LiveHost` gains `TLS` (`core.TLSLeaf`: the leaf
@@ -38,6 +44,12 @@ All notable changes to `github.com/openctemio/sdk-go`.
   `FaviconMMH3`, `JARM`, `ASN` and `CDNType` and emits a `certificate` asset
   per leaf (re-exported `TLSLeafInput`, `ASNInput`). The sensor maps httpx
   output onto them.
+
+### Changed
+
+- The absent-policy warning says what actually happens: "jobs may enable
+  out-of-band callbacks (interactsh), and custom templates run when
+  SENSOR_TEMPLATE_SIGNING_KEYS is set" (it said both "are allowed").
 
 ### Fixed
 
