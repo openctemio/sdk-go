@@ -242,6 +242,7 @@ it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
 ## Examples
 
 See [examples/](examples/) for complete examples:
+- A tool in Python with no SDK, and how to check it with the conformance kit ([python-adapter](examples/python-adapter), [docs/adapter-protocol.md](docs/adapter-protocol.md))
 - A complete sensor on `pkg/sensorkit` ([minimal-sensor](examples/minimal-sensor))
 - Basic API client usage
 - Scanner integration

@@ -468,6 +468,11 @@ Example exchange:
 {"v":1,"type":"result","status":"ok","stats":{"records":1}}
 ```
 
+The language-neutral guide (transport, rules, exit codes, conformance) is
+[docs/adapter-protocol.md](../adapter-protocol.md). `conformance.RunToolSuite`
+and the `openctem-conformance tool <tool.yaml>` command check a tool in any
+language against it (D.6.2).
+
 #### D.4.3 The exec profile (zero-code tools)
 
 For a CLI that already writes CTIS or SARIF:
