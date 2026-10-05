@@ -1,6 +1,11 @@
 // Package credentials provides credential management for the OpenCTEM SDK.
 // It includes interfaces for credential storage and retrieval, with
 // implementations for environment variables, files, and external vaults.
+//
+// Deprecated: no sensor, platform or collector imports it. Tools receive
+// credentials from the runtime by declaration (pkg/tool,
+// Permissions.Credentials). Removal is planned for a later minor release
+// (docs/STABILITY.md).
 package credentials
 
 import (
