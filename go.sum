@@ -43,6 +43,8 @@ github.com/openctemio/ctis v1.2.1-0.20261005152615-624ea18f1519 h1:bgpr4IOqPsqkd
 github.com/openctemio/ctis v1.2.1-0.20261005152615-624ea18f1519/go.mod h1:2JPNuKKM8Se951SQ2dqNSzf+0wyFJe3tEm1BGd2zbDI=
 github.com/openctemio/ctis v1.2.1-0.20261005175004-ba012fb93a18 h1:eR8Zej/kOZz+rJssOMCwyvPmlw+E3pBtjDH6pjYFrC8=
 github.com/openctemio/ctis v1.2.1-0.20261005175004-ba012fb93a18/go.mod h1:2JPNuKKM8Se951SQ2dqNSzf+0wyFJe3tEm1BGd2zbDI=
+github.com/openctemio/ctis v1.2.1-0.20261005175905-762fb51c0369 h1:9m9A/FM7lYvEYDs6+xjpEnBvPSVGTK/VJwJF5b/Xu8A=
+github.com/openctemio/ctis v1.2.1-0.20261005175905-762fb51c0369/go.mod h1:2JPNuKKM8Se951SQ2dqNSzf+0wyFJe3tEm1BGd2zbDI=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/prometheus/client_golang v1.24.1 h1:JnJkREXzWxUdCuPFpIWZiPispT9xVV59uiuyR2bPlnU=
