@@ -25,16 +25,21 @@ import (
 // Environment variables the kit reads (besides the SDK's own, such as
 // SENSOR_ALLOW_PRIVATE_TARGETS, SENSOR_SCAN_ROOTS and REGION).
 const (
-	EnvAPIURL       = "API_URL"
-	EnvAPIKey       = "API_KEY"
-	EnvSensorID     = "SENSOR_ID"
-	EnvSensorName   = "SENSOR_NAME"
-	EnvProtocol     = "SENSOR_PROTOCOL"    // auto (default) | v1 | v2
-	EnvMaxJobs      = "SENSOR_MAX_JOBS"    // 1-100; unset: the slots follow the resources
-	EnvDrainGrace   = "SENSOR_DRAIN_GRACE" // e.g. 45s, 2m (1s-1h; default 30s)
-	EnvTools        = "SENSOR_TOOLS"       // comma-separated allowlist
-	EnvStateDir     = "SENSOR_STATE_DIR"   // local state: the renewed API key, the tool cost history
-	EnvCACertFile   = "SENSOR_CA_CERT_FILE"
+	EnvAPIURL     = "API_URL"
+	EnvAPIKey     = "API_KEY"
+	EnvSensorID   = "SENSOR_ID"
+	EnvSensorName = "SENSOR_NAME"
+	EnvProtocol   = "SENSOR_PROTOCOL"    // auto (default) | v1 | v2
+	EnvMaxJobs    = "SENSOR_MAX_JOBS"    // 1-100; unset: the slots follow the resources
+	EnvDrainGrace = "SENSOR_DRAIN_GRACE" // e.g. 45s, 2m (1s-1h; default 30s)
+	EnvTools      = "SENSOR_TOOLS"       // comma-separated allowlist
+	EnvStateDir   = "SENSOR_STATE_DIR"   // local state: the renewed API key, the tool cost history
+	EnvCACertFile = "SENSOR_CA_CERT_FILE"
+	// EnvCAFingerprint pins the platform CA by its SHA-256 fingerprint
+	// (install snippet; api RFC-052).
+	EnvCAFingerprint = "SENSOR_CA_FINGERPRINT"
+	// EnvPlatformKey pins the platform's pairing key (its thumbprint).
+	EnvPlatformKey  = "SENSOR_PLATFORM_KEY"
 	EnvKeyAutoRenew = "PLATFORM_KEY_AUTORENEW" // true | false; unset: on when the state directory persists
 	// EnvScannerPriority is the priority of scanner processes: low (the
 	// default: nice +10, lowest best-effort I/O, OOM-killed before the
@@ -314,6 +319,14 @@ func CheckCredentials(apiURL, apiKey string, help CredentialsHelp) error {
 		e.hint = defaultCredentialsHint
 	}
 	return usageError(e)
+}
+
+// CheckDaemonCredentials is CheckCredentials for a sensor that may be
+// key-bound (api RFC-052): only the platform URL is required, since a
+// sensor without an API key uses its paired identity or pairs on first
+// start.
+func CheckDaemonCredentials(apiURL string, help CredentialsHelp) error {
+	return CheckCredentials(apiURL, "key-bound", help)
 }
 
 // ResolveStateDir is where the sensor keeps local state (the API key it

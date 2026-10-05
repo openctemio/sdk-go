@@ -18,7 +18,9 @@ import (
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/platform"
 	"github.com/openctemio/sdk-go/pkg/resource"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
 	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
+	"github.com/openctemio/sdk-go/pkg/sensorsig"
 )
 
 // Options configure a Kit. The zero value is a server-controlled sensor that
@@ -56,6 +58,17 @@ type Options struct {
 	// trusted besides the system trust store for platform requests and
 	// content downloads.
 	CACertFile string
+	// CAFingerprint pins the platform's TLS chain to the CA certificate
+	// with this SHA-256 fingerprint (SENSOR_CA_FINGERPRINT, from the
+	// install snippet; api RFC-052): the system trust store and CACertFile
+	// no longer apply to platform requests.
+	CAFingerprint string
+	// PlatformKey pins the platform's pairing key by its thumbprint
+	// (SENSOR_PLATFORM_KEY); a pairing with another key is refused.
+	PlatformKey string
+	// NoAutoPair stops a sensor that has neither an API key nor a paired
+	// identity instead of pairing on first start (api RFC-052).
+	NoAutoPair bool
 	// TemplateSigningKeys are the platform's template-signing public keys
 	// (SENSOR_TEMPLATE_SIGNING_KEYS; base64 Ed25519, comma-separated), as
 	// the platform shows them for the sensor's tenant. Custom templates in
@@ -259,8 +272,11 @@ type settings struct {
 	outbox                                   OutboxPlan
 	stateDir                                 string
 	key                                      startKey
-	templates                                *core.TemplateVerifier
-	local                                    *core.LocalPolicy
+	// signer and identity: a key-bound sensor (api RFC-052); no API key.
+	signer    *sensorsig.Signer
+	identity  *identity.Identity
+	templates *core.TemplateVerifier
+	local     *core.LocalPolicy
 }
 
 // scannerEntry is an added scanner.
@@ -331,7 +347,8 @@ func New(opts Options) (*Kit, error) {
 	s.verbose = opts.Verbose
 
 	if s.commands && !opts.Standalone {
-		if err := CheckCredentials(s.apiURL, s.apiKey, opts.CredentialsHelp); err != nil {
+		// No API key: the sensor is key-bound (paired), or pairs below.
+		if err := CheckDaemonCredentials(s.apiURL, opts.CredentialsHelp); err != nil {
 			return nil, err
 		}
 	}
@@ -363,6 +380,13 @@ func New(opts Options) (*Kit, error) {
 		httpsec.SetAPIRootCAs(pool)
 		httpsec.SetContentRootCAs(pool)
 	}
+	if f := envOr(opts.CAFingerprint, EnvCAFingerprint); f != "" {
+		fp, err := httpsec.ParseCAFingerprint(f)
+		if err != nil {
+			return nil, usageError(fmt.Errorf("%s: %w", EnvCAFingerprint, err))
+		}
+		httpsec.SetAPIPinnedCA(fp)
+	}
 	if keys := envOr(opts.TemplateSigningKeys, EnvTemplateSigningKeys); strings.TrimSpace(keys) != "" {
 		v, err := core.ParseTemplateSigningKeys(keys)
 		if err != nil {
@@ -385,7 +409,12 @@ func New(opts Options) (*Kit, error) {
 	// The API key: a key renewed by an earlier run is in the state
 	// directory (the renewal retired the configured one), whether or not
 	// this run renews.
-	if !opts.Standalone {
+	if !opts.Standalone && s.apiURL != "" && s.apiKey == "" {
+		if err := k.resolveIdentity(); err != nil {
+			return nil, err
+		}
+	}
+	if !opts.Standalone && s.signer == nil {
 		renewSetting := os.Getenv(EnvKeyAutoRenew)
 		switch {
 		case opts.KeyAutoRenew:
@@ -403,10 +432,11 @@ func New(opts Options) (*Kit, error) {
 		s.apiKey, s.key = sk.key, sk
 	}
 
-	if !opts.Standalone && s.apiURL != "" && s.apiKey != "" {
+	if !opts.Standalone && s.apiURL != "" && (s.apiKey != "" || s.signer != nil) {
 		k.client = client.New(&client.Config{
 			BaseURL:  s.apiURL,
 			APIKey:   s.apiKey,
+			Signer:   s.signer,
 			SensorID: s.sensorID,
 			Timeout:  opts.Timeout,
 			Verbose:  s.verbose,
@@ -484,6 +514,7 @@ func (k *Kit) initSettings() {
 	}
 	for name, v := range map[string]string{EnvAPIURL: opts.APIURL, EnvAPIKey: opts.APIKey, EnvSensorID: opts.SensorID,
 		EnvSensorName: opts.Name, EnvProtocol: opts.Protocol, EnvCACertFile: opts.CACertFile,
+		EnvCAFingerprint: opts.CAFingerprint, EnvPlatformKey: opts.PlatformKey,
 		EnvTemplateSigningKeys: opts.TemplateSigningKeys, EnvControlProxy: opts.ControlProxy,
 		EnvContentProxy: opts.ContentProxy, EnvScanProxy: opts.ScanProxy, EnvStateDir: opts.StateDir,
 		core.EnvLocalPolicy: opts.LocalPolicyPath} {

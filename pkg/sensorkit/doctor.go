@@ -35,6 +35,7 @@ const (
 	CheckStatePersistent      = "identity.state_persistent"
 	CheckKeyRenewal           = "identity.key_renewal"
 	CheckScanProxyInherit     = "network.scan_proxy_inherit"
+	CheckCAPinHost            = "platform.ca_pin_host"
 	CheckOOMProtect           = "runtime.oom_protect"
 	CheckAliasDeprecated      = "config.alias_deprecated"
 	CheckEnvUnknown           = "config.env_unknown"
@@ -216,8 +217,8 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 	r.Register(
 		settingsreg.Setting{Name: EnvAPIURL, Type: settingsreg.URL, Required: true, Group: "platform",
 			Description: "The platform's API URL (not the web UI origin)."},
-		settingsreg.Setting{Name: EnvAPIKey, Type: settingsreg.String, Required: true, Secret: true, Group: "platform",
-			Description: "The sensor's API key."},
+		settingsreg.Setting{Name: EnvAPIKey, Type: settingsreg.String, Secret: true, Group: "platform",
+			Description: "The sensor's bearer API key (legacy). Unset: the sensor pairs on first start and signs its requests with its own key (api RFC-052)."},
 		settingsreg.Setting{Name: EnvSensorID, Type: settingsreg.String, Group: "platform",
 			Description: "The sensor's id, when the key is not bound to one."},
 		settingsreg.Setting{Name: EnvSensorName, Type: settingsreg.String, Default: "sensor-<hostname>", Group: "platform",
@@ -226,12 +227,16 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Group: "platform", Description: "Sensor protocol."},
 		settingsreg.Setting{Name: EnvCACertFile, Type: settingsreg.Path, Group: "platform", Validate: readableFile,
 			Description: "PEM file with the platform's private CA (or a TLS-inspecting proxy's CA)."},
+		settingsreg.Setting{Name: EnvCAFingerprint, Type: settingsreg.String, Group: "platform", Validate: validCAFingerprint,
+			Description: "SHA-256 fingerprint of the platform's CA certificate (from the install snippet); pins platform TLS to it. API_URL must then use a host name, not an IP address."},
+		settingsreg.Setting{Name: EnvPlatformKey, Type: settingsreg.String, Group: "identity",
+			Description: "Thumbprint of the platform's pairing key (from the install snippet); pairing refuses another key."},
 		settingsreg.Setting{Name: EnvSSLCertFile, Type: settingsreg.Path, Group: "platform", Validate: readableFile,
 			Description: "System trust store file override (read by the Go runtime and the scanners)."},
 		settingsreg.Setting{Name: EnvSSLCertDir, Type: settingsreg.Path, Group: "platform", Validate: readableDir,
 			Description: "System trust store directory override."},
 		settingsreg.Setting{Name: EnvStateDir, Type: settingsreg.Path, Default: platform.DefaultStateDir, Group: "identity",
-			Description: "Local state: the renewed API key and the tool cost history. Mount a persistent volume."},
+			Description: "Local state: the paired identity and signing key (identity/), the renewed API key and the tool cost history. Mount a persistent volume."},
 		settingsreg.Setting{Name: EnvKeyAutoRenew, Type: settingsreg.Bool, Default: "auto", Group: "identity",
 			Description: "API key auto-renewal: true, false, or unset (on when the state directory persists)."},
 		settingsreg.Setting{Name: EnvMaxJobs, Type: settingsreg.Int, Group: "runtime",
@@ -326,6 +331,7 @@ func readableDir(v string) error {
 // the local policy.
 func (k *Kit) preflightNew(proxies Proxies, proxyOpts ProxyOptions) {
 	k.checkTrustFiles()
+	k.checkCAPinHost()
 	for _, rv := range legacyv1.SensorRenamedEnv {
 		r := [2]string{rv.Old, rv.New}
 		if _, ok := os.LookupEnv(r[0]); ok {

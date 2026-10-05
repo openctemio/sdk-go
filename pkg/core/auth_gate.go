@@ -57,6 +57,11 @@ const keyNotReceivedMessage = "API key required"
 // header, rather than at the API.
 func AuthFailureAdvice(err error, keyHint string) string {
 	status := AuthFailureStatus(err)
+	if strings.HasPrefix(keyHint, keyBoundHintPrefix) {
+		return fmt.Sprintf("the platform rejected the sensor's signed requests (HTTP %d, %s): the key was revoked or "+
+			"replaced, or the sensor was disabled or deleted. Pair the sensor again (openctemio-sensor pair; "+
+			"an administrator approves it under Sensors) and restart it", status, keyHint)
+	}
 	if status == http.StatusUnauthorized && strings.Contains(err.Error(), keyNotReceivedMessage) {
 		return fmt.Sprintf("the platform answered HTTP 401 %q although the sensor sent its API key (%s): "+
 			"the key never reached the API. API_URL probably points at the OpenCTEM web UI or at a proxy "+
@@ -66,6 +71,15 @@ func AuthFailureAdvice(err error, keyHint string) string {
 	return fmt.Sprintf("the platform rejected the API key (HTTP %d, key %s): the key is wrong, revoked or expired, "+
 		"or the sensor was disabled, deleted or given a new key. Create or regenerate a key under "+
 		"Settings → Sensors, set API_KEY to it and restart the sensor", status, keyHint)
+}
+
+// keyBoundHintPrefix starts the hint of a key-bound sensor (KeyBoundHint).
+const keyBoundHintPrefix = "signing key SHA256:"
+
+// KeyBoundHint names a key-bound sensor's signing key in log lines by the
+// start of its public thumbprint (nothing secret).
+func KeyBoundHint(keyID string) string {
+	return keyBoundHintPrefix + keyID[:min(12, len(keyID))] + "…"
 }
 
 // APIKeyHint returns the non-secret prefix of an API key for log lines: at

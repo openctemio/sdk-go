@@ -40,6 +40,7 @@ without a tier fails the job.
 | `pkg/tool/toolcompat` | Transitional bridges: a `core.Scanner` or `core.Collector` run as a tool of the contract (`FromScanner`, `FromCollector`), out of process; a contract tool served to the command executor (`AsScanner`) | Beta; removed once every in-tree scanner is ported |
 | `pkg/testkit` | Run a tool in-process with the runtime's rules; golden CTIS | Stable |
 | `pkg/sensorkit/toolhost` | The runtime side of the tool contract: runs one task out of process and checks, assembles and stamps its output | Beta |
+| `pkg/sensorkit/identity` | A key-bound sensor's identity on disk (permission-checked) and the interactive pairing client (api RFC-052) | Beta |
 | `pkg/sensorkit/executor` | Per-task tool sandbox behind a small backend interface (`Backend`, `TaskSpec`, `Status`) | Beta |
 | `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries, the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | Stable; its runtime internals are Internal-bound and its overlapping tool interfaces are replaced by the tool contract (RFC) |
 | `pkg/client` | Platform protocol client (v2 negotiated, v1 fallback) | Stable; its protocol internals are Internal-bound |
