@@ -1,0 +1,7 @@
+{
+  "id": "selftest-basic",
+  "targets": [
+    {"ref": "t1", "type": "http_service", "value": "http://shop.example:8080"},
+    {"ref": "t2", "type": "http_service", "value": "https://shop.example"}
+  ]
+}
