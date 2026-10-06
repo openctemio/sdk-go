@@ -1,5 +1,0 @@
-### Added: declare a simple tool with a builder
-
-- `tool.Define(name, version)` declares a tool of the tool contract without writing a manifest by hand: target types, output types, typed parameters (`StringParam`, `IntParam`, `NumberParam`, `BoolParam`, `ListParam` with label, help, default, range, allowed values, pattern and size limits) and a handler `func(ctx, job, emit)`. The parameters become the manifest's configuration schema, which the platform renders and the runtime enforces before the handler runs.
-- `tool.Job` gives the task with typed access: `Targets(types...)`, `Param(key).String()`, `.IntOr(d)`, `.BoolOr(d)`, `.Strings()`. `tool.Emit` builds CTIS records (`Vulnerability`, `Misconfiguration`, `Asset`) and passes them through the same checks as the emitter.
-- The result is an ordinary `tool.Tool`: same manifest validation, same out-of-process execution, admission, output checks and provenance, same tests. A parameter whose key looks like a secret is refused (declare a credential instead). Nothing is removed; `tool.New` stays.

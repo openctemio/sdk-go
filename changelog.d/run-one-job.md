@@ -1,5 +1,0 @@
-### Added: run one job by id and exit
-
-- `Kit.RunJob(ctx, id)` runs the one platform command with that id and returns: the sensor as a Kubernetes Job (or any per-job launcher). It sets up everything `Run` sets up, claims the command by id, runs it through the same checks and executor as a polled command (local kill switch, served command types, expiry, local policy, the platform's tool gate), waits for the outbox to deliver its results (`JobDeliveryTimeout`, 5 minutes) and stops; it never takes other work. It returns an error when the command cannot be claimed, is not run (released to the platform) or its results are not delivered in time; a command that ran and failed is reported to the platform as failed and is not an error. `EnvJobID` (`SENSOR_JOB_ID`) names the variable sensors read for it.
-- `client.ClaimCommand(ctx, id)` claims a command by id and returns it with its payload; `core.CommandPoller.RunClaimed(ctx, cmd)` runs an already claimed command with every check of a polled one.
-- Mount the outbox on a persistent volume for a Job: results not delivered before the pod ends are otherwise lost.

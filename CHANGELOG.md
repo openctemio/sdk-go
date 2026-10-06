@@ -8,6 +8,609 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.18.0 — 2026-10-06
+
+### Security
+
+- An input must be a regular file inside the task directory: absolute paths, `..`, links and directories are refused, and so are archives (the runtime extracts them). Files are parsed with the importer's hostile-input limits (no XML entities or external resources, size, depth and record caps).
+
+- The sensor refuses to start when its identity directory or files are
+  readable by others, owned by another user or symbolic links, and prints
+  the exact `chmod`/`chown` to run.
+
+- **Secret masking reveals at most a quarter of a secret** (CTIS spec 4.8
+  and 5.2). `core.MaskSecret` showed the first and last 3 characters of any
+  secret over 8 characters, which is most of a 9-12 character password. It
+  now shows nothing of a secret under 12 characters and at most a quarter of
+  a longer one (at most 4 characters at either end), counts runes instead of
+  bytes, and uses a fixed-length marker so the masked value no longer gives
+  away the length. `MaskAPIKey` and the betterleaks adapter (which showed
+  4+4 characters, all but one character of a 9-character secret) follow the
+  same rule. `MaskSecretInText` now hides the whole text when the secret is
+  not found in it. `core.GenerateSecretFingerprint` hashed the raw secret
+  into the fingerprint, so a short secret could be recovered from the
+  fingerprint by brute force; it now hashes the masked value.
+  **Identity note:** `secret.masked_value`, and secret fingerprints built by
+  these helpers, change once for every secret of 9 or more characters.
+  OpenCTEM derives a secret finding's identity from `masked_value`, so the
+  first scan after the upgrade reports such secrets under new identities.
+
+- **Sensor-local policy** (api RFC-040 §5.7, owner decisions Q3 (a) and
+  Q4 (a)). The network owner writes a read-only YAML file at install time
+  (`SENSOR_LOCAL_POLICY`, `sensorkit.Options.LocalPolicyPath`, default
+  `/etc/openctem/sensor-policy.yaml` when it exists; `apiVersion:
+  openctem.io/sensor-policy/v1`): `targets.allow` / `targets.deny` (CIDRs,
+  IPs, host names, `*.domain`), `targets.allow_private`, `ports.allow`,
+  `tools.allow`, `checks.allow` (command types), `allow_custom_templates`,
+  `allow_interactsh`, `rate.max_rps`, `rate.max_job_seconds`,
+  `kill_switch` and `kill_switch_file`. Parsing fails closed: unknown keys,
+  malformed entries, a second document, an empty or world-writable file, a
+  configured path that does not exist, a private range without
+  `allow_private`, or an always-blocked range in `targets.allow` stop the
+  sensor (exit code 2). The command poller checks every job after it is
+  claimed and before any executor or tool sees it
+  (`LocalPolicy.AdmitCommand`): host names are resolved and every address
+  must pass, so a name resolving to a denied address is refused; a job's
+  `ports` setting (RFC-038) must lie inside `ports.allow`; a refused
+  job is reported failed with `refused by local policy: <rule>: <detail>`.
+  The executor enforces the same rules again (targets through
+  `ScanTargetPolicy.Local`, templates, callbacks) and caps the rate and run
+  time. The platform's tool policy, payload switches and limits cannot
+  widen it. `LocalPolicy.CheckDial` / `DialContext` are the egress hook
+  (RFC-034 forwarder, in-process dials): they dial the checked addresses
+  only. A kill switch (policy key, or a file named by `kill_switch_file` or
+  `SENSOR_KILL_SWITCH_FILE`) stops claiming, stops running jobs (reported
+  failed) and makes the heartbeat say `paused by local policy`. Without a
+  policy the sensor works as before and reports `local_policy: absent`
+  with warnings; custom templates and interactsh stay allowed there until
+  a policy sets them (they default to off in any policy).
+  `SENSOR_ALLOWED_RANGES` / `SENSOR_ALLOWED_PORTS` are a shorthand policy
+  without a file. Heartbeats and the manifest carry `local_policy` (state,
+  digest, summary; never the ranges) only to a platform that lists the new
+  hello feature `local_policy` (`protov2.FeatureLocalPolicy`). A scan's
+  `timeout_seconds` is now capped at `core.MaxScanTimeout` (24h). New:
+  `core.LocalPolicy`, `LoadLocalPolicy`, `ParseLocalPolicy`,
+  `LocalPolicyOptions`, `LocalPolicyError`, `ErrRefusedByLocalPolicy`,
+  `LocalPolicyReport`, `LocalPolicySummary`,
+  `CommandPoller.SetLocalPolicy`, `DefaultCommandExecutor.SetLocalPolicy`,
+  `BaseSensor.SetLocalPolicy`, `SensorStatus.LocalPolicy`,
+  `Manifest.LocalPolicy`, `client.HeartbeatRequest.LocalPolicy`,
+  `conformance.FakePlatform.SetLocalPolicy`.
+
+- **v1 results name their command.** The v1 ingest path (the fallback when
+  the platform has no protocol v2, `Protocol: v1`, and the outbox's v1
+  delivery) now sends `X-OpenCTEM-Command-ID` with the command id from
+  `core.WithCommandID` (`legacyv1.HeaderCommandID`). Without it the platform
+  treated every v1 report as unsolicited and, under its `quarantine` policy,
+  held it for review (api RFC-040 §5.3). When the platform answers
+  `404 COMMAND_NOT_FOUND` (the command finished more than its grace period
+  ago), the report is sent once more unbound, as the v2 path does. A command
+  id that is not visible ASCII or is longer than 128 bytes is never put on
+  the header.
+
+### Security: tool tasks are admitted against the sensor-local policy before they start
+
+- `toolhost.Admit` and `toolhost.Host.Policy` (`*core.LocalPolicy` implements
+  `toolhost.Policy`): every task of a tool on the tool contract is checked
+  before any task directory, credential or process exists. The local
+  policy's `tools.allow` and kill switch apply; each target of a tool whose
+  network is `targets` passes the target guard (allow/deny lists, private
+  ranges, ports, resolved addresses). A refused target is removed from the
+  task and reported `skipped` with class `refused_by_policy`, so the tool
+  never receives it; a task with no target left is refused. The policy's
+  `rate.max_job_seconds` caps the run time. A manifest that declares
+  `linux_caps` is refused (the runtime grants none), and `RunOptions.Mode`
+  checks the manifest's `modes`.
+
+### Upgrade notes
+
+- A local policy that lists `checks.allow` must add `retest` for the sensor to accept retests; without it the platform's retest of a finding fails on that sensor and settles as unknown.
+
+- The SDK needs an OpenCTEM API that serves sensor protocol v2 (every API
+  since 2026-10-02); the API removed protocol v1. Against an older API every
+  platform call answers `client.ErrV2Unsupported`: upgrade the API first.
+- `SENSOR_PROTOCOL=v1` (or `-protocol v1`, `client.Config.Protocol: "v1"`) is
+  refused with `client.ErrProtocolV1Retired`. Remove the setting; `auto` and
+  `v2` are the same.
+- Code that used the removed `pkg/chunk` manager or `client.UploadChunk` uses
+  `Client.PushFindings`, which splits large reports into protocol v2 segments.
+
+- Replace `ctis.FromSARIF(data, &ctis.ConvertOptions{...})` with `(&core.SARIFParser{}).Parse(ctx, data, &core.ParseOptions{...})`: the option names are the same (`AssetType`, `AssetValue`, `AssetID`, `Branch`, `CommitSHA`, `BranchInfo`, `DefaultConfidence`, `ToolType`). Code that needs the bare module converter imports `github.com/openctemio/ctis` directly.
+
+- `ctis.IdentityHints.AgentID` (added earlier in this unreleased cycle) is now `ctis.IdentityHints.ScannerAgentID`; the JSON name stays `agent_id`, so reports are unchanged. The Go name says it is the scanner's own endpoint agent.
+- **CTIS 1.4** (`pkg/ctis` follows `github.com/openctemio/ctis`): `ctis.SchemaVersion` changed from `"1.3"` to `"1.4"`, so `NewReport()` and every adapter now stamp `"version": "1.4"`. Reports declaring 1.0 to 1.3 are still accepted, decode strictly and validate. Code that compared a version against the literal `"1.3"` should use `ctis.SupportedSchemaVersions()` / `ctis.IsSupportedVersion()` (versions this SDK knows every member of) or `ctis.IsCompatibleVersion()` (any minor of major 1). The OpenCTEM API accepts the 1.4 stamp today; do not send the new 1.4 members until the API runs a ctis 1.4 build.
+
+- **`pkg/ctis` is now `github.com/openctemio/ctis`.** It re-exports the
+  module (type aliases, constants and wrapper functions generated from the
+  version in go.mod) instead of keeping a hand copy. Code that only uses
+  the CTIS types, constants, `NewReport`, `FromSARIF`, `ConvertReconToCTIS`
+  and so on builds unchanged, and `pkg/ctis` and module values are now the
+  same types. `SARIFLog` and `SARIFRun` stay SDK types (the module's plus
+  `versionControlProvenance` and `SARIFRun.Repository()`); the nested SARIF
+  types are the module's, so one detail breaks:
+  - `SARIFResult.RuleIndex` is `*int` (was `int`), so index 0 is
+    distinguishable from absent.
+  apidiff reports every exported signature that mentions a `pkg/ctis` type
+  as changed, because the named types now live in the module; source code
+  using the same names is unaffected.
+  The sensor builds unchanged (`sensor-compat`).
+
+### Behaviour change
+
+- `API_KEY` is no longer required: a sensor without one pairs instead of
+  exiting with "missing: [API_KEY]". Set `Options.NoAutoPair` to keep the
+  old refusal.
+
+### Removed: the protocol v1 fallback client
+
+- The client speaks sensor protocol v2 only. Every call that used to fall back
+  to `/api/v1/agent/*` when the platform did not offer a v2 feature (results,
+  heartbeat incl. `SendHeartbeatWithHints` / `SendHeartbeatForCancels` /
+  `TestConnection`, command poll and transitions, `CheckFingerprints`,
+  `BaselineDiff`, `GetSuppressions` and its user-route fallback, and
+  `platform.PlatformClient.RenewKey`) now answers `client.ErrV2Unsupported`
+  (`platform.ErrRenewUnsupported` for renewal) against a platform that does
+  not serve the v2 route. The outbox keeps such a report queued instead of
+  dead-lettering it.
+- Removed with it: `client.ProtocolV1`, `client.IngestResponse`,
+  `Client.UploadChunk` / `AsChunkUploader`, the v1 chunk upload in `pkg/chunk`
+  (`Splitter`, `Manager`, `Config`, `Uploader` and their types; `SplitSegments`
+  stays), `platform.SensorBuilder.WithChunkManager`, `PlatformSensor.ChunkManager`
+  / `NeedsChunking` / `SubmitChunkedReport`, the v1 wire constants of
+  `pkg/sensorproto/legacyv1` (its settings migration stays),
+  `protov2.FeatureResultsV2`, `protov2.HeaderProtocolAdvert`,
+  `protov2.DeprecationProtocolV1`, and the v1 routes of the conformance fake
+  (`FakePlatform.V1Reports`). Requests no longer carry `X-Agent-ID`: protocol
+  v2 identifies a sensor by its key.
+- `PlatformSensor.SmartSubmitReport` returns `(string, error)`: every report
+  goes through the upload pipeline (large ones as protocol v2 segments).
+
+### Removed: `ctis.FromSARIF` and the SARIF kind helpers
+
+- `pkg/ctis.FromSARIF`, `NormalizeSARIFKind` and `NormalizeSARIFBaselineState` are removed, and the module's bare `FromSARIF` is no longer re-exported. Convert SARIF with `core.SARIFParser` (same asset rule, same options), which runs on `github.com/openctemio/ctis/importer`. `SARIFLog` and `SARIFRun` stay.
+
+### Deprecated
+
+- Packages with no importer in the sensor, the platform or the asset
+  collector are marked `Deprecated:` and will be removed in a later minor
+  release: `pkg/transport/grpc` and `proto/openctemio/v1` (removed in the
+  next minor, which drops the `google.golang.org/grpc` dependency),
+  `pkg/adapters/...`, `pkg/pipeline`, `pkg/audit`, `pkg/credentials`,
+  `pkg/errors`, `pkg/health`, `pkg/metrics`, `pkg/options`,
+  `pkg/enrichers/{epss,kev}`, `pkg/connectors/...`, `pkg/providers/github`
+  and `pkg/scanners/tenable`. `docs/STABILITY.md` lists the replacement of
+  each.
+
+### Added
+
+- **Tool manifests in the sensor manifest.** A scanner ported to the tool
+  contract implements `core.ToolContractProvider`; the registry reports its
+  `core.ToolContract` (`tool.Manifest.Contract()`: manifest digest, version,
+  class, tier, network, consumes, produces) as `tools[].contract` in the
+  sensor manifest (not on the heartbeat). A platform that does not know the
+  member ignores it.
+- **Adapter protocol v1 and the tool host.** `pkg/tool/adapter` is the
+  tool side (newline-delimited JSON on stdin/stdout, one task per process):
+  `Serve(tool)` for a tool shipped as its own binary (`--describe` prints
+  its manifest), `Dispatch(tools...)` for tools compiled into a sensor,
+  which the runtime re-executes as `<sensor> __openctem-tool <name>`. While
+  it serves, stdout is the protocol only (tool code printing goes to
+  stderr) and the process is non-dumpable. `pkg/sensorkit/toolhost` (Beta)
+  is the runtime side: `RunBuiltin` and `RunManifest` (adapter or the
+  zero-code `exec` profile for a CLI that writes CTIS or SARIF) run one task
+  in the Executor sandbox and check everything again: 1 MiB lines, an
+  invalid-message budget, idle and task timeouts, `describe` equal to the
+  manifest, CTIS validity, `produces` (quarantine), record and byte caps
+  (the tool is stopped), control and bidi characters, artifacts confined to
+  the task directory (no symlink escape, size and digest checked), a
+  graceful cancel then a kill. Only declared credentials are delivered,
+  inside the run message, and their values are masked in logs and stderr.
+  The report gets runtime-stamped provenance. An untrusted adapter runs
+  only on a backend that enforces its network class. JSON Schemas:
+  `tool.AdapterProtocolJSONSchema()`.
+- **Tool contract** (`pkg/tool`, docs/rfcs/sensor-sdk-v2.md): one contract
+  for every workload a sensor runs. A `Manifest` (the `tool.yaml` file,
+  `apiVersion: openctem.io/tool/v1`, read strictly by `LoadManifest`)
+  declares the execution class (target-scan, connector, parser, enricher),
+  tier, consumes/produces from the CTIS vocabulary, a configuration schema
+  in the settings-schema subset (no secret fields), permissions (network,
+  vendor hosts, filesystem, credentials, Linux capabilities), resources,
+  self-test fixtures and, for a tool that is its own program, how to start
+  it (`run.argv` with a closed set of placeholders and never a shell; the
+  zero-code `exec` profile). `Manifest.Validate` enforces the cross-field
+  rules (T2 only for target scans, class against network, placeholders
+  against the config schema); `Digest` is over the canonical JSON;
+  `ManifestJSONSchema` is the JSON Schema for editors and other languages.
+  `tool.New[C]` builds a tool from a manifest and a typed run function (the
+  config schema derived from C's struct tags when the manifest has none;
+  `secret:"true"` refused). `Context` gives a running tool a validating
+  `Emitter`, a redacting logger, progress, per-target outcomes, artifacts,
+  declared credentials only (`Secret` never prints its value) and an HTTP
+  client that reaches only what the network permission allows and never a
+  metadata address. Errors are categorized (`ErrorClass`, `Error`,
+  `Unreachable`, `Retry`, `RateLimit`, `Refused`, `Invalid`, `Failed`).
+- **`pkg/testkit`**: run a tool in-process with the runtime's rules (strict
+  config, declared credentials only, record checks, quarantine of
+  undeclared output, caps, report assembly and provenance); `Normalize` and
+  `Golden` for golden CTIS files.
+
+- **Runner mode with CI workload identity** (api RFC-051). `sensorkit.NewCIRun`
+  detects a GitHub Actions job allowed `id-token: write` or a GitLab CI job
+  with an `id_tokens` variable (`OPENCTEM_ID_TOKEN` by default) when
+  `OPENCTEM_TENANT_ID` is set, asks the CI provider for the job's OIDC token
+  (audience `OPENCTEM_OIDC_AUDIENCE`, default `openctem:tenant:<id>`) and
+  exchanges it at the first use for a run token that lives at most 15 minutes
+  (`POST /api/v1/ci/oidc/exchange`); on GitHub it renews the token for the
+  same run before it expires. `CIRun` is a `core.Pusher` (uploads go to
+  `/api/v1/ci/runs/{id}/results`), and `BaselineDiff` and `Evaluate` ask the
+  platform's gate for the verdict; `WriteVerdict` prints it. `Kit.RunOnce`
+  runs the kit's scanners once, pushes through the run and returns the
+  verdict. No token is printed, logged or put in an error; `CIRun.String`
+  redacts it.
+
+- `pkg/ctis` re-exports the CTIS 1.4 interoperability members (`finding.native`, `scores`, `vex`, `source_lifecycle`, `source_extra`, `vulnerability.ids`, remediation solution metadata, `asset.identity_hints`) and their normalizers (`NormalizeNativeSeverity`, `NormalizeNativeStatus`, `NormalizeVEXStatus`, `NormalizeVEXJustification`, `NormalizeVulnerabilityID`, `PreferredVulnerabilityID`, `LocationKey`, `AllScores`, `SetSourceExtra`), plus `SupportedSchemaVersions` and `IsSupportedVersion`.
+- `executor.TaskSpec.Stdin`: a task can read its standard input (the
+  channel of the tool adapter protocol); pass the read end of an `os.Pipe`
+  so the task gets the descriptor itself. `executor.Status.NetworkEnforced`
+  says whether the backend itself confines a task to its network class;
+  the process backend records the class but does not enforce it, so it
+  reports false (untrusted tools need a backend that reports true).
+- **Per-task tool sandbox** (`pkg/sensorkit/executor`). Every tool run
+  (`core.ExecuteScanner`, `StreamScanner`, `BaseScanner`) goes through one
+  executor with a small backend interface (`Backend.Prepare` → `Task`:
+  `Start`, `Wait`, `Kill`, `Cleanup`) over a generic `TaskSpec` (argv,
+  environment, working directory, writable paths, limits, network class).
+  The `process` backend runs the task through a launcher (the program's own
+  binary, `executor.RunLauncherIfRequested` first in main) that, before the
+  tool starts: gives it a private throwaway directory (HOME, TMPDIR, XDG_*);
+  sets RLIMIT_DATA / NPROC / FSIZE / NOFILE / CORE (and CPU when asked);
+  sets no_new_privs; applies Landlock (writes only under the task directory
+  and the caller's `ExecConfig.WritePaths`; no read of the protected paths:
+  the sensor's credentials file, outbox and its key, local policy,
+  configuration); installs a seccomp filter (ptrace, mount and namespaces,
+  modules and kexec, keyrings, bpf, perf, clock changes, file handles,
+  userfaultfd refused; clone with namespace flags refused; other syscall
+  ABIs kill the task). The sensor process makes itself non-dumpable, so a
+  task under the same user cannot read its memory or environment through
+  /proc. `sensorkit` turns it on by default (`SENSOR_SANDBOX=auto`;
+  `required` refuses to start without every control; `off`), protects its
+  own files plus `Options.ProtectedPaths`, and logs what is enforced. Each
+  `ExecResult` carries the sandbox status it ran under. No Docker socket is
+  ever used.
+
+- **Preflight checks and the config report** (api RFC-033, config report;
+  OpenCTEM research/26). What a sensor used to print to stderr only is now
+  also a check result with a stable id, a status, a code and typed
+  parameters, delivered to a platform that lists the `config_report`
+  feature (`PUT /api/v2/sensor/config-report`, at most 64 KiB) and named by
+  digest on every heartbeat (`config_report`); the platform asks for it
+  again with the heartbeat action `send_config_report`. Reported by the kit:
+  a skipped tool and why (`tool.<name>.binary`: not_installed, broken,
+  check_error), a tool left out by `SENSOR_TOOLS` or the local policy
+  (`tool.<name>.selection`), a tool not registered (`tool.<name>.registration`),
+  no tool at all (`tools.available`), a state directory that does not
+  persist (`identity.state_persistent`), key renewal off or failed to start
+  (`identity.key_renewal`), scanners inheriting the proxy
+  (`network.scan_proxy_inherit`), OOM protection that failed
+  (`runtime.oom_protect`), legacy `AGENT_*` names (`config.alias_deprecated`),
+  unknown `SENSOR_*`/`OPENCTEM_SDK_*` names with a "did you mean"
+  (`config.env_unknown`, opt-in with `Options.ReportUnknownEnv`), the local
+  policy and its template keys (`policy.local`, `policy.template_keys`), a
+  stopped command poller (`runtime.command_poller`), and an unreadable
+  `SSL_CERT_FILE`/`SSL_CERT_DIR` (`platform.tls`), which Go used to ignore
+  silently (now also a start-up warning). A sensor adds its own with
+  `Kit.ReportCheck`; `Kit.ConfigReport` returns the report. New checks never
+  stop the sensor.
+- **Settings registry** (`pkg/sensorkit/settings`): each setting declared
+  once with its name, type, required, default, secret, description, docs
+  link and validation. The kit registers the SDK's settings
+  (`sensorkit.RegisterSDKSettings`); a sensor passes its own registry in
+  `Options.Settings`. `docs/SETTINGS.md` is generated from it.
+- **Secrets never leave the host.** The config report carries, per declared
+  setting, only whether it is set, its source (`env`, `option`, `default`,
+  `unset`), whether it is a secret and whether its value is valid: there is
+  no value member. Every free text and parameter is scrubbed of the secret
+  settings' values, the API key and URL credentials, control and bidi
+  characters are stripped, and every field is bounded
+  (`core.ConfigReport.Finalize`). The conformance fake serves the feature
+  (`SetConfigReport`, `ConfigReports`).
+- **Local policy schema v2; v1 frozen** (owner decision D13, api
+  research/25 §3.3). `openctem.io/sensor-policy/v1` never gains a key again
+  (a sensor refuses a key it does not know, so a new v1 key would stop every
+  older sensor). `openctem.io/sensor-policy/v2` reads every v1 key plus
+  `managed: {accept: bool}` (default true; false = the owner refuses
+  platform-managed policy documents, D11; `LocalPolicy.AcceptsManagedPolicy`).
+  The version is read first and the document then decoded strictly against
+  that version's keys: a v1 file with a v2 key is refused. The report gains
+  `schema` (the file's version) and `schemas` (the versions this SDK reads,
+  `core.LocalPolicySchemas`), and the summary `managed_accept`, so the
+  platform generates a recommended policy only in a version the sensor reads.
+- **Local policy reload** (D10). `core.ReloadLocalPolicy(prev, opts)`; on a
+  file that does not load, the result is the previous policy with the kill
+  switch engaged and a warning naming the error (never the previous policy
+  silently). `sensorkit.Kit.SetLocalPolicy` / `ReloadLocalPolicy` apply a
+  policy to the running poller, executor and heartbeat;
+  `Kit.ReloadLocalPolicyOnSIGHUP` reloads on every SIGHUP.
+
+- **Structured policy refusals** (api research/25 §3.6, D8). A command a
+  policy refused (the local policy's admission or executor checks, the kill
+  switch, the platform's tool gate) is reported with
+  `core.CommandResult.Refusal` (`core.Refusal{Layer, Rule, Detail}`; layers
+  `builtin`, `local`, `managed`, `scope`, `platform_tool_gate`). The client
+  sends it as `refusal` on v2 `POST /commands/{id}/fail` when the platform's
+  hello lists the new feature `refusal` (`protov2.FeatureRefusal`), so the
+  platform re-queues routed work to another sensor; the failure text is
+  unchanged. `core.RefusalOf(err)` builds it; `LocalPolicyError` gains
+  `Layer`. Values are bounded: unknown layers become `local`, malformed rules
+  `unknown`, details lose control and bidi characters and stop at 512 bytes.
+
+- **HTTP probe results keep what they learned about the server** (api
+  research/22 E5). `core.LiveHost` gains `TLS` (`core.TLSLeaf`: the leaf
+  certificate's subject, SANs, issuer, serial, validity and SHA-256
+  fingerprint), `FaviconMMH3`, `JARM`, `ASN` (`core.ASN`) and `CDNType`.
+  `pkg/ctis` follows ctis to the commit that adds `LiveHostInput.TLS`,
+  `FaviconMMH3`, `JARM`, `ASN` and `CDNType` and emits a `certificate` asset
+  per leaf (re-exported `TLSLeafInput`, `ASNInput`). The sensor maps httpx
+  output onto them.
+
+- **Claim-N** (api RFC-046 §11, RFC-030 §5.9). Against a platform whose
+  hello lists `capacity`, `GET /api/v2/sensor/commands` sends
+  `X-OpenCTEM-Sensor-Features: capacity` and the platform answers with the
+  commands already claimed for this sensor (acknowledged, lease set), at
+  most its free slots of scans, in its fair order. `core.Command.Claimed`
+  says so; the poller still acknowledges each one it runs (a replay) and
+  now **releases** at once any claimed command it does not run (no free
+  slot, type not allowed, expired, hosts busy, sensor paused), instead of
+  leaving it to its lease. Older platforms and v1 are unchanged.
+  `client.WithoutClaimOnPoll()` opts a client out (a caller that polls
+  without running what it gets).
+
+### Added: a conformance kit for tools in any language
+
+- `conformance.RunToolSuite(t, "tool.yaml", opts)` and the command `openctem-conformance tool <tool.yaml>` check a tool that is its own program (any language) against adapter protocol v1 the way a sensor runs it: the manifest loads and validates; the handshake answers protocol 1, ignores an unknown message and describes the tool exactly as its tool.yaml does; an unknown configuration key is refused; standard output carries only protocol messages; the program exits 0 when its input ends; a cancel is honoured within the grace; and each self-test fixture runs through the runtime's own host (with every runtime check) and produces exactly the expected normalized CTIS. `-update` (or `OPENCTEM_UPDATE_GOLDEN=1`) writes the expected reports.
+
+### Added: per-command logs reach the platform
+
+- Every log line of a platform command now goes to the sensor's standard error and, on a platform that offers protocol v2 feature `logs`, to the command's log on the platform (`POST /commands/{id}/logs`), which keeps it with the task and shows it on the run page. Sources: a tool's `ctx.Log()` (`toolhost.Host.LogSink`) and the sensor's own code through `Kit.CommandLogger(ctx)`.
+- Lines are redacted on both sinks (the tool's credentials, the sensor's key, fields named like secrets), cleaned of control characters and bounded per command (2,000 lines, 1 MiB, then a note of what was dropped). Batches go through the outbox (new kind `command_log`), are delivered before the command's result and survive an outage; they are evicted first under the byte cap and a refused batch is dropped, so logs never mark a command's results as lost.
+- `client.SendCommandLogs` / `QueueCommandLogs`, `sensorproto/v2.CommandLogsRequest`, `CommandLogLine`, `CommandLogsResponse`, `FeatureLogs`, and the fake platform's `SetLogs` / `CommandLogs` for tests.
+
+### Added: pin the platform CA by fingerprint
+
+- `httpsec.SetAPIPinnedCA` / `httpsec.ParseCAFingerprint`: every API client
+  created afterwards accepts the platform only when its TLS chain verifies
+  up to the certificate with that SHA-256 fingerprint (a root or an
+  intermediate the platform sends, or a self-signed platform certificate).
+  The system trust store and `SENSOR_CA_FILE` no longer apply while a pin
+  is set; the name, validity and key usage are still checked. This is what
+  makes the first contact of a pairing sensor safe from a fake platform
+  (api RFC-052).
+- With a pin, the platform URL must use a host name: crypto/tls sends no server name for an IP address and x509 would skip the name check, so a pinned connection to an IP address is refused (`ErrPinnedCANoServerName`).
+
+### Added: the file importer as a parser-class tool
+
+- `pkg/importtool` (Beta): a tool of the tool contract, class `parser`, network `none`, workdir only. It converts the task's input files (Nessus v2 XML, Qualys detection XML with its KnowledgeBase, DefectDojo Generic Findings JSON, CycloneDX, SPDX, osv-scanner results, CSAF, OpenVEX) to CTIS with the `ctis/importer` package and emits them through the runtime's checks. Problems are logged with their line numbers; the statements of VEX documents go to the artifact `vex-statements.json`, never into findings.
+- `testkit.Options.Files` writes files into the task directory before a run, as the runtime places a parser's inputs.
+
+### Added: the kit runs tools of the tool contract (AddTool, adapter directories)
+
+- `Kit.AddTool(t)`: a tool compiled into the sensor (or a legacy scanner
+  through `toolcompat.FromScanner`) is reported with its contract and runs
+  dispatched and scheduled scans out of process: each task admitted
+  against the local policy in force (reloads included), only declared
+  credentials delivered (`Options.ToolCredentials`), output checked and
+  stamped, then delivered through the outbox like any scan. The program
+  calls `adapter.Dispatch(tools...)` at the top of `main`.
+- `Options.AdapterDirs` / `SENSOR_ADAPTER_DIRS`: tools the operator
+  installed as `tool.yaml` plus a program (adapter protocol v1 or the exec
+  profile), in `<dir>/tool.yaml` or `<dir>/<name>/tool.yaml`. A manifest is
+  loaded only when the directory, the manifest and a program shipped next
+  to it are owned by root or the sensor's user, not group- or
+  world-writable and not symbolic links, and only with a run section; a
+  name the sensor already provides is never replaced. A refused manifest is
+  a warning and an `adapter_refused` check in the config report.
+- `toolcompat.AsScanner` serves a contract tool to the command executor; a
+  task none of whose targets was scanned fails its command instead of
+  completing with no results.
+- `core.ToolSettings.Values()`; `conformance.FakePlatform.AcceptedReports()`.
+
+### Added: sensors run the platform's retest command
+
+- `sensorkit` serves the `retest` command for every tool whose manifest declares retest (`tool.WithRetest`) and reports capability `retest:<tool>` for each, which the platform routes retests by. The command (`{"scanner", "targets": [addresses], "items": [{ref, target, kind, rule_id, fingerprint}], "timeout_seconds"}`) becomes one retest task that runs out of process like a scan, and the command completes with `metadata.retest.verdicts`: one `still_present`, `fixed` or `unverifiable` per item.
+- The command is admitted like a scan before anything runs: the platform's tool policy, the local policy's `checks.allow`, `tools.allow` and every target. An item on an address that is not one of the command's targets, or a tool without retest, fails the command. Timeout: 2 minutes by default, at most 30.
+- A sensor that runs a tool itself serves its retests with `Kit.HandleRetest(name, run)` (`run` runs the task through a toolhost Host); the kit reports `retest:<name>` and admits each command the same way. `toolcompat.Retester` (implemented by the contract tools the kit adds) and `toolcompat.RetestCapability` expose the same to a sensor that wires its own executor.
+
+### Added: run one job by id and exit
+
+- `Kit.RunJob(ctx, id)` runs the one platform command with that id and returns: the sensor as a Kubernetes Job (or any per-job launcher). It sets up everything `Run` sets up, claims the command by id, runs it through the same checks and executor as a polled command (local kill switch, served command types, expiry, local policy, the platform's tool gate), waits for the outbox to deliver its results (`JobDeliveryTimeout`, 5 minutes) and stops; it never takes other work. It returns an error when the command cannot be claimed, is not run (released to the platform) or its results are not delivered in time; a command that ran and failed is reported to the platform as failed and is not an error. `EnvJobID` (`SENSOR_JOB_ID`) names the variable sensors read for it.
+- `client.ClaimCommand(ctx, id)` claims a command by id and returns it with its payload; `core.CommandPoller.RunClaimed(ctx, cmd)` runs an already claimed command with every check of a polled one.
+- Mount the outbox on a persistent volume for a Job: results not delivered before the pod ends are otherwise lost.
+
+### Added: key-bound sensors pair on first start (api RFC-052)
+
+- `pkg/sensorkit/identity`: the sensor's identity on disk
+  (`<state dir>/identity/signing.key`, PKCS #8 PEM, and `identity.json`,
+  both 0600 in a 0700 directory owned by the sensor's user) and `Pair`, the
+  interactive pairing client: the sensor makes its own Ed25519 key, checks
+  the platform's signed answer (and its pinned key), prints a code and a
+  fingerprint for the administrator to compare, waits for approval and
+  confirms the identity with a signature. No secret is ever typed or
+  pasted.
+- `client.Config.Signer`: a key-bound client signs every request (RFC 9421,
+  `pkg/sensorsig`), heartbeats included, and never sends a bearer key.
+- The kit: a sensor started without `API_KEY` uses its paired identity, or
+  pairs on first start and then runs (`Options.NoAutoPair` stops it
+  instead). `SENSOR_CA_FINGERPRINT` pins the platform's TLS chain;
+  `SENSOR_PLATFORM_KEY` pins the platform's pairing key. With a CA pin,
+  `API_URL` must use a host name; an IP address is warned about in the
+  config report (`platform.ca_pin_host`).
+
+### Added: sensor pairing protocol and signed sensor requests
+
+- `pkg/sensorproto/pairing`: the interactive pairing protocol of api
+  RFC-052 (wire types, the nonce commitment, the platform transcript and
+  its signature check with an optional pinned platform key, the short
+  authentication string a person compares, user codes). Its test vectors
+  are byte-identical with the platform's copy.
+- `pkg/sensorsig`: RFC 9421 request signatures with the sensor's Ed25519
+  key (one narrow profile: `@method` `@path` `@query` `content-digest`,
+  created/expires/nonce/keyid, RFC 7638 key id) and a signing
+  `http.RoundTripper` that never sends a bearer credential.
+
+### Added: declare a simple tool with a builder
+
+- `tool.Define(name, version)` declares a tool of the tool contract without writing a manifest by hand: target types, output types, typed parameters (`StringParam`, `IntParam`, `NumberParam`, `BoolParam`, `ListParam` with label, help, default, range, allowed values, pattern and size limits) and a handler `func(ctx, job, emit)`. The parameters become the manifest's configuration schema, which the platform renders and the runtime enforces before the handler runs.
+- `tool.Job` gives the task with typed access: `Targets(types...)`, `Param(key).String()`, `.IntOr(d)`, `.BoolOr(d)`, `.Strings()`. `tool.Emit` builds CTIS records (`Vulnerability`, `Misconfiguration`, `Asset`) and passes them through the same checks as the emitter.
+- The result is an ordinary `tool.Tool`: same manifest validation, same out-of-process execution, admission, output checks and provenance, same tests. A parameter whose key looks like a secret is refused (declare a credential instead). Nothing is removed; `tool.New` stays.
+
+### Added: retest in the tool contract
+
+- A target-scan tool can declare `retest: true` in its manifest and implement `tool.Retester` (`tool.WithRetest(t, fn)` adds a handler to any tool). A retest task carries `Task.Retest` items (a finding or asset ref, the target it is on, rule id, fingerprint); the tool answers one verdict per item with `RetestContext.Verdict`: `still_present`, `fixed` or `unverifiable`.
+- The rules are enforced by the SDK, in tests (`testkit.Result.Verdicts`) as on the adapter side: every item must be on one of the task's targets (a retest never widens scope), at most 1,000 items, no records in a retest task (`tool.ErrRetestRecord`), the first verdict per item counts, an item without a verdict is `unverifiable`, and `fixed` stands only when the item's target was reported done and the task finished. Verdict details are cleaned, capped and redacted.
+- Adapter protocol v1 gains the `verdict` message and the `retest` member of the run task (feature `retest` in the runtime's hello); the JSON Schemas of `tool.yaml` and of the protocol describe both. Adapters that do not know them are unaffected: the runtime sends a retest only to a tool whose manifest declares it.
+- The runtime side (`pkg/sensorkit/toolhost`) applies the same rules across the process boundary: a retest task is checked and admitted before anything starts, items on targets the local policy refuses are not sent and end `unverifiable`, records in a retest are refused (counted as invalid output), a verdict on an item not in the task is refused, and `Outcome.Verdicts` holds one final verdict per item in task order. An exec-profile tool cannot declare retest (it has no verdict channel).
+
+### Added: run a legacy scanner or collector as a tool of the tool contract
+
+- `pkg/tool/toolcompat` (Beta, transitional): `FromScanner(manifest, scanner,
+  ...)` and `FromCollector(manifest, collector, ...)` turn a `core.Scanner`
+  or `core.Collector` into a `tool.Tool`. Compiled into the sensor and
+  listed in `adapter.Dispatch`, it runs out of process in the task sandbox
+  like any tool: the child scans (all targets at once for a
+  `core.MultiTargetScanner`), converts the raw output with the SDK's
+  parsers (or `WithParser`), and emits the report through the runtime's
+  checks, so an undeclared record type is quarantined and a failed scan
+  fails only its target.
+- `WithState` sends the scanner's exported fields to the child (fields
+  tagged `json:"-"` stay behind); secrets travel only as declared
+  credentials (`WithPrepare` with `ctx.Secret`, or
+  `WithAPIKeyCredential` for a collector, whose `APIKey` is never sent).
+  The task's configuration, validated against the manifest's schema,
+  reaches the scanner as `ScanOptions.Settings`.
+
+### Changed
+
+- The absent-policy warning says what actually happens: "jobs may enable
+  out-of-band callbacks (interactsh), and custom templates run when
+  SENSOR_TEMPLATE_SIGNING_KEYS is set" (it said both "are allowed").
+
+- **`pkg/ctis` imports `github.com/openctemio/ctis`** (owner decision Q3,
+  research 16 G2), pinned to ctis main at `7d7d5ec` (untagged; includes
+  ctis#14 secret-snippet masking in `FromSARIF`, ctis#15 recon hardening and
+  ctis#16 SARIF suppressions). The hand copy had drifted and the sensor ran
+  stale converters. Fixed by the switch:
+  - recon reports validate: no scope type `web`, no raw recon type
+    (`port`, `url_crawl`) as a capability, IPv6 addresses as `AAAA`
+    records, one DNS record per value, hostname-only port results as
+    `host` assets, every probe an `http_service`, stable asset IDs and order;
+  - `FromSARIF` converts every run (each finding names its run's tool
+    when there are several), reads `security-severity` and CVE/CWE tags,
+    types Trivy CVEs as `vulnerability` (they were all misconfigurations),
+    gives an unknown tool no capabilities (it got `vulnerability, secret`,
+    so SAST from an unknown tool could be filed as secret), and gives the
+    asset no criticality (it defaulted to `high`; spec 4.1 leaves it to the
+    receiver);
+  - `NewReport()` stamps schema version `1.3` (was `1.0`);
+  - new from the module: `SchemaVersion`, `SchemaURL`, `ParseVersion`,
+    `IsCompatibleVersion`, `(*Report).Validate`, `SARIFLogicalLocation`,
+    `SARIFReportingReference`.
+  The SDK keeps its asset rule on top of the module's `FromSARIF` (options,
+  then branch info, then `versionControlProvenance`; results without an
+  asset are `ErrNoAssetForFindings`), plus `CheckFindingAssets` and the
+  `NormalizeSARIF*` helpers. `scripts/check-ctis-parity.sh` (the
+  `ctis-parity` job) now regenerates the aliases and fails when they are
+  stale, or when `pkg/ctis` declares a model struct of its own again.
+  Bumping CTIS is `go get github.com/openctemio/ctis@<ver>` plus
+  `go generate ./pkg/ctis`.
+- **Every report the runtime pushes states `coverage_type`** (CTIS spec 4.5:
+  an absent value is not `full`; research 16 G4, owner decision Q5). A scan
+  command's report is `partial` when the scanner says the run stopped
+  part-way (`ScanResult.Error`) or the report lists `failed_targets`, even if
+  the parser declared `full`; otherwise a value the parser declared is kept;
+  a repository scan (`metadata.branch`) is `partial`; any other completed
+  run is `full`. Collector reports keep the collector's value, else
+  `partial`. Daemon-mode scan and collect reports follow the same rules.
+  The platform's coverage-scoped auto-resolve used to read the missing
+  value as `full`; it is being changed to read it as not full, and this
+  keeps completed sensor scans eligible after that change.
+
+- `ctis.FromSARIF` carries `properties.tags` from the result and its rule
+  into the finding's `tags` (they were dropped), as `github.com/openctemio/ctis`
+  does (ctis#12). Tags are deduplicated ignoring case in first-seen order;
+  non-string, empty and over-long (more than 128 bytes) entries are skipped; at
+  most 50 are kept per finding.
+- The SARIF converter keeps one secret-scanner list (gitleaks, betterleaks,
+  trufflehog, detect-secrets, or any name containing `secret`) for both the
+  finding type and the tool capabilities. Capabilities used to match any name
+  containing `leaks`; they now match the same names as the finding type and
+  as ctis.
+- `scripts/check-ctis-parity.sh` also compares FromSARIF's secret-scanner
+  list, tag caps, `sarifTags` / `isSecretTool` bodies and the shared
+  betterleaks sample against ctis.
+
+### Changed: the tool adapters run on the ctis importer
+
+- `pkg/adapters/{trivy,nuclei,semgrep,betterleaks,vuls,sarif}` (Deprecated) now delegate to `github.com/openctemio/ctis/importer`, the one conversion entry point the platform's import and CI endpoints and the sensor use. Their exported API is unchanged, and so are the asset rules: the repository the caller names (or the CI job's repository) wins, else the asset the file names; a code report with findings and neither is still `ctis.ErrNoAssetForFindings`. Inputs now get the importer's hostile-input limits (size, depth, string and record caps, UTF-8).
+- Output differences, all to CTIS 1.4: `native`, `scores`, typed `vulnerability.ids`, `remediation` and `source_extra` are filled; tool capabilities use the platform's words (`sca`, `secret`, ...); finding ids are no longer set (receivers key findings); secret types use the schema vocabulary (`aws_key`, `generic_secret` instead of `credential` or `AWS`); semgrep's "requires login" placeholder fingerprint is replaced by a fingerprint of path, rule and line; semgrep impact is lower-case; the vuls instance id is an identity hint (`identity_hints.cloud_resource_id`); a SARIF log converts exactly as the module's `FromSARIF` does (title from the result message, no adapter-generated fingerprint, ids, data flow, tag filtering or markdown help references). Secret fingerprints are unchanged.
+- The adapters' internal helpers and their unit tests are removed (the importer tests cover the conversion), and so are the `assetctx` helpers nothing uses any more.
+
+### Changed: SARIF converts through the ctis importer
+
+- `core.SARIFParser` and the tool host (`pkg/sensorkit/toolhost`, `output.format: sarif`) convert SARIF with `github.com/openctemio/ctis/importer`, the conversion the platform's import and CI endpoints use. The asset rule is unchanged (options, then branch info, then `versionControlProvenance`, then the CI job; findings with none of them are `ctis.ErrNoAssetForFindings`), and so are the findings: `ToolType` and `DefaultConfidence` still apply (ctis#34), and `BranchInfo` is still the report branch.
+- Differences, all additions or fixes: the input gets the importer's hostile-input limits; a user and password in a `versionControlProvenance` repository URL are removed from the asset value; the asset carries a name and its branch and commit properties, and the report its scope; a result with neither a message nor a rule is skipped with an issue; `DefaultConfidence` 0 now means 90 (it used to give findings confidence 0).
+
+### Fixed
+
+- **Executor**: a task no longer fails to start ("landlock: file does not
+  exist") when a file the launcher listed while granting read access
+  disappears before its rule is added (another task's temporary file in
+  /tmp). The vanished path is skipped; it grants nothing.
+- **Cancels reach a sensor without the doorbell** (api RFC-046 §8). A
+  sensor started with the doorbell off (`sensorkit.Options.DisableDoorbell`,
+  `-disable-doorbell`) sent plain heartbeats and ignored the answer, so a
+  scan the user canceled, a run that hit its deadline or a command handed to
+  another sensor ran to the end. The plain heartbeat now reads
+  `cancel_command_ids` (`client.SendHeartbeatForCancels`,
+  `core.CancelPusher`) and the poller (`core.CommandCanceler`) stops and
+  releases those commands, as with the doorbell. The heartbeat itself is
+  unchanged: it does not announce the doorbell.
+
+- **semgrep: a partially parsed file no longer drops every finding.**
+  semgrep emits `errors[].type` as a string or an array
+  (`["PartialParsing", [...]]`); `SemgrepError.Type` was a string, so
+  `json.Unmarshal` failed for the whole document and the adapter returned no
+  findings at all. `SemgrepError` now decodes every shape and keeps the kind
+  name in `Type` (still a string, e.g. `"PartialParsing"`).
+
+### Fixed: guarded clients try every validated address
+
+- The SSRF-guarded dialer resolved every address of a host, checked them all, and then dialed only the first. A platform or target name with an IPv6 and an IPv4 address failed to connect when only one family was reachable. It now tries the validated addresses in resolver order; no unchecked address is ever dialed.
+
+### Documentation
+
+- `docs/adapter-protocol.md`: the language-neutral contract for a tool in any language (transport, conversation, the rules the runtime enforces, time and cancel, exit codes, conformance, installing).
+- `examples/python-adapter`: a complete tool in plain Python (standard library only) with its tool.yaml and self-test fixture, checked in CI by the conformance suite.
+
+- `docs/rfcs/sensor-sdk-v2.md`: the accepted design for the next SDK
+  generation (one tool contract with a `tool.yaml` manifest, out-of-process
+  execution for every tool, adapter protocol v1 for any language, one
+  runtime, stability tiers, transport v3 behind the SDK). `docs/STABILITY.md`
+  now gives every package a tier (Stable, Beta, Frozen, Internal-bound,
+  Deprecated). The module description no longer lists scanner wrappers
+  (they moved to the sensor in v0.17.0).
+
+### Documentation: every public package states its stability tier
+
+- Each public package comment now ends with `Stability: <Tier>
+  (docs/STABILITY.md).` (Stable, Beta, Frozen or Internal-bound; deprecated
+  packages keep their `Deprecated:` paragraph), as `docs/STABILITY.md`
+  lists them. The CI `api-compat` job weighs an incompatible change by that
+  tier: Stable and Frozen fail unless the pull request is labelled
+  `breaking-change` with an `### Upgrade notes` fragment, Beta warns,
+  Internal-bound and Deprecated are listed only, and a package without a
+  tier fails. A push to `main` reports against the latest release without
+  failing (every change on `main` passed the gate as a pull request).
+
 ## v0.17.0 — 2026-10-03
 
 ### Upgrade notes
