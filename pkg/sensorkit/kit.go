@@ -321,6 +321,8 @@ type Kit struct {
 	// (HandleRetest).
 	retests map[string]RetestFunc
 	ran     bool
+	// jobID makes Run run that one command and stop (RunJob).
+	jobID string
 
 	reg *settingsreg.Registry
 	doc *doctor
@@ -330,6 +332,10 @@ type Kit struct {
 	localMu  sync.Mutex
 	executor atomic.Pointer[core.DefaultCommandExecutor]
 	poller   atomic.Pointer[core.CommandPoller]
+	// logs ships per-command logs to the platform (set by Run); logMW
+	// sends a command's last lines before its result.
+	logs  atomic.Pointer[logShipper]
+	logMW func(core.CommandExecutor) core.CommandExecutor
 
 	kitTools
 }
@@ -862,6 +868,7 @@ func (k *Kit) Run(ctx context.Context) error {
 
 	var poller *core.CommandPoller
 	if k.s.commands && k.client != nil {
+		k.logMW = k.startLogShipper(ctx)
 		poller = k.newPoller(scanners, doorbell)
 		k.ReportCheck(core.ConfigCheck{ID: CheckCommandPoller, Status: core.CheckPass, Code: "running"})
 	}
@@ -874,7 +881,13 @@ func (k *Kit) Run(ctx context.Context) error {
 	// capped backoff instead of exiting into a restart loop.
 	if k.client != nil && !waitForAcceptedKey(ctx, s.FirstHeartbeat, sleepCtx, out) {
 		_, _ = fmt.Fprintln(out, "Sensor stopped.")
+		if k.jobID != "" {
+			return errors.New("stopped before the job ran")
+		}
 		return nil
+	}
+	if k.jobID != "" {
+		return k.runOneJob(ctx, poller)
 	}
 
 	// pollerDone closes when the poller has drained.
@@ -1074,6 +1087,11 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 		for _, t := range k.middlewares[i].types {
 			types = appendType(types, t)
 		}
+	}
+	if k.logMW != nil {
+		// Outermost: a command's last log lines are queued after every
+		// layer ran and before its result is reported.
+		exec = k.logMW(exec)
 	}
 
 	// Slots follow what this sensor may use (cgroup-aware CPU and memory)

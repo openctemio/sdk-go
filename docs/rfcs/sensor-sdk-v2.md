@@ -401,31 +401,53 @@ detail}], error?}`.
 
 #### D.3.8 Minimal tool (Go, about 15 lines)
 
+A simple tool is declared with the builder (`tool.Define`): name and version,
+target types, output types, typed parameters and a handler. The builder writes
+the manifest (parameters become the configuration schema the platform renders
+and the runtime enforces), and the result is an ordinary `Tool` with every
+runtime guarantee. `tool.New` with a manifest and a typed configuration struct
+stays for tools that need the whole manifest.
+
 ```go
 package dotenv
 
 import "github.com/openctemio/sdk-go/pkg/tool"
 
-var Tool = tool.New(tool.Manifest{
-	Name: "dotenv-check", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-	Consumes: []string{"http_service"}, Produces: []string{"finding:misconfiguration"},
-	Permissions: tool.Permissions{Network: tool.NetTargets},
-}, func(ctx tool.Context, task tool.Task, _ tool.NoConfig) error {
-	for _, t := range task.Targets {
-		resp, err := ctx.HTTP().Get(t.URL("/.env"))
-		if err != nil {
-			ctx.TargetError(t, tool.Unreachable(err))
-			continue
+var Tool = tool.Define("dotenv-check", "1.0.0").
+	Targets("http_service").
+	Produces("finding:misconfiguration").
+	Params(tool.StringParam("path").Label("Path").Default("/.env").Pattern("^/").MaxLength(256)).
+	Handle(func(ctx tool.Context, job *tool.Job, emit tool.Emit) error {
+		for _, t := range job.Targets() {
+			resp, err := ctx.HTTP().Get(t.URL(job.Param("path").String()))
+			if err != nil {
+				ctx.TargetError(t, tool.Unreachable(err))
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				emit.Misconfiguration(t, tool.Issue{RuleID: "dotenv-exposed", Title: ".env file is publicly readable", Severity: "high"})
+			}
+			ctx.TargetDone(t)
 		}
-		resp.Body.Close()
-		if resp.StatusCode == 200 {
-			ctx.Emit().Finding(t, tool.Misconfig("dotenv-exposed", ".env file is publicly readable", tool.High))
-		}
-		ctx.TargetDone(t)
-	}
-	return nil
-})
+		return nil
+	}).
+	MustBuild()
 ```
+
+- Defaults: class `target-scan`, tier T1 (T0 for other classes), the class's
+  network permission. `Class`, `Tier`, `Capabilities`, `Timeout` change them;
+  `Manifest(func(*tool.Manifest))` sets any other field (credentials,
+  resources, self-tests).
+- Parameters: `StringParam`, `IntParam`, `NumberParam`, `BoolParam`,
+  `ListParam`, with `Label`, `Help`, `Default`, `Range`, `OneOf`, `Pattern`,
+  `MaxLength`, `MaxItems`, `Required` and `PerScan`. A key that looks like a
+  secret is refused: secrets are credentials.
+- `Job`: the task, `Targets(types...)` and `Param(key)` with typed accessors
+  (`String`, `IntOr`, `BoolOr`, `Strings`, ...). The configuration was
+  validated and its defaults filled before the handler runs.
+- `Emit`: `Vulnerability`, `Misconfiguration` and `Asset` build CTIS records;
+  `CTIS()` is the full emitter. Each record is checked when it is emitted.
 
 #### D.3.9 The same tool in Python
 
@@ -515,6 +537,11 @@ Example exchange:
 {"v":1,"type":"result","status":"ok","stats":{"records":1}}
 ```
 
+The language-neutral guide (transport, rules, exit codes, conformance) is
+[docs/adapter-protocol.md](../adapter-protocol.md). `conformance.RunToolSuite`
+and the `openctem-conformance tool <tool.yaml>` command check a tool in any
+language against it (D.6.2).
+
 #### D.4.3 The exec profile (zero-code tools)
 
 For a CLI that already writes CTIS or SARIF:
@@ -585,6 +612,22 @@ Today's `sensorkit.Options` has about 45 fields that mirror environment settings
 ```
 
 Runner and daemon share the same kit, task pipeline and checks. Today the sensor has two runtimes (the kit for the daemon, a hand-written one-shot path with its own handlers); they merge.
+
+#### D.5.1a One job, then exit
+
+`Kit.RunJob(ctx, id)` runs the one platform command with that id and returns:
+a sensor started per job by a Kubernetes Job, an autoscaler or an operator
+(`SENSOR_JOB_ID`). It sets up everything `Run` sets up (identity, manifest,
+tools, local policy, outbox, heartbeats, which keep the lease and carry
+cancels), claims the command by id (`POST /commands/{id}/claim` answers the
+command), runs it through the same checks and executor as a polled command
+(kill switch, served types, expiry, local policy, the platform's tool gate),
+waits for the outbox to deliver its results and stops. It never polls for
+other work. The platform's claim decides who may run the command (tenant,
+holder, state); a command the sensor does not serve is released. A Job's
+outbox belongs on a persistent volume, or undelivered results are lost with
+the pod. No pool or autoscaling logic is in the platform yet (research
+trigger: the first deployment with more than one replica of a sensor).
 
 #### D.5.2 Minimal sensor (Go, about 20 lines)
 
@@ -671,6 +714,32 @@ Suites take a `conformance.T` (the subset of `testing.TB` they use), so the same
 7. **Stream.** The adapter host validates every message and record (schema, produces, caps, sanitization), stamps provenance (tool, version, artifact digest, sandbox `Status`, sensor, task), assembles CTIS and writes it to the encrypted outbox in segments.
 8. **Deliver.** Resumable, chunked, exactly-once upload bound to the command (lease epoch echo); logs streamed (redacted, capped); artifacts through their own upload; the command completed with outcome and error class.
 9. **Clean up.** Kill the process group, wipe the workdir and credentials, release the slot, record duration and cost for the capacity model.
+
+#### D.7.1 Per-command logs
+
+Every log line of a platform command goes to two sinks: the sensor's standard
+error and the command's log on the platform, which keeps it with the task for a
+limited time and shows it on the run page (protocol v2 feature `logs`,
+`POST /commands/{id}/logs`).
+
+- Sources: a tool's `ctx.Log()` (through the adapter protocol's `log` message,
+  `toolhost.Host.LogSink`) and the sensor's own code through
+  `Kit.CommandLogger(ctx)` (an executor added with `HandleCommand`). Lines below
+  info stay local.
+- Redaction: the tool's credentials (toolhost), the sensor's key, and the value
+  of any field whose name names a secret (`token`, `password`, `api_key`, ...)
+  on both sinks; control and bidirectional-override characters are removed.
+  The platform redacts again.
+- Bounds: at most 2,000 lines and 1 MiB per command (then one note of how many
+  lines were dropped), 8 KiB per message, 32 fields; batches of at most 500
+  lines and half the 256 KiB body limit, sent every 3 seconds or when 200
+  lines are buffered.
+- Delivery: batches go through the outbox (kind `command_log`, numbered by
+  `seq` for idempotency), so an outage loses nothing. A command's last batch is
+  queued before its result, and the outbox delivers them before the result.
+  Logs are best effort: they are evicted first under the byte cap, a batch the
+  platform refuses is dropped, and neither ever marks the command's results as
+  lost. A platform without the feature gets no logs.
 
 ### D.8 Transport v3 behind the SDK
 

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "assets": [
+    {
+      "id": "target-t1",
+      "name": "http://shop.example:8080",
+      "type": "http_service",
+      "value": "http://shop.example:8080"
+    }
+  ],
+  "findings": [
+    {
+      "asset_ref": "target-t1",
+      "description": "Traffic to http://shop.example:8080 is not encrypted.",
+      "rule_id": "http-plaintext",
+      "severity": "medium",
+      "title": "Service is served over plaintext HTTP",
+      "type": "misconfiguration"
+    }
+  ],
+  "metadata": {
+    "properties": {
+      "provenance": "<provenance>"
+    },
+    "source_type": "scanner"
+  },
+  "tool": {
+    "name": "http-plaintext"
+  },
+  "version": "1.4"
+}

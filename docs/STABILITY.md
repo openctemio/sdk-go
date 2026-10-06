@@ -35,7 +35,7 @@ without a tier fails the job.
 |---|---|---|
 | `pkg/sensorkit` | The runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain, preflight checks and the config report; runner mode (`CIRun`, `Kit.RunOnce`: CI OIDC exchange, uploads, gate verdict, api RFC-051) | Stable; runner mode Beta |
 | `pkg/sensorkit/settings` | The settings registry: every setting declared once (name, type, required, default, secret, description, docs link, validation); `docs/SETTINGS.md` is generated from it | Stable |
-| `pkg/tool` | The tool contract: `tool.yaml` manifest, `Run(ctx, task)`, emitter, categorized errors (docs/rfcs/sensor-sdk-v2.md) | Stable |
+| `pkg/tool` | The tool contract: `tool.yaml` manifest, `Run(ctx, task)`, emitter, categorized errors, the `Define` builder for simple tools (docs/rfcs/sensor-sdk-v2.md) | Stable |
 | `pkg/tool/adapter` | Adapter protocol v1, the tool side (`Serve`, `Dispatch`) | Stable |
 | `pkg/tool/toolcompat` | Transitional bridges: a `core.Scanner` or `core.Collector` run as a tool of the contract (`FromScanner`, `FromCollector`), out of process; a contract tool served to the command executor (`AsScanner`) | Beta; removed once every in-tree scanner is ported |
 | `pkg/testkit` | Run a tool in-process with the runtime's rules; golden CTIS | Stable |
@@ -51,7 +51,7 @@ without a tier fails the job.
 | `pkg/sensorsig` | RFC 9421 request signatures of a key-bound sensor (api RFC-052 §4.3): signer, verifier, signing transport | Beta |
 | `pkg/ctis` | CTIS types: re-exports `github.com/openctemio/ctis` (generated aliases; the `ctis-parity` CI job fails when they are stale) | Stable, follows CTIS |
 | `pkg/httpsec` | SSRF-safe HTTP clients and URL validation | Stable |
-| `pkg/conformance` | Fake platform and the sensor conformance suite | Stable |
+| `pkg/conformance` | Fake platform, the sensor conformance suite and the tool (adapter protocol) suite | Stable |
 | `pkg/useragent`, `pkg/sdk` | Build identity on the wire | Stable |
 | `pkg/outbox`, `pkg/resource`, `pkg/chunk`, `pkg/compress`, `pkg/retry`, `pkg/shared/*` | Runtime internals used by `client`, `core` and `sensorkit` | Internal-bound |
 | `pkg/platform` | Credentials file and key renewal (used by sensorkit); its bootstrap/lease client serves the removed platform mode | Internal-bound (credentials, key renewal); the bootstrap/lease client is a removal candidate |
@@ -197,7 +197,7 @@ A wrapper that starts processes without these helpers must call
 
 ## 6. Conformance
 
-`pkg/conformance` has two halves:
+`pkg/conformance` has three parts:
 
 - `FakePlatform`, an in-process platform that implements protocol v2
   strictly (and the v1 routes), records every request and injects faults.
@@ -207,6 +207,12 @@ A wrapper that starts processes without these helpers must call
   left for another sensor, forward-compatible decoding, and a command run to
   completion with its reports committed first. A third-party sensor runs it
   from its own tests; the kit runs it in `pkg/sensorkit`.
+- `RunToolSuite(t, "tool.yaml", opts)`, the contract every tool that is its
+  own program (any language) must keep with adapter protocol v1: handshake,
+  self-description equal to its tool.yaml, configuration validation,
+  protocol-only stdout, exit on end of input, cancel, and its self-test
+  fixtures through the runtime's own host. `cmd/openctem-conformance tool
+  <tool.yaml>` runs it without Go code (docs/adapter-protocol.md).
 
 The live suite (`live_test.go`, `OPENCTEM_CONFORMANCE_URL` /
 `OPENCTEM_CONFORMANCE_KEY`) runs the results contract against a real
