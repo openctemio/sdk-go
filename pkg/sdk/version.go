@@ -18,4 +18,4 @@ const Name = "openctem-sdk-go"
 //
 // A release PR sets it to the version being tagged; TestVersionNotBehindChangelog
 // fails when it is older than the newest release in CHANGELOG.md.
-const Version = "0.17.0"
+const Version = "0.18.0"

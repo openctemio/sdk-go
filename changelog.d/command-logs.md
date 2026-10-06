@@ -1,5 +1,0 @@
-### Added: per-command logs reach the platform
-
-- Every log line of a platform command now goes to the sensor's standard error and, on a platform that offers protocol v2 feature `logs`, to the command's log on the platform (`POST /commands/{id}/logs`), which keeps it with the task and shows it on the run page. Sources: a tool's `ctx.Log()` (`toolhost.Host.LogSink`) and the sensor's own code through `Kit.CommandLogger(ctx)`.
-- Lines are redacted on both sinks (the tool's credentials, the sensor's key, fields named like secrets), cleaned of control characters and bounded per command (2,000 lines, 1 MiB, then a note of what was dropped). Batches go through the outbox (new kind `command_log`), are delivered before the command's result and survive an outage; they are evicted first under the byte cap and a refused batch is dropped, so logs never mark a command's results as lost.
-- `client.SendCommandLogs` / `QueueCommandLogs`, `sensorproto/v2.CommandLogsRequest`, `CommandLogLine`, `CommandLogsResponse`, `FeatureLogs`, and the fake platform's `SetLogs` / `CommandLogs` for tests.
