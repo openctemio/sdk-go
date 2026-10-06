@@ -28,6 +28,8 @@ type Sink interface {
 	Progress(done, total int, msg string)
 	Log(level slog.Level, msg string, attrs map[string]any)
 	Artifact(name, mediaType string) (io.WriteCloser, error)
+	// Verdict is a retest verdict on item ref (detail cleaned and redacted).
+	Verdict(ref string, v tool.Verdict, detail string)
 }
 
 // Log bounds per task.
@@ -53,9 +55,12 @@ type ContextConfig struct {
 // secret values and bounds what it keeps, Secret answers only declared
 // credentials, and HTTP reaches only what the network permission allows.
 func NewContext(ctx context.Context, cfg ContextConfig) tool.Context {
-	c := &runCtx{Context: ctx, cfg: cfg, checker: NewChecker(cfg.Manifest), targets: map[string]bool{}}
+	c := &runCtx{Context: ctx, cfg: cfg, checker: NewChecker(cfg.Manifest), targets: map[string]bool{}, items: map[string]bool{}}
 	for _, t := range cfg.Task.Targets {
 		c.targets[t.Ref] = true
+	}
+	for _, it := range cfg.Task.Retest {
+		c.items[it.Ref] = true
 	}
 	var secrets []string
 	for _, s := range cfg.Secrets {
@@ -81,6 +86,7 @@ type runCtx struct {
 	cfg     ContextConfig
 	checker *Checker
 	targets map[string]bool
+	items   map[string]bool
 	redact  func(string) string
 	logger  *slog.Logger
 	http    *http.Client
@@ -124,6 +130,19 @@ func (c *runCtx) target(t tool.Target, st tool.TargetState, err *tool.Error) {
 	c.cfg.Sink.Target(t.Ref, st, err)
 }
 
+// Verdict reports a retest verdict (tool.RetestContext).
+func (c *runCtx) Verdict(item tool.RetestItem, v tool.Verdict, detail string) {
+	if !c.items[item.Ref] {
+		c.logger.Warn("verdict for an item not in the retest ignored", "ref", item.Ref)
+		return
+	}
+	if !v.Valid() {
+		c.logger.Warn("unknown verdict ignored", "ref", item.Ref, "verdict", string(v))
+		return
+	}
+	c.cfg.Sink.Verdict(item.Ref, v, c.redact(tool.CapDetail(CleanString(detail))))
+}
+
 func (c *runCtx) Artifact(name, mediaType string) (io.WriteCloser, error) {
 	return c.cfg.Sink.Artifact(name, mediaType)
 }
@@ -144,6 +163,9 @@ type emitter struct{ c *runCtx }
 // refused record is counted there (quarantine makes the task partial).
 
 func (e emitter) Asset(a ctis.Asset) error {
+	if e.c.cfg.Task.IsRetest() {
+		return tool.ErrRetestRecord
+	}
 	checked, err := e.c.checker.Asset(a)
 	if err != nil {
 		_ = e.c.cfg.Sink.Asset(a)
@@ -153,6 +175,9 @@ func (e emitter) Asset(a ctis.Asset) error {
 }
 
 func (e emitter) Finding(t tool.Target, f ctis.Finding) error {
+	if e.c.cfg.Task.IsRetest() {
+		return tool.ErrRetestRecord
+	}
 	if t.Ref != "" && !e.c.targets[t.Ref] {
 		return fmt.Errorf("%w: target %q is not in the task", tool.ErrInvalidRecord, t.Ref)
 	}
@@ -165,6 +190,9 @@ func (e emitter) Finding(t tool.Target, f ctis.Finding) error {
 }
 
 func (e emitter) Dependency(t tool.Target, d ctis.Dependency) error {
+	if e.c.cfg.Task.IsRetest() {
+		return tool.ErrRetestRecord
+	}
 	if t.Ref != "" && !e.c.targets[t.Ref] {
 		return fmt.Errorf("%w: target %q is not in the task", tool.ErrInvalidRecord, t.Ref)
 	}
@@ -180,6 +208,9 @@ func (e emitter) Dependency(t tool.Target, d ctis.Dependency) error {
 // dependencies. The first output-limit error stops it; other refused
 // records are skipped and the first such error is returned.
 func (e emitter) Report(r *ctis.Report) error {
+	if e.c.cfg.Task.IsRetest() {
+		return tool.ErrRetestRecord
+	}
 	if r == nil {
 		return nil
 	}

@@ -131,6 +131,9 @@ type Manifest struct {
 	Resources   Resources       `json:"resources"`
 	// Selftest are fixtures: a task and the CTIS it must produce.
 	Selftest []Fixture `json:"selftest,omitempty"`
+	// Retest says the tool can check again what it reported (a retest
+	// task, see Retester). Target-scan tools only.
+	Retest bool `json:"retest,omitempty"`
 	// Protocol is the range of adapter protocol versions the tool speaks.
 	Protocol Range `json:"protocol"`
 	// Run says how to start a tool that is not compiled into the sensor.

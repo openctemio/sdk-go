@@ -353,6 +353,32 @@ Task outcome: `ok` (every target done), `partial` (some targets failed or output
 | `parser` | a file | `none` | none | `file:<media type>` → findings, dependencies, assets | runner mode or an upload job |
 | `enricher` | CTIS records | `none` or `vendor` | optional | `finding:*` → `finding:*` (annotations only) | never creates assets; cannot change asset identity |
 
+#### D.3.7a Retest
+
+A target-scan tool may declare `retest: true` and implement `tool.Retester`
+(`tool.WithRetest(t, fn)` adds a handler to any tool). The platform then asks
+it to check again what it reported: a **retest task** carries `retest` items
+(a finding or asset ref, the target ref it is on, rule id, fingerprint) next to
+ordinary `targets`, and the tool answers one verdict per item through
+`RetestContext.Verdict`: `still_present`, `fixed` or `unverifiable`. The
+platform's Validation stage settles each item from its verdict (a fixed finding
+is resolved, a regression reopened; RFC-039 in the platform).
+
+Rules the runtime enforces, because a verdict closes or reopens findings:
+
+- **No scope widening.** A retest's targets are admitted like any task's;
+  every item must be on one of them (else `invalid_input` before the tool
+  starts); at most 1,000 items with unique refs.
+- **Verdicts, not records.** A retest task emits no CTIS records
+  (`ErrRetestRecord`), so it can never create findings or count as scan
+  coverage.
+- **"Fixed" must be earned.** The first verdict of an item counts. An item
+  without a verdict is `unverifiable`. `fixed` stands only when the task
+  finished without error and the item's target was reported done; otherwise
+  the runtime reports `unverifiable` ("the target was not reached", "the
+  retest did not finish"). An unreachable host can never read as fixed.
+- Details are cleaned, capped at 256 bytes and redacted like logs.
+
 #### D.3.8 Minimal tool (Go, about 15 lines)
 
 A simple tool is declared with the builder (`tool.Define`): name and version,
@@ -459,7 +485,7 @@ Runtime → adapter:
 | `hello` | `protocol: [1]`, `runtime: {name, version, os, arch}`, `limits: {max_line, max_records, max_output_bytes, max_artifact_bytes}`, `features: ["artifacts","progress","credentials","target_status"]` | first message |
 | `describe` | — | answer `manifest` |
 | `validate` | `task` | answer `validation` |
-| `run` | `task: {id, attempt, deadline, targets[], config, inputs[], workdir, credentials: [{name, file}], repo?, scope}` | starts the task |
+| `run` | `task: {id, attempt, deadline, targets[], config, inputs[], workdir, credentials: [{name, file}], repo?, scope, retest?}` | starts the task; `retest` items make it a retest (D.3.7a), sent only to a tool whose manifest declares `retest` |
 | `cancel` | `reason` | then SIGTERM after `grace` (default 10 s), SIGKILL after 2×grace |
 
 Adapter → runtime:
@@ -475,6 +501,7 @@ Adapter → runtime:
 | `target_status` | `target`, `status: done|failed|skipped`, `error?: {class, detail}` | coverage |
 | `artifact` | `name`, `media_type`, `path` (relative to workdir), `sha256`, `size` | runtime opens it beneath the workdir (no symlink escape), checks size and digest |
 | `heartbeat` | — | keeps a quiet adapter alive under `idle_timeout` |
+| `verdict` | `item`, `verdict: still_present|fixed|unverifiable`, `detail?` | retest tasks only (D.3.7a); the first verdict per item counts |
 | `result` | `status: ok|partial|failed|cancelled`, `error?: {class, retryable, retry_after_ms, detail}`, `stats` | final; exit 0 afterwards |
 
 Exiting without `result` is `tool_crashed`. A `result` claiming `ok` while targets were never reported is downgraded to `partial` by the runtime.

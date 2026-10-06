@@ -80,3 +80,39 @@ func TestServeRefusesUnknownProtocol(t *testing.T) {
 		t.Fatal("a run before hello must be refused")
 	}
 }
+
+var retester = tool.WithRetest(probe, func(ctx tool.RetestContext, task tool.Task) error {
+	for _, it := range task.Retest {
+		ctx.Verdict(it, tool.StillPresent, "seen again")
+	}
+	ctx.TargetDone(task.Targets[0])
+	return nil
+})
+
+func TestServeRetest(t *testing.T) {
+	in := `{"v":1,"type":"hello","protocol":[1]}
+{"v":1,"type":"run","task":{"id":"t","targets":[{"ref":"a","type":"domain","value":"a.example"}],"retest":[{"ref":"f1","target":"a","kind":"finding","rule_id":"r1"}],"workdir":"/tmp"}}
+`
+	var out bytes.Buffer
+	if err := ServeIO(context.Background(), retester, strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{`"type":"verdict","item":"f1","verdict":"still_present","detail":"seen again"`, `"type":"result","status":"ok"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %s in\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `"type":"record"`) {
+		t.Fatalf("a retest sent records:\n%s", got)
+	}
+
+	// A tool without a retest handler fails a retest task as invalid input.
+	out.Reset()
+	if err := ServeIO(context.Background(), probe, strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"status":"failed","error":{"class":"invalid_input"`) {
+		t.Fatalf("retest on a tool without retest:\n%s", out.String())
+	}
+}
