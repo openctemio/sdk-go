@@ -5,7 +5,7 @@
 // module: it has no copy of the types or converters, only names for them.
 //
 // Identifiers pkg/ctis defines itself (sdk-only behavior around the same
-// types) are listed in skip and must exist in pkg/ctis.
+// types), or leaves out on purpose, are listed in skip.
 //
 // Usage (from the sdk-go root): go generate ./pkg/ctis
 // CI (scripts/check-ctis-parity.sh) regenerates the file and fails on a diff.
@@ -29,12 +29,13 @@ import (
 
 const module = "github.com/openctemio/ctis"
 
-// skip names upstream identifiers that pkg/ctis implements itself.
+// skip names upstream identifiers that pkg/ctis implements itself (the
+// value is the file) or leaves out (the value says why).
 var skip = map[string]string{
-	// FromSARIF keeps the SDK's asset rule: the asset comes from the options,
-	// the branch info or the log's versionControlProvenance, and a log with
-	// results but no asset is ErrNoAssetForFindings (see sarif.go).
-	"FromSARIF": "sarif.go",
+	// SARIF is converted by core.SARIFParser through the module's importer
+	// package (input limits, asset rule); the bare converter is not
+	// re-exported, so the SDK has one SARIF path.
+	"FromSARIF": "left out: use core.SARIFParser",
 	// SARIFLog and SARIFRun add versionControlProvenance (and
 	// SARIFRun.Repository) to the module's SARIF model; the nested SARIF
 	// types are the module's.

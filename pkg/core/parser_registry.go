@@ -1,12 +1,15 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/openctemio/ctis/importer"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/internal/cirepo"
@@ -147,50 +150,123 @@ func isSARIFLog(data []byte) bool {
 	return strings.HasPrefix(runs, "[")
 }
 
-// Parse converts SARIF to CTIS format. Data that is not a SARIF log is an
-// error: decoding arbitrary JSON into the SARIF structure succeeds with no
-// runs, which used to turn a scanner's real results into "0 findings".
+// Parse converts SARIF to CTIS with the one conversion entry point,
+// github.com/openctemio/ctis/importer, under its input limits. Data that is
+// not a SARIF log is an error: decoding arbitrary JSON into the SARIF
+// structure succeeds with no runs, which used to turn a scanner's real
+// results into "0 findings".
+//
+// Every finding is filed on one asset:
+//
+//  1. opts.AssetValue (opts.AssetType, default repository);
+//  2. else opts.BranchInfo.RepositoryURL (a repository);
+//  3. else the first repository the log names in versionControlProvenance;
+//  4. else the repository of the CI job.
+//
+// With none of these, a log with results is an error matching
+// ctis.ErrNoAssetForFindings, never a shared placeholder asset.
+// opts.BranchInfo, when set, is the report's branch.
 func (p *SARIFParser) Parse(ctx context.Context, data []byte, opts *ParseOptions) (*ctis.Report, error) {
 	if !isSARIFLog(data) {
 		return nil, fmt.Errorf("not a SARIF log: expected a JSON object with a \"runs\" array")
 	}
 	if opts == nil {
-		opts = &ParseOptions{
-			DefaultConfidence: 90,
-		}
+		opts = &ParseOptions{}
 	}
-
-	// Use the CTIS package's SARIF converter
-	convertOpts := &ctis.ConvertOptions{
-		AssetType:         opts.AssetType,
-		AssetValue:        opts.AssetValue,
-		AssetID:           opts.AssetID,
-		Branch:            opts.Branch,
-		CommitSHA:         opts.CommitSHA,
-		BranchInfo:        opts.BranchInfo,
-		DefaultConfidence: opts.DefaultConfidence,
+	in := importer.Options{
+		Format:            importer.FormatSARIF,
+		SourceType:        "scanner",
 		ToolType:          opts.ToolType,
+		DefaultConfidence: opts.DefaultConfidence,
+		DefaultAsset:      &ctis.Asset{ID: sarifNoAsset, Type: ctis.AssetTypeUnclassified, Value: sarifNoAsset},
+	}
+	branch, commit := opts.Branch, opts.CommitSHA
+	if bi := opts.BranchInfo; bi != nil && branch == "" {
+		branch, commit = bi.Name, bi.CommitSHA
+	}
+	// other is an asset of another type than a repository: every finding
+	// goes on it.
+	var other *ctis.Asset
+	switch {
+	case strings.TrimSpace(opts.AssetValue) != "":
+		t := opts.AssetType
+		if t == "" || t == ctis.AssetTypeRepository {
+			in.Repository, in.Branch, in.CommitSHA = opts.AssetValue, branch, commit
+			break
+		}
+		id := opts.AssetID
+		if id == "" {
+			id = "asset-1"
+		}
+		other = &ctis.Asset{ID: id, Type: t, Value: opts.AssetValue, Name: opts.AssetValue}
+	case opts.BranchInfo != nil && strings.TrimSpace(opts.BranchInfo.RepositoryURL) != "":
+		in.Repository, in.Branch, in.CommitSHA = opts.BranchInfo.RepositoryURL, branch, commit
 	}
 
-	report, err := ctis.FromSARIF(data, convertOpts)
-	if !errors.Is(err, ctis.ErrNoAssetForFindings) {
-		return report, err
+	report, err := sarifImport(ctx, data, in, other)
+	if errors.Is(err, ctis.ErrNoAssetForFindings) && in.Repository == "" && other == nil {
+		// Neither the options nor the log name the repository: use the one
+		// the CI job is building, or fail.
+		repo, ok := cirepo.Detect()
+		if !ok {
+			return nil, err
+		}
+		in.Repository, in.Branch, in.CommitSHA = repo.URL, branch, commit
+		if in.Branch == "" {
+			in.Branch, in.CommitSHA = repo.Branch, repo.Commit
+		}
+		report, err = sarifImport(ctx, data, in, other)
 	}
-	// Neither the options nor the log name the repository: use the one the
-	// CI job is building, or fail. Never a shared placeholder asset.
-	repo, ok := cirepo.Detect()
-	if !ok {
+	if err != nil {
 		return nil, err
 	}
-	convertOpts.AssetType = ctis.AssetTypeRepository
-	convertOpts.AssetValue = repo.URL
-	if convertOpts.Branch == "" {
-		convertOpts.Branch = repo.Branch
+	switch {
+	case opts.BranchInfo != nil:
+		bi := *opts.BranchInfo
+		report.Metadata.Branch = &bi
+	case report.Metadata.Branch == nil && branch != "":
+		report.Metadata.Branch = &ctis.BranchInfo{Name: branch, CommitSHA: commit}
 	}
-	if convertOpts.CommitSHA == "" {
-		convertOpts.CommitSHA = repo.Commit
+	return report, nil
+}
+
+// sarifNoAsset is the importer's default asset; seeing it in a result means
+// no asset was named.
+const sarifNoAsset = "\x00no-asset"
+
+// sarifImport runs one SARIF conversion and files every finding on other
+// when set. A result on the default asset is an error matching
+// ctis.ErrNoAssetForFindings when it has findings.
+func sarifImport(ctx context.Context, data []byte, in importer.Options, other *ctis.Asset) (*ctis.Report, error) {
+	res, err := importer.Parse(ctx, bytes.NewReader(data), in)
+	if err != nil {
+		return nil, fmt.Errorf("parse sarif: %w", err)
 	}
-	return ctis.FromSARIF(data, convertOpts)
+	r := res.Report
+	usedDefault := false
+	for _, a := range r.Assets {
+		if a.ID == sarifNoAsset {
+			usedDefault = true
+		}
+	}
+	switch {
+	case other != nil:
+		r.Assets = []ctis.Asset{*other}
+		for i := range r.Findings {
+			r.Findings[i].AssetRef = other.ID
+		}
+	case usedDefault && len(r.Findings) > 0:
+		tool := "sarif"
+		if r.Tool != nil && r.Tool.Name != "" {
+			tool = r.Tool.Name
+		}
+		return nil, fmt.Errorf("%w: SARIF log from %q has %d result(s) but names no repository: "+
+			"set the asset (AssetValue or BranchInfo.RepositoryURL) or add versionControlProvenance",
+			ctis.ErrNoAssetForFindings, tool, len(r.Findings))
+	case usedDefault:
+		r.Assets = nil
+	}
+	return r, nil
 }
 
 // =============================================================================

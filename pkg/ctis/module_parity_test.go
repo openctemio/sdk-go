@@ -2,7 +2,6 @@ package ctis
 
 import (
 	"reflect"
-	"strings"
 	"testing"
 
 	upstream "github.com/openctemio/ctis"
@@ -56,93 +55,5 @@ func TestConvertReconToCTIS_OutputValidates(t *testing.T) {
 				}
 			}
 		}
-	}
-}
-
-// The hand copy typed every Trivy result a misconfiguration. A CVE rule
-// tagged "vulnerability" is a vulnerability.
-func TestFromSARIF_TrivyCVEIsVulnerability(t *testing.T) {
-	log := []byte(`{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy","rules":[
-	  {"id":"CVE-2099-0001","properties":{"tags":["vulnerability","security","HIGH"]}},
-	  {"id":"AVD-AWS-0001","properties":{"tags":["misconfiguration","terraform"]}}]}},
-	  "results":[
-	    {"ruleId":"CVE-2099-0001","level":"error","message":{"text":"pkg 1.0 vulnerable"}},
-	    {"ruleId":"AVD-AWS-0001","level":"warning","message":{"text":"bucket public"}}]}]}`)
-	r, err := FromSARIF(log, &ConvertOptions{AssetValue: "registry.example.test/app", AssetType: AssetTypeContainer})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.Findings[0].Type != FindingTypeVulnerability {
-		t.Errorf("CVE finding type = %s, want vulnerability", r.Findings[0].Type)
-	}
-	if r.Findings[1].Type != FindingTypeMisconfiguration {
-		t.Errorf("misconfiguration finding type = %s", r.Findings[1].Type)
-	}
-}
-
-// The hand copy gave an unknown tool capabilities [vulnerability secret],
-// and OpenCTEM takes the technique from the first recognized capability, so
-// SAST from an unknown tool could be filed as secret.
-func TestFromSARIF_UnknownToolIsNotSecret(t *testing.T) {
-	log := []byte(`{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"some-new-sast"}},
-	  "results":[{"ruleId":"r1","message":{"text":"m"}}]}]}`)
-	r, err := FromSARIF(log, &ConvertOptions{AssetValue: "github.com/example/shop"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range r.Tool.Capabilities {
-		if c == "secret" {
-			t.Fatalf("unknown tool got capability secret: %q", r.Tool.Capabilities)
-		}
-	}
-	if r.Findings[0].Type == FindingTypeSecret {
-		t.Error("unknown tool's finding typed secret")
-	}
-	if err := r.Validate(); err != nil {
-		t.Errorf("report does not validate: %v", err)
-	}
-}
-
-// The SDK's asset rule on top of the module: options, then branch info, then
-// versionControlProvenance; the asset carries no criticality.
-func TestFromSARIF_AssetRule(t *testing.T) {
-	const prov = `{"version":"2.1.0","runs":[{"versionControlProvenance":[{"repositoryUri":" https://github.com/example/shop ","revisionId":"abc123","branch":"main"}],
-	  "tool":{"driver":{"name":"x"}},"results":[{"ruleId":"r","message":{"text":"m"}}]}]}`
-	r, err := FromSARIF([]byte(prov), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := r.Assets[0]
-	if a.Value != "https://github.com/example/shop" || a.Type != AssetTypeRepository {
-		t.Errorf("provenance asset = %+v", a)
-	}
-	if a.Properties["commit_sha"] != "abc123" || a.Properties["branch"] != "main" || a.Properties["source"] != "sarif_version_control_provenance" {
-		t.Errorf("provenance properties = %v", a.Properties)
-	}
-	if a.Criticality != "" {
-		t.Errorf("asset criticality %q: the receiver decides", a.Criticality)
-	}
-	if r.Findings[0].AssetRef != a.ID {
-		t.Errorf("finding asset_ref %q, asset id %q", r.Findings[0].AssetRef, a.ID)
-	}
-
-	r, err = FromSARIF([]byte(prov), &ConvertOptions{AssetValue: "github.com/example/other"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.Assets[0].Value != "github.com/example/other" || r.Assets[0].Type != AssetTypeRepository || r.Assets[0].Properties != nil {
-		t.Errorf("option asset = %+v", r.Assets[0])
-	}
-
-	r, err = FromSARIF([]byte(prov), &ConvertOptions{BranchInfo: &BranchInfo{Name: "dev", RepositoryURL: "github.com/example/branchrepo"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.Assets[0].Value != "github.com/example/branchrepo" || r.Metadata.Branch == nil {
-		t.Errorf("branch-info asset = %+v, branch %+v", r.Assets[0], r.Metadata.Branch)
-	}
-
-	if _, err := FromSARIF([]byte("{"), nil); err == nil || !strings.Contains(err.Error(), "parse sarif") {
-		t.Errorf("malformed log: err = %v", err)
 	}
 }

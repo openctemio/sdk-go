@@ -111,7 +111,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 			}
 		}
 		if runErr == nil {
-			if err := ingestOutput(p, m.Run.Output.Format, data); err != nil {
+			if err := ingestOutput(ctx, p, m.Run.Output.Format, data); err != nil {
 				if errors.Is(err, tool.ErrOutputLimit) {
 					partial = true
 				} else {
@@ -285,18 +285,18 @@ func readOutputFile(path string, maxBytes int64) ([]byte, error) {
 }
 
 // ingestOutput feeds the CLI's output through the record checks.
-func ingestOutput(p *prepared, format string, data []byte) error {
+func ingestOutput(ctx context.Context, p *prepared, format string, data []byte) error {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil
 	}
 	switch format {
 	case tool.OutputSARIF:
-		opts := ctis.DefaultConvertOptions()
+		opts := &core.ParseOptions{}
 		if len(p.task.Targets) == 1 {
 			opts.AssetValue = p.task.Targets[0].Value
 			opts.AssetType = ctis.AssetType(p.task.Targets[0].Type)
 		}
-		r, err := ctis.FromSARIF(data, opts)
+		r, err := (&core.SARIFParser{}).Parse(ctx, data, opts)
 		if err != nil {
 			return err
 		}
