@@ -355,31 +355,53 @@ Task outcome: `ok` (every target done), `partial` (some targets failed or output
 
 #### D.3.8 Minimal tool (Go, about 15 lines)
 
+A simple tool is declared with the builder (`tool.Define`): name and version,
+target types, output types, typed parameters and a handler. The builder writes
+the manifest (parameters become the configuration schema the platform renders
+and the runtime enforces), and the result is an ordinary `Tool` with every
+runtime guarantee. `tool.New` with a manifest and a typed configuration struct
+stays for tools that need the whole manifest.
+
 ```go
 package dotenv
 
 import "github.com/openctemio/sdk-go/pkg/tool"
 
-var Tool = tool.New(tool.Manifest{
-	Name: "dotenv-check", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-	Consumes: []string{"http_service"}, Produces: []string{"finding:misconfiguration"},
-	Permissions: tool.Permissions{Network: tool.NetTargets},
-}, func(ctx tool.Context, task tool.Task, _ tool.NoConfig) error {
-	for _, t := range task.Targets {
-		resp, err := ctx.HTTP().Get(t.URL("/.env"))
-		if err != nil {
-			ctx.TargetError(t, tool.Unreachable(err))
-			continue
+var Tool = tool.Define("dotenv-check", "1.0.0").
+	Targets("http_service").
+	Produces("finding:misconfiguration").
+	Params(tool.StringParam("path").Label("Path").Default("/.env").Pattern("^/").MaxLength(256)).
+	Handle(func(ctx tool.Context, job *tool.Job, emit tool.Emit) error {
+		for _, t := range job.Targets() {
+			resp, err := ctx.HTTP().Get(t.URL(job.Param("path").String()))
+			if err != nil {
+				ctx.TargetError(t, tool.Unreachable(err))
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				emit.Misconfiguration(t, tool.Issue{RuleID: "dotenv-exposed", Title: ".env file is publicly readable", Severity: "high"})
+			}
+			ctx.TargetDone(t)
 		}
-		resp.Body.Close()
-		if resp.StatusCode == 200 {
-			ctx.Emit().Finding(t, tool.Misconfig("dotenv-exposed", ".env file is publicly readable", tool.High))
-		}
-		ctx.TargetDone(t)
-	}
-	return nil
-})
+		return nil
+	}).
+	MustBuild()
 ```
+
+- Defaults: class `target-scan`, tier T1 (T0 for other classes), the class's
+  network permission. `Class`, `Tier`, `Capabilities`, `Timeout` change them;
+  `Manifest(func(*tool.Manifest))` sets any other field (credentials,
+  resources, self-tests).
+- Parameters: `StringParam`, `IntParam`, `NumberParam`, `BoolParam`,
+  `ListParam`, with `Label`, `Help`, `Default`, `Range`, `OneOf`, `Pattern`,
+  `MaxLength`, `MaxItems`, `Required` and `PerScan`. A key that looks like a
+  secret is refused: secrets are credentials.
+- `Job`: the task, `Targets(types...)` and `Param(key)` with typed accessors
+  (`String`, `IntOr`, `BoolOr`, `Strings`, ...). The configuration was
+  validated and its defaults filled before the handler runs.
+- `Emit`: `Vulnerability`, `Misconfiguration` and `Asset` build CTIS records;
+  `CTIS()` is the full emitter. Each record is checked when it is emitted.
 
 #### D.3.9 The same tool in Python
 
