@@ -1,0 +1,20 @@
+# An OpenCTEM tool written in Python with no SDK: it speaks adapter
+# protocol v1 (docs/adapter-protocol.md). Install the directory in one of the
+# sensor adapter directories (SENSOR_ADAPTER_DIRS); check it with
+#   go run github.com/openctemio/sdk-go/cmd/openctem-conformance tool examples/python-adapter/tool.yaml
+apiVersion: openctem.io/tool/v1
+name: http-plaintext
+version: 0.1.0
+description: Flags HTTP services served without TLS (from the address; no network).
+class: target-scan
+tier: T0
+consumes: [http_service]
+produces: ["finding:misconfiguration"]
+permissions:
+  network: none
+selftest:
+  - name: basic
+    task: testdata/task.json
+    expect: testdata/expect.json
+run:
+  argv: ["./http_plaintext.py"]
