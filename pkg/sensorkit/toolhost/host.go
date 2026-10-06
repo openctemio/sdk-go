@@ -27,7 +27,11 @@
 // produces (undeclared output is quarantined), record and byte caps (the
 // tool is stopped when it reaches them), control and bidi characters,
 // artifacts confined to the task directory, and provenance stamped by the
-// runtime. Only credentials the manifest declares are delivered, inside
+// runtime. A retest task (tool.Retester) is admitted the same way, carries
+// only items on admitted targets, may send verdicts but no records, and
+// its Fixed verdicts stand only for targets reported done in a task that
+// finished (Outcome.Verdicts). Only credentials the manifest declares are
+// delivered, inside
 // the run message (never as a file, never in the environment or argv),
 // and their values are masked in everything the host keeps.
 package toolhost
@@ -167,10 +171,15 @@ type Outcome struct {
 	Stats     Stats
 	Logs      []LogLine
 	Artifacts []Artifact
-	Sandbox   executor.Status
-	Stderr    string
-	ExitCode  int
-	Duration  time.Duration
+	// Verdicts of a retest task, one per item in task order (see
+	// tool.Retester): an item whose target the policy refused, an item
+	// without a verdict, and Fixed on a target not reported done or in a
+	// task that did not finish are Unverifiable.
+	Verdicts []tool.RetestVerdict
+	Sandbox  executor.Status
+	Stderr   string
+	ExitCode int
+	Duration time.Duration
 }
 
 // ReportJSON is the report as JSON (a scanner's raw output for the
@@ -234,6 +243,10 @@ type prepared struct {
 	refused []TargetOutcome
 	// timeout is the task's run time after admission.
 	timeout time.Duration
+	// asked are the retest items as asked; refusedItems those on refused
+	// targets (never sent to the tool).
+	asked        []tool.RetestItem
+	refusedItems map[string]bool
 }
 
 // prepare checks the manifest and the task (targets, config), admits it
@@ -250,6 +263,9 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if ierr := checkTargets(m, task.Targets); ierr != nil {
 		return nil, ierr, nil
 	}
+	if ierr := toolrt.CheckRetest(m, task); ierr != nil {
+		return nil, ierr, nil
+	}
 	cfg, ierr := effectiveConfig(m, task.Config)
 	if ierr != nil {
 		return nil, ierr, nil
@@ -260,7 +276,25 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, ierr, nil
 	}
 	task = adm.Task
-	p := &prepared{m: m, task: task, refused: adm.Refused, timeout: adm.Timeout}
+	p := &prepared{m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest}
+	if task.IsRetest() && len(adm.Refused) > 0 {
+		// A retest never reaches a target the policy refused: its items
+		// are not sent and end unverifiable.
+		refused := map[string]bool{}
+		for _, r := range adm.Refused {
+			refused[r.Ref] = true
+		}
+		p.refusedItems = map[string]bool{}
+		kept := task.Retest[:0:0]
+		for _, it := range task.Retest {
+			if refused[it.Target] {
+				p.refusedItems[it.Ref] = true
+				continue
+			}
+			kept = append(kept, it)
+		}
+		p.task.Retest = kept
+	}
 	for _, req := range m.Permissions.Credentials {
 		v, ok := o.Credentials[req.Name]
 		if !ok || v == "" {
@@ -283,7 +317,7 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		dir = r
 	}
 	p.workdir = dir
-	p.asm = toolrt.NewAssembler(m, task, toolrt.NewChecker(m))
+	p.asm = toolrt.NewAssembler(m, p.task, toolrt.NewChecker(m))
 	return p, nil, nil
 }
 
@@ -365,6 +399,13 @@ func (p *prepared) redact(s string) string {
 func (h *Host) failedOutcome(m tool.Manifest, task tool.Task, e *tool.Error) *Outcome {
 	asm := toolrt.NewAssembler(m, task, toolrt.NewChecker(m))
 	out := &Outcome{Status: tool.StatusFailed, Err: e, Report: asm.Report(time.Now().UTC()), ExitCode: -1}
+	for _, it := range task.Retest {
+		detail := "the retest did not run"
+		if e != nil {
+			detail += ": " + string(e.Class)
+		}
+		out.Verdicts = append(out.Verdicts, tool.RetestVerdict{Ref: it.Ref, Verdict: tool.Unverifiable, Detail: detail})
+	}
 	if e != nil && e.Class == tool.RefusedByPolicy {
 		out.Status = tool.StatusFailed
 	}
@@ -648,6 +689,9 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 	}
 	switch env.Type {
 	case toolwire.TypeRecord:
+		if s.p.task.IsRetest() {
+			return refuse("a retest task reports verdicts, not records")
+		}
 		var rec toolwire.Record
 		if toolwire.Decode(line, &rec) != nil {
 			return refuse("unreadable record")
@@ -729,6 +773,14 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 			return refuse("artifact: " + err.Error())
 		}
 		s.out.Artifacts = append(s.out.Artifacts, art)
+	case toolwire.TypeVerdict:
+		var v toolwire.VerdictMsg
+		if toolwire.Decode(line, &v) != nil {
+			return refuse("unreadable verdict")
+		}
+		if err := asm.Verdict(v.Item, v.Verdict, s.p.redact(toolrt.CleanString(v.Detail))); err != nil {
+			return refuse(s.p.redact(err.Error()))
+		}
 	case toolwire.TypeHeartbeat:
 	case toolwire.TypeResult:
 		var r toolwire.Result
@@ -822,7 +874,30 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 		out.Targets = append(out.Targets, to)
 	}
 	p.addRefused(out)
+	out.Verdicts = p.verdicts(runErr)
 	s.h.stamp(out, p.m, p.task, execution)
+}
+
+// verdicts are the final verdicts in the order of the task as it was asked
+// (before admission removed items on refused targets).
+func (p *prepared) verdicts(runErr *tool.Error) []tool.RetestVerdict {
+	asked := p.asked
+	if len(asked) == 0 {
+		return nil
+	}
+	got := map[string]tool.RetestVerdict{}
+	for _, v := range p.asm.Verdicts(runErr) {
+		got[v.Ref] = v
+	}
+	out := make([]tool.RetestVerdict, 0, len(asked))
+	for _, it := range asked {
+		if p.refusedItems[it.Ref] {
+			out = append(out, tool.RetestVerdict{Ref: it.Ref, Verdict: tool.Unverifiable, Detail: "the local policy refused the target"})
+			continue
+		}
+		out = append(out, got[it.Ref])
+	}
+	return out
 }
 
 // addRefused reports the targets the policy refused; a task that ran on

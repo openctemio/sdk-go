@@ -112,6 +112,12 @@ func (m Manifest) Validate() error {
 		add("/produces", "must declare at least one output type")
 	}
 	checkList(add, "/produces", m.Produces, func(s string) string { return checkProduces(m.Class, s) })
+	if m.Retest && m.Class != TargetScan {
+		add("/retest", "only target-scan tools retest")
+	}
+	if m.Retest && m.Run != nil && m.Run.Profile == ProfileExec {
+		add("/retest", "an exec-profile tool cannot retest (it has no verdict channel)")
+	}
 	schema := m.validateConfig(add)
 	m.validatePermissions(add, schema)
 	m.validateResources(add)

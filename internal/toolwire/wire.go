@@ -44,11 +44,12 @@ const (
 	TypeTargetStatus = "target_status"
 	TypeArtifact     = "artifact"
 	TypeHeartbeat    = "heartbeat"
+	TypeVerdict      = "verdict"
 	TypeResult       = "result"
 )
 
 // Features the runtime offers in its hello.
-var Features = []string{"artifacts", "progress", "credentials", "target_status", "report_info"}
+var Features = []string{"artifacts", "progress", "credentials", "target_status", "report_info", "retest"}
 
 // Envelope is the part every message has.
 type Envelope struct {
@@ -232,6 +233,15 @@ type Artifact struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
+}
+
+// VerdictMsg is a retest verdict on one item.
+type VerdictMsg struct {
+	Envelope
+	// Item is the ref of the retest item.
+	Item    string       `json:"item"`
+	Verdict tool.Verdict `json:"verdict"`
+	Detail  string       `json:"detail,omitempty"`
 }
 
 // Stats are the adapter's own counters (informational).

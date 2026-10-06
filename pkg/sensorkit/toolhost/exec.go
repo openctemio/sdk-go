@@ -38,6 +38,9 @@ const (
 // the same checks as any record. All targets share the outcome.
 func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o RunOptions, argv []string) (*Outcome, error) {
 	start := time.Now()
+	if task.IsRetest() {
+		return h.failedOutcome(m, task, tool.AsError(tool.Invalid("an exec-profile tool cannot retest"))), nil
+	}
 	p, ierr, err := h.prepare(ctx, m, task, o)
 	if err != nil {
 		return nil, err

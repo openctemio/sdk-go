@@ -71,6 +71,7 @@
         }
       }
     },
+    "retest": {"type": "boolean", "description": "The tool can check again what it reported (a retest task: items in, one verdict per item out). Target-scan tools only."},
     "protocol": {
       "type": "object",
       "additionalProperties": false,

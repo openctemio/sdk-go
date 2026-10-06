@@ -31,6 +31,9 @@ type Task struct {
 	// into it (operator settings, managed content paths): never from the
 	// platform, never for an adapter shipped on its own.
 	Local json.RawMessage `json:"local,omitempty"`
+	// Retest, when not empty, makes the task a retest: the items to check
+	// again, each on one of Targets (see Retester).
+	Retest []RetestItem `json:"retest,omitempty"`
 }
 
 // Target is one thing to work on.
