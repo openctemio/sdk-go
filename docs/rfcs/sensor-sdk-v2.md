@@ -674,6 +674,32 @@ Suites take a `conformance.T` (the subset of `testing.TB` they use), so the same
 8. **Deliver.** Resumable, chunked, exactly-once upload bound to the command (lease epoch echo); logs streamed (redacted, capped); artifacts through their own upload; the command completed with outcome and error class.
 9. **Clean up.** Kill the process group, wipe the workdir and credentials, release the slot, record duration and cost for the capacity model.
 
+#### D.7.1 Per-command logs
+
+Every log line of a platform command goes to two sinks: the sensor's standard
+error and the command's log on the platform, which keeps it with the task for a
+limited time and shows it on the run page (protocol v2 feature `logs`,
+`POST /commands/{id}/logs`).
+
+- Sources: a tool's `ctx.Log()` (through the adapter protocol's `log` message,
+  `toolhost.Host.LogSink`) and the sensor's own code through
+  `Kit.CommandLogger(ctx)` (an executor added with `HandleCommand`). Lines below
+  info stay local.
+- Redaction: the tool's credentials (toolhost), the sensor's key, and the value
+  of any field whose name names a secret (`token`, `password`, `api_key`, ...)
+  on both sinks; control and bidirectional-override characters are removed.
+  The platform redacts again.
+- Bounds: at most 2,000 lines and 1 MiB per command (then one note of how many
+  lines were dropped), 8 KiB per message, 32 fields; batches of at most 500
+  lines and half the 256 KiB body limit, sent every 3 seconds or when 200
+  lines are buffered.
+- Delivery: batches go through the outbox (kind `command_log`, numbered by
+  `seq` for idempotency), so an outage loses nothing. A command's last batch is
+  queued before its result, and the outbox delivers them before the result.
+  Logs are best effort: they are evicted first under the byte cap, a batch the
+  platform refuses is dropped, and neither ever marks the command's results as
+  lost. A platform without the feature gets no logs.
+
 ### D.8 Transport v3 behind the SDK
 
 #### D.8.1 Proto layout (in the protocol module)
