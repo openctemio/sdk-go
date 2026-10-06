@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,6 +22,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
 	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
 	"github.com/openctemio/sdk-go/pkg/sensorsig"
+	"github.com/openctemio/sdk-go/pkg/tool/toolcompat"
 )
 
 // Options configure a Kit. The zero value is a server-controlled sensor that
@@ -315,7 +317,10 @@ type Kit struct {
 	parsers     []core.Parser
 	handlers    map[string]core.CommandExecutor
 	middlewares []middleware
-	ran         bool
+	// retests are the tools a sensor serves retests for itself
+	// (HandleRetest).
+	retests map[string]RetestFunc
+	ran     bool
 	// jobID makes Run run that one command and stop (RunJob).
 	jobID string
 
@@ -1000,7 +1005,12 @@ func (k *Kit) inventory(reg *core.ToolRegistry) []scannerEntry {
 			continue
 		}
 		scanners = append(scanners, e)
-		if err := reg.RegisterScanner(e.s, e.caps...); err != nil {
+		caps := e.caps
+		if r, ok := e.s.(toolcompat.Retester); ok && r.Retests() {
+			// The platform routes retest commands by this capability.
+			caps = append(slices.Clone(caps), toolcompat.RetestCapability(e.s.Name()))
+		}
+		if err := reg.RegisterScanner(e.s, caps...); err != nil {
 			if k.s.verbose {
 				_, _ = fmt.Fprintf(k.errw, "Warning: scanner %s is not reported to the platform: %v\n", e.label(), err)
 			}
@@ -1059,10 +1069,16 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	}
 
 	types := slices.Clone(defaultCommandTypes)
+	handlers := maps.Clone(k.handlers)
+	if _, custom := handlers[RetestCommandType]; !custom {
+		if rx := newRetestExecutor(scanners, k.retests); rx != nil {
+			handlers[RetestCommandType] = rx
+		}
+	}
 	var exec core.CommandExecutor = executor
-	if len(k.handlers) > 0 {
-		exec = &commandRouter{handlers: k.handlers, fallback: executor}
-		for t := range k.handlers {
+	if len(handlers) > 0 {
+		exec = &commandRouter{handlers: handlers, fallback: executor}
+		for t := range handlers {
 			types = appendType(types, t)
 		}
 	}
