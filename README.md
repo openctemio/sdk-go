@@ -214,6 +214,31 @@ s.Tools().Limit(strings.Split(os.Getenv("MY_TOOLS"), ",")...) // optional operat
   `resource.ManagerConfig{Tools: s.Tools().Names(), CostHints: s.Tools().CostHints()}`.
 - `SetCapabilityReporter` replaces the registry with your own reporter.
 
+## Write a tool
+
+A tool is a manifest plus a run function (`pkg/tool`); the sensor runs it out
+of process, admits its targets against the local policy and checks every
+record it emits. A simple tool is declared with the builder:
+
+```go
+var Dotenv = tool.Define("dotenv", "1.0.0").
+	Targets("http_service").
+	Produces("finding:misconfiguration").
+	Params(tool.StringParam("path").Label("Path").Default("/.env").Pattern("^/")).
+	Handle(func(ctx tool.Context, job *tool.Job, emit tool.Emit) error {
+		for _, t := range job.Targets() {
+			// probe t.URL(job.Param("path").String()) with ctx.HTTP()
+			_ = emit.Misconfiguration(t, tool.Issue{RuleID: "dotenv-exposed", Title: ".env is readable", Severity: "high"})
+			ctx.TargetDone(t)
+		}
+		return nil
+	}).
+	MustBuild()
+```
+
+Add it to a sensor with `kit.AddTool(Dotenv)` and test it with
+`testkit.Run`. The design: [docs/rfcs/sensor-sdk-v2.md](docs/rfcs/sensor-sdk-v2.md).
+
 ## Packages
 
 What the SDK promises, what is stable, what is moving to the sensor, and how
