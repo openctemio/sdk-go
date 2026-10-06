@@ -1,7 +1,7 @@
 // Package adapters provides a registry for scanner output adapters.
 // Each adapter converts a specific scanner's output format to CTIS.
 //
-// Deprecated: the converters duplicate ctis.FromSARIF and the parsers the
+// Deprecated: the converters duplicate core.SARIFParser and the parsers the
 // sensor ships; no sensor, platform or collector imports them. Emit CTIS
 // from a tool (pkg/tool) or convert SARIF with the ctis module. Removal is
 // planned for a later minor release (docs/STABILITY.md).

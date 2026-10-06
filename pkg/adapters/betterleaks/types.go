@@ -1,7 +1,7 @@
 // Package betterleaks provides an adapter to convert Betterleaks (v1) JSON
 // reports to CTIS. gitleaks reports have the same format and convert too.
 //
-// Deprecated: the converters duplicate ctis.FromSARIF and the parsers the
+// Deprecated: the converters duplicate core.SARIFParser and the parsers the
 // sensor ships; no sensor, platform or collector imports them. Emit CTIS
 // from a tool (pkg/tool) or convert SARIF with the ctis module. Removal is
 // planned for a later minor release (docs/STABILITY.md).

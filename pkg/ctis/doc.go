@@ -10,13 +10,13 @@
 //
 // What the SDK adds on top of the module:
 //
-//   - FromSARIF wraps the module's converter with the SDK's asset rule: the
-//     findings' asset comes from the options, then the branch info, then the
-//     log's versionControlProvenance, and a log with results but no asset is
-//     ErrNoAssetForFindings instead of a report with unowned findings.
+//   - SARIFLog / SARIFRun: the module's SARIF root types plus
+//     versionControlProvenance (SARIFRun.Repository).
 //   - CheckFindingAssets / ErrNoAssetForFindings: every finding needs an
 //     asset of its own report (the rule protocol v2 ingest enforces).
-//   - NormalizeSARIFKind / NormalizeSARIFBaselineState.
+//
+// SARIF is converted by core.SARIFParser, through the module's importer
+// package; the module's bare FromSARIF is not re-exported.
 //
 // Stability: Stable (docs/STABILITY.md).
 package ctis
