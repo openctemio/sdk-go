@@ -96,6 +96,10 @@ type Host struct {
 	// Logger receives the tools' log lines, redacted (nil: kept in the
 	// Outcome only).
 	Logger *slog.Logger
+	// LogSink also receives each of a task's log lines, redacted and
+	// cleaned, with the context the task was run with (which carries the
+	// platform command, core.CommandIDFromContext). It must not block.
+	LogSink func(ctx context.Context, tool string, l LogLine)
 	// Policy admits every task before it starts (see Admit): the
 	// sensor-local policy. nil admits by the manifest alone.
 	Policy Policy
@@ -428,6 +432,8 @@ type session struct {
 	p   *prepared
 	o   RunOptions
 	out *Outcome
+	// ctx is the context the task was run with (for LogSink).
+	ctx context.Context
 
 	invalid  int
 	lastProg time.Time
@@ -494,7 +500,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	_ = inR.Close()
 	_ = outW.Close()
 
-	s := &session{h: h, p: p, o: o, out: &Outcome{Sandbox: be.Status()}}
+	s := &session{h: h, p: p, o: o, out: &Outcome{Sandbox: be.Status()}, ctx: ctx}
 	_, _, maxBytes, _ := m.Resources.Limits()
 	stopReason, stopClass := s.drive(runCtx, ctx, t, toolwire.NewWriter(inW), outR, idle, maxRecords, maxBytes)
 	_ = inW.Close()
@@ -813,11 +819,15 @@ func (s *session) log(level, msg string, fields map[string]any) {
 	default:
 		level = "info"
 	}
+	line := LogLine{Level: level, Msg: msg, Fields: clean}
 	s.logMu.Lock()
 	if len(s.out.Logs) < MaxLogLines {
-		s.out.Logs = append(s.out.Logs, LogLine{Level: level, Msg: msg, Fields: clean})
+		s.out.Logs = append(s.out.Logs, line)
 	}
 	s.logMu.Unlock()
+	if sink := s.h.LogSink; sink != nil && s.ctx != nil {
+		sink(s.ctx, s.p.m.Name, line)
+	}
 	if l := s.h.Logger; l != nil {
 		lv := map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}[level]
 		args := []any{"tool", s.p.m.Name, "task", s.p.task.ID}

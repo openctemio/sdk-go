@@ -109,6 +109,10 @@ const (
 	// KindCommandResult is the completion or failure of a platform command.
 	// It is delivered only after every older report of the same command.
 	KindCommandResult Kind = "command_result"
+	// KindCommandLog is a batch of a command's log lines. It is delivered
+	// before the command's result, evicted first under the byte cap, and
+	// losing it never marks the command's results as lost.
+	KindCommandLog Kind = "command_log"
 	// KindChunk was a protocol v1 chunk of a large report. Protocol v1 is
 	// retired: such an item left in an outbox is not delivered.
 	KindChunk Kind = "chunk"
@@ -674,12 +678,16 @@ func (o *Outbox) enforceCapsLocked(extra int64) ([]Meta, string) {
 	limit := o.capBytesLocked()
 	used := o.usedBytesLocked()
 	if used+extra > limit {
-		// Dead letters first, then pending results, then command results;
+		// Dead letters first, then logs, then pending results, then command
+		// results;
 		// each oldest first. A command result is a few hundred bytes:
 		// evicting it frees almost nothing and leaves its command running
 		// on the platform until it times out.
 		order := o.sortedLocked(func(e *entry) bool { return e.dead != nil })
-		order = append(order, o.sortedLocked(func(e *entry) bool { return e.dead == nil && e.meta.Kind != KindCommandResult })...)
+		order = append(order, o.sortedLocked(func(e *entry) bool { return e.dead == nil && e.meta.Kind == KindCommandLog })...)
+		order = append(order, o.sortedLocked(func(e *entry) bool {
+			return e.dead == nil && e.meta.Kind != KindCommandResult && e.meta.Kind != KindCommandLog
+		})...)
 		order = append(order, o.sortedLocked(func(e *entry) bool { return e.dead == nil && e.meta.Kind == KindCommandResult })...)
 		for _, e := range order {
 			if used+extra <= limit {
@@ -722,7 +730,7 @@ func (o *Outbox) evictLocked(e *entry) {
 // the command result of its command (queued now or later) carries the
 // reason, so the command is not reported as a clean, complete run.
 func (o *Outbox) noteLostLocked(m Meta, why string) {
-	if m.CommandID == "" || m.Kind == KindCommandResult {
+	if m.CommandID == "" || m.Kind == KindCommandResult || m.Kind == KindCommandLog {
 		return
 	}
 	why = fmt.Sprintf("%s %s %s", m.Kind, m.ID, why)
@@ -887,7 +895,7 @@ func (o *Outbox) DeadLetterForCommand(commandID string) (DeadLetter, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for _, e := range o.entries {
-		if e.dead != nil && e.meta.CommandID == commandID && e.meta.Kind != KindCommandResult {
+		if e.dead != nil && e.meta.CommandID == commandID && e.meta.Kind != KindCommandResult && e.meta.Kind != KindCommandLog {
 			return *e.dead, true
 		}
 	}

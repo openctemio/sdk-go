@@ -33,6 +33,14 @@ func (f *FakePlatform) control(w http.ResponseWriter, r *http.Request, rest stri
 		switch parts[1] {
 		case protov2.ClaimAction, protov2.StartAction, protov2.CompleteAction, protov2.FailAction, protov2.ReleaseAction:
 			f.transitionV2(w, parts[0], parts[1], body, r.Header.Get(protov2.HeaderLeaseEpoch))
+		case protov2.LogsAction:
+			f.mu.Lock()
+			on := f.logs
+			f.mu.Unlock()
+			if !on {
+				return false
+			}
+			f.logsV2(w, parts[0], body)
 		default:
 			return false
 		}
@@ -80,6 +88,33 @@ func (f *FakePlatform) control(w http.ResponseWriter, r *http.Request, rest stri
 		return false
 	}
 	return true
+}
+
+// logsV2 stores one batch of a command's logs (idempotent by seq). A
+// command the fake does not know is not found.
+func (f *FakePlatform) logsV2(w http.ResponseWriter, id string, body []byte) {
+	var req protov2.CommandLogsRequest
+	if err := json.Unmarshal(body, &req); err != nil || req.Seq < 0 || len(req.Lines) > protov2.MaxCommandLogLines {
+		f.problem(w, http.StatusBadRequest, protov2.ProblemSchemaInvalid)
+		return
+	}
+	f.mu.Lock()
+	if _, ok := f.commands[id]; !ok {
+		f.mu.Unlock()
+		f.problem(w, http.StatusNotFound, protov2.ProblemCommandNotFound)
+		return
+	}
+	if f.cmdLogs == nil {
+		f.cmdLogs = map[string]map[int]protov2.CommandLogsRequest{}
+	}
+	if f.cmdLogs[id] == nil {
+		f.cmdLogs[id] = map[int]protov2.CommandLogsRequest{}
+	}
+	if _, dup := f.cmdLogs[id][req.Seq]; !dup {
+		f.cmdLogs[id][req.Seq] = req
+	}
+	f.mu.Unlock()
+	writeJSON(w, http.StatusOK, protov2.CommandLogsResponse{Stored: len(req.Lines)})
 }
 
 func (f *FakePlatform) heartbeatV2(w http.ResponseWriter, body []byte) {

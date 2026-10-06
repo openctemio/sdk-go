@@ -104,7 +104,53 @@ const (
 	// (FailRequest.Refusal). The platform re-queues a refused routed job to
 	// another sensor and never offers it to the refuser again.
 	FeatureRefusal = "refusal"
+	// FeatureLogs: POST /commands/{id}/logs takes a command's log lines
+	// (CommandLogsRequest), kept with the task on the platform for a
+	// limited time. Without it a sensor keeps its logs local.
+	FeatureLogs = "logs"
 )
+
+// LogsAction is the command resource that takes log lines:
+// POST CommandActionPath(id, LogsAction).
+const LogsAction = "logs"
+
+// Command log limits (the platform refuses more with 413).
+const (
+	// MaxCommandLogLines bounds the lines of one CommandLogsRequest.
+	MaxCommandLogLines = 500
+	// MaxCommandLogBodyBytes bounds the body of one CommandLogsRequest.
+	MaxCommandLogBodyBytes = 256 << 10
+)
+
+// CommandLogLine is one log line of a command: level debug, info, warn or
+// error; source names the tool that logged it ("" the sensor itself);
+// fields are scalars. Already redacted by the sensor; the platform redacts
+// again.
+type CommandLogLine struct {
+	TS     time.Time      `json:"ts"`
+	Level  string         `json:"level"`
+	Msg    string         `json:"msg"`
+	Source string         `json:"source,omitempty"`
+	Fields map[string]any `json:"fields,omitempty"`
+}
+
+// CommandLogsRequest is the body of POST /commands/{id}/logs: one batch.
+// Seq numbers a command's batches from 0; a replay of a stored seq is
+// answered as the first time (idempotent).
+type CommandLogsRequest struct {
+	Seq   int              `json:"seq"`
+	Lines []CommandLogLine `json:"lines"`
+}
+
+// CommandLogsResponse answers POST /commands/{id}/logs: the lines stored,
+// and the lines dropped because the command reached the platform's
+// per-command cap (Truncated); a capped batch is not an error and is not
+// retried.
+type CommandLogsResponse struct {
+	Stored    int  `json:"stored"`
+	Dropped   int  `json:"dropped"`
+	Truncated bool `json:"truncated"`
+}
 
 // ManifestResponse answers PUT /manifest: the digest the platform stored
 // (echo it as the heartbeat's manifest_digest), whether it was new, and

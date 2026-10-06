@@ -88,7 +88,7 @@ var (
 
 func TestMain(m *testing.M) {
 	executor.RunLauncherIfRequested()
-	adapter.Dispatch(contractTool, bridgedLegacy)
+	adapter.Dispatch(contractTool, bridgedLegacy, loggingTool)
 	os.Exit(m.Run())
 }
 

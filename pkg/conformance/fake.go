@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -125,8 +126,12 @@ type FakePlatform struct {
 	// served (SetConfigReport); configReports are the reports received.
 	configReport  bool
 	configReports []json.RawMessage
-	configDigest  string
-	digest        string
+	// logs: hello lists "logs" and POST /commands/{id}/logs is served
+	// (SetLogs); cmdLogs are the batches received by command and seq.
+	logs         bool
+	cmdLogs      map[string]map[int]protov2.CommandLogsRequest
+	configDigest string
+	digest       string
 	// policyTools, when set, is the policy's allowed_tools (else every
 	// tool of the manifest); slim answers omit_inventory (api RFC-033 §6.12).
 	policyTools   []string
@@ -175,6 +180,30 @@ func (f *FakePlatform) SetConfigReport(on bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.configReport = on
+}
+
+// SetLogs makes the fake serve POST /commands/{id}/logs and list "logs" on
+// hello.
+func (f *FakePlatform) SetLogs(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logs = on
+}
+
+// CommandLogs returns the log lines received for a command, in seq order.
+func (f *FakePlatform) CommandLogs(id string) []protov2.CommandLogLine {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seqs := make([]int, 0, len(f.cmdLogs[id]))
+	for seq := range f.cmdLogs[id] {
+		seqs = append(seqs, seq)
+	}
+	slices.Sort(seqs)
+	var out []protov2.CommandLogLine
+	for _, seq := range seqs {
+		out = append(out, f.cmdLogs[id][seq].Lines...)
+	}
+	return out
 }
 
 // ConfigReports returns the config reports received, in order.
@@ -593,6 +622,9 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 			}
 			if f.localPolicy {
 				features = append(features, protov2.FeatureLocalPolicy)
+			}
+			if f.logs {
+				features = append(features, protov2.FeatureLogs)
 			}
 		}
 		f.mu.Unlock()

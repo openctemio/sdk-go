@@ -762,3 +762,48 @@ func TestByteCapEvictsCommandResultsLast(t *testing.T) {
 	}
 	t.Fatal("the command result was evicted before the reports")
 }
+
+// A command log batch is evicted before results under the byte cap, and
+// losing one never marks its command result lost: logs are best effort.
+func TestCommandLogsAreEvictedFirstAndNeverMarkResultsLost(t *testing.T) {
+	o := openTest(t, t.TempDir(), func(c *Config) { c.MaxBytes = 3000; c.MaxDiskFraction = -1 })
+	rep, err := o.Enqueue(Meta{Kind: KindReport, CommandID: "c"}, []byte("report"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := o.Enqueue(Meta{Kind: KindCommandResult, CommandID: "c"}, []byte("result"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 40 {
+		if _, err := o.Enqueue(Meta{Kind: KindCommandLog, CommandID: "c"}, []byte(strings.Repeat("l", 50)+fmt.Sprint(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if o.Stats().Evicted == 0 {
+		t.Fatal("nothing evicted")
+	}
+	kept := map[string]bool{}
+	for _, m := range o.Pending() {
+		kept[m.ID] = true
+	}
+	if !kept[rep.Meta.ID] || !kept[res.Meta.ID] {
+		t.Fatal("a report or the command result was evicted before the logs")
+	}
+	var lost string
+	r := &recorder{errs: func(d *Delivery) error {
+		if d.Meta.Kind == KindCommandResult {
+			lost = d.State.LostResults
+		}
+		return nil
+	}}
+	stop := runFor(t, o, r)
+	defer stop()
+	waitFor(t, func() bool { return o.Stats().PendingCount == 0 })
+	if lost != "" {
+		t.Fatalf("an evicted log batch marked the command result lost: %q", lost)
+	}
+	if _, ok := o.DeadLetterForCommand("c"); ok {
+		t.Fatal("unexpected dead letter")
+	}
+}
