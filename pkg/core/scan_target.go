@@ -361,18 +361,21 @@ func (p *ScanTargetPolicy) validateNetworkTarget(ctx context.Context, target str
 
 func (p *ScanTargetPolicy) checkHost(ctx context.Context, host string, failClosedOnDNS bool) error {
 	lower := strings.TrimSuffix(strings.ToLower(host), ".")
+	if isWildcardHost(lower) {
+		return markTarget(RefusedTargetWildcard, fmt.Errorf("scan target host %q is a wildcard pattern, not a host", host))
+	}
 	for _, b := range blockedTargetHosts {
 		if lower == b && !(p.AllowLoopback && strings.HasPrefix(b, "localhost")) {
-			return fmt.Errorf("scan target host %q is blocked", host)
+			return markTarget(RefusedTargetDenied, fmt.Errorf("scan target host %q is blocked", host))
 		}
 	}
 	if strings.HasSuffix(lower, ".localhost") && !p.AllowLoopback {
-		return fmt.Errorf("scan target host %q is blocked", host)
+		return markTarget(RefusedTargetDenied, fmt.Errorf("scan target host %q is blocked", host))
 	}
 
 	if ip := net.ParseIP(lower); ip != nil {
 		if httpsec.IsIPBlockedWith(ip, p.AllowPrivate, p.AllowLoopback) {
-			return fmt.Errorf("scan target IP %s is in a blocked range", ip)
+			return markTarget(RefusedTargetDenied, fmt.Errorf("scan target IP %s is in a blocked range", ip))
 		}
 		if p.Local.Present() {
 			_, err := p.Local.checkHost(ctx, lower, true)
@@ -387,6 +390,10 @@ func (p *ScanTargetPolicy) checkHost(ctx context.Context, host string, failClose
 	}
 
 	lookup := p.LookupIP
+	if lookup == nil && p.Local.Present() {
+		// The local policy resolves the way admission did.
+		lookup = p.Local.resolve
+	}
 	if lookup == nil {
 		lookup = func(ctx context.Context, host string) ([]net.IP, error) {
 			return net.DefaultResolver.LookupIP(ctx, "ip", host)
@@ -395,13 +402,13 @@ func (p *ScanTargetPolicy) checkHost(ctx context.Context, host string, failClose
 	ips, err := lookup(ctx, host)
 	if err != nil || len(ips) == 0 {
 		if failClosedOnDNS {
-			return fmt.Errorf("cannot resolve scan target host %q (refusing to scan an unverifiable target): %v", host, err)
+			return markTarget(RefusedTargetUnresolvable, fmt.Errorf("cannot resolve scan target host %q (refusing to scan an unverifiable target): %v", host, err))
 		}
 		return nil
 	}
 	for _, ip := range ips {
 		if httpsec.IsIPBlockedWith(ip, p.AllowPrivate, p.AllowLoopback) {
-			return fmt.Errorf("scan target host %q resolves to blocked address %s", host, ip)
+			return markTarget(RefusedTargetDenied, fmt.Errorf("scan target host %q resolves to blocked address %s", host, ip))
 		}
 	}
 	if p.Local.Present() {
@@ -416,11 +423,11 @@ func (p *ScanTargetPolicy) checkHost(ctx context.Context, host string, failClose
 // is probed through IsIPBlockedWith so the toggles apply consistently.
 func (p *ScanTargetPolicy) checkCIDR(n *net.IPNet) error {
 	if httpsec.IsIPBlockedWith(n.IP, p.AllowPrivate, p.AllowLoopback) {
-		return fmt.Errorf("scan target range %s includes blocked addresses", n)
+		return markTarget(RefusedTargetDenied, fmt.Errorf("scan target range %s includes blocked addresses", n))
 	}
 	for _, blocked := range blockedRangesForOverlap {
 		if n.Contains(blocked.IP) && httpsec.IsIPBlockedWith(blocked.IP, p.AllowPrivate, p.AllowLoopback) {
-			return fmt.Errorf("scan target range %s overlaps blocked range %s", n, blocked)
+			return markTarget(RefusedTargetDenied, fmt.Errorf("scan target range %s overlaps blocked range %s", n, blocked))
 		}
 	}
 	return nil

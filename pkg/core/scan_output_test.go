@@ -255,16 +255,39 @@ func TestExecuteScanTargetShapes(t *testing.T) {
 		}
 	})
 
-	t.Run("a refused target fails the command and is named", func(t *testing.T) {
+	t.Run("refused targets are skipped and listed; the rest is scanned", func(t *testing.T) {
+		s := &listScanner{rawScanner: rawScanner{name: "nuclei"}}
+		res, err := execPayload(t, newExec(s), map[string]any{"scanner": "nuclei",
+			"targets": []string{"http://203.0.113.10", "http://169.254.169.254/latest/meta-data/", "-u=evil", "203.0.113.11"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.single != "" || strings.Join(s.list, ",") != "http://203.0.113.10,203.0.113.11" {
+			t.Fatalf("scanned single=%q list=%v; a refused target reached the scanner", s.single, s.list)
+		}
+		refused, _ := res.Metadata[core.MetaRefusedTargets].([]core.RefusedTarget)
+		if len(refused) != 2 || res.Metadata[core.MetaRefusedTargetsTotal] != 2 || res.Metadata[core.MetaPartial] != true {
+			t.Fatalf("metadata %+v", res.Metadata)
+		}
+		if refused[0].Target != "http://169.254.169.254/latest/meta-data/" || refused[0].Reason != core.RefusedTargetDenied ||
+			refused[1].Target != "-u=evil" || refused[1].Reason != core.RefusedTargetInvalid {
+			t.Fatalf("refused %+v", refused)
+		}
+		if res.Metadata["targets_scanned"] != 2 {
+			t.Fatalf("targets_scanned = %v", res.Metadata["targets_scanned"])
+		}
+	})
+
+	t.Run("every target refused fails the command, naming them", func(t *testing.T) {
 		s := &listScanner{rawScanner: rawScanner{name: "nuclei"}}
 		_, err := execPayload(t, newExec(s), map[string]any{"scanner": "nuclei",
-			"targets": []string{"http://203.0.113.10", "http://169.254.169.254/latest/meta-data/", "-u=evil"}})
+			"targets": []string{"http://169.254.169.254/latest/meta-data/", "-u=evil"}})
 		if err == nil || !strings.Contains(err.Error(), "169.254.169.254") || !strings.Contains(err.Error(), "-u=evil") ||
-			!strings.Contains(err.Error(), "2 of 3") {
+			!strings.Contains(err.Error(), "2 of 2") {
 			t.Fatalf("want both refused targets named, got %v", err)
 		}
 		if s.single != "" || s.list != nil {
-			t.Fatal("nothing may be scanned when a target is refused")
+			t.Fatal("nothing may be scanned when every target is refused")
 		}
 	})
 

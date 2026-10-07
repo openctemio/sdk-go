@@ -149,9 +149,21 @@ func TestKit_CommandLogs(t *testing.T) {
 	if !found {
 		t.Fatalf("tool lines %+v", toolLines)
 	}
-	cl := f.CommandLogs(custom)
+	var cl, own []protov2.CommandLogLine
+	for _, l := range f.CommandLogs(custom) {
+		if l.Source == "sensor" {
+			own = append(own, l)
+		} else {
+			cl = append(cl, l)
+		}
+	}
 	if len(cl) != 1 || cl[0].Msg != "custom step done" || cl[0].Fields["token"] != tool.Redacted || cl[0].Fields["items"] != float64(2) {
 		t.Fatalf("custom executor lines %+v", cl)
+	}
+	// The sensor's own lines frame the executor's: received first, the
+	// outcome last.
+	if len(own) < 2 || own[0].Msg != "Received by the sensor" || own[len(own)-1].Msg != "Completed" {
+		t.Fatalf("sensor lines %+v", own)
 	}
 	if strings.Contains(errw.String(), "tool-secret-456") || strings.Contains(errw.String(), "t0p-secret") {
 		t.Fatal("a secret reached the sensor's standard error")
@@ -193,5 +205,40 @@ func TestLogShipperBatchesFitTheBodyLimit(t *testing.T) {
 	}
 	if total != 100 || len(send.lines("c")[0].Msg) != maxLogMsgBytes {
 		t.Fatalf("%d lines sent; first message %d bytes", total, len(send.lines("c")[0].Msg))
+	}
+}
+
+// directFakeSender also sends batches directly (as *client.Client does).
+type directFakeSender struct {
+	fakeLogSender
+	direct []int
+}
+
+func (f *directFakeSender) SendCommandLogs(ctx context.Context, id string, b protov2.CommandLogsRequest) (*protov2.CommandLogsResponse, error) {
+	f.mu.Lock()
+	f.direct = append(f.direct, b.Seq)
+	f.mu.Unlock()
+	return &protov2.CommandLogsResponse{}, f.QueueCommandLogs(ctx, id, b)
+}
+
+// The poller's lines (core.CommandLogSink) are tagged "sensor"; a command
+// that gets lines after it finished (a hand-back, a second run here)
+// continues its batch sequence, because the platform keeps the first batch
+// of each number; a direct finish goes around the outbox.
+func TestLogShipperCommandLogSink(t *testing.T) {
+	send := &directFakeSender{}
+	s := newLogShipper(send, nil, nil)
+	ctx := context.Background()
+	s.CommandLog(ctx, "c", "warn", "Target refused by the local policy: api.example.com", map[string]any{"reason": "unresolvable"})
+	s.FinishCommandLog(ctx, "c", false)
+	s.CommandLog(ctx, "c", "info", "Not run on this sensor now: no free slot; handed back to the platform", nil)
+	s.FinishCommandLog(ctx, "c", true)
+
+	lines := send.lines("c") // panics when a batch number repeats or skips
+	if len(lines) != 2 || lines[0].Source != "sensor" || lines[0].Fields["reason"] != "unresolvable" || lines[1].Level != "info" {
+		t.Fatalf("lines %+v", lines)
+	}
+	if len(send.direct) != 1 || send.direct[0] != 1 {
+		t.Fatalf("direct batches %v, want the second batch (seq 1) only", send.direct)
 	}
 }

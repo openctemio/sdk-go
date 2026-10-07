@@ -46,6 +46,16 @@ type logSender interface {
 	QueueCommandLogs(ctx context.Context, commandID string, batch protov2.CommandLogsRequest) error
 }
 
+// directLogSender sends a batch now, outside the outbox (*client.Client):
+// the last lines of a command about to be handed back.
+type directLogSender interface {
+	SendCommandLogs(ctx context.Context, commandID string, batch protov2.CommandLogsRequest) (*protov2.CommandLogsResponse, error)
+}
+
+// maxSeqMemory bounds the finished commands whose next batch number the
+// shipper remembers.
+const maxSeqMemory = 4096
+
 // logShipper batches the log lines of running commands.
 type logShipper struct {
 	send   logSender
@@ -54,7 +64,11 @@ type logShipper struct {
 
 	mu   sync.Mutex
 	cmds map[string]*commandLog
-	kick chan struct{}
+	// nextSeq is the next batch number of a finished command: lines it
+	// gets later (a hand-back, a second run here) continue the sequence,
+	// because the platform keeps the first batch of each number.
+	nextSeq map[string]int
+	kick    chan struct{}
 	// sendMu keeps a command's batches in seq order on the wire.
 	sendMu sync.Mutex
 }
@@ -70,7 +84,7 @@ type commandLog struct {
 }
 
 func newLogShipper(send logSender, redact func(string) string, logf func(string, ...any)) *logShipper {
-	return &logShipper{send: send, redact: redact, logf: logf, cmds: map[string]*commandLog{}, kick: make(chan struct{}, 1)}
+	return &logShipper{send: send, redact: redact, logf: logf, cmds: map[string]*commandLog{}, nextSeq: map[string]int{}, kick: make(chan struct{}, 1)}
 }
 
 // run flushes full and aging buffers until ctx ends.
@@ -98,7 +112,8 @@ func (s *logShipper) add(id string, l protov2.CommandLogLine) {
 	s.mu.Lock()
 	c := s.cmds[id]
 	if c == nil {
-		c = &commandLog{}
+		c = &commandLog{seq: s.nextSeq[id]}
+		delete(s.nextSeq, id)
 		s.cmds[id] = c
 	}
 	if c.lines >= MaxCommandLogLines || c.bytes+size > MaxCommandLogBytes {
@@ -125,6 +140,22 @@ func (s *logShipper) add(id string, l protov2.CommandLogLine) {
 // dropped) and forgets it. Called when the command's executor returned,
 // before its result is reported, so the logs are queued ahead of it.
 func (s *logShipper) finish(ctx context.Context, id string) {
+	s.finishVia(ctx, id, false)
+}
+
+// CommandLog takes one of the poller's own lines about command id
+// (core.CommandLogSink).
+func (s *logShipper) CommandLog(_ context.Context, id, level, msg string, fields map[string]any) {
+	s.add(id, protov2.CommandLogLine{TS: time.Now().UTC(), Level: level, Msg: msg, Source: "sensor", Fields: fields})
+}
+
+// FinishCommandLog sends what is left of command id: queued through the
+// outbox ahead of its result, or directly (core.CommandLogSink).
+func (s *logShipper) FinishCommandLog(ctx context.Context, id string, direct bool) {
+	s.finishVia(ctx, id, direct)
+}
+
+func (s *logShipper) finishVia(ctx context.Context, id string, direct bool) {
 	s.mu.Lock()
 	c := s.cmds[id]
 	if c != nil && c.dropped > 0 {
@@ -140,7 +171,15 @@ func (s *logShipper) finish(ctx context.Context, id string) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalFlushWait)
 	defer cancel()
-	s.sendBatches(ctx, id, c)
+	s.sendBatchesVia(ctx, id, c, direct)
+	s.mu.Lock()
+	if len(s.nextSeq) >= maxSeqMemory {
+		clear(s.nextSeq)
+	}
+	if _, running := s.cmds[id]; !running {
+		s.nextSeq[id] = c.seq
+	}
+	s.mu.Unlock()
 }
 
 func (s *logShipper) flushAll(ctx context.Context) {
@@ -164,6 +203,12 @@ func (s *logShipper) flushAll(ctx context.Context) {
 
 // sendBatches cuts c's buffer into batches and queues them.
 func (s *logShipper) sendBatches(ctx context.Context, id string, c *commandLog) {
+	s.sendBatchesVia(ctx, id, c, false)
+}
+
+// sendBatchesVia sends c's buffer: queued, or directly when direct and the
+// sender can (else queued).
+func (s *logShipper) sendBatchesVia(ctx context.Context, id string, c *commandLog, direct bool) {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
 	for {
@@ -186,7 +231,13 @@ func (s *logShipper) sendBatches(ctx context.Context, id string, c *commandLog) 
 			c.buf, c.sizes, c.bufBytes = nil, nil, 0
 		}
 		s.mu.Unlock()
-		if err := s.send.QueueCommandLogs(ctx, id, batch); err != nil && s.logf != nil {
+		var err error
+		if d, ok := s.send.(directLogSender); ok && direct {
+			_, err = d.SendCommandLogs(ctx, id, batch)
+		} else {
+			err = s.send.QueueCommandLogs(ctx, id, batch)
+		}
+		if err != nil && s.logf != nil {
 			s.logf("command %s: log batch %d not sent: %v", id, batch.Seq, err)
 		}
 	}
@@ -375,11 +426,11 @@ func (k *Kit) localLogHandler() slog.Handler {
 }
 
 // startLogShipper creates the shipper (when the kit has a platform
-// client), wires it into the tool host and returns the command executor
-// middleware that sends a command's last lines before its result.
-func (k *Kit) startLogShipper(ctx context.Context) func(core.CommandExecutor) core.CommandExecutor {
+// client) and wires it into the tool host; the poller is its other source
+// and sends a command's last lines before its result.
+func (k *Kit) startLogShipper(ctx context.Context) {
 	if k.client == nil {
-		return nil
+		return
 	}
 	ship := newLogShipper(k.client, k.redactKey, func(f string, a ...any) {
 		if k.s.verbose {
@@ -393,21 +444,17 @@ func (k *Kit) startLogShipper(ctx context.Context) func(core.CommandExecutor) co
 	if h.Logger == nil {
 		h.Logger = slog.New(k.localLogHandler())
 	}
-	return func(next core.CommandExecutor) core.CommandExecutor {
-		return commandExecFunc(func(ctx context.Context, cmd *core.Command) (*core.CommandExecutionResult, error) {
-			res, err := next.Execute(ctx, cmd)
-			if cmd != nil {
-				ship.finish(ctx, cmd.ID)
-			}
-			return res, err
-		})
-	}
 }
 
+var (
+	_ logSender           = (*client.Client)(nil)
+	_ directLogSender     = (*client.Client)(nil)
+	_ core.CommandLogSink = (*logShipper)(nil)
+)
+
+// commandExecFunc is a function as a core.CommandExecutor.
 type commandExecFunc func(ctx context.Context, cmd *core.Command) (*core.CommandExecutionResult, error)
 
 func (f commandExecFunc) Execute(ctx context.Context, cmd *core.Command) (*core.CommandExecutionResult, error) {
 	return f(ctx, cmd)
 }
-
-var _ logSender = (*client.Client)(nil)
