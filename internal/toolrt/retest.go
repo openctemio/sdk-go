@@ -16,7 +16,7 @@ func CheckRetest(m tool.Manifest, task tool.Task) *tool.Error {
 	if !task.IsRetest() {
 		return nil
 	}
-	if !m.Retest {
+	if !m.RetestFeature() {
 		return tool.AsError(tool.Invalid("%s does not declare retest", m.Name))
 	}
 	if len(task.Retest) > tool.MaxRetestItems {

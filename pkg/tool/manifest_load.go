@@ -189,9 +189,14 @@ func (m Manifest) Canonical() ([]byte, error) {
 // its digest and the fields the platform plans with.
 func (m Manifest) Contract() *core.ToolContract {
 	m = m.withDefaults()
+	var implements []string
+	for _, im := range m.Implements {
+		implements = append(implements, im.Capability)
+	}
 	return &core.ToolContract{
 		APIVersion: m.APIVersion, Digest: m.Digest(), Version: m.Version, Class: string(m.Class), Tier: string(m.Tier),
 		Network: string(m.Permissions.Network), Consumes: slices.Clone(m.Consumes), Produces: slices.Clone(m.Produces),
+		Implements: implements, Batch: m.Batches(),
 	}
 }
 

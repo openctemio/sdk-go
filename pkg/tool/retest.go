@@ -112,7 +112,9 @@ type retestTool struct {
 
 func (r *retestTool) Manifest() Manifest {
 	m := r.Tool.Manifest()
-	m.Retest = true
+	if !m.RetestFeature() {
+		m.Retest = true
+	}
 	return m
 }
 

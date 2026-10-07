@@ -87,6 +87,11 @@ type ToolContract struct {
 	Network    string   `json:"network,omitempty"`
 	Consumes   []string `json:"consumes,omitempty"`
 	Produces   []string `json:"produces"`
+	// Implements are the capability references the tool implements
+	// ("scan.ports@1").
+	Implements []string `json:"implements,omitempty"`
+	// Batch: the tool takes a list of targets per task.
+	Batch bool `json:"batch,omitempty"`
 }
 
 // ToolContractProvider is a scanner ported to the tool contract: the
