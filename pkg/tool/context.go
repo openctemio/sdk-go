@@ -68,6 +68,9 @@ type Emitter interface {
 	Finding(t Target, f ctis.Finding) error
 	// Dependency emits a dependency (SBOM component) found on t.
 	Dependency(t Target, d ctis.Dependency) error
+	// Endpoint emits a method and path a web origin serves (CTIS 1.6).
+	// A URL in it never carries a query value or credentials.
+	Endpoint(e ctis.Endpoint) error
 	// Report emits every record of a report (the output of a converter),
 	// plus its tool, metadata and properties (ReportInfo).
 	Report(r *ctis.Report) error

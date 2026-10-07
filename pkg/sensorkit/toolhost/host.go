@@ -744,6 +744,11 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 			if d, err = chk.DependencyJSON(rec.Data); err == nil {
 				asm.AddCheckedDependency(d)
 			}
+		case tool.KindEndpoint:
+			var e ctis.Endpoint
+			if e, err = chk.EndpointJSON(rec.Data); err == nil {
+				asm.AddCheckedEndpoint(e)
+			}
 		default:
 			return refuse("unknown record kind")
 		}

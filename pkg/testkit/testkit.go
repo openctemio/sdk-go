@@ -313,6 +313,8 @@ func (s *sink) Finding(ref string, f ctis.Finding) error { return s.asm.Finding(
 
 func (s *sink) Dependency(_ string, d ctis.Dependency) error { return s.asm.Dependency(d) }
 
+func (s *sink) Endpoint(e ctis.Endpoint) error { return s.asm.Endpoint(e) }
+
 func (s *sink) Info(info *tool.ReportInfo) error {
 	checked, err := s.asm.Checker().Info(info)
 	if err != nil {

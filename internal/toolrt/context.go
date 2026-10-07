@@ -23,6 +23,7 @@ type Sink interface {
 	// Finding and Dependency name the target ref ("" for none).
 	Finding(ref string, f ctis.Finding) error
 	Dependency(ref string, d ctis.Dependency) error
+	Endpoint(e ctis.Endpoint) error
 	Info(info *tool.ReportInfo) error
 	Target(ref string, state tool.TargetState, err *tool.Error)
 	Progress(done, total int, msg string)
@@ -210,8 +211,20 @@ func (e emitter) Dependency(t tool.Target, d ctis.Dependency) error {
 	return e.c.cfg.Sink.Dependency(t.Ref, checked)
 }
 
-// Report emits the report's info, then its assets, findings and
-// dependencies. The first output-limit error stops it; other refused
+func (e emitter) Endpoint(ep ctis.Endpoint) error {
+	if e.c.cfg.Task.IsRetest() {
+		return tool.ErrRetestRecord
+	}
+	checked, err := e.c.checker.Endpoint(ep)
+	if err != nil {
+		_ = e.c.cfg.Sink.Endpoint(ep)
+		return err
+	}
+	return e.c.cfg.Sink.Endpoint(checked)
+}
+
+// Report emits the report's info, then its assets, findings, dependencies
+// and endpoints. The first output-limit error stops it; other refused
 // records are skipped and the first such error is returned.
 func (e emitter) Report(r *ctis.Report) error {
 	if e.c.cfg.Task.IsRetest() {
@@ -254,6 +267,11 @@ func (e emitter) Report(r *ctis.Report) error {
 	}
 	for _, d := range r.Dependencies {
 		if err := keep(e.Dependency(tool.Target{}, d)); err != nil {
+			return err
+		}
+	}
+	for _, ep := range r.Endpoints {
+		if err := keep(e.Endpoint(ep)); err != nil {
 			return err
 		}
 	}
