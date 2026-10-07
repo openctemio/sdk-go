@@ -202,6 +202,12 @@ func scaffoldManifest(kind string, c capability.Capability, name string) (tool.M
 		}
 	}
 	for _, p := range c.OutPorts {
+		if p == capability.PortEndpoint {
+			if !slices.Contains(m.Produces, tool.KindEndpoint) {
+				m.Produces = append(m.Produces, tool.KindEndpoint)
+			}
+			continue
+		}
 		if p == capability.PortFinding {
 			types := c.FindingTypes
 			if len(types) == 0 {

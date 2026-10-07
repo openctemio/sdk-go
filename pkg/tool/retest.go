@@ -3,6 +3,8 @@ package tool
 import (
 	"context"
 	"errors"
+
+	"github.com/openctemio/sdk-go/pkg/ctis"
 )
 
 // A retest asks a tool to check again what it reported before: the platform
@@ -18,7 +20,10 @@ import (
 //   - Fixed means the tool reached the target, ran the check and did not see
 //     the issue. The runtime turns Fixed into Unverifiable when the item's
 //     target was not reported done (TargetDone) or the task did not finish;
-//   - an item without a verdict is Unverifiable.
+//   - an item without a verdict is Unverifiable;
+//   - a networked tool's Fixed on a finding stands only with an
+//     http_exchange evidence item whose response arrived (the attempt that
+//     did not see the issue); otherwise it is Unverifiable.
 //
 // A tool declares that it can retest with Manifest.Retest and implements
 // Retester (WithRetest adds one to any tool).
@@ -72,6 +77,23 @@ type RetestVerdict struct {
 	Ref     string  `json:"ref"`
 	Verdict Verdict `json:"verdict"`
 	Detail  string  `json:"detail,omitempty"`
+	// Evidence is what the attempt saw (at most MaxVerdictEvidence items),
+	// sensitive values marked (ctis.MarkSensitive), never masked.
+	Evidence []ctis.EvidenceItem `json:"evidence,omitempty"`
+	// TemplateDigest identifies the exact check that ran (a template's
+	// digest), so the platform can tell a fix from a changed check.
+	TemplateDigest string `json:"template_digest,omitempty"`
+}
+
+// MaxVerdictEvidence bounds the evidence items of one verdict.
+const MaxVerdictEvidence = 5
+
+// VerdictReport is a verdict with what supports it (RetestContext.Report).
+type VerdictReport struct {
+	Verdict        Verdict
+	Detail         string
+	Evidence       []ctis.EvidenceItem
+	TemplateDigest string
 }
 
 // ErrRetestRecord is the error of a record emitted in a retest task.
@@ -87,6 +109,10 @@ type RetestContext interface {
 	// counts; a verdict on an item not in the task is ignored. detail is
 	// cut to MaxErrorDetail and redacted.
 	Verdict(item RetestItem, v Verdict, detail string)
+	// Report is Verdict with the attempt's evidence and the digest of the
+	// check that ran. Evidence over MaxVerdictEvidence items or invalid
+	// makes the verdict Unverifiable.
+	Report(item RetestItem, r VerdictReport)
 }
 
 // Retester is implemented by a tool that can retest (Manifest.Retest).

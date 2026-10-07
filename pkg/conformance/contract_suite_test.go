@@ -36,7 +36,7 @@ var awsKeyRE = regexp.MustCompile(`AKIA[A-Z2-7]{16}`)
 //	crawl <url> <scope>    follows links from the URL, keeping to the web
 //	                       scope file ($CONFORMANCE_IGNORE_SCOPE=1: ignores it)
 func fakeTool(mode string, args []string) int {
-	report := map[string]any{"version": "1.4", "metadata": map[string]any{"timestamp": "2026-01-01T00:00:00Z"}}
+	report := map[string]any{"version": "1.6", "metadata": map[string]any{"timestamp": "2026-01-01T00:00:00Z"}}
 	var assets, findings []map[string]any
 	arg := func(i int) string {
 		if i < len(args) {
@@ -95,6 +95,17 @@ func fakeTool(mode string, args []string) int {
 			"properties": map[string]any{"status_code": resp.StatusCode, "title": title}})
 	case "crawl":
 		assets = fakeCrawl(arg(0), arg(1))
+	case "evidence":
+		// A finding with an HTTP exchange; $CONFORMANCE_UNMARKED=1 leaves the
+		// Authorization value unmarked.
+		ex := map[string]any{"kind": "http_exchange", "version": 1, "http": map[string]any{
+			"request":  map[string]any{"method": "GET", "url": arg(0) + "/.env", "headers": []any{map[string]any{"name": "Authorization", "value": "Bearer conformance"}}},
+			"response": map[string]any{"status": 200, "body": "APP_ENV=production"}}}
+		if os.Getenv("CONFORMANCE_UNMARKED") != "1" {
+			ex["sensitive"] = []any{map[string]any{"pointer": "/http/request/headers/0/value", "kind": "authorization"}}
+		}
+		findings = append(findings, map[string]any{"type": "misconfiguration", "rule_id": "dotenv", "title": ".env exposed", "asset_value": arg(0),
+			"severity": "high", "evidence_items": []any{ex}})
 	default:
 		return 2
 	}
@@ -412,5 +423,25 @@ func TestContractSuite_WebScope(t *testing.T) {
 	undeclared := fakeManifest(t, strings.Replace(crawlTool, "FEATURES", "", 1), nil)
 	if r := runContract(undeclared, ContractOptions{Capability: true, Env: map[string]string{fakeToolEnv: "crawl"}}); !hasErr(r, "must declare features.web_scope") {
 		t.Fatalf("an undeclared crawler passed: %v", r.errs)
+	}
+}
+
+// SECURITY (acceptance): a tool whose evidence leaves an Authorization
+// value unmarked fails; one that marks it passes.
+func TestContractSuite_EvidenceMarked(t *testing.T) {
+	body := `tier: T1
+implements: [{capability: vuln.templates@1}]
+consumes: [http_service]
+produces: [finding:misconfiguration]
+permissions: {network: targets}
+run: {profile: exec, argv: [EXE, "{{target.value}}"], output: {format: ctis, from: stdout}}
+`
+	path := fakeManifest(t, body, nil)
+	if r := runContract(path, ContractOptions{Capability: true, Env: map[string]string{fakeToolEnv: "evidence"}}); len(r.errs) > 0 {
+		t.Fatalf("marked: %v", r.errs)
+	}
+	r := runContract(path, ContractOptions{Capability: true, Env: map[string]string{fakeToolEnv: "evidence", "CONFORMANCE_UNMARKED": "1"}})
+	if !hasErr(r, "Authorization header value is not marked sensitive") {
+		t.Fatalf("unmarked evidence passed: %v", r.errs)
 	}
 }

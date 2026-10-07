@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/ctis"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
 
@@ -242,6 +243,10 @@ type VerdictMsg struct {
 	Item    string       `json:"item"`
 	Verdict tool.Verdict `json:"verdict"`
 	Detail  string       `json:"detail,omitempty"`
+	// Evidence and TemplateDigest support the verdict
+	// (tool.VerdictReport); the runtime checks them again.
+	Evidence       []ctis.EvidenceItem `json:"evidence,omitempty"`
+	TemplateDigest string              `json:"template_digest,omitempty"`
 }
 
 // Stats are the adapter's own counters (informational).

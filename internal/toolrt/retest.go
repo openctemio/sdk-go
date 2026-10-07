@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/openctemio/ctis"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
 
@@ -44,20 +45,39 @@ func CheckRetest(m tool.Manifest, task tool.Task) *tool.Error {
 }
 
 // Verdict records the verdict on item ref (the first one counts). A ref not
-// in the task or an unknown verdict is an error.
-func (a *Assembler) Verdict(ref string, v tool.Verdict, detail string) error {
-	if !v.Valid() {
-		return fmt.Errorf("unknown verdict %q", v)
+// in the task or an unknown verdict is an error. Evidence the runtime
+// cannot accept (too many items, an invalid item, an unreadable template
+// digest) makes the verdict Unverifiable rather than failing the task: the
+// tool's output is hostile until checked.
+func (a *Assembler) Verdict(ref string, r tool.VerdictReport) error {
+	if !r.Verdict.Valid() {
+		return fmt.Errorf("unknown verdict %q", r.Verdict)
 	}
 	if _, ok := a.items[ref]; !ok {
 		return fmt.Errorf("retest item %q is not in the task", ref)
+	}
+	v := tool.RetestVerdict{Ref: ref, Verdict: r.Verdict, Detail: tool.CapDetail(CleanString(r.Detail))}
+	if err := checkVerdictEvidence(r); err != nil {
+		v = tool.RetestVerdict{Ref: ref, Verdict: tool.Unverifiable, Detail: tool.CapDetail("evidence refused: " + err.Error())}
+	} else {
+		v.TemplateDigest = r.TemplateDigest
+		if len(r.Evidence) > 0 {
+			v.Evidence = append([]ctis.EvidenceItem(nil), r.Evidence...)
+			ptrs := make([]*ctis.EvidenceItem, len(v.Evidence))
+			for i := range v.Evidence {
+				ptrs[i] = &v.Evidence[i]
+			}
+			// Marks only (never masks): a value the tool did not mark is
+			// marked here, so the platform masks it.
+			ctis.MarkSensitive(ptrs...)
+		}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, done := a.verdicts[ref]; done {
 		return nil
 	}
-	a.verdicts[ref] = tool.RetestVerdict{Ref: ref, Verdict: v, Detail: tool.CapDetail(CleanString(detail))}
+	a.verdicts[ref] = v
 	return nil
 }
 
@@ -85,6 +105,12 @@ func (a *Assembler) Verdicts(runErr *tool.Error) []tool.RetestVerdict {
 		case v.Verdict == tool.Fixed:
 			if r, done := a.results[a.items[ref].Target]; !done || r.State != tool.StateDone {
 				v = tool.RetestVerdict{Ref: ref, Verdict: tool.Unverifiable, Detail: "the target was not reached"}
+			} else if a.items[ref].Kind == tool.RetestFinding && a.m.Normalized().Permissions.Network != tool.NetNone &&
+				!hasAnsweredExchange(v.Evidence) {
+				// A networked check that did not show the attempt it made
+				// cannot call a finding fixed.
+				v = tool.RetestVerdict{Ref: ref, Verdict: tool.Unverifiable, TemplateDigest: v.TemplateDigest,
+					Evidence: v.Evidence, Detail: "fixed without the attempt's HTTP exchange"}
 			}
 		}
 		out = append(out, v)

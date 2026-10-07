@@ -75,6 +75,9 @@ func (r *contractRun) runSuite(name string, c capability.Capability, task tool.T
 	if v, _ := c.Check(out.Report, capability.CheckOptions{Shape: outputShape(r.m, c)}); len(v) > 0 {
 		r.t.Errorf("%s: %d record(s) miss the contract, first: %s", name, len(v), v[0])
 	}
+	for _, p := range evidenceProblems(out.Report) {
+		r.t.Errorf("%s: %s", name, p)
+	}
 	return out
 }
 

@@ -207,15 +207,15 @@ func checkProduces(c Class, s string) string {
 		if !ctis.FindingType(typ).IsValid() {
 			return "unknown CTIS finding type"
 		}
-	case KindDependency:
-		if typ != "" || s != KindDependency {
-			return `must be exactly "dependency"`
+	case KindDependency, KindEndpoint:
+		if typ != "" || s != kind {
+			return `must be exactly "` + kind + `"`
 		}
 		if c == Enricher {
 			return "an enricher produces findings only"
 		}
 	default:
-		return `must be "asset:<type>", "finding:<type>" or "dependency"`
+		return `must be "asset:<type>", "finding:<type>", "dependency" or "endpoint"`
 	}
 	return ""
 }

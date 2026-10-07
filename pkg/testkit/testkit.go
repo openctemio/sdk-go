@@ -313,6 +313,8 @@ func (s *sink) Finding(ref string, f ctis.Finding) error { return s.asm.Finding(
 
 func (s *sink) Dependency(_ string, d ctis.Dependency) error { return s.asm.Dependency(d) }
 
+func (s *sink) Endpoint(e ctis.Endpoint) error { return s.asm.Endpoint(e) }
+
 func (s *sink) Info(info *tool.ReportInfo) error {
 	checked, err := s.asm.Checker().Info(info)
 	if err != nil {
@@ -328,7 +330,7 @@ func (s *sink) Target(ref string, st tool.TargetState, err *tool.Error) {
 
 func (s *sink) Progress(int, int, string) {}
 
-func (s *sink) Verdict(ref string, v tool.Verdict, detail string) { _ = s.asm.Verdict(ref, v, detail) }
+func (s *sink) Verdict(ref string, r tool.VerdictReport) { _ = s.asm.Verdict(ref, r) }
 
 func (s *sink) Log(level slog.Level, msg string, attrs map[string]any) {
 	s.mu.Lock()

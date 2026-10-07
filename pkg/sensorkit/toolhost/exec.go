@@ -368,6 +368,7 @@ func ingestCTIS(p *prepared, data []byte) error {
 		Assets       []json.RawMessage `json:"assets"`
 		Findings     []json.RawMessage `json:"findings"`
 		Dependencies []json.RawMessage `json:"dependencies"`
+		Endpoints    []json.RawMessage `json:"endpoints"`
 		Properties   json.RawMessage   `json:"properties"`
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
@@ -417,6 +418,11 @@ func ingestCTIS(p *prepared, data []byte) error {
 			return err
 		}
 	}
+	for _, e := range r.Endpoints {
+		if err := ingestRecord(p, tool.KindEndpoint, "", e); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -440,6 +446,11 @@ func ingestRecord(p *prepared, kind, ref string, data json.RawMessage) error {
 		var d ctis.Dependency
 		if d, err = chk.DependencyJSON(data); err == nil {
 			p.asm.AddCheckedDependency(d)
+		}
+	case tool.KindEndpoint:
+		var e ctis.Endpoint
+		if e, err = chk.EndpointJSON(data); err == nil {
+			p.asm.AddCheckedEndpoint(e)
 		}
 	default:
 		return fmt.Errorf("unknown record kind %q", kind)
