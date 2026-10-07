@@ -259,6 +259,30 @@ func lineSize(l protov2.CommandLogLine) int {
 // secretKeyRE matches a field name that names a secret.
 var secretKeyRE = regexp.MustCompile(`(?i)(pass(word|wd)?|secret|token|api[_-]?key|private[_-]?key|credential|authorization|cookie)`)
 
+var (
+	// credentialValueRE is a credential written into a log line: a header
+	// ("Authorization: Bearer x", "Cookie: a=b") or a key=value / key: value
+	// pair whose key names a secret. The value is replaced, the key kept.
+	credentialValueRE = regexp.MustCompile(`(?i)\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|pass(?:word|wd)?|session(?:id)?)("?\s*[:=]\s*)("?)(?:(?:bearer|basic|token)\s+)?[^\s"&,;]+`)
+	// cookieHeaderRE is a cookie header: every cookie in it is a session.
+	cookieHeaderRE = regexp.MustCompile(`(?i)\b((?:set-)?cookie\s*:\s*)[^\r\n"]+`)
+	// urlUserinfoRE is the user info of a URL ("https://user:pass@host").
+	urlUserinfoRE = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@`)
+)
+
+// redactLogText masks credentials written into a line's text: header and
+// key=value secrets and the user info of URLs. A tool's own secrets are
+// masked by the tool host, the sensor's key by the kit; this catches what
+// a tool prints about its targets.
+func redactLogText(v string) string {
+	if v == "" {
+		return v
+	}
+	v = urlUserinfoRE.ReplaceAllString(v, "${1}"+tool.Redacted+"@")
+	v = cookieHeaderRE.ReplaceAllString(v, "${1}"+tool.Redacted)
+	return credentialValueRE.ReplaceAllString(v, "${1}${2}${3}"+tool.Redacted)
+}
+
 // clean redacts, strips control and bidirectional-override characters
 // and bounds one line.
 func (s *logShipper) clean(l protov2.CommandLogLine) protov2.CommandLogLine {
@@ -308,6 +332,7 @@ func (s *logShipper) text(v string, maxBytes int) string {
 	if s.redact != nil {
 		v = s.redact(v)
 	}
+	v = redactLogText(v)
 	if len(v) > maxBytes {
 		v = v[:maxBytes]
 	}
@@ -386,6 +411,21 @@ func (h *commandLogHandler) WithGroup(name string) slog.Handler {
 	}
 	n.group = name
 	return &n
+}
+
+// ToolLogSink is the log sink for a tool host the sensor builds itself
+// (toolhost.Host.LogSink): a tool's lines go to the platform with the
+// command the task runs for (core.CommandIDFromContext), redacted and
+// bounded like the kit's own tools. It may be taken before Run; until the
+// kit runs with a platform client, and outside a command, lines are not
+// sent. Lines never block the tool: past the per-command bounds they are
+// dropped and counted.
+func (k *Kit) ToolLogSink() func(ctx context.Context, tool string, l toolhost.LogLine) {
+	return func(ctx context.Context, name string, l toolhost.LogLine) {
+		if ship := k.logs.Load(); ship != nil {
+			ship.toolLogSink(ctx, name, l)
+		}
+	}
 }
 
 // CommandLogger is the logger of the platform command ctx runs for (an
