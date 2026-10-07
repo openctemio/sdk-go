@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -53,7 +54,32 @@ func LoadManifestFile(path string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	return LoadManifest(data)
+	m, err := LoadManifest(data)
+	if err != nil {
+		return Manifest{}, err
+	}
+	// The mapping file is part of the contract: load it now (a bad one
+	// refuses the tool) and record its digest, which the manifest digest
+	// covers.
+	if o := outputOf(m); o != nil && o.Mapping != "" {
+		mp, err := LoadMappingFile(filepath.Dir(path), o.Mapping, o.MappingDigest)
+		if err != nil {
+			return Manifest{}, ManifestErrors{{Path: "/run/output/mapping", Message: err.Error()}}
+		}
+		run := *m.Run
+		out := *run.Output
+		out.MappingDigest = mp.Digest()
+		run.Output = &out
+		m.Run = &run
+	}
+	return m, nil
+}
+
+func outputOf(m Manifest) *OutputSpec {
+	if m.Run == nil {
+		return nil
+	}
+	return m.Run.Output
 }
 
 // LoadManifest reads a manifest (YAML or JSON) strictly: unknown keys,

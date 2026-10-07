@@ -53,6 +53,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/openctemio/ctis/importer/mapping"
 	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/internal/toolwire"
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -256,6 +257,11 @@ type prepared struct {
 	refusedItems map[string]bool
 	// rateLine says the local policy changed the rate (nil: it did not).
 	rateLine *LogLine
+	// mapping turns an exec tool's json or jsonl output into CTIS.
+	mapping *mapping.Mapping
+	// notes are the runtime's own log lines for the outcome (parser
+	// issues), bounded.
+	notes []LogLine
 }
 
 // prepare checks the manifest and the task (targets, config), admits it

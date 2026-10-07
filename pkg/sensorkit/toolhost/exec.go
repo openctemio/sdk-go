@@ -49,6 +49,15 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return h.failedOutcome(m, task, ierr), nil
 	}
 	defer func() { _ = os.RemoveAll(p.workdir) }()
+	if isMappedFormat(m.Run.Output.Format) {
+		// Loaded before the tool starts: a missing, invalid or changed
+		// mapping file refuses the task instead of wasting a scan.
+		mp, err := tool.LoadMappingFile(o.Dir, m.Run.Output.Mapping, m.Run.Output.MappingDigest)
+		if err != nil {
+			return h.failedOutcome(m, task, &tool.Error{Class: tool.ToolError, Detail: tool.CapDetail(err.Error())}), nil
+		}
+		p.mapping = mp
+	}
 	if err := writeExecFiles(p); err != nil {
 		return nil, err
 	}
@@ -147,6 +156,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if p.rateLine != nil {
 		out.Logs = append(out.Logs, *p.rateLine)
 	}
+	out.Logs = append(out.Logs, p.notes...)
 	out.Duration = time.Since(start)
 	h.stamp(out, m, p.task, "exec profile")
 	return out, nil
@@ -311,6 +321,8 @@ func ingestOutput(ctx context.Context, p *prepared, format string, data []byte) 
 		return ingestCTIS(p, raw)
 	case tool.OutputCTIS:
 		return ingestCTIS(p, data)
+	case tool.OutputJSON, tool.OutputJSONL:
+		return ingestMapped(ctx, p, data)
 	case tool.OutputJSONLCTIS:
 		for _, line := range bytes.Split(data, []byte("\n")) {
 			if len(bytes.TrimSpace(line)) == 0 {
@@ -331,6 +343,9 @@ func ingestOutput(ctx context.Context, p *prepared, format string, data []byte) 
 			}
 		}
 		return nil
+	}
+	if isNamedFormat(format) {
+		return ingestNamed(ctx, p, format, data)
 	}
 	return fmt.Errorf("unknown output format %q", format)
 }

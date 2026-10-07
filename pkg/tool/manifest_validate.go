@@ -382,8 +382,18 @@ func (m Manifest) validateRun(add func(p, format string, args ...any), schema *c
 		if r.Output == nil {
 			add("/run/output", "required for the exec profile")
 		} else {
-			if !slices.Contains([]string{OutputCTIS, OutputSARIF, OutputJSONLCTIS}, r.Output.Format) {
-				add("/run/output/format", "must be ctis, sarif or jsonl-ctis")
+			if !slices.Contains(outputFormats(), r.Output.Format) {
+				add("/run/output/format", "must be one of %s", strings.Join(outputFormats(), ", "))
+			}
+			switch {
+			case needsMapping(r.Output.Format) && r.Output.Mapping == "":
+				add("/run/output/mapping", "the %s format needs a mapping file", r.Output.Format)
+			case !needsMapping(r.Output.Format) && (r.Output.Mapping != "" || r.Output.MappingDigest != ""):
+				add("/run/output/mapping", "only for the json and jsonl formats")
+			case r.Output.Mapping != "":
+				if msg := checkRelPath(r.Output.Mapping); msg != "" {
+					add("/run/output/mapping", "%s", msg)
+				}
 			}
 			switch r.Output.From {
 			case "stdout":

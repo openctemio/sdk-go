@@ -164,6 +164,13 @@ func hostile(mode string) int {
 	case "claims-ok":
 		handshake()
 		send(`{"v":1,"type":"result","status":"ok"}`)
+	case "jsonl-cli":
+		// A port scanner writing one JSON object per open port.
+		fmt.Println(`{"ip":"192.0.2.10","port":443,"protocol":"TCP","host":"a.example"}`)
+		fmt.Println(`{"ip":"192.0.2.10","port":22,"protocol":"tcp","host":"a.example"}`)
+		fmt.Println(`{"note":"progress line without a port"}`)
+	case "nuclei-cli":
+		fmt.Println(`{"template-id":"tech-exposed","info":{"name":"Exposed panel","severity":"medium"},"type":"http","host":"https://a.example","matched-at":"https://a.example/admin","timestamp":"2026-10-07T00:00:00Z"}`)
 	case "sarif-cli":
 		fmt.Println(`{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"cli","rules":[{"id":"R1","shortDescription":{"text":"rule"}}]}},"results":[{"ruleId":"R1","level":"error","message":{"text":"bad thing"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"main.go"},"region":{"startLine":3}}}]}]}]}`)
 	case "ctis-cli":
