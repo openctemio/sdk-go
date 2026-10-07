@@ -226,3 +226,20 @@ func TestHTTPClientReachesOnlyAllowedHosts(t *testing.T) {
 		t.Fatalf("metadata address dialed: %v", err)
 	}
 }
+
+// A tool that leaves a secret unmasked in the snippet and the title does not
+// get it into the report.
+func TestCheckerMasksRawSecrets(t *testing.T) {
+	m := testManifest
+	m.Produces = append(append([]string{}, m.Produces...), "finding:secret")
+	c := NewChecker(m.Normalized())
+	key := "AKIA" + "Q3EGRZ7X2MNVBP4L"
+	f, err := c.Finding(ctis.Finding{Type: "secret", Title: "AWS key " + key, Severity: "high",
+		Location: &ctis.FindingLocation{Path: "a.env", StartLine: 1, Snippet: "AWS_KEY=" + key}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := json.Marshal(f); strings.Contains(string(b), key) {
+		t.Fatalf("raw secret in the checked finding: %s", b)
+	}
+}

@@ -190,6 +190,10 @@ func (c *Checker) finding(f ctis.Finding) (ctis.Finding, error) {
 	if !c.m.Declares(tool.KindFinding, string(f.Type)) {
 		return f, c.quarantine(tool.KindFinding + ":" + string(f.Type))
 	}
+	// A secret finding whose snippet or masked value a tool left unmasked
+	// has it masked here and wherever another field repeats it, so no tool
+	// can put a raw credential in the report.
+	ctis.RedactSecretFinding(&f)
 	probe := f
 	probe.AssetRef, probe.ID = "", ""
 	if err := validate(&ctis.Report{Findings: []ctis.Finding{probe}}); err != nil {
