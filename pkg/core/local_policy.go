@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/idna"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,7 +44,8 @@ const (
 	// read-only.
 	DefaultLocalPolicyPath = "/etc/openctem/sensor-policy.yaml"
 	// EnvAllowedRanges is a shorthand policy without a file: a
-	// comma-separated targets.allow list (CIDRs, IPs, domains, *.domains).
+	// comma-separated targets.allow list (CIDRs, IPs, domains, *.domains;
+	// *.x covers x and every name below it).
 	EnvAllowedRanges = "SENSOR_ALLOWED_RANGES"
 	// EnvAllowedPorts is a shorthand policy without a file: ports.allow
 	// ("1-1024,3389").
@@ -226,17 +228,39 @@ type policyFileV2 struct {
 }
 
 // domainPattern is a targets entry naming hosts: an exact name, or
-// "*.suffix" for every name below suffix (not suffix itself).
+// "*.x" for x itself and every name below it, at any depth. This is the
+// platform's reading of a scope pattern (api RFC-054 §4.1), so an allow
+// entry and a platform scope entry cover the same names. A deny entry uses
+// the same matcher: "*.x" in targets.deny also denies x. Names are compared
+// lower-case, without one trailing dot, in their IDNA ASCII form.
 type domainPattern struct {
 	name     string
 	wildcard bool
 }
 
 func (d domainPattern) matches(host string) bool {
+	host = canonicalHostName(host)
 	if d.wildcard {
-		return strings.HasSuffix(host, "."+d.name)
+		return host == d.name || strings.HasSuffix(host, "."+d.name)
 	}
 	return host == d.name
+}
+
+// canonicalHostName lower-cases a host name, trims spaces and one trailing
+// dot, and converts an internationalized name to its IDNA ASCII form. A
+// name that does not convert is returned lower-cased: it then matches only
+// an identical pattern, never a wider one.
+func canonicalHostName(s string) string {
+	s = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".")
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			if a, err := idna.Lookup.ToASCII(s); err == nil {
+				return strings.ToLower(a)
+			}
+			return s
+		}
+	}
+	return s
 }
 
 type portRange struct{ lo, hi int }
@@ -605,9 +629,9 @@ func parseNet(e string) (*net.IPNet, error) {
 }
 
 func parseDomainPattern(e string) (domainPattern, error) {
-	d := domainPattern{name: strings.TrimSuffix(e, ".")}
+	d := domainPattern{name: canonicalHostName(e)}
 	if rest, ok := strings.CutPrefix(d.name, "*."); ok {
-		d.name, d.wildcard = rest, true
+		d.name, d.wildcard = canonicalHostName(rest), true
 	}
 	if !validHostname(d.name) || (d.wildcard && !strings.Contains(d.name, ".")) {
 		return domainPattern{}, fmt.Errorf("%q is not a CIDR, an IP address, a host name or *.domain", e)
