@@ -1,0 +1,39 @@
+# OpenCTEM tool checks: validate the descriptor, run the conformance kit
+# (self-tests, the capability's suites on local fixtures, the scope check,
+# parser fuzzing) and refuse a descriptor change without the right version
+# bump. Copy to .github/workflows/ in the tool's repository.
+name: openctem-tool
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+      - name: Install the openctem CLI
+        run: go install github.com/openctemio/sdk-go/cmd/openctem@latest
+      - name: Validate the descriptor
+        run: openctem tool validate .
+      - name: Conformance
+        run: openctem tool test --capability --scope --fuzz 30s .
+      - name: Version bump of a descriptor change
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/old"
+          if git show "origin/$BASE_REF:tool.yaml" > "$RUNNER_TEMP/old/tool.yaml" 2>/dev/null; then
+            openctem tool diff "$RUNNER_TEMP/old/tool.yaml" tool.yaml
+          fi
