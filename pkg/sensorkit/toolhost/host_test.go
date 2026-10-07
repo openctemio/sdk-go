@@ -96,7 +96,7 @@ func hostile(mode string) int {
 		m.Permissions.Network = tool.NetVendor
 		m.Class = tool.Connector
 	}
-	if mode == "retest-liar" {
+	if mode == "retest-liar" || mode == "retest-evidence" {
 		m.Retest = true
 	}
 	mb, _ := json.Marshal(m.Normalized())
@@ -160,6 +160,18 @@ func hostile(mode string) int {
 		send(`{"v":1,"type":"record","kind":"finding","target":"t1","data":{"type":"misconfiguration","title":"sneaked in","severity":"low"}}`)
 		send(`{"v":1,"type":"verdict","item":"not-in-task","verdict":"fixed"}`)
 		send(`{"v":1,"type":"verdict","item":"f1","verdict":"fixed","detail":"never reached it"}`)
+		send(`{"v":1,"type":"result","status":"ok"}`)
+	case "retest-evidence":
+		// f1: fixed with six items (over the cap); f2: fixed with an
+		// invalid item; f3: fixed with an answered exchange whose
+		// Authorization value is not marked.
+		handshake()
+		ex := `{"kind":"http_exchange","version":1,"http":{"request":{"method":"GET","url":"https://a.example/x","headers":[{"name":"Authorization","value":"Bearer leak-me"}]},"response":{"status":200}}}`
+		six := strings.TrimSuffix(strings.Repeat(ex+",", 6), ",")
+		send(`{"v":1,"type":"verdict","item":"f1","verdict":"fixed","evidence":[` + six + `]}`)
+		send(`{"v":1,"type":"verdict","item":"f2","verdict":"fixed","evidence":[{"kind":"Not A Kind","version":1}]}`)
+		send(`{"v":1,"type":"verdict","item":"f3","verdict":"fixed","template_digest":"sha256:t","evidence":[` + ex + `]}`)
+		send(`{"v":1,"type":"target_status","target":"t1","status":"done"}`)
 		send(`{"v":1,"type":"result","status":"ok"}`)
 	case "claims-ok":
 		handshake()

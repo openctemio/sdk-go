@@ -47,6 +47,7 @@ type Checker struct {
 	assetIDs    map[string]bool
 	findingIDs  map[string]bool
 	depIDs      map[string]bool
+	endpointIDs map[string]bool
 	quarantined map[string]int
 	invalid     int
 	targets     map[string]bool
@@ -56,7 +57,7 @@ type Checker struct {
 func NewChecker(m tool.Manifest) *Checker {
 	_, _, maxBytes, maxRecords := m.Resources.Limits()
 	return &Checker{m: m, maxRecords: maxRecords, maxBytes: maxBytes,
-		assetIDs: map[string]bool{}, findingIDs: map[string]bool{}, depIDs: map[string]bool{},
+		assetIDs: map[string]bool{}, findingIDs: map[string]bool{}, depIDs: map[string]bool{}, endpointIDs: map[string]bool{},
 		quarantined: map[string]int{}, targets: map[string]bool{}}
 }
 
@@ -256,6 +257,46 @@ func (c *Checker) dependency(d ctis.Dependency) (ctis.Dependency, error) {
 		c.depIDs[d.ID] = true
 	}
 	return d, nil
+}
+
+// EndpointJSON checks an endpoint given as JSON.
+func (c *Checker) EndpointJSON(raw []byte) (ctis.Endpoint, error) {
+	var e ctis.Endpoint
+	if err := Sanitize(raw, &e); err != nil {
+		return e, c.reject(err)
+	}
+	return c.endpoint(e)
+}
+
+// Endpoint checks a typed endpoint.
+func (c *Checker) Endpoint(e ctis.Endpoint) (ctis.Endpoint, error) {
+	var out ctis.Endpoint
+	if err := SanitizeValue(e, &out); err != nil {
+		return out, c.reject(err)
+	}
+	return c.endpoint(out)
+}
+
+func (c *Checker) endpoint(e ctis.Endpoint) (ctis.Endpoint, error) {
+	if !c.m.Declares(tool.KindEndpoint, "") {
+		return e, c.quarantine(tool.KindEndpoint)
+	}
+	if err := validate(&ctis.Report{Endpoints: []ctis.Endpoint{e}}); err != nil {
+		return e, c.reject(err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e.ID != "" && c.endpointIDs[e.ID] {
+		c.invalid++
+		return e, fmt.Errorf("%w: duplicate endpoint id %q", tool.ErrInvalidRecord, e.ID)
+	}
+	if err := c.account(e); err != nil {
+		return e, err
+	}
+	if e.ID != "" {
+		c.endpointIDs[e.ID] = true
+	}
+	return e, nil
 }
 
 // InfoJSON checks a report's tool, metadata and properties given as JSON.

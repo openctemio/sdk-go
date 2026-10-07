@@ -235,13 +235,16 @@ const (
 	KindAsset      = "asset"
 	KindFinding    = "finding"
 	KindDependency = "dependency"
+	// KindEndpoint is a method and path a web origin serves (CTIS 1.6
+	// endpoints[]).
+	KindEndpoint = "endpoint"
 )
 
 // Declares reports whether the manifest produces records of kind ("asset",
 // "finding", "dependency") and CTIS type typ ("" for dependencies).
 func (m Manifest) Declares(kind, typ string) bool {
 	want := kind
-	if kind != KindDependency {
+	if kind != KindDependency && kind != KindEndpoint {
 		want = kind + ":" + typ
 	}
 	return slices.Contains(m.Produces, want)

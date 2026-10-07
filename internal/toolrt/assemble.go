@@ -147,6 +147,23 @@ func (a *Assembler) AddCheckedDependency(d ctis.Dependency) {
 	a.mu.Unlock()
 }
 
+// Endpoint checks and adds an endpoint.
+func (a *Assembler) Endpoint(e ctis.Endpoint) error {
+	e, err := a.checker.Endpoint(e)
+	if err != nil {
+		return err
+	}
+	a.AddCheckedEndpoint(e)
+	return nil
+}
+
+// AddCheckedEndpoint adds an endpoint the checker already accepted.
+func (a *Assembler) AddCheckedEndpoint(e ctis.Endpoint) {
+	a.mu.Lock()
+	a.report.Endpoints = append(a.report.Endpoints, e)
+	a.mu.Unlock()
+}
+
 // SetInfo merges a checked ReportInfo (later calls win per field).
 func (a *Assembler) SetInfo(info *tool.ReportInfo) {
 	if info == nil {

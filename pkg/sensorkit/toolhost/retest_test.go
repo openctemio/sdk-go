@@ -2,9 +2,13 @@ package toolhost
 
 import (
 	"context"
+	"net/http"
+	"net/url"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/ctis"
 
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
@@ -22,7 +26,10 @@ var retestTool = tool.WithRetest(tool.New(tool.Manifest{
 			case "present":
 				ctx.Verdict(it, tool.StillPresent, "matched")
 			case "gone":
-				ctx.Verdict(it, tool.Fixed, "no match on a reachable target")
+				// A networked tool shows the attempt that did not match.
+				u, _ := url.Parse("https://" + targetValue(task, it.Target) + "/check")
+				ex, _ := tool.HTTPExchange(&http.Request{Method: "GET", URL: u}, nil, &http.Response{StatusCode: 404}, []byte("not found"))
+				ctx.Report(it, tool.VerdictReport{Verdict: tool.Fixed, Detail: "no match on a reachable target", Evidence: []ctis.EvidenceItem{ex}})
 			}
 		}
 		for _, t := range task.Targets {
@@ -30,6 +37,15 @@ var retestTool = tool.WithRetest(tool.New(tool.Manifest{
 		}
 		return nil
 	})
+
+func targetValue(task tool.Task, ref string) string {
+	for _, t := range task.Targets {
+		if t.Ref == ref {
+			return t.Value
+		}
+	}
+	return ""
+}
 
 func retestTask() tool.Task {
 	return tool.Task{
@@ -90,6 +106,32 @@ func TestRetestHostileAdapter(t *testing.T) {
 	}
 	if out.Stats.Invalid < 2 || len(out.Report.Findings) != 0 {
 		t.Fatalf("refused output: invalid %d, findings %d", out.Stats.Invalid, len(out.Report.Findings))
+	}
+}
+
+// SECURITY: an adapter's verdict evidence is checked again on the host: too
+// many or invalid items make the verdict unverifiable, an unmarked
+// credential is marked, the evidence and digest of a good verdict travel.
+func TestRetestEvidenceFromAHostileAdapter(t *testing.T) {
+	m := hostileManifest
+	m.Retest = true
+	task := tool.Task{Targets: oneTarget, Retest: []tool.RetestItem{
+		{Ref: "f1", Target: "t1", Kind: tool.RetestFinding}, {Ref: "f2", Target: "t1", Kind: tool.RetestFinding},
+		{Ref: "f3", Target: "t1", Kind: tool.RetestFinding}}}
+	out := hostileRun(t, "retest-evidence", m, task)
+	if out.Err != nil {
+		t.Fatalf("the adapter did not run: %v", out.Err)
+	}
+	got := map[string]tool.RetestVerdict{}
+	for _, v := range out.Verdicts {
+		got[v.Ref] = v
+	}
+	if got["f1"].Verdict != tool.Unverifiable || got["f2"].Verdict != tool.Unverifiable {
+		t.Fatalf("bad evidence accepted: %+v", out.Verdicts)
+	}
+	f3 := got["f3"]
+	if f3.Verdict != tool.Fixed || f3.TemplateDigest != "sha256:t" || len(f3.Evidence) != 1 || len(f3.Evidence[0].Sensitive) == 0 {
+		t.Fatalf("f3: %+v", f3)
 	}
 }
 
