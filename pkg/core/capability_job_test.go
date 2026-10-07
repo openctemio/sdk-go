@@ -117,3 +117,33 @@ func TestManifestCarriesTheDescriptor(t *testing.T) {
 		t.Fatal("nil contract")
 	}
 }
+
+// The descriptors of one manifest stay within their budget: the largest are
+// left out (their digest and contract fields stay), deterministically.
+func TestManifestDescriptorBudget(t *testing.T) {
+	big := func(n int) json.RawMessage { return json.RawMessage(`"` + strings.Repeat("a", n) + `"`) }
+	tools := []ManifestTool{
+		{Name: "a", Contract: &ToolContract{Digest: "sha256:a", Descriptor: big(60 << 10)}},
+		{Name: "b", Contract: &ToolContract{Digest: "sha256:b", Descriptor: big(60 << 10)}},
+		{Name: "c", Contract: &ToolContract{Digest: "sha256:c", Descriptor: big(20 << 10)}},
+		{Name: "d"},
+	}
+	budgetDescriptors(tools)
+	kept := 0
+	for _, tl := range tools {
+		if tl.Contract != nil && len(tl.Contract.Descriptor) > 0 {
+			kept += len(tl.Contract.Descriptor)
+		}
+	}
+	if kept > MaxManifestDescriptorBytes || tools[0].Contract.Descriptor != nil || tools[1].Contract.Descriptor == nil || tools[2].Contract.Descriptor == nil {
+		t.Fatalf("kept %d bytes; a=%d b=%d c=%d", kept, len(tools[0].Contract.Descriptor), len(tools[1].Contract.Descriptor), len(tools[2].Contract.Descriptor))
+	}
+	if tools[0].Contract.Digest != "sha256:a" {
+		t.Fatal("the digest must stay when the descriptor is left out")
+	}
+	small := []ManifestTool{{Name: "x", Contract: &ToolContract{Descriptor: big(10)}}}
+	budgetDescriptors(small)
+	if small[0].Contract.Descriptor == nil {
+		t.Fatal("a manifest within the budget is unchanged")
+	}
+}
