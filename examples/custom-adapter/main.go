@@ -1,17 +1,18 @@
-// Example: Using the SARIF Adapter
+// Example: converting a tool's SARIF output to CTIS
 //
-// This example demonstrates how to use the SARIF adapter to convert
-// SARIF output from any security tool to CTIS format.
+// This example converts SARIF output from any security tool to CTIS with
+// the ctis importer (the one conversion library the SDK, the sensor and the
+// platform share) and pushes it to the platform.
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 
-	"github.com/openctemio/sdk-go/pkg/adapters/sarif"
+	"github.com/openctemio/ctis/importer"
 	"github.com/openctemio/sdk-go/pkg/client"
-	"github.com/openctemio/sdk-go/pkg/core"
 )
 
 func main() {
@@ -24,18 +25,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create SARIF adapter
-	adapter := sarif.NewAdapter()
-
-	// Check if input is valid SARIF
-	if !adapter.CanConvert(sarifData) {
-		fmt.Println("Input is not valid SARIF format")
-		os.Exit(1)
-	}
-
-	// Convert to CTIS
-	report, err := adapter.Convert(ctx, sarifData, &core.AdapterOptions{
-		SourceName:  "custom-scanner",
+	// Convert to CTIS. The importer refuses input that is not SARIF and
+	// bounds its size, depth and record count.
+	res, err := importer.Parse(ctx, bytes.NewReader(sarifData), importer.Options{
+		Format:      importer.FormatSARIF,
 		Repository:  "owner/repo",
 		MinSeverity: "medium", // Filter out low/info findings
 	})
@@ -43,6 +36,7 @@ func main() {
 		fmt.Printf("Failed to convert SARIF: %v\n", err)
 		os.Exit(1)
 	}
+	report := res.Report
 
 	// Print summary
 	fmt.Printf("Tool: %s v%s\n", report.Tool.Name, report.Tool.Version)

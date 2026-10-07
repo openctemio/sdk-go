@@ -65,7 +65,6 @@ note in CHANGELOG.md):
 | Package | Replacement |
 |---|---|
 | `pkg/transport/grpc`, `proto/openctemio/v1` | none: no platform serves it. Removed in the next minor, which also drops the `google.golang.org/grpc` dependency. Sensor protocol v3 is generated from its own proto definitions. |
-| `pkg/adapters`, `pkg/adapters/{betterleaks,nuclei,sarif,semgrep,trivy,vuls}` | emit CTIS from a tool, or convert SARIF with the `ctis` module |
 | `pkg/pipeline`, `pkg/audit` | the outbox (through `sensorkit`) |
 | `pkg/credentials` | credentials by declaration in the tool contract |
 | `pkg/errors` | categorized tool errors in the tool contract |

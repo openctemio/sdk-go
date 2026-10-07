@@ -11,10 +11,10 @@ import (
 	"github.com/openctemio/sdk-go/pkg/ctis"
 )
 
-// The converter fixtures are shared with pkg/adapters.
+// SARIF fixtures of the converter tests.
 func sarifFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "adapters", "testdata", name)) //nolint:gosec // test fixture path
+	data, err := os.ReadFile(filepath.Join("testdata", "sarif", name)) //nolint:gosec // test fixture path
 	if err != nil {
 		t.Fatal(err)
 	}
