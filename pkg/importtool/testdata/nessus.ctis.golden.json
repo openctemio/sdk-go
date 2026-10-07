@@ -64,6 +64,10 @@
         "severity": "0",
         "vuln_id": "19506"
       },
+      "network": {
+        "host": "app01.example.com",
+        "protocol": "tcp"
+      },
       "rule_id": "19506",
       "rule_name": "Nessus Scan Information",
       "severity": "info",
@@ -229,6 +233,10 @@
         "scheme": "nessus",
         "severity": "2",
         "vuln_id": "21157"
+      },
+      "network": {
+        "host": "app01.example.com",
+        "protocol": "tcp"
       },
       "references": [
         "https://workbench.cisecurity.org/files/0000"
