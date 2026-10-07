@@ -6,6 +6,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -81,6 +82,12 @@ type ScanOptions struct {
 	// own defaults, as before. A tool maps each typed value to a specific
 	// flag; settings never become free-form arguments.
 	Settings *ToolSettings `yaml:"-" json:"-"`
+
+	// Capability, Params and MaxTier are a capability job's (see
+	// ScanCommandPayload); only a CapabilityScanner receives them.
+	Capability string                     `yaml:"-" json:"-"`
+	Params     map[string]json.RawMessage `yaml:"-" json:"-"`
+	MaxTier    string                     `yaml:"-" json:"-"`
 }
 
 // ScanResult holds the raw scan result before conversion.
