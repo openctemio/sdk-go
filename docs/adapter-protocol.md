@@ -139,6 +139,19 @@ or from a Go test: `conformance.RunToolSuite(t, "tool.yaml", conformance.ToolSui
 `-update` (or `OPENCTEM_UPDATE_GOLDEN=1`) writes the fixtures' expected reports
 from what the tool produced. Review them before you commit.
 
+## No code at all: the exec profile
+
+A CLI needs no adapter when its output is one of:
+
+- CTIS (`ctis`, or `jsonl-ctis` records) or SARIF (`sarif`);
+- a format `ctis/importer` reads (`nuclei`, `semgrep`, `trivy`, `betterleaks`, `gitleaks`, `grype`, `zap`, `vuls`, `cyclonedx`, `spdx`, `osv`, `csaf`, `openvex`, `nessus`, `qualys`, `defectdojo`);
+- any JSON document or JSON Lines, with a mapping file
+  (`run.output: {format: jsonl, from: stdout, mapping: mapping.yaml}`) in the
+  declarative language of `ctis/importer/mapping`.
+
+The mapping file sits next to `tool.yaml` and is part of the contract: its
+digest is recorded when the manifest is loaded, and a changed file is refused.
+
 ## Installing
 
 An operator installs the tool's directory (its `tool.yaml` and program) in one

@@ -274,10 +274,20 @@ type RunSpec struct {
 
 // OutputSpec is an exec-profile tool's output.
 type OutputSpec struct {
-	// Format is OutputCTIS, OutputSARIF or OutputJSONLCTIS.
+	// Format is OutputCTIS, OutputSARIF, OutputJSONLCTIS, OutputJSON or
+	// OutputJSONL (with Mapping), or a named format of ctis/importer
+	// (ImporterFormats: "nuclei", "trivy", "cyclonedx", ...).
 	Format string `json:"format"`
 	// From is "stdout" or "file" (the {{task.output}} path).
 	From string `json:"from"`
+	// Mapping is the mapping file (relative to the manifest's directory)
+	// that turns json or jsonl output into CTIS: the declarative mapping
+	// language of ctis/importer/mapping, in JSON or YAML.
+	Mapping string `json:"mapping,omitempty"`
+	// MappingDigest is the mapping's digest, set when the manifest file is
+	// loaded (LoadManifestFile); the manifest digest covers it, and the
+	// runtime refuses a mapping file that no longer matches it.
+	MappingDigest string `json:"mapping_digest,omitempty"`
 }
 
 // ByteSize is a size in bytes; in a manifest a number or a string with a
