@@ -11,3 +11,10 @@
   - `key=value` or `key: value` pairs (JSON-quoted keys included) whose key names a secret (token, api_key, password, secret, session);
   - the user info of URLs.
 - This comes on top of the existing masking of the sensor's key, tool secrets and secret-named fields. The platform redacts again.
+
+### Added: each tool run logs its start and its end
+
+- A tool host with a log sink logs, to the task's command log:
+  - "Tool <name> <version> started", with the targets and the capability;
+  - "Tool <name> finished: <status>", with the exit code, records, duration and error class.
+- A run that could not start logs an error line.

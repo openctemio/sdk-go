@@ -206,7 +206,42 @@ func (h *Host) RunBuiltin(ctx context.Context, t tool.Tool, task tool.Task, o Ru
 		self = exe
 	}
 	m := t.Manifest().Normalized()
-	return h.run(ctx, m, task, o, []string{self, adapter.ToolArg, m.Name}, "built-in (re-executed, adapter protocol v1)")
+	return h.lifecycle(ctx, m, task, func() (*Outcome, error) {
+		return h.run(ctx, m, task, o, []string{self, adapter.ToolArg, m.Name}, "built-in (re-executed, adapter protocol v1)")
+	})
+}
+
+// lifecycle runs one task and logs, to the task's command log (LogSink),
+// which tool ran and how it ended: the line an operator looks for first.
+func (h *Host) lifecycle(ctx context.Context, m tool.Manifest, task tool.Task, run func() (*Outcome, error)) (*Outcome, error) {
+	if h.LogSink == nil {
+		return run()
+	}
+	start := time.Now()
+	h.LogSink(ctx, m.Name, LogLine{Level: "info", Msg: fmt.Sprintf("Tool %s %s started", m.Name, m.Version),
+		Fields: map[string]any{"tool": m.Name, "tool_version": m.Version, "targets": len(task.Targets), "capability": task.Capability}})
+	out, err := run()
+	fields := map[string]any{"tool": m.Name, "duration_ms": time.Since(start).Milliseconds()}
+	switch {
+	case err != nil:
+		h.LogSink(ctx, m.Name, LogLine{Level: "error", Msg: fmt.Sprintf("Tool %s could not run", m.Name), Fields: fields})
+		return out, err
+	case out == nil:
+		return out, err
+	}
+	fields["status"] = string(out.Status)
+	fields["exit_code"] = out.ExitCode
+	fields["records"] = out.Stats.Records
+	level := "info"
+	if out.Err != nil {
+		fields["error_class"] = string(out.Err.Class)
+		level = "warn"
+		if out.Status == tool.StatusFailed {
+			level = "error"
+		}
+	}
+	h.LogSink(ctx, m.Name, LogLine{Level: level, Msg: fmt.Sprintf("Tool %s finished: %s", m.Name, out.Status), Fields: fields})
+	return out, err
 }
 
 // RunManifest runs one task of a tool described by a manifest file: an
@@ -226,10 +261,12 @@ func (h *Host) RunManifest(ctx context.Context, m tool.Manifest, task tool.Task,
 	if o.Dir != "" && !filepath.IsAbs(argv[0]) && strings.ContainsRune(argv[0], filepath.Separator) {
 		argv[0] = filepath.Join(o.Dir, argv[0])
 	}
-	if m.Run.Profile == tool.ProfileExec {
-		return h.runExec(ctx, m, task, o, argv)
-	}
-	return h.run(ctx, m, task, o, argv, "adapter (adapter protocol v1)")
+	return h.lifecycle(ctx, m, task, func() (*Outcome, error) {
+		if m.Run.Profile == tool.ProfileExec {
+			return h.runExec(ctx, m, task, o, argv)
+		}
+		return h.run(ctx, m, task, o, argv, "adapter (adapter protocol v1)")
+	})
 }
 
 func (h *Host) backend() executor.Backend {

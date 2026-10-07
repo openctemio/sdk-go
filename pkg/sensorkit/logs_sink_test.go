@@ -78,6 +78,16 @@ func TestKit_ToolLogSinkForAnOwnHost(t *testing.T) {
 			toolLines++
 		}
 	}
+	var started, finished bool
+	for _, l := range f.CommandLogs(id) {
+		started = started || strings.HasPrefix(l.Msg, "Tool kit-logging 1.0.0 started")
+		if strings.HasPrefix(l.Msg, "Tool kit-logging finished: ok") && l.Fields["exit_code"] == float64(0) {
+			finished = true
+		}
+	}
+	if !started || !finished {
+		t.Errorf("no tool lifecycle lines: %+v", f.CommandLogs(id))
+	}
 	if toolLines == 0 {
 		t.Fatalf("no line of the own host's tool reached the platform: %+v\nstderr:%s", f.CommandLogs(id), errw.String())
 	}
