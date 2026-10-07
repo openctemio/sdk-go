@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/openctemio/sdk-go/pkg/resource"
 )
@@ -227,6 +228,7 @@ func BuildManifest(status *SensorStatus, res *resource.HostResources, model stri
 			}
 		}
 	}
+	budgetDescriptors(m.Tools)
 	for _, c := range status.Capabilities {
 		if !provided[c] && !slices.Contains(m.Capabilities, c) {
 			m.Capabilities = append(m.Capabilities, c)
@@ -269,4 +271,41 @@ func (m Manifest) Digest() (string, error) {
 	}
 	sum := sha256.Sum256(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// MaxManifestDescriptorBytes bounds the tool descriptors one manifest
+// carries in all. The platform caps a manifest document (256 KiB in
+// OpenCTEM); descriptors past the budget are left out, largest first, and
+// the platform keeps planning with those tools by their digest and
+// contract fields.
+const MaxManifestDescriptorBytes = 128 << 10
+
+// budgetDescriptors leaves out the largest descriptors until the rest fit
+// MaxManifestDescriptorBytes. The choice is deterministic (size, then name),
+// so the manifest digest stays stable.
+func budgetDescriptors(tools []ManifestTool) {
+	total := 0
+	var idx []int
+	for i, t := range tools {
+		if t.Contract != nil && len(t.Contract.Descriptor) > 0 {
+			total += len(t.Contract.Descriptor)
+			idx = append(idx, i)
+		}
+	}
+	if total <= MaxManifestDescriptorBytes {
+		return
+	}
+	slices.SortStableFunc(idx, func(a, b int) int {
+		if d := len(tools[b].Contract.Descriptor) - len(tools[a].Contract.Descriptor); d != 0 {
+			return d
+		}
+		return strings.Compare(tools[a].Name, tools[b].Name)
+	})
+	for _, i := range idx {
+		if total <= MaxManifestDescriptorBytes {
+			return
+		}
+		total -= len(tools[i].Contract.Descriptor)
+		tools[i].Contract.Descriptor = nil
+	}
 }
