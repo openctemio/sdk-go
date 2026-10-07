@@ -103,11 +103,11 @@ func (s *toolScanner) Capabilities() []string {
 }
 
 // Retests reports whether the tool can retest (its manifest declares it).
-func (s *toolScanner) Retests() bool { return s.m.Retest }
+func (s *toolScanner) Retests() bool { return s.m.RetestFeature() }
 
 // RunRetest runs one retest task (tool.Task.Retest set) out of process.
 func (s *toolScanner) RunRetest(ctx context.Context, task tool.Task) (*toolhost.Outcome, error) {
-	if !s.m.Retest || !task.IsRetest() {
+	if !s.m.RetestFeature() || !task.IsRetest() {
 		return nil, fmt.Errorf("%s: not a retest", s.m.Name)
 	}
 	return s.run(ctx, task)

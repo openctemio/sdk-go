@@ -76,9 +76,36 @@ func (b *Builder) Produces(kinds ...string) *Builder {
 	return b
 }
 
-// Capabilities declares the platform capability ids the tool provides.
+// Capabilities declares free-form capability words.
+//
+// Deprecated: use Implements with capability references.
 func (b *Builder) Capabilities(ids ...string) *Builder {
 	b.m.Capabilities = append(b.m.Capabilities, ids...)
+	return b
+}
+
+// Implements declares the capabilities the tool implements, by reference
+// with their major ("vuln.templates@1"). A standard param of the
+// capability maps to the tool's parameter of the same name when the tool
+// declares one of a matching type; ImplementsWith maps them explicitly.
+func (b *Builder) Implements(refs ...string) *Builder {
+	for _, r := range refs {
+		b.m.Implements = append(b.m.Implements, Implementation{Capability: r})
+	}
+	return b
+}
+
+// ImplementsWith declares an implemented capability with an explicit
+// param mapping and output shape.
+func (b *Builder) ImplementsWith(im Implementation) *Builder {
+	b.m.Implements = append(b.m.Implements, im)
+	return b
+}
+
+// BatchTargets makes the tool take a list of at most max targets per task
+// (0: the runtime's default).
+func (b *Builder) BatchTargets(max int) *Builder {
+	b.m.Input = &InputSpec{Batch: BatchList, MaxTargets: max}
 	return b
 }
 
@@ -128,6 +155,7 @@ func (b *Builder) Build() (Tool, error) {
 		m.Config = raw
 	}
 	m = m.withDefaults()
+	m.Implements = autoMapParams(m)
 	if err := m.Validate(); err != nil {
 		return nil, fmt.Errorf("tool %s: %w", m.Name, err)
 	}

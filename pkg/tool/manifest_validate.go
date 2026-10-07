@@ -120,6 +120,7 @@ func (m Manifest) Validate() error {
 	}
 	schema := m.validateConfig(add)
 	m.validatePermissions(add, schema)
+	m.validateContract(add, schema)
 	m.validateResources(add)
 	if m.Protocol.Min > ProtocolVersion {
 		add("/protocol/min", "this SDK speaks adapter protocol %d", ProtocolVersion)

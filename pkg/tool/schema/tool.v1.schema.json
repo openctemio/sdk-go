@@ -11,14 +11,73 @@
     "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
     "version": {"type": "string", "pattern": "^v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,64})?(\\+[0-9A-Za-z.-]{1,64})?$"},
     "description": {"type": "string", "maxLength": 1024},
+    "publisher": {"type": "string", "maxLength": 64, "description": "Who publishes the tool; shown as text, never trusted."},
+    "license": {"type": "string", "maxLength": 512, "description": "SPDX license expression of the adapter."},
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "description": "The program the tool wraps. Its version is probed at run time, never trusted from here.",
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+        "license": {"type": "string", "maxLength": 512},
+        "min_version": {"type": "string", "maxLength": 140},
+        "version_probe": {"type": "array", "maxItems": 8, "items": {"type": "string", "minLength": 1, "maxLength": 256}}
+      }
+    },
+    "presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How the platform shows the tool: text only, an icon from a closed set, a docs link it never fetches.",
+      "properties": {
+        "display_name": {"type": "string", "maxLength": 64},
+        "category": {"enum": ["network", "dns", "web", "vulnerability", "code", "secrets", "dependencies", "container", "cloud", "connector", "import", "other"]},
+        "icon": {"enum": ["radar", "globe", "network", "server", "link", "search", "bug", "shield", "code", "key", "package", "container", "cloud", "plug", "file", "lock", "terminal", "tool"]},
+        "docs_url": {"type": "string", "maxLength": 512, "pattern": "^https://"}
+      }
+    },
     "class": {"enum": ["target-scan", "connector", "parser", "enricher"]},
     "modes": {"type": "array", "maxItems": 2, "uniqueItems": true, "items": {"enum": ["daemon", "runner"]}},
     "tier": {"enum": ["T0", "T1", "T2"]},
-    "capabilities": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{0,63}$"}},
+    "implements": {
+      "type": "array", "maxItems": 64,
+      "description": "Capabilities of the OpenCTEM capability taxonomy the tool implements, with the mapping of their standard params to config keys.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["capability"],
+        "properties": {
+          "capability": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+@[1-9][0-9]{0,2}$"},
+          "params": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+                "values": {"type": "array", "maxItems": 64, "items": {"type": "string"}},
+                "min": {"type": "integer"},
+                "max": {"type": "integer"}
+              }
+            }
+          },
+          "output_shape": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"}
+        }
+      }
+    },
+    "capabilities": {"type": "array", "deprecated": true, "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{0,63}$"}},
     "consumes": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 140}},
     "produces": {
       "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
       "items": {"type": "string", "pattern": "^(asset:[a-z_]+|finding:[a-z0-9_]+|dependency)$"}
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "batch": {"enum": ["one", "list"]},
+        "max_targets": {"type": "integer", "minimum": 0, "maximum": 100000}
+      }
     },
     "config": {"type": "object", "description": "The configuration schema: the closed JSON Schema subset of api RFC-038 (x-octm-* annotations), with no secret fields."},
     "permissions": {
@@ -42,7 +101,26 @@
             }
           }
         },
-        "linux_caps": {"type": "array", "uniqueItems": true, "items": {"enum": ["NET_RAW", "NET_BIND_SERVICE"]}}
+        "linux_caps": {"type": "array", "uniqueItems": true, "items": {"enum": ["NET_RAW", "NET_BIND_SERVICE"]}},
+        "proxy": {"enum": ["honors", "ignores"]}
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rate_param": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+        "side_effects": {"type": "array", "uniqueItems": true, "maxItems": 6, "items": {"enum": ["ioc_in_logs", "artifacts_on_target", "state_change", "account_lockout", "service_disruption", "third_party_contact"]}},
+        "expands_targets": {"type": "boolean"}
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "retest": {"type": "boolean"},
+        "cancel": {"type": "boolean"},
+        "streaming": {"const": false}
       }
     },
     "resources": {
@@ -71,7 +149,7 @@
         }
       }
     },
-    "retest": {"type": "boolean", "description": "The tool can check again what it reported (a retest task: items in, one verdict per item out). Target-scan tools only."},
+    "retest": {"type": "boolean", "deprecated": true, "description": "Older spelling of features.retest. The tool can check again what it reported (a retest task: items in, one verdict per item out). Target-scan tools only."},
     "protocol": {
       "type": "object",
       "additionalProperties": false,
@@ -101,6 +179,21 @@
           "propertyNames": {"pattern": "^(0|[1-9][0-9]{0,2})$"},
           "additionalProperties": {"enum": ["ok", "partial", "tool_error", "invalid_input", "target_unreachable", "transient"]}
         }
+      }
+    },
+    "sdk": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"min": {"type": "string", "maxLength": 140}}
+    },
+    "deprecated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["since"],
+      "properties": {
+        "since": {"type": "string", "maxLength": 140},
+        "replaced_by": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+        "message": {"type": "string", "maxLength": 512}
       }
     }
   }
