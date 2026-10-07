@@ -343,6 +343,10 @@ type Provenance struct {
 	Quarantined    map[string]int `json:"quarantined,omitempty"`
 	Invalid        int            `json:"invalid,omitempty"`
 	Capped         bool           `json:"capped,omitempty"`
+	// Capability is the capability the task ran ("scan.ports@1").
+	Capability string `json:"capability,omitempty"`
+	// ContractViolations counts records that miss its contract.
+	ContractViolations int `json:"contract_violations,omitempty"`
 }
 
 // Stamp writes p into r's metadata properties, replacing anything there.

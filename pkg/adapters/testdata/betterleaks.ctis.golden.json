@@ -1,5 +1,5 @@
 {
-  "version": "1.4",
+  "version": "1.5",
   "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
   "metadata": {
     "timestamp": "0001-01-01T00:00:00Z",

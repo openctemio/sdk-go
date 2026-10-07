@@ -148,6 +148,9 @@ type Stats struct {
 	Capped      bool           `json:"capped,omitempty"`
 	Quarantined map[string]int `json:"quarantined,omitempty"`
 	Invalid     int            `json:"invalid,omitempty"`
+	// ContractViolations counts records that miss the task capability's
+	// contract (required paths, allowed outputs).
+	ContractViolations int `json:"contract_violations,omitempty"`
 }
 
 // LogLine is one line a tool logged (redacted).
@@ -251,6 +254,8 @@ type prepared struct {
 	// targets (never sent to the tool).
 	asked        []tool.RetestItem
 	refusedItems map[string]bool
+	// rateLine says the local policy changed the rate (nil: it did not).
+	rateLine *LogLine
 }
 
 // prepare checks the manifest and the task (targets, config), admits it
@@ -270,9 +275,17 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if ierr := toolrt.CheckRetest(m, task); ierr != nil {
 		return nil, ierr, nil
 	}
+	task, ierr := admitContract(m, task)
+	if ierr != nil {
+		return nil, ierr, nil
+	}
 	cfg, ierr := effectiveConfig(m, task.Config)
 	if ierr != nil {
 		return nil, ierr, nil
+	}
+	cfg, rateLine, err := capRate(m, cfg, h.Policy)
+	if err != nil {
+		return nil, tool.AsError(tool.Invalid("%v", err)), nil
 	}
 	task.Config = cfg
 	adm, ierr := Admit(ctx, m, task, h.Policy, o.Mode)
@@ -280,7 +293,7 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, ierr, nil
 	}
 	task = adm.Task
-	p := &prepared{m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest}
+	p := &prepared{m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine}
 	if task.IsRetest() && len(adm.Refused) > 0 {
 		// A retest never reaches a target the policy refused: its items
 		// are not sent and end unverifiable.
@@ -423,6 +436,7 @@ func (h *Host) stamp(out *Outcome, m tool.Manifest, task tool.Task, execution st
 		Execution: execution, Sandbox: out.Sandbox, Network: string(m.Permissions.Network), Sensor: h.Sensor,
 		TaskID: task.ID, Attempt: task.Attempt, Status: out.Status, Records: out.Stats.Records,
 		Quarantined: out.Stats.Quarantined, Invalid: out.Stats.Invalid, Capped: out.Stats.Capped,
+		Capability: task.Capability, ContractViolations: out.Stats.ContractViolations,
 	})
 }
 
@@ -883,8 +897,12 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 		}
 		out.Targets = append(out.Targets, to)
 	}
+	p.checkContract(out)
 	p.addRefused(out)
 	out.Verdicts = p.verdicts(runErr)
+	if p.rateLine != nil {
+		out.Logs = append(out.Logs, *p.rateLine)
+	}
 	s.h.stamp(out, p.m, p.task, execution)
 }
 
