@@ -229,10 +229,25 @@ func TestManifestJSONSchemaMatchesTypes(t *testing.T) {
 	for name, typ := range map[string]reflect.Type{
 		"permissions": reflect.TypeFor[Permissions](), "resources": reflect.TypeFor[Resources](),
 		"protocol": reflect.TypeFor[Range](), "run": reflect.TypeFor[RunSpec](),
+		"engine": reflect.TypeFor[Engine](), "presentation": reflect.TypeFor[Presentation](),
+		"input": reflect.TypeFor[InputSpec](), "safety": reflect.TypeFor[Safety](),
+		"features": reflect.TypeFor[Features](), "sdk": reflect.TypeFor[SDKRequirement](),
+		"deprecated": reflect.TypeFor[Deprecation](),
 	} {
 		if got, want := sortedKeys(sub(name)), jsonKeys(typ); !slices.Equal(got, want) {
 			t.Errorf("%s: schema keys %v, Go keys %v", name, got, want)
 		}
+	}
+	var impl struct {
+		Items struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(schema.Properties["implements"], &impl); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := sortedKeys(impl.Items.Properties), jsonKeys(reflect.TypeFor[Implementation]()); !slices.Equal(got, want) {
+		t.Errorf("implements: schema keys %v, Go keys %v", got, want)
 	}
 	enum := func(raw json.RawMessage) []string {
 		var e struct {
