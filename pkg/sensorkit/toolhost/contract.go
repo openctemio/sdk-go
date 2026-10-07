@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/openctemio/ctis/capability"
+	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
 
@@ -24,6 +25,9 @@ const maxContractLogs = 10
 func admitContract(m tool.Manifest, task tool.Task) (tool.Task, *tool.Error) {
 	if task.MaxTier != "" && m.MinimumTier().Exceeds(task.MaxTier) {
 		return task, refusedErr("%s needs tier %s; the job allows at most %s", m.Name, m.MinimumTier(), task.MaxTier)
+	}
+	if werr := toolrt.CheckWebScope(m, task); werr != nil {
+		return task, werr
 	}
 	mapped, err := m.ApplyParams(task)
 	if err != nil {

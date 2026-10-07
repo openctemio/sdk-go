@@ -7,12 +7,15 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/webscope"
 
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
@@ -30,6 +33,8 @@ var awsKeyRE = regexp.MustCompile(`AKIA[A-Z2-7]{16}`)
 //	secrets <dir>          reports AWS keys in <dir>/config.py, masked
 //	                       ($CONFORMANCE_LEAK=1 also puts the raw key in the description)
 //	probe <url>            GETs the URL and reports status and title
+//	crawl <url> <scope>    follows links from the URL, keeping to the web
+//	                       scope file ($CONFORMANCE_IGNORE_SCOPE=1: ignores it)
 func fakeTool(mode string, args []string) int {
 	report := map[string]any{"version": "1.4", "metadata": map[string]any{"timestamp": "2026-01-01T00:00:00Z"}}
 	var assets, findings []map[string]any
@@ -88,6 +93,8 @@ func fakeTool(mode string, args []string) int {
 		}
 		assets = append(assets, map[string]any{"type": "http_service", "value": arg(0),
 			"properties": map[string]any{"status_code": resp.StatusCode, "title": title}})
+	case "crawl":
+		assets = fakeCrawl(arg(0), arg(1))
 	default:
 		return 2
 	}
@@ -325,5 +332,85 @@ func TestFuzzOutput(t *testing.T) {
 	}
 	if msg := fuzzOne(func(context.Context, []byte) ([]byte, int, error) { return nil, fuzzMaxRecords + 1, nil }, nil); !strings.Contains(msg, "above the cap") {
 		t.Fatal(msg)
+	}
+}
+
+var linkRE = regexp.MustCompile(`(?:href|action)="([^"]+)"|fetch\("([^"]+)"\)`)
+
+// fakeCrawl follows the links of the start page and its children (depth
+// 2), checking each against the web scope file unless told to ignore it,
+// and reports every page it fetched as a discovered_url.
+func fakeCrawl(start, scopeFile string) []map[string]any {
+	var scope *webscope.Scope
+	if b, err := os.ReadFile(scopeFile); err == nil {
+		_ = json.Unmarshal(b, &scope)
+	}
+	if os.Getenv("CONFORMANCE_IGNORE_SCOPE") == "1" {
+		scope = nil
+	}
+	base, err := url.Parse(start)
+	if err != nil {
+		return nil
+	}
+	var assets []map[string]any
+	seen := map[string]bool{}
+	queue := []*url.URL{base}
+	for depth := 0; depth < 3 && len(queue) > 0; depth++ {
+		var next []*url.URL
+		for _, u := range queue {
+			if seen[u.String()] {
+				continue
+			}
+			seen[u.String()] = true
+			if scope.Allows("GET", u, []string{base.Hostname()}) != nil {
+				continue
+			}
+			client := &http.Client{CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+				return scope.Allows("GET", req.URL, []string{base.Hostname()})
+			}}
+			resp, err := client.Get(u.String()) //nolint:noctx // the fixture
+			if err != nil {
+				continue
+			}
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+			_ = resp.Body.Close()
+			assets = append(assets, map[string]any{"type": "discovered_url", "value": u.String(),
+				"properties": map[string]any{"host": u.Hostname()}})
+			for _, m := range linkRE.FindAllStringSubmatch(string(body), -1) {
+				ref := m[1] + m[2]
+				if l, err := u.Parse(ref); err == nil {
+					next = append(next, l)
+				}
+			}
+		}
+		queue = next
+	}
+	return assets
+}
+
+const crawlTool = `tier: T1
+implements: [{capability: crawl.web@1}]
+consumes: [http_service]
+produces: [asset:discovered_url]
+permissions: {network: targets}
+FEATURES
+run: {profile: exec, argv: [EXE, "{{target.value}}", "{{task.web_scope_file}}"], output: {format: ctis, from: stdout}}
+`
+
+// SECURITY (acceptance): a crawler that keeps to the web scope passes the
+// crawl.web suite; one that requests a denied path fails it, and one that
+// does not declare features.web_scope fails it without running.
+func TestContractSuite_WebScope(t *testing.T) {
+	declared := fakeManifest(t, strings.Replace(crawlTool, "FEATURES", "features: {web_scope: true}", 1), nil)
+	if r := runContract(declared, ContractOptions{Capability: true, Env: map[string]string{fakeToolEnv: "crawl"}}); len(r.errs) > 0 {
+		t.Fatalf("a crawler that keeps to the scope: %v", r.errs)
+	}
+	r := runContract(declared, ContractOptions{Capability: true, Env: map[string]string{fakeToolEnv: "crawl", "CONFORMANCE_IGNORE_SCOPE": "1"}})
+	if !hasErr(r, "which the web scope denies") {
+		t.Fatalf("a crawler that ignores the scope passed: %v", r.errs)
+	}
+	undeclared := fakeManifest(t, strings.Replace(crawlTool, "FEATURES", "", 1), nil)
+	if r := runContract(undeclared, ContractOptions{Capability: true, Env: map[string]string{fakeToolEnv: "crawl"}}); !hasErr(r, "must declare features.web_scope") {
+		t.Fatalf("an undeclared crawler passed: %v", r.errs)
 	}
 }

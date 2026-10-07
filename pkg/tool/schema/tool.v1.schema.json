@@ -120,6 +120,7 @@
       "properties": {
         "retest": {"type": "boolean"},
         "cancel": {"type": "boolean"},
+        "web_scope": {"type": "boolean"},
         "streaming": {"const": false}
       }
     },

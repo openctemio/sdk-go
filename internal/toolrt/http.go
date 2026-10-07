@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/tool"
+	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
 // ErrHostNotAllowed is the error of a request to a host the tool's network
@@ -73,8 +74,18 @@ func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
 		MaxIdleConnsPerHost:   4,
 		IdleConnTimeout:       30 * time.Second,
 	}
+	var rt http.RoundTripper = tr
+	if task.WebScope != nil {
+		hosts := make([]string, 0, len(task.Targets))
+		for _, t := range task.Targets {
+			if h := t.Host(); h != "" {
+				hosts = append(hosts, h)
+			}
+		}
+		rt = scopedTransport{next: tr, scope: task.WebScope, targets: hosts}
+	}
 	return &http.Client{
-		Transport: tr,
+		Transport: rt,
 		Timeout:   5 * time.Minute,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
@@ -86,6 +97,24 @@ func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
 			return nil
 		},
 	}
+}
+
+// scopedTransport refuses every request outside the job's web scope,
+// redirects included (each one is a new round trip).
+type scopedTransport struct {
+	next    http.RoundTripper
+	scope   *webscope.Scope
+	targets []string
+}
+
+func (s scopedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := s.scope.Allows(req.Method, req.URL, s.targets); err != nil {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return nil, err
+	}
+	return s.next.RoundTrip(req)
 }
 
 // vendorHosts resolves a vendor host entry: a host[:port], or

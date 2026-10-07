@@ -34,11 +34,14 @@ const (
 // Whether the tool implements the capability and supports each value is
 // checked by the tool runtime (tool.Manifest.ApplyParams).
 func applyCapabilityJob(opts *ScanOptions, scanner Scanner, p *ScanCommandPayload) error {
-	if p.Capability == "" && len(p.Params) == 0 && p.MaxTier == "" {
+	if p.Capability == "" && len(p.Params) == 0 && p.MaxTier == "" && p.WebScope == nil {
 		return nil
 	}
 	if cs, ok := scanner.(CapabilityScanner); !ok || !cs.TakesCapabilityJobs() {
-		return fmt.Errorf("scanner %s does not run capability jobs (capability, params, max_tier); update the sensor", p.Scanner)
+		return fmt.Errorf("scanner %s does not run capability jobs (capability, params, max_tier, web_scope); update the sensor", p.Scanner)
+	}
+	if err := p.WebScope.Validate(); err != nil {
+		return err
 	}
 	if p.Capability != "" {
 		if _, major, ok := capability.ParseRef(p.Capability); !ok || major == 0 {
@@ -58,7 +61,7 @@ func applyCapabilityJob(opts *ScanOptions, scanner Scanner, p *ScanCommandPayloa
 			return fmt.Errorf("standard param %q is too large", truncateBytes(k, 64))
 		}
 	}
-	opts.Capability, opts.MaxTier = p.Capability, p.MaxTier
+	opts.Capability, opts.MaxTier, opts.WebScope = p.Capability, p.MaxTier, p.WebScope
 	opts.Params = p.Params
 	return nil
 }

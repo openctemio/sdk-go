@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/webscope"
 
 	"github.com/openctemio/sdk-go/pkg/resource"
 )
@@ -88,6 +89,9 @@ type ScanOptions struct {
 	Capability string                     `yaml:"-" json:"-"`
 	Params     map[string]json.RawMessage `yaml:"-" json:"-"`
 	MaxTier    string                     `yaml:"-" json:"-"`
+	// WebScope is the job's web scope (see ScanCommandPayload); only a
+	// CapabilityScanner receives it.
+	WebScope *webscope.Scope `yaml:"-" json:"-"`
 }
 
 // ScanResult holds the raw scan result before conversion.

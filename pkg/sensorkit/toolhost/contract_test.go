@@ -9,6 +9,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/tool"
+	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
 // contractTool implements vuln.templates@1: the workflow's severity and
@@ -122,6 +123,7 @@ func TestContractRefusalsBeforeStart(t *testing.T) {
 		"capability not implemented":      {tool.Task{Capability: "scan.ports@1"}, tool.InvalidInput, "does not implement"},
 		"config conflicts with the param": {tool.Task{Capability: "vuln.templates@1", Params: params("rate", `50`), Config: json.RawMessage(`{"rate":60}`)}, tool.InvalidInput, "another value"},
 		"tier above the job's ceiling":    {tool.Task{Capability: "vuln.templates@1", MaxTier: tool.T0}, tool.RefusedByPolicy, "allows at most T0"},
+		"invalid web scope":               {tool.Task{WebScope: &webscope.Scope{Methods: []string{"TRACE"}}}, tool.RefusedByPolicy, "web scope"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

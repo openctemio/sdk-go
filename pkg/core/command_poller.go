@@ -20,6 +20,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/resource"
+	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
 // CommandClient interface for command-related API operations.
@@ -113,6 +114,9 @@ type ScanCommandPayload struct {
 	Capability string                     `json:"capability,omitempty"`
 	Params     map[string]json.RawMessage `json:"params,omitempty"`
 	MaxTier    string                     `json:"max_tier,omitempty"`
+	// WebScope is the hosts, paths and methods a web tool may request
+	// (webscope.Scope); an invalid one fails the job.
+	WebScope *webscope.Scope `json:"web_scope,omitempty"`
 }
 
 // CapabilityScanner is a scanner that runs capability jobs: it takes the

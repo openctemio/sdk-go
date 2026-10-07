@@ -131,6 +131,11 @@ type Features struct {
 	Retest bool `json:"retest,omitempty"`
 	// Cancel: the tool stops promptly on a cancel message.
 	Cancel bool `json:"cancel,omitempty"`
+	// WebScope: the tool keeps every request inside the job's web scope
+	// (Task.WebScope): it maps the scope onto its own flags, or requests
+	// only through Context.HTTP, which enforces it. A job with a web scope
+	// is refused for a networked tool that does not declare it.
+	WebScope bool `json:"web_scope,omitempty"`
 	// Streaming is reserved: feeding records to the next stage while the
 	// task runs is not part of protocol v1.
 	Streaming bool `json:"streaming,omitempty"`

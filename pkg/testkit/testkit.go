@@ -108,6 +108,9 @@ func Run(t testing.TB, tl tool.Tool, task tool.Task, opts ...Options) *Result {
 		runErr = toolrt.CheckRetest(m, task)
 	}
 	if runErr == nil {
+		runErr = toolrt.CheckWebScope(m, task)
+	}
+	if runErr == nil {
 		secrets := map[string]tool.Secret{}
 		for _, c := range m.Permissions.Credentials {
 			if v, ok := o.Secrets[c.Name]; ok {
