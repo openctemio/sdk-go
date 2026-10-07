@@ -108,12 +108,28 @@ type Manifest struct {
 	// engine it runs).
 	Version     string `json:"version"`
 	Description string `json:"description,omitempty"`
-	Class       Class  `json:"class"`
+	// Publisher is who publishes the tool: the signer of a certified
+	// tool, or free text (shown as text, never trusted).
+	Publisher string `json:"publisher,omitempty"`
+	// License is the SPDX license expression of the adapter (the wrapped
+	// engine's is engine.license).
+	License string `json:"license,omitempty"`
+	// Engine is the program the tool wraps; its version is probed.
+	Engine *Engine `json:"engine,omitempty"`
+	// Presentation is how the platform shows the tool.
+	Presentation *Presentation `json:"presentation,omitempty"`
+	Class        Class         `json:"class"`
 	// Modes the tool runs in; empty means both.
 	Modes []Mode `json:"modes,omitempty"`
-	Tier  Tier   `json:"tier"`
-	// Capabilities are the platform's capability ids the tool provides
-	// ("web.probe", "vuln.templates", ...).
+	// Tier is the tier the tool asks for. It cannot be below the tier
+	// floor of a capability it implements; the platform assigns the
+	// effective tier and may raise it (MinimumTier).
+	Tier Tier `json:"tier"`
+	// Implements are the capabilities of the OpenCTEM capability taxonomy
+	// the tool implements ("scan.ports@1"), with its param mapping.
+	Implements []Implementation `json:"implements,omitempty"`
+	// Capabilities is the older free-form capability list. Deprecated:
+	// use Implements. With Implements set it may only repeat its ids.
 	Capabilities []string `json:"capabilities,omitempty"`
 	// Consumes are CTIS asset types, "file:<media type>" for parsers, or
 	// "finding:<type>" for enrichers.
@@ -121,6 +137,8 @@ type Manifest struct {
 	// Produces are "asset:<type>", "finding:<type>" or "dependency". A
 	// record of any other kind is refused (ErrUndeclaredOutput).
 	Produces []string `json:"produces"`
+	// Input is how the tool takes its targets (default: one per task).
+	Input *InputSpec `json:"input,omitempty"`
 	// Config is the tool's configuration schema: the closed JSON Schema
 	// subset of api RFC-038 (pkg/core settings schemas), with no secret
 	// fields (secrets are credentials, never configuration). nil: no
@@ -129,15 +147,24 @@ type Manifest struct {
 	Config      json.RawMessage `json:"config,omitempty"`
 	Permissions Permissions     `json:"permissions"`
 	Resources   Resources       `json:"resources"`
+	// Safety is what the tool does to its targets beyond reading them.
+	Safety *Safety `json:"safety,omitempty"`
+	// Features are the optional protocol features the tool supports.
+	Features *Features `json:"features,omitempty"`
 	// Selftest are fixtures: a task and the CTIS it must produce.
 	Selftest []Fixture `json:"selftest,omitempty"`
 	// Retest says the tool can check again what it reported (a retest
-	// task, see Retester). Target-scan tools only.
+	// task, see Retester). Target-scan tools only. Deprecated spelling of
+	// features.retest.
 	Retest bool `json:"retest,omitempty"`
 	// Protocol is the range of adapter protocol versions the tool speaks.
 	Protocol Range `json:"protocol"`
 	// Run says how to start a tool that is not compiled into the sensor.
 	Run *RunSpec `json:"run,omitempty"`
+	// SDK is the oldest SDK that understands every key this manifest uses.
+	SDK *SDKRequirement `json:"sdk,omitempty"`
+	// Deprecated marks a tool being replaced.
+	Deprecated *Deprecation `json:"deprecated,omitempty"`
 }
 
 // Permissions are what a tool needs. The effective permission is the
@@ -157,6 +184,9 @@ type Permissions struct {
 	// LinuxCaps the tool needs (NET_RAW for SYN scans); granted only when
 	// the local policy allows.
 	LinuxCaps []string `json:"linux_caps,omitempty"`
+	// Proxy is ProxyHonours or ProxyIgnores; unset is unknown, which the
+	// platform treats as ignores where a zone requires a proxy.
+	Proxy string `json:"proxy,omitempty"`
 }
 
 // CredentialReq is a credential a tool declares.
