@@ -230,7 +230,7 @@ Rules the manifest validator enforces (CI and runtime):
 - `produces` must be non-empty and drawn from the CTIS vocabulary; `consumes` must name CTIS asset types or `file:` media types;
 - `T2` requires `class: target-scan`;
 - the config schema follows the RFC-038 subset (`additionalProperties: false`, bounded strings and arrays, RE2 patterns), and contains no secret fields;
-- `run.argv` placeholders are a closed set (`{{config.<key>}}` of scalar type, `{{target.*}}`, `{{task.targets_file}}`, `{{task.config_file}}`, `{{task.output}}`, `{{task.workdir}}`); never a shell; every expanded value is checked against the dangerous-flag list exactly as user extra args are today.
+- `run.argv` placeholders are a closed set (`{{config.<key>}}` of scalar type, `{{target.*}}`, `{{task.targets_file}}`, `{{task.config_file}}`, `{{task.web_scope_file}}`, `{{task.output}}`, `{{task.workdir}}`); never a shell; every expanded value is checked against the dangerous-flag list exactly as user extra args are today.
 
 #### D.3.3 Task and targets
 

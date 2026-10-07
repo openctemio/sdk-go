@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
 // Task is one unit of work. Its targets were admitted by the runtime and its
@@ -45,6 +47,11 @@ type Task struct {
 	// MaxTier is the highest tier the job allows (the ceiling of the
 	// platform grant). A tool whose MinimumTier is higher is refused.
 	MaxTier Tier `json:"max_tier,omitempty"`
+	// WebScope, when set, is the hosts, paths and methods a web tool may
+	// request (webscope.Scope). Context.HTTP refuses every request outside
+	// it; a tool that makes its own requests declares features.web_scope
+	// and keeps to it.
+	WebScope *webscope.Scope `json:"web_scope,omitempty"`
 }
 
 // Target is one thing to work on.

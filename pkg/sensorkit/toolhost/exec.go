@@ -28,7 +28,10 @@ const (
 	targetsFile     = "targets.txt"
 	targetsJSONFile = "targets.json"
 	configFile      = "config.json"
-	outputFile      = "output"
+	// webScopeFile is the job's web scope (webscope.Scope as JSON; "null"
+	// without one): an exec-profile crawler reads it to keep to the scope.
+	webScopeFile = "web_scope.json"
+	outputFile   = "output"
 )
 
 // runExec runs a zero-code tool: the runtime writes the targets and the
@@ -185,7 +188,11 @@ func writeExecFiles(p *prepared) error {
 	if err != nil {
 		return err
 	}
-	for name, data := range map[string][]byte{targetsFile: []byte(txt), targetsJSONFile: tj, configFile: p.task.Config} {
+	ws, err := json.Marshal(p.task.WebScope)
+	if err != nil {
+		return err
+	}
+	for name, data := range map[string][]byte{targetsFile: []byte(txt), targetsJSONFile: tj, configFile: p.task.Config, webScopeFile: ws} {
 		if err := os.WriteFile(filepath.Join(p.workdir, name), data, 0o600); err != nil {
 			return fmt.Errorf("toolhost: %w", err)
 		}
@@ -213,6 +220,8 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 				return filepath.Join(p.workdir, targetsJSONFile)
 			case name == "task.config_file":
 				return filepath.Join(p.workdir, configFile)
+			case name == "task.web_scope_file":
+				return filepath.Join(p.workdir, webScopeFile)
 			case name == "task.output":
 				return filepath.Join(p.workdir, outputFile)
 			case name == "task.workdir":

@@ -32,6 +32,8 @@ func (r *contractRun) capabilitySuite(c capability.Capability) {
 		r.probeHTTP(name, c)
 	case "vuln.templates":
 		r.vulnTemplates(name, c)
+	case "crawl.web", "dast.web":
+		r.webScope(name, c)
 	case "secrets.code":
 		r.secretsCode(name, c)
 	case "sast.code":

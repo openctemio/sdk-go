@@ -263,7 +263,8 @@ type RunSpec struct {
 	// are a closed set: {{config.<key>}} (a scalar key of the config
 	// schema), {{target.value}}, {{target.host}}, {{target.port}},
 	// {{target.url}}, {{task.targets_file}}, {{task.targets_json}},
-	// {{task.config_file}}, {{task.output}}, {{task.workdir}}.
+	// {{task.config_file}}, {{task.web_scope_file}}, {{task.output}},
+	// {{task.workdir}}.
 	Argv []string `json:"argv"`
 	// Output is where an exec-profile tool writes its results.
 	Output *OutputSpec `json:"output,omitempty"`
