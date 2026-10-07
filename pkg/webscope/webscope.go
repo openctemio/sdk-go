@@ -6,6 +6,8 @@
 //
 // A job without a web scope is unrestricted by this package (the target
 // hosts and the egress guard still apply).
+//
+// Stability: Beta (docs/STABILITY.md).
 package webscope
 
 import (
