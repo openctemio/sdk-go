@@ -43,7 +43,7 @@ const (
 // Placeholders an argv may use besides {{config.<key>}}.
 var argvPlaceholders = []string{
 	"target.value", "target.host", "target.port", "target.url",
-	"task.targets_file", "task.targets_json", "task.config_file", "task.output", "task.workdir",
+	"task.targets_file", "task.targets_json", "task.config_file", "task.web_scope_file", "task.output", "task.workdir",
 }
 
 // Programs an argv may not start: a shell or an interpreter given code on

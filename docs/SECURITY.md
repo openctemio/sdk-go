@@ -429,7 +429,31 @@ process group with `setsid` is bounded by its rlimits but not killed with the
 group. The sandbox never uses a Docker socket; future backends (a Kubernetes
 Pod per task, a rootless container) plug in behind the same interface.
 
-### 8. API Client Transport
+### 8. Web scope of a job (`pkg/webscope`)
+
+A job can carry a web scope (`web_scope`): the hosts (`app.example.com`, or
+`*.example.com` for the domain and every name under it), the path prefixes
+and the methods a web tool may request, and paths it never requests
+(`deny_paths`, such as `/logout` or `/admin`). The platform sets it, and the
+SDK enforces it:
+
+- `tool.Context.HTTP` refuses every request outside the scope before it is
+  sent, and each redirect is checked as a new request. The path is checked as
+  the server sees it: percent-decoded, with dot segments resolved and
+  backslashes as slashes. A path with an encoded slash, backslash or NUL is
+  refused. Deny paths match by prefix, ignoring case, so over-blocking is the
+  failure mode. Without `methods`, only GET, HEAD and OPTIONS are allowed.
+- A networked tool that does not declare `features.web_scope` is refused a
+  job with a web scope, because it would run unrestricted. An invalid scope
+  is refused too, never ignored. A scanner that cannot take capability jobs
+  fails such a job (`core`).
+- An exec-profile tool reads the scope from `{{task.web_scope_file}}` (JSON;
+  `null` without one). A sensor wrapper maps it onto its tool's flags.
+- The conformance kit's `crawl.web` and `dast.web` suites point the tool at a
+  site that links to denied paths (links, a redirect, a form, a script, dot
+  segments, upper case). They fail a tool that requests any of them.
+
+### 9. API Client Transport
 
 - API clients (`pkg/client`, `pkg/platform`) refuse HTTP redirects; the API
   never issues them and following one would forward the bearer key.

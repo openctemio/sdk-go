@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
 // capScanner is a scanner on the tool contract.
@@ -36,6 +38,11 @@ func TestApplyCapabilityJob(t *testing.T) {
 	if opts.Capability != "scan.ports@1" || string(opts.Params["top_n"]) != "100" || opts.MaxTier != "T1" {
 		t.Fatalf("opts %+v", opts)
 	}
+	ws := &webscope.Scope{Hosts: []string{"*.example.com"}, DenyPaths: []string{"/logout"}}
+	opts = &ScanOptions{}
+	if err := applyCapabilityJob(opts, ports, &ScanCommandPayload{Scanner: "ports", Capability: "scan.ports@1", WebScope: ws}); err != nil || opts.WebScope != ws {
+		t.Fatalf("web scope not carried: %v %+v", err, opts)
+	}
 	// A plain job is untouched, for any scanner.
 	if err := applyCapabilityJob(&ScanOptions{}, &fakeScanner{name: "legacy"}, &ScanCommandPayload{Scanner: "legacy"}); err != nil {
 		t.Fatal(err)
@@ -54,6 +61,9 @@ func TestApplyCapabilityJob(t *testing.T) {
 		"legacy scanner":          {&fakeScanner{name: "legacy"}, ScanCommandPayload{Scanner: "legacy", Capability: "scan.ports@1"}, "does not run capability jobs"},
 		"scanner that declines":   {&capScanner{takes: false}, ScanCommandPayload{Scanner: "x", Params: params}, "does not run capability jobs"},
 		"legacy with a tier only": {&fakeScanner{name: "legacy"}, ScanCommandPayload{Scanner: "legacy", MaxTier: "T0"}, "does not run capability jobs"},
+		// SECURITY: a web scope a scanner cannot keep to is never dropped.
+		"legacy with a web scope": {&fakeScanner{name: "legacy"}, ScanCommandPayload{Scanner: "legacy", WebScope: &webscope.Scope{DenyPaths: []string{"/admin"}}}, "does not run capability jobs"},
+		"invalid web scope":       {ports, ScanCommandPayload{Capability: "scan.ports@1", WebScope: &webscope.Scope{DenyPaths: []string{"admin"}}}, "web scope"},
 		"no major":                {ports, ScanCommandPayload{Capability: "scan.ports"}, "want id@major"},
 		"look-alike":              {ports, ScanCommandPayload{Capability: "Scan.Ports@1"}, "want id@major"},
 		"params without ref":      {ports, ScanCommandPayload{Params: params}, "need the job's capability"},
@@ -69,7 +79,7 @@ func TestApplyCapabilityJob(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
-			if opts.Capability != "" || opts.Params != nil {
+			if opts.Capability != "" || opts.Params != nil || opts.WebScope != nil {
 				t.Fatal("options set on a refused job")
 			}
 		})
