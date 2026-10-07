@@ -299,6 +299,65 @@ exec.SetScanTargetPolicy(&core.ScanTargetPolicy{
 | `OPENCTEM_SDK_SCAN_ROOTS` | Allowed roots (`:`-separated) for the default policy |
 | `OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS=1` | Allow RFC1918/ULA targets (`SENSOR_ALLOW_PRIVATE_TARGETS=1` — or its pre-rename name `AGENT_ALLOW_PRIVATE_TARGETS=1`, read with a deprecation warning — and `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1` are honored too; setting the sensor and agent names to different values refuses every target) |
 
+#### Refused targets: per target, never the whole job
+
+A scan job's target that a policy refuses, or that cannot be checked, is
+removed from the job; the job runs on the rest. This applies at two points:
+the poller's admission against the sensor-local policy
+(`LocalPolicy.AdmitCommandTargets`, before any executor sees the command),
+and the executor's own check right before the scanner starts.
+
+| Reason (`refused_targets[].reason`) | When |
+|---|---|
+| `unresolvable` | A dotted host name that does not resolve (NXDOMAIN, resolver failure): its addresses cannot be checked |
+| `wildcard_pattern` | A pattern such as `*.example.com`: not a host a policy can check or a tool can reach |
+| `denied_by_policy` | Outside `targets.allow`, inside `targets.deny`, a private address without the switch, the built-in deny list, a port outside `ports.allow` |
+| `invalid_target` | Not a URL, host, address, range or path, or unsafe to hand to a tool (a leading `-`, control characters) |
+
+- The command completes with `metadata.refused_targets` (at most 100
+  entries of `{target, reason, rule, detail}`), `metadata.refused_targets_total`
+  and `metadata.partial: true`.
+- When every target is refused, or the single target of a single-target job
+  (payload `target`), the command fails as before; the error lists the
+  targets and reasons.
+- A retest or validation command is not rewritten: one refused target
+  still refuses it whole.
+- A refused target is never handed to an executor or a tool, so a result
+  cannot carry data for it. The admission and every refused target are in
+  the command's log on the platform (see *Per-command logs* below) and on
+  the sensor's standard output.
+
+**DNS rebinding.** Admission resolves a name and checks every address. The
+executor resolves and checks again immediately before the scanner starts,
+so a name that now resolves to a denied address is refused there. In-process
+dials made through `LocalPolicy.DialContext` (and the egress forwarder)
+check each connection and connect only to the addresses they checked.
+External scanner binaries (nuclei, httpx, ...) resolve the name once more
+themselves. The window between the executor's check and the tool's own
+lookup is not closed for them. To close it, route the tool through the egress
+forwarder, or list addresses instead of names in `targets.allow`.
+
+#### Per-command logs of the poller
+
+With a log sink (`CommandPoller.SetCommandLogSink`; `sensorkit` wires its
+log shipper), the poller writes its own lines to the command's log, tagged
+`source: sensor`:
+
+- the command was received;
+- the local policy check, each refused target with its reason, and a
+  refusal before running;
+- the platform tool gate's refusal;
+- the outcome: completed, completed with skipped targets, failed, timed out,
+  or stopped by the kill switch;
+- a hand-back to the platform (no free slot, busy hosts, drain), logged once
+  per command and reason.
+
+A command refused before any tool started therefore still has a log that
+says why. The lines are redacted and bounded like a tool's lines. They are
+queued through the outbox ahead of the command's result. Lines for a
+hand-back are sent directly before the release, because the platform does
+not take this sensor's lines after that.
+
 ### 6. Scanner Process Environment
 
 Scanner child processes no longer inherit the sensor's whole environment
