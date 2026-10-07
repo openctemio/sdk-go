@@ -3,12 +3,15 @@ package sensorkit
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/openctemio/sdk-go/pkg/conformance"
+	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
@@ -25,7 +28,10 @@ var retestContract = tool.WithRetest(tool.New(tool.Manifest{
 			case "present":
 				ctx.Verdict(it, tool.StillPresent, "matched")
 			case "gone":
-				ctx.Verdict(it, tool.Fixed, "no match")
+				// A networked tool shows the attempt that did not match.
+				u, _ := url.Parse("https://a.example/check")
+				ex, _ := tool.HTTPExchange(&http.Request{Method: "GET", URL: u}, nil, &http.Response{StatusCode: 404}, nil)
+				ctx.Report(it, tool.VerdictReport{Verdict: tool.Fixed, Detail: "no match", Evidence: []ctis.EvidenceItem{ex}})
 			}
 		}
 		for _, t := range task.Targets {

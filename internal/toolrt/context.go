@@ -29,7 +29,7 @@ type Sink interface {
 	Log(level slog.Level, msg string, attrs map[string]any)
 	Artifact(name, mediaType string) (io.WriteCloser, error)
 	// Verdict is a retest verdict on item ref (detail cleaned and redacted).
-	Verdict(ref string, v tool.Verdict, detail string)
+	Verdict(ref string, r tool.VerdictReport)
 }
 
 // Log bounds per task.
@@ -132,15 +132,21 @@ func (c *runCtx) target(t tool.Target, st tool.TargetState, err *tool.Error) {
 
 // Verdict reports a retest verdict (tool.RetestContext).
 func (c *runCtx) Verdict(item tool.RetestItem, v tool.Verdict, detail string) {
+	c.Report(item, tool.VerdictReport{Verdict: v, Detail: detail})
+}
+
+// Report reports a retest verdict with its evidence (tool.RetestContext).
+func (c *runCtx) Report(item tool.RetestItem, r tool.VerdictReport) {
 	if !c.items[item.Ref] {
 		c.logger.Warn("verdict for an item not in the retest ignored", "ref", item.Ref)
 		return
 	}
-	if !v.Valid() {
-		c.logger.Warn("unknown verdict ignored", "ref", item.Ref, "verdict", string(v))
+	if !r.Verdict.Valid() {
+		c.logger.Warn("unknown verdict ignored", "ref", item.Ref, "verdict", string(r.Verdict))
 		return
 	}
-	c.cfg.Sink.Verdict(item.Ref, v, c.redact(tool.CapDetail(CleanString(detail))))
+	r.Detail = c.redact(tool.CapDetail(CleanString(r.Detail)))
+	c.cfg.Sink.Verdict(item.Ref, r)
 }
 
 func (c *runCtx) Artifact(name, mediaType string) (io.WriteCloser, error) {

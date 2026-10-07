@@ -328,7 +328,7 @@ func (s *sink) Target(ref string, st tool.TargetState, err *tool.Error) {
 
 func (s *sink) Progress(int, int, string) {}
 
-func (s *sink) Verdict(ref string, v tool.Verdict, detail string) { _ = s.asm.Verdict(ref, v, detail) }
+func (s *sink) Verdict(ref string, r tool.VerdictReport) { _ = s.asm.Verdict(ref, r) }
 
 func (s *sink) Log(level slog.Level, msg string, attrs map[string]any) {
 	s.mu.Lock()
