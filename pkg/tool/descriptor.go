@@ -304,7 +304,7 @@ func (m Manifest) validateContract(add func(p, format string, args ...any), sche
 	if len(caps) > 0 {
 		if m.Class == TargetScan {
 			for i, t := range m.Consumes {
-				if !slices.ContainsFunc(caps, func(c capability.Capability) bool { return c.Accepts(t) }) {
+				if !slices.ContainsFunc(caps, func(c capability.Capability) bool { return c.Accepts(t) || takesFindings(c) }) {
 					add(fmt.Sprintf("/consumes/%d", i), "%s is not an input of any implemented capability", t)
 				}
 			}
@@ -622,4 +622,11 @@ func autoMapParams(m Manifest) []Implementation {
 		}
 	}
 	return out
+}
+
+// takesFindings reports whether a capability's input is a finding
+// (verify.finding): its task runs on the asset the finding is on, so any
+// asset type a finding can be on is an input.
+func takesFindings(c capability.Capability) bool {
+	return slices.Contains(c.InPorts, capability.PortFinding)
 }
