@@ -98,52 +98,12 @@ const maxPolicyRefusals = 5
 // list (host names are resolved; every address must pass) and ports.allow.
 // A single violation refuses the whole job with a *LocalPolicyError naming
 // the rule; nothing in the payload can widen the policy. Without a policy
-// only the kill switch applies.
+// only the kill switch applies. AdmitCommandTargets is the same check that
+// removes refused targets from a scan job instead of refusing all of it.
 func (lp *LocalPolicy) AdmitCommand(ctx context.Context, cmd *Command) error {
-	if why := lp.killSwitchReason(); why != "" {
-		return refuse("kill_switch", "%s", why)
-	}
-	if !lp.Present() || cmd == nil {
-		return nil
-	}
-	if !lp.AllowsCheck(cmd.Type) {
-		return refuse("checks.allow", "%q jobs are not allowed on this sensor", cmd.Type)
-	}
-	var job policyJob
-	if len(cmd.Payload) > 0 {
-		if err := json.Unmarshal(cmd.Payload, &job); err != nil {
-			return refuse("payload", "the job payload cannot be read for the policy check: %v", err)
-		}
-	}
-	tool := job.tool(cmd.Type)
-	if lp.tools != nil {
-		switch {
-		case tool != "" && !lp.AllowsTool(tool):
-			return refuse("tools.allow", "%s is not allowed on this sensor", tool)
-		case tool == "" && (cmd.Type == "scan" || cmd.Type == "collect"):
-			return refuse("tools.allow", "the job names no tool")
-		}
-	}
-	if len(job.CustomTemplates) > 0 && !lp.AllowsCustomTemplates() {
-		return refuse("allow_custom_templates", "the job carries %d custom template(s); this sensor's policy does not allow platform-supplied templates", len(job.CustomTemplates))
-	}
-	// The executor turns callbacks on only for a boolean true; so does this.
-	if v, ok := job.Config["allow_interactsh"].(bool); ok && v && !lp.AllowsInteractsh() {
-		return refuse("allow_interactsh", "the job asks for out-of-band callbacks (interactsh); this sensor's policy does not allow them")
-	}
-	// A port list the job hands its tool as a setting (api RFC-038, e.g.
-	// naabu's "ports") must lie inside ports.allow too.
-	if v, ok := job.Config["ports"]; ok && lp.ports != nil {
-		if err := lp.checkPortSetting(v); err != nil {
-			return err
-		}
-	}
-	targets, err := job.targets()
-	if err != nil {
-		return refuse("payload", "%v", err)
-	}
-	if len(targets) > MaxScanTargets {
-		return refuse("targets", "%d targets, more than the %d allowed per job", len(targets), MaxScanTargets)
+	targets, err := lp.admitJob(cmd)
+	if err != nil || len(targets) == 0 {
+		return err
 	}
 	var (
 		first error
@@ -173,6 +133,164 @@ func (lp *LocalPolicy) AdmitCommand(ctx context.Context, cmd *Command) error {
 		return first
 	}
 	return &LocalPolicyError{Rule: pe.Rule, Detail: fmt.Sprintf("%s (refused targets include %s)", pe.Detail, strings.Join(names, ", "))}
+}
+
+// CommandAdmission is what AdmitCommandTargets decided about a command's
+// targets.
+type CommandAdmission struct {
+	// Total is how many targets the command named.
+	Total int
+	// Refused are the targets removed from the command (or, with an error,
+	// the targets that made it refused), in payload order.
+	Refused []RefusedTarget
+}
+
+// Partial reports whether the command runs on some of its targets only.
+func (a *CommandAdmission) Partial() bool { return a != nil && len(a.Refused) > 0 }
+
+// AdmitCommandTargets is AdmitCommand that refuses per target: in a scan
+// job, a target the policy refuses or cannot check (it does not resolve,
+// it is a wildcard pattern) is removed from cmd.Payload and listed with
+// its reason, and the job runs on the rest. It refuses the whole command,
+// with a *LocalPolicyError, when a job-wide rule refuses it (kill switch,
+// checks.allow, tools.allow, templates, callbacks, the ports setting, an
+// unreadable payload), when every target is refused, when the target the
+// job runs on alone (payload "target") is refused, and for every other
+// command type (a retest or a validation names its targets in items the
+// sensor does not rewrite). The admission is returned with the error too,
+// so the refusal can list every target.
+//
+// It rewrites cmd.Payload only when it removed targets. A removed target is
+// never handed to an executor or a tool.
+func (lp *LocalPolicy) AdmitCommandTargets(ctx context.Context, cmd *Command) (*CommandAdmission, error) {
+	targets, err := lp.admitJob(cmd)
+	adm := &CommandAdmission{Total: len(targets)}
+	if err != nil || len(targets) == 0 {
+		return adm, err
+	}
+	refused := make(map[string]bool)
+	var first error
+	for _, t := range targets {
+		if refused[t] {
+			continue
+		}
+		if err := lp.CheckTarget(ctx, t); err != nil {
+			if cerr := ctx.Err(); cerr != nil {
+				return adm, cerr
+			}
+			if first == nil {
+				first = err
+			}
+			refused[t] = true
+			adm.Refused = append(adm.Refused, refusedTargetOf(t, err))
+		}
+	}
+	if first == nil {
+		return adm, nil
+	}
+	refuseAll := func() error {
+		if len(targets) == 1 {
+			return first
+		}
+		rule := "targets"
+		var pe *LocalPolicyError
+		if errors.As(first, &pe) {
+			rule = pe.Rule
+		}
+		return &LocalPolicyError{Rule: rule, Detail: refusedSummary(adm.Refused)}
+	}
+	if cmd.Type != "scan" {
+		return adm, refuseAll()
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(cmd.Payload, &fields); err != nil {
+		return adm, refuseAll()
+	}
+	var job struct {
+		Target  json.RawMessage `json:"target"`
+		Targets []string        `json:"targets"`
+	}
+	if err := json.Unmarshal(cmd.Payload, &job); err != nil {
+		return adm, refuseAll()
+	}
+	single := ""
+	if len(job.Target) > 0 && string(job.Target) != "null" {
+		// "target" is the whole job when set: refused, nothing is left.
+		if json.Unmarshal(job.Target, &single) != nil || refused[single] {
+			return adm, refuseAll()
+		}
+	}
+	kept := make([]string, 0, len(job.Targets))
+	for _, t := range job.Targets {
+		if !refused[t] {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) == 0 && single == "" {
+		return adm, refuseAll()
+	}
+	raw, err := json.Marshal(kept)
+	if err != nil {
+		return adm, refuseAll()
+	}
+	fields["targets"] = raw
+	payload, err := json.Marshal(fields)
+	if err != nil {
+		return adm, refuseAll()
+	}
+	cmd.Payload = payload
+	return adm, nil
+}
+
+// admitJob applies the job-wide rules of the local policy to cmd and
+// returns its targets (none to check without a policy).
+func (lp *LocalPolicy) admitJob(cmd *Command) ([]string, error) {
+	if why := lp.killSwitchReason(); why != "" {
+		return nil, refuse("kill_switch", "%s", why)
+	}
+	if !lp.Present() || cmd == nil {
+		return nil, nil
+	}
+	if !lp.AllowsCheck(cmd.Type) {
+		return nil, refuse("checks.allow", "%q jobs are not allowed on this sensor", cmd.Type)
+	}
+	var job policyJob
+	if len(cmd.Payload) > 0 {
+		if err := json.Unmarshal(cmd.Payload, &job); err != nil {
+			return nil, refuse("payload", "the job payload cannot be read for the policy check: %v", err)
+		}
+	}
+	tool := job.tool(cmd.Type)
+	if lp.tools != nil {
+		switch {
+		case tool != "" && !lp.AllowsTool(tool):
+			return nil, refuse("tools.allow", "%s is not allowed on this sensor", tool)
+		case tool == "" && (cmd.Type == "scan" || cmd.Type == "collect"):
+			return nil, refuse("tools.allow", "the job names no tool")
+		}
+	}
+	if len(job.CustomTemplates) > 0 && !lp.AllowsCustomTemplates() {
+		return nil, refuse("allow_custom_templates", "the job carries %d custom template(s); this sensor's policy does not allow platform-supplied templates", len(job.CustomTemplates))
+	}
+	// The executor turns callbacks on only for a boolean true; so does this.
+	if v, ok := job.Config["allow_interactsh"].(bool); ok && v && !lp.AllowsInteractsh() {
+		return nil, refuse("allow_interactsh", "the job asks for out-of-band callbacks (interactsh); this sensor's policy does not allow them")
+	}
+	// A port list the job hands its tool as a setting (api RFC-038, e.g.
+	// naabu's "ports") must lie inside ports.allow too.
+	if v, ok := job.Config["ports"]; ok && lp.ports != nil {
+		if err := lp.checkPortSetting(v); err != nil {
+			return nil, err
+		}
+	}
+	targets, err := job.targets()
+	if err != nil {
+		return nil, refuse("payload", "%v", err)
+	}
+	if len(targets) > MaxScanTargets {
+		return nil, refuse("targets", "%d targets, more than the %d allowed per job", len(targets), MaxScanTargets)
+	}
+	return targets, nil
 }
 
 // CommandWarnings are what the sensor logs about cmd when no policy
@@ -216,7 +334,7 @@ func (lp *LocalPolicy) CheckTarget(ctx context.Context, target string) error {
 	case strings.Contains(t, "://"):
 		u, err := url.Parse(t)
 		if err != nil || u.Hostname() == "" {
-			return refuse("targets", "%q is not a URL with a host", t)
+			return markTarget(RefusedTargetInvalid, refuse("targets", "%q is not a URL with a host", t))
 		}
 		host = u.Hostname()
 		p, err := urlPort(u)
@@ -233,8 +351,11 @@ func (lp *LocalPolicy) CheckTarget(ctx context.Context, target string) error {
 		var err error
 		host, port, err = splitNetworkTarget(t)
 		if err != nil {
-			return refuse("targets", "%q: %v", t, err)
+			return markTarget(RefusedTargetInvalid, refuse("targets", "%q: %v", t, err))
 		}
+	}
+	if isWildcardHost(host) {
+		return markTarget(RefusedTargetWildcard, refuse("targets", "%q is a wildcard pattern, not a host the policy can check", t))
 	}
 	if port != 0 {
 		if err := lp.checkPort(port); err != nil {
@@ -405,7 +526,7 @@ func (lp *LocalPolicy) checkHost(ctx context.Context, host string, failClosed bo
 	ips, err := lp.resolve(ctx, name)
 	if err != nil || len(ips) == 0 {
 		if failClosed {
-			return nil, refuse("targets", "cannot resolve %s (an address the policy cannot check is refused)", name)
+			return nil, markTarget(RefusedTargetUnresolvable, refuse("targets", "cannot resolve %s (an address the policy cannot check is refused)", name))
 		}
 		// An unresolvable dotless name is an image reference ("alpine"),
 		// not a host: it reaches no target network.

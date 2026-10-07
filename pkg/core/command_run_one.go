@@ -25,7 +25,7 @@ func (p *CommandPoller) RunClaimed(ctx context.Context, cmd *Command) error {
 		return fmt.Errorf("%w: no command", ErrNotRun)
 	}
 	notRun := func(reason string) error {
-		p.release(cmd.ID, reason)
+		p.handBack(cmd.ID, reason)
 		return fmt.Errorf("%w: %s", ErrNotRun, reason)
 	}
 	switch {

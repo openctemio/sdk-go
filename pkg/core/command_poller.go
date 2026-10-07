@@ -275,6 +275,11 @@ type CommandPoller struct {
 	// switch is engaged.
 	local  atomic.Pointer[LocalPolicy]
 	killed atomic.Bool
+
+	// logSink takes the poller's own lines about each command
+	// (SetCommandLogSink); handBacks dedupes its hand-back lines.
+	logSink   CommandLogSink
+	handBacks handBackNotes
 }
 
 // errKilledByLocalPolicy cancels running commands when the sensor owner
@@ -286,10 +291,11 @@ var errKilledByLocalPolicy = errors.New("stopped by the local kill switch")
 const KillSwitchCheckInterval = 2 * time.Second
 
 // SetLocalPolicy makes the poller enforce the sensor-local policy (api
-// RFC-040 §5.7): every command passes LocalPolicy.AdmitCommand after it is
-// claimed and before any executor or tool sees it, and a refused command is
-// reported failed with "refused by local policy: <rule>: …", never run and
-// never dropped silently. While the kill switch is engaged the poller
+// RFC-040 §5.7): every command passes LocalPolicy.AdmitCommandTargets
+// after it is claimed and before any executor or tool sees it. A scan
+// target it refuses is removed from the job and listed in the result
+// (MetaRefusedTargets); a refused command is reported failed with "refused
+// by local policy: <rule>: …", never run and never dropped silently. While the kill switch is engaged the poller
 // claims nothing and stops the commands it runs (reported failed). It is
 // checked before the gate of SetCommandGate, so no platform policy can
 // widen it. Call before Start.
@@ -588,7 +594,7 @@ func (p *CommandPoller) dropClaimed(cmd *Command, reason string) {
 	if cmd == nil || !cmd.Claimed {
 		return
 	}
-	go p.release(cmd.ID, reason)
+	go p.handBack(cmd.ID, reason)
 }
 
 // release hands a command back to the platform (best-effort).
@@ -884,7 +890,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 
 	// Stopping (or canceled) before it started: hand it back unstarted.
 	if p.draining.Load() || ctx.Err() != nil {
-		p.release(cmd.ID, releaseReason(ctx, ReleaseReasonDraining))
+		p.handBack(cmd.ID, releaseReason(ctx, ReleaseReasonDraining))
 		return
 	}
 
@@ -909,13 +915,24 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 		return
 	}
 	p.queue.markStarted(cmd.ID)
+	p.clog(ctx, cmd.ID, "info", "Received by the sensor", map[string]any{"type": cmd.Type})
 
 	// The sensor-local policy first: nothing the platform says (its tool
-	// policy below, the payload) can widen it.
+	// policy below, the payload) can widen it. A scan target it refuses or
+	// cannot check is removed from the job (and listed in the result); the
+	// job is refused when nothing is left.
+	var admission *CommandAdmission
 	if lp := p.local.Load(); lp != nil {
-		if err := lp.AdmitCommand(ctx, cmd); err != nil {
+		adm, err := lp.AdmitCommandTargets(ctx, cmd)
+		p.logAdmission(ctx, cmd, adm, err)
+		if err != nil {
+			p.finishLog(ctx, cmd.ID)
 			p.refuseCommand(ctx, cmd, err)
 			return
+		}
+		if adm.Partial() {
+			fmt.Printf("[command-poller] Command %s: %s; running on the rest\n", cmd.ID, refusedSummary(adm.Refused))
+			admission = adm
 		}
 		for _, w := range lp.CommandWarnings(cmd) {
 			fmt.Printf("[command-poller] Warning: %s\n", w)
@@ -925,6 +942,8 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 	if g := p.gate.Load(); g != nil {
 		if err := (*g)(cmd); err != nil {
 			fmt.Printf("[command-poller] Refusing command %s: %v\n", cmd.ID, err)
+			p.clog(ctx, cmd.ID, "error", "Refused before running: "+err.Error(), refusalFields(err))
+			p.finishLog(ctx, cmd.ID)
 			if rerr := p.client.ReportCommandResult(ctx, cmd.ID, &CommandResult{
 				Status: "failed", Error: err.Error(), CompletedAt: time.Now(), Refusal: RefusalOf(err),
 			}); rerr != nil && p.verbose.Load() {
@@ -933,6 +952,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 			return
 		}
 	}
+	p.clog(ctx, cmd.ID, "info", "Started", nil)
 
 	// Run the executor with panic recovery — a panic in a tool or parser would
 	// otherwise take down the whole sensor process, and the server would wait for
@@ -950,14 +970,17 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 
 	// Stopped by the local kill switch: reported failed with the reason.
 	if errors.Is(context.Cause(ctx), errKilledByLocalPolicy) {
-		p.refuseCommand(context.WithoutCancel(ctx), cmd, refuse("kill_switch", "stopped by the sensor owner while running"))
+		kerr := refuse("kill_switch", "stopped by the sensor owner while running")
+		p.clog(context.WithoutCancel(ctx), cmd.ID, "error", "Stopped: "+kerr.Error(), refusalFields(kerr))
+		p.finishLog(ctx, cmd.ID)
+		p.refuseCommand(context.WithoutCancel(ctx), cmd, kerr)
 		return
 	}
 	// Canceled by the platform or by a drain: release it (the platform
 	// re-queues it at once, or it is already canceled there) instead of
 	// reporting a failure that is not the command's.
 	if cause := context.Cause(ctx); errors.Is(cause, errCanceledByPlatform) || errors.Is(cause, errDrained) {
-		p.release(cmd.ID, releaseReason(ctx, ReleaseReasonShutdown))
+		p.handBack(cmd.ID, releaseReason(ctx, ReleaseReasonShutdown))
 		return
 	}
 
@@ -991,6 +1014,20 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 			fmt.Printf("[command-poller] Command %s completed (findings: %d)\n", cmd.ID, reportResult.FindingsCount)
 		}
 	}
+	// Targets refused at admission and by the executor's own check: the
+	// command completed on the rest (partial), and the result says which
+	// targets were skipped and why.
+	if admission.Partial() {
+		refused := append(append([]RefusedTarget(nil), admission.Refused...), refusedTargetsFrom(reportResult.Metadata)...)
+		if reportResult.Metadata == nil {
+			reportResult.Metadata = map[string]any{}
+		}
+		for k, v := range RefusedTargetsMetadata(refused) {
+			reportResult.Metadata[k] = v
+		}
+	}
+	p.logOutcome(ctx, cmd, reportResult, err, time.Since(startTime))
+	p.finishLog(ctx, cmd.ID)
 
 	// Report result back to server. A client with an outbox queues it behind
 	// the command's results, so the platform sees the command complete only
@@ -1248,7 +1285,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// SECURITY: targets are server-supplied. Validate every one before any
 	// scanner sees it: SSRF blocklist for network targets, confinement for
 	// filesystem targets, and no leading '-' (flag injection).
-	targets, err := e.validateScanTargets(ctx, &payload)
+	targets, refusedTargets, err := e.validateScanTargets(ctx, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -1383,6 +1420,12 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	if len(ignoredConfig) > 0 {
 		result.Metadata["ignored_config_keys"] = ignoredConfig
 	}
+	// Targets the scan-target policy refused here (a name that no longer
+	// resolves, or now resolves to a denied address, since admission): the
+	// scanner never saw them; the command completes as partial.
+	for k, v := range RefusedTargetsMetadata(refusedTargets) {
+		result.Metadata[k] = v
+	}
 
 	// Parse and push results if pusher is configured. Empty (or whitespace-
 	// only) output is a scan that found nothing; anything else must be read by
@@ -1427,19 +1470,23 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 }
 
 // validateScanTargets returns the command's targets, each validated by the
-// scan-target policy. Target is the job when set (single-target and older
-// payloads); otherwise Targets is. A refused target fails the whole command,
-// naming it: scanning the rest would silently drop it from the results.
-func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payload *ScanCommandPayload) ([]string, error) {
+// scan-target policy, and the targets it refused. Target is the job when
+// set (single-target and older payloads); otherwise Targets is. A refused
+// target is left out and listed with its reason (the command completes as
+// partial and says so in its result); when every target is refused the
+// command fails, naming them. This runs right before the scanner starts,
+// after the poller's admission: a name that resolves to a denied address
+// by now (DNS rebinding) is refused here.
+func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payload *ScanCommandPayload) ([]string, []RefusedTarget, error) {
 	raw := payload.Targets
 	if payload.Target != "" {
 		raw = []string{payload.Target}
 	}
 	if len(raw) == 0 {
-		return nil, fmt.Errorf("invalid scan target: scan target is required")
+		return nil, nil, fmt.Errorf("invalid scan target: scan target is required")
 	}
 	if len(raw) > MaxScanTargets {
-		return nil, fmt.Errorf("invalid scan target: %d targets, more than the %d allowed per command", len(raw), MaxScanTargets)
+		return nil, nil, fmt.Errorf("invalid scan target: %d targets, more than the %d allowed per command", len(raw), MaxScanTargets)
 	}
 
 	policy := e.ScanTargetPolicy()
@@ -1450,11 +1497,18 @@ func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payloa
 	}
 	seen := make(map[string]bool, len(raw))
 	out := make([]string, 0, len(raw))
-	var refused []string
+	var (
+		refused []string
+		details []RefusedTarget
+	)
 	for _, t := range raw {
 		v, err := policy.Validate(ctx, t)
 		if err != nil {
+			if cerr := ctx.Err(); cerr != nil {
+				return nil, nil, cerr
+			}
 			refused = append(refused, fmt.Sprintf("%q: %v", t, err))
+			details = append(details, refusedTargetOf(t, err))
 			continue
 		}
 		if !seen[v] {
@@ -1462,18 +1516,29 @@ func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payloa
 			out = append(out, v)
 		}
 	}
-	if len(refused) > 0 {
+	if len(out) == 0 {
 		listed := refused
 		if len(listed) > maxRefusedListed {
 			listed = append(listed[:maxRefusedListed:maxRefusedListed], fmt.Sprintf("and %d more", len(refused)-maxRefusedListed))
 		}
-		if len(raw) == 1 {
-			return nil, fmt.Errorf("invalid scan target: %s", strings.Join(listed, "; "))
+		err := fmt.Errorf("invalid scan target: %s", strings.Join(listed, "; "))
+		if len(raw) > 1 {
+			err = fmt.Errorf("invalid scan target: %d of %d targets refused: %s", len(refused), len(raw), strings.Join(listed, "; "))
 		}
-		return nil, fmt.Errorf("invalid scan target: %d of %d targets refused: %s", len(refused), len(raw), strings.Join(listed, "; "))
+		return nil, details, &refusedTargetsError{err: err, refused: details}
 	}
-	return out, nil
+	return out, details, nil
 }
+
+// refusedTargetsError is the error of a command whose every target was
+// refused: the poller lists them in the failed result.
+type refusedTargetsError struct {
+	err     error
+	refused []RefusedTarget
+}
+
+func (e *refusedTargetsError) Error() string { return e.err.Error() }
+func (e *refusedTargetsError) Unwrap() error { return e.err }
 
 // validateScanArgValue rejects server-supplied values that end up as scanner
 // argv entries and could be parsed as flags or break argument framing.

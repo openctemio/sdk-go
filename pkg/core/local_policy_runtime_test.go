@@ -183,7 +183,7 @@ func TestDefaultCommandExecutor_LocalPolicyCannotBeLoosened(t *testing.T) {
 		"templates": {Scanner: "nuclei", Target: "203.0.113.9", CustomTemplates: []EmbeddedTemplate{{ID: "t", Name: "t.yaml",
 			TemplateType: "nuclei", Content: base64.StdEncoding.EncodeToString([]byte("id: t"))}}},
 		"outside range":  {Scanner: "nuclei", Target: "192.0.2.1"},
-		"denied range":   {Scanner: "nuclei", Targets: []string{"203.0.113.9", "10.20.5.1"}},
+		"denied range":   {Scanner: "nuclei", Targets: []string{"10.20.5.1", "10.20.5.2"}},
 		"denied name":    {Scanner: "nuclei", Target: "https://secret.corp.example.com/"},
 		"rebinding name": {Scanner: "nuclei", Target: "rebind.corp.example.com"},
 		"port":           {Scanner: "nuclei", Target: "https://203.0.113.9:9443/"},

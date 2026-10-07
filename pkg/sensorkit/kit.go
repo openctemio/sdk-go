@@ -332,10 +332,9 @@ type Kit struct {
 	localMu  sync.Mutex
 	executor atomic.Pointer[core.DefaultCommandExecutor]
 	poller   atomic.Pointer[core.CommandPoller]
-	// logs ships per-command logs to the platform (set by Run); logMW
-	// sends a command's last lines before its result.
-	logs  atomic.Pointer[logShipper]
-	logMW func(core.CommandExecutor) core.CommandExecutor
+	// logs ships per-command logs to the platform (set by Run); the
+	// poller sends a command's last lines before its result.
+	logs atomic.Pointer[logShipper]
 
 	kitTools
 }
@@ -868,7 +867,7 @@ func (k *Kit) Run(ctx context.Context) error {
 
 	var poller *core.CommandPoller
 	if k.s.commands && k.client != nil {
-		k.logMW = k.startLogShipper(ctx)
+		k.startLogShipper(ctx)
 		poller = k.newPoller(scanners, doorbell)
 		k.ReportCheck(core.ConfigCheck{ID: CheckCommandPoller, Status: core.CheckPass, Code: "running"})
 	}
@@ -1088,11 +1087,6 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 			types = appendType(types, t)
 		}
 	}
-	if k.logMW != nil {
-		// Outermost: a command's last log lines are queued after every
-		// layer ran and before its result is reported.
-		exec = k.logMW(exec)
-	}
 
 	// Slots follow what this sensor may use (cgroup-aware CPU and memory)
 	// and its tools' learned cost, at most the operator's cap.
@@ -1135,6 +1129,13 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// The sensor-local policy decides first: admission before any executor
 	// or tool, and the local kill switch (api RFC-040 §5.7).
 	poller.SetLocalPolicy(k.LocalPolicy())
+	if ship := k.logs.Load(); ship != nil {
+		// The poller's own lines (received, the policy check and its
+		// refused targets, the outcome, a hand-back) go to the command's
+		// log; the poller sends a command's last lines after every
+		// executor layer ran and before its result is reported.
+		poller.SetCommandLogSink(ship)
+	}
 	k.poller.Store(poller)
 
 	if p := k.opts.ScanTargetPolicy; p != nil && len(p.AllowedRoots) > 0 {
