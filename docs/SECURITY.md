@@ -299,6 +299,21 @@ exec.SetScanTargetPolicy(&core.ScanTargetPolicy{
 | `OPENCTEM_SDK_SCAN_ROOTS` | Allowed roots (`:`-separated) for the default policy |
 | `OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS=1` | Allow RFC1918/ULA targets (`SENSOR_ALLOW_PRIVATE_TARGETS=1` — or its pre-rename name `AGENT_ALLOW_PRIVATE_TARGETS=1`, read with a deprecation warning — and `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1` are honored too; setting the sensor and agent names to different values refuses every target) |
 
+#### Domain patterns in `targets.allow` and `targets.deny`
+
+| Entry | Covers |
+|---|---|
+| `x` | exactly `x` |
+| `*.x` | `x` and every name below it, at any depth |
+
+This is the platform's reading of a scope pattern (api RFC-054 §4.1), so a
+sensor allow list and a platform scope entry cover the same names. The deny
+list uses the same matcher: `*.x` in `targets.deny` also denies `x`. Names
+are compared lower-case, without one trailing dot, in their IDNA ASCII form;
+`*.x` never matches a name that only ends with the same letters
+(`notx`, `x.evil.net`). A wildcard of a single label (`*.com`) is refused
+when the policy loads.
+
 #### Refused targets: per target, never the whole job
 
 A scan job's target that a policy refuses, or that cannot be checked, is
