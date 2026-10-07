@@ -20,6 +20,13 @@ record types it produces, its configuration schema, its permissions (network,
 credentials), its resources, its self-test fixtures and `run.argv`, the program
 to start (never a shell).
 
+A tool states which capabilities of the OpenCTEM capability taxonomy it
+implements (`implements: [{capability: scan.ports@1, params: {...}}]`, see
+[docs/capabilities.md in ctis](https://github.com/openctemio/ctis/blob/main/docs/capabilities.md)).
+The capability carries the phase, the tier floor, the input and output types
+and the required output; the tool maps the capability's standard params to its
+own config keys.
+
 The runtime trusts the **file**, never the program. Permissions are known and
 enforced before any of your code runs. Your program must describe itself
 exactly as the file does (the `run` section aside), or it is refused.
@@ -78,6 +85,13 @@ ignored, except during the handshake. A newer runtime may send more.
 - **Logs** (`{"type":"log","level":"info","msg":"...","fields":{...}}`) are
   redacted, rate-limited and capped. They go to the sensor's log and to the
   task's log on the platform. Never log a secret on purpose.
+- **Capability tasks** (`task.capability` present): the runtime already
+  mapped the capability's standard params onto your config keys, refused a
+  value you do not support, capped your `safety.rate_param` by the sensor's
+  local policy, and refused the task when your minimum tier is above the job's
+  `max_tier`. Read your config as usual. After the task the output is checked
+  against the capability's required output; records that miss it are kept, the
+  task ends `partial` and the platform checks them again.
 - **Retest tasks** (`task.retest` present, only if the manifest declares
   `retest: true`): answer one `verdict` per item (`still_present`, `fixed` or
   `unverifiable`) and emit no records. `fixed` counts only for a target you
