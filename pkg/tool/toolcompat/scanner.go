@@ -77,7 +77,12 @@ var (
 	_ core.MultiTargetScanner     = (*toolScanner)(nil)
 	_ core.ToolContractProvider   = (*toolScanner)(nil)
 	_ core.SettingsSchemaProvider = (*toolScanner)(nil)
+	_ core.CapabilityScanner      = (*toolScanner)(nil)
 )
+
+// TakesCapabilityJobs: a tool that implements capabilities runs
+// capability jobs (the runtime maps their params, tool.Manifest.ApplyParams).
+func (s *toolScanner) TakesCapabilityJobs() bool { return len(s.m.Implements) > 0 }
 
 func (s *toolScanner) legacy() core.Scanner {
 	if b, ok := s.t.(ScannerBridge); ok {
@@ -151,7 +156,16 @@ func (s *toolScanner) program() string {
 	return prog
 }
 
-func (s *toolScanner) ToolContract() *core.ToolContract { return s.m.Contract() }
+// ToolContract is the tool's contract with its origin: an adapter the
+// operator installed (a run section) or a tool compiled into the sensor.
+func (s *toolScanner) ToolContract() *core.ToolContract {
+	c := s.m.Contract()
+	c.Origin = core.ToolOriginBuiltin
+	if s.m.Run != nil {
+		c.Origin = core.ToolOriginAdapter
+	}
+	return c
+}
 
 func (s *toolScanner) SettingsSchema() *core.SettingsSchema {
 	if schema, err := s.m.ConfigSchema(); err == nil && schema != nil {
@@ -175,6 +189,9 @@ func (s *toolScanner) ScanTargets(ctx context.Context, targets []string, opts *c
 	task := tool.Task{Targets: make([]tool.Target, len(targets))}
 	for i, v := range targets {
 		task.Targets[i] = tool.Target{Ref: fmt.Sprintf("t%d", i), Value: v}
+	}
+	if opts != nil {
+		task.Capability, task.Params, task.MaxTier = opts.Capability, opts.Params, tool.Tier(opts.MaxTier)
 	}
 	if opts != nil && opts.Settings != nil && len(s.m.Config) > 0 {
 		raw, err := json.Marshal(opts.Settings.Values())

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/ctis/capability"
 	"github.com/openctemio/sdk-go/pkg/resource"
 )
 
@@ -92,7 +94,27 @@ type ToolContract struct {
 	Implements []string `json:"implements,omitempty"`
 	// Batch: the tool takes a list of targets per task.
 	Batch bool `json:"batch,omitempty"`
+	// Origin is where the tool comes from: ToolOriginBuiltin (compiled
+	// into the signed sensor binary) or ToolOriginAdapter (installed by
+	// the operator in an adapter directory). The platform derives the
+	// tool's trust level from it; it never trusts a tool's own claim.
+	Origin string `json:"origin,omitempty"`
+	// Descriptor is the tool's full manifest in canonical JSON (its
+	// SHA-256 is Digest), so the platform can plan with every fact of the
+	// contract. It travels in the manifest only, which is registered when
+	// it changes; heartbeats carry the manifest digest. Absent when larger
+	// than MaxToolDescriptorBytes.
+	Descriptor json.RawMessage `json:"descriptor,omitempty"`
 }
+
+// Tool origins.
+const (
+	ToolOriginBuiltin = "builtin"
+	ToolOriginAdapter = "adapter"
+)
+
+// MaxToolDescriptorBytes bounds a descriptor in the manifest.
+const MaxToolDescriptorBytes = 64 << 10
 
 // ToolContractProvider is a scanner ported to the tool contract: the
 // registry reports its contract with the tool.
@@ -298,6 +320,8 @@ func (r *ToolRegistry) RegisterScanner(s Scanner, extraCaps ...string) error {
 	}
 	if p, ok := s.(ToolContractProvider); ok {
 		spec.Contract = p.ToolContract()
+		// A tool on the contract serves the capabilities it implements.
+		spec.Capabilities = appendUnique(spec.Capabilities, spec.Contract.capabilityIDs()...)
 	}
 	return r.Register(spec)
 }
@@ -595,5 +619,23 @@ func (c *ToolContract) clone() *ToolContract {
 	out := *c
 	out.Consumes = slices.Clone(c.Consumes)
 	out.Produces = slices.Clone(c.Produces)
+	out.Implements = slices.Clone(c.Implements)
+	out.Descriptor = slices.Clone(c.Descriptor)
 	return &out
+}
+
+// capabilityIDs are the capability ids (without the major) of a contract's
+// implemented references: what the sensor reports as the tool's
+// capabilities, so the platform routes the tool by capability.
+func (c *ToolContract) capabilityIDs() []string {
+	if c == nil {
+		return nil
+	}
+	var out []string
+	for _, ref := range c.Implements {
+		if id, _, ok := capability.ParseRef(ref); ok && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }

@@ -193,11 +193,15 @@ func (m Manifest) Contract() *core.ToolContract {
 	for _, im := range m.Implements {
 		implements = append(implements, im.Capability)
 	}
-	return &core.ToolContract{
+	c := &core.ToolContract{
 		APIVersion: m.APIVersion, Digest: m.Digest(), Version: m.Version, Class: string(m.Class), Tier: string(m.Tier),
 		Network: string(m.Permissions.Network), Consumes: slices.Clone(m.Consumes), Produces: slices.Clone(m.Produces),
 		Implements: implements, Batch: m.Batches(),
 	}
+	if b, err := m.Canonical(); err == nil && len(b) <= core.MaxToolDescriptorBytes {
+		c.Descriptor = b
+	}
+	return c
 }
 
 // Produce kinds.

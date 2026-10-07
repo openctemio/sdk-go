@@ -106,6 +106,22 @@ type ScanCommandPayload struct {
 	// CustomTemplates (TemplateManifest in a DSSE envelope). Custom
 	// templates run only when it verifies (see TemplateVerifier.Verify).
 	CustomTemplatesEnvelope *SignedEnvelope `json:"custom_templates_envelope,omitempty"`
+	// Capability is the capability the job runs ("scan.ports@1"), sent to
+	// a tool that reported a contract. Params are its standard params as
+	// the workflow set them; the tool runtime maps them onto the tool's
+	// config keys. MaxTier is the grant's tier ceiling.
+	Capability string                     `json:"capability,omitempty"`
+	Params     map[string]json.RawMessage `json:"params,omitempty"`
+	MaxTier    string                     `json:"max_tier,omitempty"`
+}
+
+// CapabilityScanner is a scanner that runs capability jobs: it takes the
+// job's capability, standard params and tier ceiling (ScanOptions) and
+// applies the tool contract to them. A job that carries them for any other
+// scanner fails: they would have no effect.
+type CapabilityScanner interface {
+	Scanner
+	TakesCapabilityJobs() bool
 }
 
 // EmbeddedTemplate is a custom template embedded in scan command payload.
@@ -1299,14 +1315,9 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		return nil, fmt.Errorf("scanner %s takes one target per job; the command carries %d", payload.Scanner, len(targets))
 	}
 
-	if e.verbose.Load() {
-		fmt.Printf("[executor] Running scanner %s on %s\n", payload.Scanner, strings.Join(targets, ", "))
-	}
-
-	// Create scan options
-	opts := &ScanOptions{
-		TargetDir: target,
-		Verbose:   e.verbose.Load(),
+	opts, err := e.newScanOptions(target, targets, scanner, &payload)
+	if err != nil {
+		return nil, err
 	}
 
 	local := e.local.Load()

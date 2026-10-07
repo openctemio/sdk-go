@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
 
@@ -103,3 +104,52 @@ type manifestOnly struct{ m tool.Manifest }
 
 func (t manifestOnly) Manifest() tool.Manifest         { return t.m }
 func (manifestOnly) Run(tool.Context, tool.Task) error { return nil }
+
+// capTool implements scan.ports@1; the standard param top_n reaches it as
+// its key top.
+var capTool = tool.Define("cap-ports", "1.0.0").
+	ImplementsWith(tool.Implementation{Capability: "scan.ports@1", Params: map[string]tool.ParamMapping{"top_n": {Key: "top"}}}).
+	Targets("domain").Produces("asset:open_port").
+	Params(tool.IntParam("top").Default(10).Range(1, 65535)).
+	Manifest(func(m *tool.Manifest) { m.Permissions.Network = tool.NetNone }).
+	BatchTargets(10).
+	Handle(func(ctx tool.Context, job *tool.Job, emit tool.Emit) error {
+		for _, t := range job.Targets() {
+			a := ctis.Asset{Type: "open_port", Value: t.Value + ":443",
+				Properties: ctis.Properties{"host": t.Value, "port": 443, "protocol": "tcp", "top": job.Param("top").Int()}}
+			if err := emit.CTIS().Asset(a); err != nil {
+				return err
+			}
+			ctx.TargetDone(t)
+		}
+		return nil
+	}).MustBuild()
+
+func TestCapabilityJobReachesTheTool(t *testing.T) {
+	s := AsScanner(capTool, ScannerConfig{Host: host(t)})
+	if !s.(core.CapabilityScanner).TakesCapabilityJobs() || AsScanner(plain, ScannerConfig{Host: host(t)}).(core.CapabilityScanner).TakesCapabilityJobs() {
+		t.Fatal("TakesCapabilityJobs")
+	}
+	c := s.(core.ToolContractProvider).ToolContract()
+	if c.Origin != core.ToolOriginBuiltin || len(c.Descriptor) == 0 || c.Implements[0] != "scan.ports@1" {
+		t.Fatalf("contract %+v", c)
+	}
+	res, err := s.(core.MultiTargetScanner).ScanTargets(context.Background(), []string{"a.example"},
+		&core.ScanOptions{Capability: "scan.ports@1", Params: map[string]json.RawMessage{"top_n": json.RawMessage("5")}, MaxTier: "T1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(res.RawOutput), `"top":5`) || !strings.Contains(string(res.RawOutput), `"capability":"scan.ports@1"`) {
+		t.Fatalf("output %s", res.RawOutput)
+	}
+	// SECURITY: a tier ceiling below the tool fails the scan.
+	if _, err := s.Scan(context.Background(), "a.example", &core.ScanOptions{Capability: "scan.ports@1", MaxTier: "T0"}); err == nil || !strings.Contains(err.Error(), "allows at most T0") {
+		t.Fatalf("tier ceiling: %v", err)
+	}
+	// An operator-installed tool reports its origin as adapter.
+	m := capTool.Manifest()
+	m.Run = &tool.RunSpec{Argv: []string{"/bin/true"}}
+	if AsScanner(manifestOnly{m}, ScannerConfig{Host: host(t)}).(core.ToolContractProvider).ToolContract().Origin != core.ToolOriginAdapter {
+		t.Fatal("adapter origin")
+	}
+}
