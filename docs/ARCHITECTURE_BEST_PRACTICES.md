@@ -1,6 +1,6 @@
 # OpenCTEM SDK - Architecture Best Practices
 
-> Since v0.17.0 the tool wrappers (`pkg/scanners/*` except `tenable`),
+> Since v0.17.0 the tool wrappers (`pkg/scanners/*`),
 > `pkg/handler` and `pkg/strategy` are no longer in the SDK: they live in
 > `github.com/openctemio/sensor/internal/...`. The patterns below describe
 > that code; the import paths in the examples are the old SDK ones.

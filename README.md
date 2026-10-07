@@ -247,7 +247,6 @@ it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
 | Package | Description |
 |---------|-------------|
 | `pkg/client` | API client for OpenCTEM API |
-| `pkg/scanners/tenable` | Nessus API client and `.nessus` converter (the other tool wrappers live in the sensor) |
 | `pkg/sensorkit` | The sensor runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain |
 | `pkg/core` | Core types and interfaces |
 | `pkg/errors` | Error types and handling |
