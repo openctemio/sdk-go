@@ -71,7 +71,7 @@ note in CHANGELOG.md):
 | `pkg/errors` | categorized tool errors in the tool contract |
 | `pkg/health`, `pkg/metrics`, `pkg/options` | preflight checks, the config report and the settings registry in `sensorkit` |
 | `pkg/enrichers/{epss,kev}` | the platform enriches findings itself |
-| `pkg/connectors`, `pkg/connectors/github`, `pkg/providers/github`, `pkg/scanners/tenable` | the connectors module (api RFC-049) |
+| `pkg/connectors`, `pkg/connectors/github`, `pkg/providers/github` | the connectors module (api RFC-049) |
 
 **Moved to the sensor** (removed in v0.17.0, deprecated in v0.16.0): the
 tool wrappers `pkg/scanners` (the registry),
@@ -81,6 +81,10 @@ and the CI-mode `pkg/handler` and `pkg/strategy`. Their code lives in
 `github.com/openctemio/sensor/internal/{scanners,recon,handler,strategy}`.
 Tool wrappers change whenever a tool does; they belong to the program that
 ships the tool binaries.
+
+**Removed:** `pkg/scanners/tenable` (a Nessus REST client and `.nessus`
+converter with no importer). Convert `.nessus` exports with
+`github.com/openctemio/ctis/importer` (format `nessus`).
 
 `pkg/internal/*` is private.
 
