@@ -1,0 +1,20 @@
+# OpenCTEM tool checks: validate the descriptor, run the conformance kit
+# (self-tests, the capability's suites on local fixtures, the scope check,
+# parser fuzzing) and refuse a descriptor change without the right version
+# bump. Include it from .gitlab-ci.yml.
+openctem-tool:
+  image: golang:latest
+  stage: test
+  script:
+    - go install github.com/openctemio/sdk-go/cmd/openctem@latest
+    - export PATH="$PATH:$(go env GOPATH)/bin"
+    - openctem tool validate .
+    - openctem tool test --capability --scope --fuzz 30s .
+    - |
+      if [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" ]; then
+        git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        if git show "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME:tool.yaml" > /tmp/base-tool.yaml 2>/dev/null; then
+          mkdir -p /tmp/old && cp /tmp/base-tool.yaml /tmp/old/tool.yaml
+          openctem tool diff /tmp/old/tool.yaml tool.yaml
+        fi
+      fi

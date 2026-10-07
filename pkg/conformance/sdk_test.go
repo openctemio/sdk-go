@@ -17,10 +17,17 @@ import (
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/outbox"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
 func TestMain(m *testing.M) {
+	executor.RunLauncherIfRequested()
+	// The test binary is also the exec-profile tool the contract suite
+	// tests run (contract_suite_test.go).
+	if mode := os.Getenv(fakeToolEnv); mode != "" {
+		os.Exit(fakeTool(mode, os.Args[1:]))
+	}
 	// The fake listens on 127.0.0.1; the SDK refuses loopback by default.
 	httpsec.AllowLoopback = true
 	os.Exit(m.Run())

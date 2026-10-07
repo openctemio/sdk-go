@@ -14,6 +14,7 @@ OpenCTEM SDK provides Go packages for:
 - `pkg/ctis`: the CTIS result types
 - `pkg/httpsec`: SSRF-safe HTTP clients
 - `pkg/conformance`: a fake platform and the sensor conformance suite
+- `cmd/openctem`: `openctem tool init|validate|run|test|diff|describe`, to scaffold a tool from a capability and check it with the conformance kit ([docs/tools/cli.md](docs/tools/cli.md))
 
 The scanner wrappers (Semgrep, CodeQL, Trivy, Betterleaks, Nuclei and the recon
 tools) live in the sensor (`github.com/openctemio/sensor`), not in the SDK.
