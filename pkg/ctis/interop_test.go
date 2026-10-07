@@ -49,10 +49,10 @@ func TestInteropMembersReExported(t *testing.T) {
 // decodes and validates, 1.3 included.
 func TestSupportedVersionsReExported(t *testing.T) {
 	vs := SupportedSchemaVersions()
-	if len(vs) == 0 || vs[len(vs)-1] != SchemaVersion || SchemaVersion != "1.4" {
+	if len(vs) == 0 || vs[len(vs)-1] != SchemaVersion || SchemaVersion != "1.5" {
 		t.Fatalf("supported %v, current %s", vs, SchemaVersion)
 	}
-	if !IsSupportedVersion("1.3") || IsSupportedVersion("1.5") {
+	if !IsSupportedVersion("1.3") || IsSupportedVersion("1.6") {
 		t.Fatal("IsSupportedVersion")
 	}
 	var r Report
