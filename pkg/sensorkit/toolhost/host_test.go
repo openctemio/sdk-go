@@ -63,7 +63,7 @@ var echoTool = tool.New(tool.Manifest{
 
 func TestMain(m *testing.M) {
 	executor.RunLauncherIfRequested()
-	adapter.Dispatch(echoTool, dialTool, retestTool)
+	adapter.Dispatch(echoTool, dialTool, retestTool, contractTool)
 	if mode := os.Getenv("TOOLHOST_HOSTILE"); mode != "" {
 		os.Exit(hostile(mode))
 	}

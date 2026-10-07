@@ -142,7 +142,11 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		}
 		out.Targets = append(out.Targets, to)
 	}
+	p.checkContract(out)
 	p.addRefused(out)
+	if p.rateLine != nil {
+		out.Logs = append(out.Logs, *p.rateLine)
+	}
 	out.Duration = time.Since(start)
 	h.stamp(out, m, p.task, "exec profile")
 	return out, nil

@@ -34,6 +34,17 @@ type Task struct {
 	// Retest, when not empty, makes the task a retest: the items to check
 	// again, each on one of Targets (see Retester).
 	Retest []RetestItem `json:"retest,omitempty"`
+	// Capability is the capability the task runs ("scan.ports@1"), one the
+	// tool implements. The runtime checks the output against its contract.
+	Capability string `json:"capability,omitempty"`
+	// Params are the capability's standard params as the workflow set
+	// them. The runtime maps them onto the tool's config keys
+	// (Manifest.ApplyParams) before the tool starts; the tool reads only
+	// Config and never receives Params.
+	Params map[string]json.RawMessage `json:"params,omitempty"`
+	// MaxTier is the highest tier the job allows (the ceiling of the
+	// platform grant). A tool whose MinimumTier is higher is refused.
+	MaxTier Tier `json:"max_tier,omitempty"`
 }
 
 // Target is one thing to work on.

@@ -74,6 +74,9 @@ func (p kitPolicy) CheckTarget(ctx context.Context, target string) error {
 func (p kitPolicy) CapTimeout(d time.Duration) time.Duration { return p.k.LocalPolicy().CapTimeout(d) }
 func (p kitPolicy) KillSwitchEngaged() bool                  { return p.k.LocalPolicy().KillSwitchEngaged() }
 
+// CapRate caps a tool's rate key by the policy's rate.max_rps.
+func (p kitPolicy) CapRate(requested int) int { return p.k.LocalPolicy().CapRate(requested) }
+
 func (k *Kit) toolCredentials(name string) func() map[string]string {
 	if k.opts.ToolCredentials == nil {
 		return nil
