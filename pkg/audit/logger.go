@@ -154,6 +154,9 @@ type Logger struct {
 	running bool
 	stopCh  chan struct{}
 	wg      sync.WaitGroup
+	// flushes are the flushes Log started; Stop waits for them, so none
+	// writes after the file is closed.
+	flushes sync.WaitGroup
 
 	// Callbacks for remote sending
 	remoteSender func([]Event) error
@@ -225,6 +228,9 @@ func (l *Logger) Stop() error {
 	l.mu.Unlock()
 
 	l.wg.Wait()
+	// A flush Log started may hold events taken from the buffer: let it
+	// write them before the file closes.
+	l.flushes.Wait()
 
 	// Final flush
 	l.Flush()
@@ -253,7 +259,11 @@ func (l *Logger) Log(event Event) {
 	}
 
 	if shouldFlush {
-		go l.Flush()
+		l.flushes.Add(1)
+		go func() {
+			defer l.flushes.Done()
+			l.Flush()
+		}()
 	}
 }
 
