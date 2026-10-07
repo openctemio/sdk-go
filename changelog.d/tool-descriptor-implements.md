@@ -33,3 +33,7 @@
 ### Deprecated
 
 - `capabilities` in tool.yaml and `Builder.Capabilities`: use `implements` / `Builder.Implements`. The top-level `retest` key is the older spelling of `features.retest`; a manifest may set one, not both.
+
+### Upgrade notes
+
+- ctis is now at CTIS 1.5: reports the SDK builds are stamped `"version": "1.5"`. No new 1.5 member is emitted yet, so receivers on CTIS 1.4 (any minor of major 1 is accepted) read them unchanged.
