@@ -105,14 +105,17 @@ func setupNetwork(ls launchSpec) error {
 		if rerr != nil {
 			return fmt.Errorf("resolver: %w (and %w)", err, rerr)
 		}
-		dnsAddrs = dnsAddrs[:0]
+		// 127.0.0.1:53 is always served too: a tool told to use it (a DNS
+		// tool given -r 127.0.0.1) finds the relay there.
 		for _, s := range servers {
 			if !s.IsLoopback() {
 				if err := addLoopbackAddr(s); err != nil {
 					return fmt.Errorf("resolver %s: %w", s, err)
 				}
 			}
-			dnsAddrs = append(dnsAddrs, net.JoinHostPort(s.String(), "53"))
+			if a := net.JoinHostPort(s.String(), "53"); !slices.Contains(dnsAddrs, a) {
+				dnsAddrs = append(dnsAddrs, a)
+			}
 		}
 	}
 	if ls.EgressProxy != "" {

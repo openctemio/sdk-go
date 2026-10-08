@@ -331,3 +331,120 @@ func FuzzAnswerDNS(f *testing.F) {
 		_, _ = fw.AnswerDNS(context.Background(), in)
 	})
 }
+
+// SECURITY: AnyPublic reaches the internet, never private, loopback or
+// metadata addresses, whatever a name resolves to.
+func TestAnyPublic(t *testing.T) {
+	f := New(Scope{AnyPublic: true}, Limits{})
+	f.LookupVendor = func(_ context.Context, h string) ([]netip.Addr, error) {
+		switch h {
+		case "public.example":
+			return []netip.Addr{addr("203.0.113.9")}, nil
+		case "rebind.example":
+			return []netip.Addr{addr("10.0.0.5"), addr("169.254.169.254")}, nil
+		}
+		return nil, errors.New("nxdomain")
+	}
+	ctx := context.Background()
+	if got, err := f.Resolve(ctx, "public.example", 443); err != nil || got[0] != addr("203.0.113.9") {
+		t.Fatalf("public: %v %v", got, err)
+	}
+	if _, err := f.Resolve(ctx, "8.8.8.8", 53); err != nil {
+		t.Fatalf("public address: %v", err)
+	}
+	for _, h := range []string{"rebind.example", "10.1.1.1", "127.0.0.1", "169.254.169.254", "192.168.1.1", "168.63.129.16", "100.100.100.200", "fd00:ec2::254"} {
+		if _, err := f.Resolve(ctx, h, 443); !errors.Is(err, ErrRefused) {
+			t.Errorf("%s: %v, want refused", h, err)
+		}
+	}
+}
+
+// The relay of a confined task asks over a stream (RFC 1035 framing).
+func TestServeDNSStream(t *testing.T) {
+	f := New(Scope{Names: map[string][]netip.Addr{"target.test": {addr("192.0.2.7")}}}, Limits{})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = f.ServeDNSStream(ctx, ln) }()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	for _, name := range []string{"target.test.", "other.test."} {
+		q := dnsmessage.Message{Header: dnsmessage.Header{ID: 9}, Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(name), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}}}
+		b, _ := q.Pack()
+		if _, err := c.Write(append([]byte{byte(len(b) >> 8), byte(len(b))}, b...)); err != nil {
+			t.Fatal(err)
+		}
+		var l [2]byte
+		if _, err := io.ReadFull(c, l[:]); err != nil {
+			t.Fatal(err)
+		}
+		resp := make([]byte, int(l[0])<<8|int(l[1]))
+		if _, err := io.ReadFull(c, resp); err != nil {
+			t.Fatal(err)
+		}
+		var m dnsmessage.Message
+		if err := m.Unpack(resp); err != nil {
+			t.Fatal(err)
+		}
+		switch name {
+		case "target.test.":
+			if len(m.Answers) != 1 {
+				t.Fatalf("admitted name: %+v", m)
+			}
+		default:
+			if m.RCode != dnsmessage.RCodeNameError {
+				t.Fatalf("other name: %+v", m.Header)
+			}
+		}
+	}
+}
+
+// A DNS tool gets the other record types of an admitted name from the
+// upstream resolver; an unadmitted name never reaches it, and an answer
+// to another question is not passed on.
+func TestDNSUpstreamForAdmittedNames(t *testing.T) {
+	f := New(Scope{Names: map[string][]netip.Addr{"target.test": {addr("192.0.2.7")}}}, Limits{})
+	asked := 0
+	mx := func(q []byte, id uint16, name string) []byte {
+		m := dnsmessage.Message{Header: dnsmessage.Header{ID: id, Response: true},
+			Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(name), Type: dnsmessage.TypeMX, Class: dnsmessage.ClassINET}},
+			Answers: []dnsmessage.Resource{{Header: dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName(name), Type: dnsmessage.TypeMX, Class: dnsmessage.ClassINET},
+				Body: &dnsmessage.MXResource{Pref: 10, MX: dnsmessage.MustNewName("mail.target.test.")}}}}
+		b, _ := m.Pack()
+		return b
+	}
+	var reply func(q []byte) []byte
+	f.Upstream = func(_ context.Context, q []byte) ([]byte, error) { asked++; return reply(q), nil }
+	ask := func(name string, id uint16) *dnsmessage.Message {
+		q := dnsmessage.Message{Header: dnsmessage.Header{ID: id}, Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(name), Type: dnsmessage.TypeMX, Class: dnsmessage.ClassINET}}}
+		b, _ := q.Pack()
+		out, err := f.AnswerDNS(context.Background(), b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m dnsmessage.Message
+		if err := m.Unpack(out); err != nil {
+			t.Fatal(err)
+		}
+		return &m
+	}
+	reply = func(q []byte) []byte { return mx(q, 5, "target.test.") }
+	if m := ask("target.test.", 5); len(m.Answers) != 1 || m.Answers[0].Body.(*dnsmessage.MXResource).Pref != 10 {
+		t.Fatalf("MX of an admitted name: %+v", m)
+	}
+	// SECURITY: an upstream answer to another question is dropped.
+	reply = func(q []byte) []byte { return mx(q, 99, "evil.test.") }
+	if m := ask("target.test.", 6); len(m.Answers) != 0 {
+		t.Fatalf("a mismatched upstream answer was passed on: %+v", m)
+	}
+	before := asked
+	if m := ask("exfil.example.", 7); m.RCode != dnsmessage.RCodeNameError || asked != before {
+		t.Fatalf("an unadmitted name reached upstream (asked %d->%d) or answered %+v", before, asked, m.Header)
+	}
+}

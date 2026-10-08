@@ -331,7 +331,7 @@ func (t *processTask) taskEnv() []string {
 		if t.spec.EgressProxy != "" {
 			proxy = "http://" + RelayProxyAddr
 		}
-		for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy", EnvEgressProxy} {
 			set(k, proxy)
 		}
 		set("NO_PROXY", "")

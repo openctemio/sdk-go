@@ -329,9 +329,22 @@ func (r *contractRun) scope() {
 	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
 		env[k] = proxyURL
 	}
-	if _, err := r.runEnv(task, env); err != nil {
+	out, err := r.runEnv(task, env)
+	if err != nil {
 		r.t.Errorf("Scope: %v", err)
 		return
+	}
+	// A confined task's own forwarder saw every destination, the direct
+	// ones included (they had no other way out).
+	for _, rec := range out.Egress {
+		if rec.Verdict != egress.Refused {
+			continue
+		}
+		dest := rec.Host
+		if rec.Port > 0 {
+			dest = net.JoinHostPort(rec.Host, strconv.Itoa(rec.Port))
+		}
+		r.t.Errorf("Scope: the tool asked for %s (%s), which is not a target (target %s): %s", dest, rec.Protocol, target.Value, rec.Reason)
 	}
 	if n := b.accepted(); n > 0 {
 		r.t.Errorf("Scope: the tool connected %d time(s) to %s, an address it was not given (target %s)", n, b.ln.Addr(), target.Value)

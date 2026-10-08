@@ -13,6 +13,10 @@ import (
 // --sandbox is not given: off, auto (default) or required.
 const EnvSandbox = "OPENCTEM_SANDBOX"
 
+// EnvSandboxNetwork sets network confinement of those commands: auto
+// (default), required or off (see executor.Config.ConfineNetwork).
+const EnvSandboxNetwork = "OPENCTEM_SANDBOX_NETWORK"
+
 // InstallSandbox runs every task of this process in the same process
 // sandbox a sensor uses (pkg/sensorkit/executor), so a tool that works here
 // works on a sensor: a private task directory, rlimits, no_new_privs,
@@ -28,13 +32,22 @@ func InstallSandbox(mode string, w io.Writer) error {
 	if !ok {
 		return fmt.Errorf("sandbox mode %q: use off, auto or required", mode)
 	}
-	b, err := executor.NewProcessBackend(executor.Config{Mode: m})
+	nm, ok := executor.ParseMode(strings.TrimSpace(os.Getenv(EnvSandboxNetwork)))
+	if !ok {
+		return fmt.Errorf("%s=%q: use off, auto or required", EnvSandboxNetwork, os.Getenv(EnvSandboxNetwork))
+	}
+	b, err := executor.NewProcessBackend(executor.Config{Mode: m,
+		ConfineNetwork: nm != executor.ModeOff && m != executor.ModeOff, RequireNetwork: nm == executor.ModeRequired})
 	if err != nil {
 		return err
 	}
 	executor.SetCurrent(b)
-	for _, miss := range b.Status().Missing {
+	st := b.Status()
+	for _, miss := range st.Missing {
 		_, _ = fmt.Fprintf(w, "note: sandbox: %s\n", miss)
+	}
+	if st.NetworkMissing != "" {
+		_, _ = fmt.Fprintf(w, "note: network not confined: %s\n", st.NetworkMissing)
 	}
 	return nil
 }

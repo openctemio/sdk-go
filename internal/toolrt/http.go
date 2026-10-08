@@ -117,6 +117,16 @@ func (s scopedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return s.next.RoundTrip(req)
 }
 
+// VendorHosts are the hosts of a manifest's permissions.vendor_hosts, with
+// ${config.<key>} entries read from the task's configuration.
+func VendorHosts(m tool.Manifest, config json.RawMessage) []string {
+	var out []string
+	for _, e := range m.Permissions.VendorHosts {
+		out = append(out, vendorHosts(e, config)...)
+	}
+	return out
+}
+
 // vendorHosts resolves a vendor host entry: a host[:port], or
 // ${config.<key>} naming a URL or host in the configuration.
 func vendorHosts(entry string, config json.RawMessage) []string {

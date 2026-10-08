@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,6 +189,35 @@ func hostile(mode string) int {
 	case "ctis-cli":
 		fmt.Println(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":"from cli","severity":"high"},{"type":"secret","title":"undeclared","severity":"high"}]}`)
 		return 2
+	case "egress-probe":
+		// A CONNECT to its target through the proxy it was given, one to a
+		// host it was not given, and a direct dial; the results go in the
+		// finding title.
+		var res []string
+		proxyAddr := strings.TrimPrefix(os.Getenv("HTTPS_PROXY"), "http://")
+		connect := func(target string) string {
+			c, err := net.DialTimeout("tcp", proxyAddr, 3*time.Second)
+			if err != nil {
+				return "noproxy"
+			}
+			defer c.Close()
+			_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+			fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+			line, _ := bufio.NewReader(c).ReadString('\n')
+			if f := strings.Fields(line); len(f) > 1 {
+				return f[1]
+			}
+			return "?"
+		}
+		res = append(res, "target="+connect(os.Getenv("TOOLHOST_TARGET")), "outside="+connect("outside.example:80"))
+		if c, err := net.DialTimeout("tcp", "192.0.2.1:80", 2*time.Second); err == nil {
+			_ = c.Close()
+			res = append(res, "direct=reached")
+		} else {
+			res = append(res, "direct=blocked")
+		}
+		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
+		return 0
 	case "env-cli":
 		// Reports, as a finding title, which vendor variables it can see.
 		var seen []string

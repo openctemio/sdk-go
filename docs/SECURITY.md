@@ -408,7 +408,18 @@ first thing in `main`), which confines itself and then becomes the tool:
 **Network confinement requires unprivileged user namespaces.**
 - In a container, the seccomp profile must allow `unshare` and `clone` with the user, network and mount flags; the runtime's default profile refuses them.
 - On a host with `kernel.apparmor_restrict_unprivileged_userns=1`, an AppArmor profile must grant the sensor binary `userns`.
-- Where neither is in place, `Status.NetworkEnforced` is false and `Status.Missing` says why: `auto` runs tasks unconfined, and `required` refuses to start.
+- Where neither is in place, `Status.NetworkEnforced` is false and `Status.NetworkMissing` says why. With `SENSOR_SANDBOX_NETWORK=auto` (the default) tasks then run unconfined with a warning; with `required` (shared sensors) the sensor refuses to start.
+
+**What a confined task may reach (the tool host).** Every task whose manifest network is not `none` gets its own forwarder, and every refused destination is a warning line in the task's command log and an entry in `Outcome.Egress`:
+
+| Manifest `permissions.network` | Forwarder scope |
+|---|---|
+| `targets` | The admitted targets only. Names are dialed at the addresses the local policy admitted (`core.LocalPolicy.AdmittedAddrs`) and never resolved again; IP and CIDR targets as given |
+| `vendor` | The manifest's vendor hosts, at public addresses |
+| `egress-proxy` | Any public address. Loopback, private ranges, link-local and cloud metadata addresses are refused |
+| `none` | Nothing: no forwarder, no way out |
+
+A tool that dials raw sockets without honouring the proxy variables gets "network unreachable" when confined; it must connect through the proxy (HTTP CONNECT or SOCKS5).
 - Where `/etc/resolv.conf` cannot be bind-mounted (a profile that denies `mount`), the relay answers on each address the file names instead.
 
 Modes (`SENSOR_SANDBOX` for sensorkit): `auto` (default) enforces what the

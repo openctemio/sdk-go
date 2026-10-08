@@ -58,6 +58,7 @@ import (
 	"github.com/openctemio/sdk-go/internal/toolwire"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/tool"
 	"github.com/openctemio/sdk-go/pkg/tool/adapter"
@@ -188,6 +189,12 @@ type Outcome struct {
 	Stderr   string
 	ExitCode int
 	Duration time.Duration
+	// Egress is what a confined task asked its forwarder for (api
+	// RFC-060): every destination, allowed or refused, at most
+	// MaxEgressRecords; EgressDropped counts the rest. Nil when the task's
+	// network was not confined.
+	Egress        []egress.Record
+	EgressDropped int
 }
 
 // ReportJSON is the report as JSON (a scanner's raw output for the
@@ -535,11 +542,19 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	defer func() { _ = inW.Close(); _ = outR.Close() }()
 	stderr := &cappedBuffer{max: MaxStderr}
 	be := h.backend()
+	eg, err := h.startEgress(ctx, be, p)
+	if err != nil {
+		_ = inR.Close()
+		_ = outW.Close()
+		return nil, err
+	}
+	defer eg.stop()
 	t, err := be.Prepare(executor.TaskSpec{
 		ID: m.Name, Argv: argv, Env: core.ScannerEnvironFor(envOwner(m), o.Env), SetEnv: o.Env, Dir: p.workdir,
 		WritePaths: append([]string{p.workdir}, o.WritePaths...), Limits: o.Limits,
 		Network: networkClass(m.Permissions.Network), Stdin: inR, Stdout: outW, Stderr: stderr,
-		Hooks: executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: core.ApplyScannerPriority, Finished: core.ReapScannerProcess},
+		Hooks:       executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: core.ApplyScannerPriority, Finished: core.ReapScannerProcess},
+		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(),
 	})
 	if err != nil {
 		_ = inR.Close()
@@ -587,6 +602,12 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 		res = <-waitDone
 	}
 	s.finish(res, stopReason, stopClass, stderr, start, execution)
+	if eg != nil {
+		s.out.Egress, s.out.EgressDropped = eg.stop()
+		for _, l := range egressLog(s.out.Egress) {
+			s.log(l.Level, l.Msg, l.Fields)
+		}
+	}
 	return s.out, nil
 }
 

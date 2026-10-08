@@ -46,6 +46,7 @@ Setup & health checklist shows each one's presence, never its value.
 | [`OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE`](https://docs.openctem.io/sensor/settings#OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE) | bool |  |  |  | Lets SDK HTTP clients reach private addresses. |
 | [`OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK`](https://docs.openctem.io/sensor/settings#OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK) | bool |  |  |  | Lets SDK HTTP clients reach loopback addresses. |
 | [`SENSOR_SANDBOX`](https://docs.openctem.io/sensor/settings#SENSOR_SANDBOX) | enum |  | `auto` |  | How every tool run is confined: auto (what the host supports), required (refuse to start without every control), off. |
+| [`SENSOR_SANDBOX_NETWORK`](https://docs.openctem.io/sensor/settings#SENSOR_SANDBOX_NETWORK) | enum |  | `auto` |  | Network confinement of tool runs: each task in its own network namespace whose only way out is its forwarder (needs user namespaces: a container seccomp profile that allows them). auto (where available), required (refuse to start without it; shared sensors), off. |
 | [`SENSOR_OUTBOX`](https://docs.openctem.io/sensor/settings#SENSOR_OUTBOX) | enum |  |  |  | The durable results outbox (on for a daemon). |
 | [`SENSOR_OUTBOX_DIR`](https://docs.openctem.io/sensor/settings#SENSOR_OUTBOX_DIR) | path |  |  |  | Outbox directory. Mount a persistent volume. |
 | [`SENSOR_OUTBOX_MAX_BYTES`](https://docs.openctem.io/sensor/settings#SENSOR_OUTBOX_MAX_BYTES) | bytes |  | `1GiB` |  | Outbox size limit. |
