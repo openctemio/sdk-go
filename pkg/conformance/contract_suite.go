@@ -80,7 +80,46 @@ func LintDescriptor(m tool.Manifest) []LintIssue {
 			warn("/safety/rate_param", c.Ref()+" has a rate param but the tool names no rate key: the sensor policy cannot cap it")
 		}
 	}
+	// An exec tool reads its config only through its argv (or the whole
+	// config file): a mapped param whose key no argument uses is accepted
+	// and silently ignored.
+	if m.Run != nil && m.Run.Profile == tool.ProfileExec && !argvUses(m.Run.Argv, "task.config_file") {
+		for i, im := range m.Implements {
+			for _, param := range slices.Sorted(maps.Keys(im.Params)) {
+				k := im.Params[param].Key
+				if k == "" {
+					k = param
+				}
+				if !argvUsesKey(m.Run.Argv, k) {
+					warn(fmt.Sprintf("/implements/%d/params/%s", i, param),
+						"mapped to config key "+k+", which no run.argv argument uses: the param would be accepted and ignored (use {{config."+k+"}}, {{config."+k+"?}} or {{config."+k+"...}})")
+				}
+			}
+		}
+	}
 	return out
+}
+
+// argvUses reports whether an argv uses the placeholder name.
+func argvUses(argv []string, name string) bool {
+	for _, a := range argv {
+		if slices.Contains(tool.ArgvPlaceholders(a), name) {
+			return true
+		}
+	}
+	return false
+}
+
+// argvUsesKey reports whether an argv reads config key k in any form.
+func argvUsesKey(argv []string, k string) bool {
+	for _, a := range argv {
+		for _, n := range tool.ArgvPlaceholders(a) {
+			if key, _, _, ok := tool.ConfigArg(n); ok && key == k {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // RunContractSuite checks a tool against the contract of the capabilities

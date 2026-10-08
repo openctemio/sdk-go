@@ -223,10 +223,32 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 	var cfg map[string]any
 	_ = json.Unmarshal(p.task.Config, &cfg)
 	var target *tool.Target
-	out := make([]string, len(argv))
+	out := make([]string, 0, len(argv))
 	var subErr *tool.Error
-	for i, a := range argv {
-		out[i] = placeholderRE.ReplaceAllStringFunc(a, func(ph string) string {
+	for _, a := range argv {
+		// A switch, or a list as the whole element, becomes its own
+		// arguments; an element whose optional or list value is empty is
+		// left out (the tool then uses its own default).
+		if whole := wholePlaceholder(a); whole != "" {
+			if key, form, flag, ok := tool.ConfigArg(whole); ok && (form == tool.ArgSwitch || form == tool.ArgList) {
+				if form == tool.ArgSwitch {
+					if b, _ := cfg[key].(bool); b {
+						out = append(out, flag)
+					}
+					continue
+				}
+				items, ierr := listItems(cfg[key], whole)
+				if ierr != nil {
+					return nil, ierr
+				}
+				out = append(out, items...)
+				continue
+			}
+		}
+		if emptyOptional(a, cfg) {
+			continue
+		}
+		out = append(out, placeholderRE.ReplaceAllStringFunc(a, func(ph string) string {
 			name := strings.TrimSpace(placeholderRE.FindStringSubmatch(ph)[1])
 			var v string
 			switch {
@@ -261,9 +283,21 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 					v = target.URL("")
 				}
 			case strings.HasPrefix(name, "config."):
-				val, ok := cfg[strings.TrimPrefix(name, "config.")]
+				key, form, _, _ := tool.ConfigArg(name)
+				if key == "" {
+					key = strings.TrimPrefix(name, "config.")
+				}
+				val, ok := cfg[key]
 				if !ok {
 					return ""
+				}
+				if form == tool.ArgList {
+					items, ierr := listItems(val, name)
+					if ierr != nil {
+						subErr = ierr
+						return ""
+					}
+					return strings.Join(items, ",")
 				}
 				switch x := val.(type) {
 				case string:
@@ -285,10 +319,79 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 				return ""
 			}
 			return v
-		})
+		}))
 	}
 	if subErr != nil {
 		return nil, subErr
+	}
+	return out, nil
+}
+
+// wholePlaceholder is the placeholder name when the element is exactly one
+// placeholder ("" otherwise).
+func wholePlaceholder(a string) string {
+	m := placeholderRE.FindStringSubmatchIndex(a)
+	if m == nil || m[0] != 0 || m[1] != len(a) {
+		return ""
+	}
+	return strings.TrimSpace(a[m[2]:m[3]])
+}
+
+// emptyOptional reports whether an element holds an optional or list
+// placeholder whose value is not set, empty or false.
+func emptyOptional(a string, cfg map[string]any) bool {
+	for _, name := range tool.ArgvPlaceholders(a) {
+		key, form, _, ok := tool.ConfigArg(name)
+		if !ok || (form != tool.ArgOptional && form != tool.ArgList) {
+			continue
+		}
+		switch v := cfg[key].(type) {
+		case nil:
+			return true
+		case string:
+			if v == "" {
+				return true
+			}
+		case bool:
+			if !v {
+				return true
+			}
+		case []any:
+			if len(v) == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// listItems are the items of a list config value as arguments, each
+// checked like any substituted value.
+func listItems(val any, name string) ([]string, *tool.Error) {
+	arr, ok := val.([]any)
+	if val == nil {
+		return nil, nil
+	}
+	if !ok {
+		return nil, tool.AsError(tool.Invalid("{{%s}} is not a list", name))
+	}
+	out := make([]string, 0, len(arr))
+	for _, it := range arr {
+		var v string
+		switch x := it.(type) {
+		case string:
+			v = x
+		case float64:
+			v = strconv.FormatFloat(x, 'f', -1, 64)
+		case bool:
+			v = strconv.FormatBool(x)
+		default:
+			return nil, tool.AsError(tool.Invalid("{{%s}}: items must be scalars", name))
+		}
+		if err := checkValue(v); err != nil {
+			return nil, tool.AsError(tool.Invalid("{{%s}}: %v", name, err))
+		}
+		out = append(out, v)
 	}
 	return out, nil
 }

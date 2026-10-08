@@ -152,6 +152,17 @@ A CLI needs no adapter when its output is one of:
 The mapping file sits next to `tool.yaml` and is part of the contract: its
 digest is recorded when the manifest is loaded, and a changed file is refused.
 
+**Passing settings to a CLI.** An exec tool reads its configuration (the capability's standard params, already mapped onto its config keys) only through `run.argv` placeholders, or the whole file with `{{task.config_file}}`:
+
+| Placeholder | Config key | Expands to |
+|---|---|---|
+| `{{config.k}}` | scalar | the value (empty when not set) |
+| `{{config.k?}}` | scalar | the value; the whole argument is left out when the key is not set, empty or false (`"-r={{config.resolver?}}"`) |
+| `{{config.k...}}` | array of scalars | as the whole argument, one argument per item; inside a larger one, the items joined with commas (`"-t={{config.tags...}}"`); left out when empty |
+| `{{config.k?:-flag}}` | boolean | the literal flag when true, nothing otherwise (the whole argument) |
+
+Every value is checked like any argument: no leading `-`, no control characters, no dangerous flags. `openctem tool validate` warns about a param whose config key no argument uses, because the tool would accept it and ignore it.
+
 ## Installing
 
 An operator installs the tool's directory (its `tool.yaml` and program) in one
