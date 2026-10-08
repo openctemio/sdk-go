@@ -1,19 +1,24 @@
 package conformance
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/openctemio/ctis/capability"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
@@ -304,11 +309,71 @@ func (r *contractRun) scope() {
 			task.Params = map[string]json.RawMessage{"ports": strParam(fmt.Sprint(a.port()))}
 		}
 	}
-	if _, err := r.run(task); err != nil {
+	// The task runs behind a recording forwarder (pkg/sensorkit/egress)
+	// whose scope is the task's targets: a tool that honors the proxy
+	// variables, as every tool must on a confined sensor, has each
+	// destination checked and recorded. A direct connection to the
+	// listening address B is caught as before.
+	fw := egress.New(scopeOf(task.Targets, r.m.Permissions.VendorHosts), egress.Limits{})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		r.t.Errorf("Scope: %v", err)
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() { _ = fw.Serve(ctx, ln); close(served) }()
+	defer func() { cancel(); <-served }()
+	proxyURL := "http://" + ln.Addr().String()
+	env := map[string]string{"NO_PROXY": "", "no_proxy": ""}
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		env[k] = proxyURL
+	}
+	if _, err := r.runEnv(task, env); err != nil {
 		r.t.Errorf("Scope: %v", err)
 		return
 	}
 	if n := b.accepted(); n > 0 {
 		r.t.Errorf("Scope: the tool connected %d time(s) to %s, an address it was not given (target %s)", n, b.ln.Addr(), target.Value)
 	}
+	for _, rec := range fw.Refusals() {
+		dest := rec.Host
+		if rec.Port > 0 {
+			dest = net.JoinHostPort(rec.Host, strconv.Itoa(rec.Port))
+		}
+		r.t.Errorf("Scope: the tool asked for %s (%s), which is not a target (target %s): %s", dest, rec.Protocol, target.Value, rec.Reason)
+	}
+}
+
+// scopeOf is the forwarder scope of a task's targets: an address target is
+// admitted as itself, a name with the addresses it resolves to now; vendor
+// hosts as the manifest names them (entries read from the configuration
+// are left out).
+func scopeOf(targets []tool.Target, vendor []string) egress.Scope {
+	s := egress.Scope{Names: map[string][]netip.Addr{}}
+	for _, v := range vendor {
+		if !strings.HasPrefix(v, "${") {
+			h := v
+			if host, _, err := net.SplitHostPort(v); err == nil {
+				h = host
+			}
+			s.Vendor = append(s.Vendor, h)
+		}
+	}
+	for _, t := range targets {
+		h := t.Host()
+		if h == "" {
+			continue
+		}
+		if a, err := netip.ParseAddr(strings.Trim(h, "[]")); err == nil {
+			a = a.Unmap()
+			s.Prefixes = append(s.Prefixes, netip.PrefixFrom(a, a.BitLen()))
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		addrs, _ := net.DefaultResolver.LookupNetIP(ctx, "ip", h)
+		cancel()
+		s.Names[h] = addrs
+	}
+	return s
 }

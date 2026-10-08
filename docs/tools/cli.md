@@ -56,7 +56,7 @@ It also writes:
 | Lint | Warns about anything the descriptor should not leave out: no `implements`, no fixture, no engine version probe, a rate param with no rate key, deprecated keys. |
 | FixtureContract | Run as a task of each implemented capability, every fixture meets the capability's required output. |
 | `--capability` | Runs a suite per implemented capability, on loopback fixtures. |
-| `--scope` | The tool is given target A while another loopback address B listens. Any connection to B fails. |
+| `--scope` | The tool is given target A while another loopback address B listens. It runs with its proxy variables pointing at a recording forwarder whose scope is A (`pkg/sensorkit/egress`). Any connection to B fails, and so does any request through the proxy for anything but A or the manifest's vendor hosts; the failure names the destination. A tool that ignores the proxy variables and dials elsewhere directly is caught once the sandbox confines the network (api RFC-060). |
 | `--fuzz d` | Fuzzes the parser of an exec tool's output format, seeded from `fuzz/*` and a minimal document. A panic, two different results for one input, or a result above the record cap fails. The input is saved under `fuzz/crashers/`. |
 
 The `--capability` suites:

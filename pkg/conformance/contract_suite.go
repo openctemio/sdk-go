@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"path/filepath"
 	"slices"
@@ -138,13 +139,23 @@ type contractRun struct {
 }
 
 func (r *contractRun) run(task tool.Task) (*toolhost.Outcome, error) {
+	return r.runEnv(task, nil)
+}
+
+// runEnv runs a task with extra environment on top of opts.Env.
+func (r *contractRun) runEnv(task tool.Task, extra map[string]string) (*toolhost.Outcome, error) {
 	if task.ID == "" {
 		task.ID = fmt.Sprintf("conformance-%d", time.Now().UnixNano())
 	}
+	env := maps.Clone(r.opts.Env)
+	if len(extra) > 0 && env == nil {
+		env = map[string]string{}
+	}
+	maps.Copy(env, extra)
 	ctx, cancel := context.WithTimeout(context.Background(), r.opts.Timeout)
 	defer cancel()
 	host := &toolhost.Host{Sensor: "conformance", RuntimeName: conformanceRuntime}
-	return host.RunManifest(ctx, r.m, task, toolhost.RunOptions{Trusted: true, Dir: r.dir, Credentials: r.opts.Credentials, Env: r.opts.Env})
+	return host.RunManifest(ctx, r.m, task, toolhost.RunOptions{Trusted: true, Dir: r.dir, Credentials: r.opts.Credentials, Env: env})
 }
 
 func (r *contractRun) fixtureContract() {
