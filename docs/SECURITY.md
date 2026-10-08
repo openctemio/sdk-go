@@ -372,6 +372,20 @@ variables, which may hold `user:password` (scanners stop getting them with
 follow `SENSOR_CONTENT_PROXY`), and the tools' own namespaces, such as
 `TRIVY_PASSWORD` or `PDCP_API_KEY`, which are that tool's credentials.
 
+A task of the tool contract (`toolhost`) gets a namespace only when it is
+its own (`core.ScannerEnvironFor`):
+- trivy gets `TRIVY_*` and the container runtime variables (`DOCKER_HOST`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `CONTAINER_HOST`);
+- semgrep gets `SEMGREP_*`;
+- betterleaks gets `BETTERLEAKS_*` and `GITLEAKS_*`;
+- codeql gets `CODEQL_*`;
+- each ProjectDiscovery tool gets its own prefix plus `PDCP_*`.
+
+A tool the operator installed (a manifest with a run section) gets no
+vendor namespace: its credentials are the ones its manifest declares,
+delivered in the run message. Names the operator allows explicitly
+(`OPENCTEM_SDK_SCANNER_ENV_ALLOW`) and variables the caller passes still
+reach any tool.
+
 ### 7. Per-task tool sandbox (`pkg/sensorkit/executor`)
 
 Every tool run goes through one executor. A backend takes a generic task

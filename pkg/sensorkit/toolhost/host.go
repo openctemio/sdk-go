@@ -381,6 +381,17 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	return p, nil, nil
 }
 
+// envOwner is the tool whose vendor environment namespace the task gets
+// (core.ScannerEnvironFor): a tool compiled into the sensor gets its own; a
+// program the operator installed (a run section) gets none, and receives
+// the credentials its manifest declares in the run message.
+func envOwner(m tool.Manifest) string {
+	if m.Run != nil {
+		return ""
+	}
+	return m.Name
+}
+
 func checkTargets(m tool.Manifest, targets []tool.Target) *tool.Error {
 	if len(targets) > MaxTargets {
 		return tool.AsError(tool.Invalid("%d targets, more than %d", len(targets), MaxTargets))
@@ -524,7 +535,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	stderr := &cappedBuffer{max: MaxStderr}
 	be := h.backend()
 	t, err := be.Prepare(executor.TaskSpec{
-		ID: m.Name, Argv: argv, Env: core.ScannerEnviron(o.Env), SetEnv: o.Env, Dir: p.workdir,
+		ID: m.Name, Argv: argv, Env: core.ScannerEnvironFor(envOwner(m), o.Env), SetEnv: o.Env, Dir: p.workdir,
 		WritePaths: append([]string{p.workdir}, o.WritePaths...), Limits: o.Limits,
 		Network: networkClass(m.Permissions.Network), Stdin: inR, Stdout: outW, Stderr: stderr,
 		Hooks: executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: core.ApplyScannerPriority, Finished: core.ReapScannerProcess},
