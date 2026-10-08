@@ -44,6 +44,14 @@ import (
 	"time"
 )
 
+// RelayProxyAddr is where a confined task finds its proxy (HTTP CONNECT,
+// absolute-form HTTP or SOCKS5, all relayed to its forwarder), and
+// RelayDNSAddr its resolver.
+const (
+	RelayProxyAddr = "127.0.0.1:1080"
+	RelayDNSAddr   = "127.0.0.1:53"
+)
+
 // Mode says how strictly tasks are sandboxed.
 type Mode string
 
@@ -161,6 +169,16 @@ type TaskSpec struct {
 	Stdout, Stderr io.Writer
 	// Hooks let the caller adjust the process (process backend only).
 	Hooks ProcessHooks
+	// EgressProxy and EgressDNS are unix socket paths of the task's
+	// forwarder (pkg/sensorkit/egress): its proxy listener and its DNS
+	// stream listener. On a backend that confines the network (Status.
+	// NetworkEnforced) they are the task's only way out: the task sees a
+	// proxy on 127.0.0.1:1080 (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY) and a
+	// resolver on 127.0.0.1:53 that lead to them, and nothing else. Empty:
+	// a confined task has no network at all. Ignored when the network is
+	// not confined.
+	EgressProxy string
+	EgressDNS   string
 }
 
 // ProcessHooks are the caller's process-level adjustments, called by the
@@ -224,13 +242,17 @@ type Status struct {
 	Seccomp    bool `json:"seccomp"`
 	NoNewPrivs bool `json:"no_new_privs"`
 	Rlimits    bool `json:"rlimits"`
-	// NetworkEnforced is true when the backend itself confines the task to
-	// its network class (a per-task network namespace or policy). The
-	// process backend records the class but does not enforce it, so it is
-	// false there; the sensor's target guard and egress settings apply
-	// instead. Code from outside the project must not run on a backend
-	// without it.
+	// NetworkEnforced is true when the backend itself confines the task's
+	// network: the process backend with Config.ConfineNetwork, where user
+	// namespaces are available, runs each task in its own network
+	// namespace whose only way out is its forwarder (TaskSpec.EgressProxy,
+	// EgressDNS). Without it the sensor's target guard and egress settings
+	// apply instead. Code from outside the project must not run on a
+	// backend without it.
 	NetworkEnforced bool `json:"network_enforced"`
+	// NetworkMissing says why network confinement was asked for and is not
+	// enforced (empty when it is, or was not asked for).
+	NetworkMissing string `json:"network_missing,omitempty"`
 	// Missing lists the controls this host could not enforce, and why.
 	Missing []string `json:"missing,omitempty"`
 }
