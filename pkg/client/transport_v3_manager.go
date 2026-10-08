@@ -352,6 +352,7 @@ func (m *v3Manager) tryGRPC(ctx context.Context, https sensorv3connect.SensorSer
 			return svc, "", nil
 		}
 		if !identityError(err) && !certRefused(err) {
+			m.logf("transport: gRPC binding at %s unavailable: %v", endpoint, err)
 			return nil, fallbackReason(err), nil
 		}
 		// The platform refused the certificate: a new one, once. A second
