@@ -7,6 +7,8 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -18,8 +20,10 @@ const dnsTTL = 30
 // AnswerDNS answers one DNS query (wire format) for a confined task: an
 // admitted name gets its pinned addresses, a vendor host its public
 // addresses, and every other name NXDOMAIN, so a tool can neither be
-// rebound to another address nor carry data out in a lookup. Only A and
-// AAAA are answered; other types get an empty answer for admitted names.
+// rebound to another address nor carry data out in a lookup. A and AAAA
+// are answered from the scope; another type for an admitted name (CNAME,
+// MX, TXT, NS, ... a DNS tool's records) is asked of the upstream resolver
+// (Upstream) and its answer returned, and without an upstream it is empty.
 // Every question is recorded.
 func (f *Forwarder) AnswerDNS(ctx context.Context, query []byte) ([]byte, error) {
 	var p dnsmessage.Parser
@@ -47,6 +51,11 @@ func (f *Forwarder) AnswerDNS(ctx context.Context, query []byte) ([]byte, error)
 	}
 	rec.Verdict = Allowed
 	f.record(rec)
+	if q.Type != dnsmessage.TypeA && q.Type != dnsmessage.TypeAAAA && f.Upstream != nil {
+		if up, err := f.Upstream(ctx, query); err == nil && sameQuestion(up, h.ID, q) {
+			return up, nil
+		}
+	}
 	for _, a := range addrs {
 		hdr := dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: dnsTTL}
 		switch {
@@ -59,6 +68,92 @@ func (f *Forwarder) AnswerDNS(ctx context.Context, query []byte) ([]byte, error)
 		}
 	}
 	return resp.Pack()
+}
+
+// sameQuestion reports whether an upstream answer answers the query (its
+// id and question), so a confused or spoofed answer is never passed on.
+func sameQuestion(resp []byte, id uint16, q dnsmessage.Question) bool {
+	var p dnsmessage.Parser
+	h, err := p.Start(resp)
+	if err != nil || !h.Response || h.ID != id {
+		return false
+	}
+	got, err := p.Question()
+	return err == nil && got.Type == q.Type && got.Class == q.Class && normName(got.Name.String()) == normName(q.Name.String())
+}
+
+// UpstreamDNS returns an Upstream that sends a query to the first resolver
+// of resolvConf (the sensor's own /etc/resolv.conf when ""), over UDP, and
+// again over TCP when the answer is truncated.
+func UpstreamDNS(resolvConf string) func(ctx context.Context, query []byte) ([]byte, error) {
+	if resolvConf == "" {
+		resolvConf = "/etc/resolv.conf"
+	}
+	return func(ctx context.Context, query []byte) ([]byte, error) {
+		server := "127.0.0.1"
+		if b, err := os.ReadFile(resolvConf); err == nil {
+			for _, line := range strings.Split(string(b), "\n") {
+				if f := strings.Fields(line); len(f) >= 2 && f[0] == "nameserver" {
+					server = f[1]
+					break
+				}
+			}
+		}
+		addr := net.JoinHostPort(strings.TrimSuffix(strings.SplitN(server, "%", 2)[0], "."), "53")
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		var d net.Dialer
+		c, err := d.DialContext(ctx, "udp", addr)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		if dl, ok := ctx.Deadline(); ok {
+			_ = c.SetDeadline(dl)
+		}
+		if _, err := c.Write(query); err != nil {
+			return nil, err
+		}
+		buf := make([]byte, 65535)
+		n, err := c.Read(buf)
+		if err != nil {
+			return nil, err
+		}
+		resp := buf[:n]
+		var p dnsmessage.Parser
+		if h, err := p.Start(resp); err == nil && h.Truncated {
+			return tcpDNS(ctx, addr, query)
+		}
+		return resp, nil
+	}
+}
+
+func tcpDNS(ctx context.Context, addr string, query []byte) ([]byte, error) {
+	var d net.Dialer
+	c, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	if dl, ok := ctx.Deadline(); ok {
+		_ = c.SetDeadline(dl)
+	}
+	if len(query) > 65535 {
+		return nil, errors.New("egress: query too large")
+	}
+	frame := make([]byte, 2+len(query))
+	binary.BigEndian.PutUint16(frame, uint16(len(query))) //nolint:gosec // bounded above
+	copy(frame[2:], query)
+	if _, err := c.Write(frame); err != nil {
+		return nil, err
+	}
+	var l [2]byte
+	if _, err := io.ReadFull(c, l[:]); err != nil {
+		return nil, err
+	}
+	resp := make([]byte, binary.BigEndian.Uint16(l[:]))
+	_, err = io.ReadFull(c, resp)
+	return resp, err
 }
 
 // resolveName is Resolve for a name with no port: admitted names and

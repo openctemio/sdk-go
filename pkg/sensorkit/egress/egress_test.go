@@ -404,3 +404,47 @@ func TestServeDNSStream(t *testing.T) {
 		}
 	}
 }
+
+// A DNS tool gets the other record types of an admitted name from the
+// upstream resolver; an unadmitted name never reaches it, and an answer
+// to another question is not passed on.
+func TestDNSUpstreamForAdmittedNames(t *testing.T) {
+	f := New(Scope{Names: map[string][]netip.Addr{"target.test": {addr("192.0.2.7")}}}, Limits{})
+	asked := 0
+	mx := func(q []byte, id uint16, name string) []byte {
+		m := dnsmessage.Message{Header: dnsmessage.Header{ID: id, Response: true},
+			Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(name), Type: dnsmessage.TypeMX, Class: dnsmessage.ClassINET}},
+			Answers: []dnsmessage.Resource{{Header: dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName(name), Type: dnsmessage.TypeMX, Class: dnsmessage.ClassINET},
+				Body: &dnsmessage.MXResource{Pref: 10, MX: dnsmessage.MustNewName("mail.target.test.")}}}}
+		b, _ := m.Pack()
+		return b
+	}
+	var reply func(q []byte) []byte
+	f.Upstream = func(_ context.Context, q []byte) ([]byte, error) { asked++; return reply(q), nil }
+	ask := func(name string, id uint16) *dnsmessage.Message {
+		q := dnsmessage.Message{Header: dnsmessage.Header{ID: id}, Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(name), Type: dnsmessage.TypeMX, Class: dnsmessage.ClassINET}}}
+		b, _ := q.Pack()
+		out, err := f.AnswerDNS(context.Background(), b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m dnsmessage.Message
+		if err := m.Unpack(out); err != nil {
+			t.Fatal(err)
+		}
+		return &m
+	}
+	reply = func(q []byte) []byte { return mx(q, 5, "target.test.") }
+	if m := ask("target.test.", 5); len(m.Answers) != 1 || m.Answers[0].Body.(*dnsmessage.MXResource).Pref != 10 {
+		t.Fatalf("MX of an admitted name: %+v", m)
+	}
+	// SECURITY: an upstream answer to another question is dropped.
+	reply = func(q []byte) []byte { return mx(q, 99, "evil.test.") }
+	if m := ask("target.test.", 6); len(m.Answers) != 0 {
+		t.Fatalf("a mismatched upstream answer was passed on: %+v", m)
+	}
+	before := asked
+	if m := ask("exfil.example.", 7); m.RCode != dnsmessage.RCodeNameError || asked != before {
+		t.Fatalf("an unadmitted name reached upstream (asked %d->%d) or answered %+v", before, asked, m.Header)
+	}
+}

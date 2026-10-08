@@ -145,7 +145,7 @@ func hostileTool(mode string, args []string) int {
 		fmt.Println()
 		return 0
 	case "proxyenv":
-		fmt.Println(os.Getenv("HTTPS_PROXY"), os.Getenv("NO_PROXY") == "")
+		fmt.Println(os.Getenv("HTTPS_PROXY"), os.Getenv("NO_PROXY") == "", os.Getenv("OPENCTEM_EGRESS_PROXY"))
 		return 0
 	}
 	return 99

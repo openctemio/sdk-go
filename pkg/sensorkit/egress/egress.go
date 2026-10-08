@@ -139,6 +139,9 @@ type Forwarder struct {
 	LookupVendor func(ctx context.Context, host string) ([]netip.Addr, error)
 	// OnRecord, when set, receives every record as it happens.
 	OnRecord func(Record)
+	// Upstream answers a DNS query of another type than A or AAAA for an
+	// admitted name (UpstreamDNS; nil: such queries get an empty answer).
+	Upstream func(ctx context.Context, query []byte) ([]byte, error)
 
 	rate    *rate.Limiter
 	mu      sync.Mutex

@@ -56,6 +56,7 @@ func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared
 	}
 	e := &taskEgress{dir: dir, proxy: filepath.Join(dir, "proxy.sock"), dns: filepath.Join(dir, "dns.sock"),
 		fw: egress.New(scope, egress.Limits{Rate: egressRate(p.task.Config, p.m)})}
+	e.fw.Upstream = egress.UpstreamDNS("")
 	pl, err := net.Listen("unix", e.proxy)
 	if err != nil {
 		_ = os.RemoveAll(dir)

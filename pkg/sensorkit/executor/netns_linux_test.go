@@ -164,7 +164,7 @@ func TestConfinedTaskReachesItsForwarder(t *testing.T) {
 	if out, _ := runTool(t, b, spec, "resolve", "target.example"); out != "OK 192.0.2.99" {
 		t.Fatalf("resolve through the relay: %q", out)
 	}
-	if out, _ := runTool(t, b, spec, "proxyenv"); out != "http://"+RelayProxyAddr+" true" {
+	if out, _ := runTool(t, b, spec, "proxyenv"); out != "http://"+RelayProxyAddr+" true http://"+RelayProxyAddr {
 		t.Fatalf("proxy variables: %q", out)
 	}
 	// Without forwarder sockets a confined task has no network at all.

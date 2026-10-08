@@ -52,6 +52,11 @@ const (
 	RelayDNSAddr   = "127.0.0.1:53"
 )
 
+// EnvEgressProxy is set, for a confined task with a forwarder, to the
+// relay's proxy URL (HTTP CONNECT and SOCKS5 on one port): a wrapper passes
+// it to a tool that takes a proxy flag rather than the proxy variables.
+const EnvEgressProxy = "OPENCTEM_EGRESS_PROXY"
+
 // Mode says how strictly tasks are sandboxed.
 type Mode string
 
