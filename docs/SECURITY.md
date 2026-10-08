@@ -403,6 +403,13 @@ first thing in `main`), which confines itself and then becomes the tool:
 | seccomp filter | ptrace, process_vm_*, mount/namespaces (also clone with namespace flags; clone3 answers ENOSYS), kernel modules, kexec, keyrings, bpf, perf, clock changes, file handles, userfaultfd; a syscall from another ABI kills the task |
 | Process group, killed whole on timeout or cancel | stray children |
 | The sensor is non-dumpable | reading its memory, environment or open files through /proc |
+| Network confinement (`Config.ConfineNetwork`, api RFC-060): its own user, network and mount namespaces per task, only loopback, a relay on 127.0.0.1:1080 (proxy) and :53 (DNS) to the task's forwarder (`pkg/sensorkit/egress`); the tool runs as a child of the launcher with no capabilities (`SECBIT_NOROOT` locked, empty bounding set) | any connection or lookup that does not go through the forwarder: a tool that ignores the proxy, raw sockets, DNS exfiltration, the sensor's own loopback services |
+
+**Network confinement requires unprivileged user namespaces.**
+- In a container, the seccomp profile must allow `unshare` and `clone` with the user, network and mount flags; the runtime's default profile refuses them.
+- On a host with `kernel.apparmor_restrict_unprivileged_userns=1`, an AppArmor profile must grant the sensor binary `userns`.
+- Where neither is in place, `Status.NetworkEnforced` is false and `Status.Missing` says why: `auto` runs tasks unconfined, and `required` refuses to start.
+- Where `/etc/resolv.conf` cannot be bind-mounted (a profile that denies `mount`), the relay answers on each address the file names instead.
 
 Modes (`SENSOR_SANDBOX` for sensorkit): `auto` (default) enforces what the
 host supports and logs what it cannot; `required` refuses to start unless

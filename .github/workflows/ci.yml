@@ -60,6 +60,33 @@ jobs:
         with:
           files: ./coverage.out
 
+  # The sandbox's network confinement needs unprivileged user namespaces,
+  # which the runner's host refuses (AppArmor). Its tests run here in a
+  # container whose seccomp profile allows them, as a non-root user the
+  # host does not otherwise use, and must not skip.
+  sandbox-netns:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+          cache: true
+
+      - name: Build the executor tests
+        run: CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/netns/executor.test" ./pkg/sensorkit/executor/
+
+      - name: Run them confined
+        run: |
+          chmod 0755 "$RUNNER_TEMP/netns"
+          docker run --rm --user 23456:23456 --security-opt seccomp=unconfined \
+            -e OPENCTEM_TEST_REQUIRE_NETNS=1 -v "$RUNNER_TEMP/netns:/t:ro" \
+            public.ecr.aws/docker/library/debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 \
+            /t/executor.test -test.v -test.count=1
+
   lint:
     runs-on: ubuntu-latest
     steps:

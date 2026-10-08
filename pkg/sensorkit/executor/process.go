@@ -34,6 +34,17 @@ type Config struct {
 	// Launcher is the binary re-executed as the launcher (default: this
 	// program). It must call RunLauncherIfRequested first thing in main.
 	Launcher string
+	// ConfineNetwork runs every task in its own user, network and mount
+	// namespaces (Linux; api RFC-060): only loopback exists, and the task's
+	// way out is its forwarder (TaskSpec.EgressProxy, EgressDNS). It needs
+	// unprivileged user namespaces (a container seccomp profile that
+	// allows them; on a host with AppArmor's restriction, a profile for the
+	// sensor). Where they are not available, tasks run unconfined and
+	// Status.NetworkMissing says why, unless RequireNetwork is set.
+	ConfineNetwork bool
+	// RequireNetwork makes NewProcessBackend fail when ConfineNetwork
+	// cannot be enforced (a shared sensor, where it is a requirement).
+	RequireNetwork bool
 }
 
 // ProcessBackend runs each task as a child process, through the launcher
@@ -43,13 +54,32 @@ type ProcessBackend struct {
 	launcher string
 	status   Status
 	deny     []string
+	// confine: tasks run in their own network namespace (the probe
+	// proved it works here).
+	confine bool
 }
 
 // NewProcessBackend checks what this host enforces by running the launcher
 // once in probe mode, and returns the backend. With ModeRequired it fails
 // unless every control is enforced; with ModeAuto it degrades and lists what
-// is missing in Status.
+// is missing in Status. With RequireNetwork it fails unless tasks' network
+// is confined.
 func NewProcessBackend(cfg Config) (*ProcessBackend, error) {
+	b, err := newProcessBackend(cfg)
+	if err == nil && cfg.RequireNetwork && !b.confine {
+		why := b.status.NetworkMissing
+		if why == "" {
+			why = strings.Join(b.status.Missing, "; ")
+		}
+		if why == "" {
+			why = "sandbox mode " + string(b.cfg.Mode)
+		}
+		return nil, fmt.Errorf("executor: network confinement required but not available: %s", why)
+	}
+	return b, err
+}
+
+func newProcessBackend(cfg Config) (*ProcessBackend, error) {
 	if cfg.Mode == "" {
 		cfg.Mode = ModeAuto
 	}
@@ -104,7 +134,22 @@ func NewProcessBackend(cfg Config) (*ProcessBackend, error) {
 	}
 	b.launcher = launcher
 	makeUndumpable()
-	st, err := probe(launcher, b.deny, cfg.Limits)
+	st, err := probe(launcher, b.deny, cfg.Limits, cfg.ConfineNetwork)
+	if cfg.ConfineNetwork {
+		if err == nil {
+			b.confine = true
+		} else {
+			// Without network confinement the rest of the sandbox still
+			// applies: probe again and say why the network is not.
+			netErr := err
+			if cfg.RequireNetwork {
+				return nil, fmt.Errorf("executor: network confinement required but not available: %w", netErr)
+			}
+			if st, err = probe(launcher, b.deny, cfg.Limits, false); err == nil {
+				st.NetworkMissing = netErr.Error()
+			}
+		}
+	}
 	switch {
 	case err != nil && cfg.Mode == ModeRequired:
 		return nil, fmt.Errorf("executor: sandbox required but the launcher does not work: %w", err)
@@ -193,6 +238,10 @@ func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 		WritePaths: append([]string{dir}, spec.WritePaths...),
 		Binary:     bin,
 	}
+	if b.confine {
+		ls.Confined, ls.EgressProxy, ls.EgressDNS = true, spec.EgressProxy, spec.EgressDNS
+		t.confine = true
+	}
 	enc, err := ls.encode()
 	if err != nil {
 		_ = os.RemoveAll(dir)
@@ -275,12 +324,26 @@ func (t *processTask) taskEnv() []string {
 	for _, k := range keys {
 		set(k, t.spec.SetEnv[k])
 	}
+	// A confined task's only way out is its forwarder, through the relay
+	// in its namespace: the proxy variables say so, whatever the caller set.
+	if t.confine {
+		proxy := ""
+		if t.spec.EgressProxy != "" {
+			proxy = "http://" + RelayProxyAddr
+		}
+		for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+			set(k, proxy)
+		}
+		set("NO_PROXY", "")
+		set("no_proxy", "")
+	}
 	return env
 }
 
 type processTask struct {
 	b       *ProcessBackend
 	spec    TaskSpec
+	confine bool
 	workdir string
 	cmdPath string
 	args    []string
