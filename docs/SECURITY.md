@@ -76,42 +76,13 @@ if credentials.SecureCompare(providedToken, expectedToken) {
 }
 ```
 
-### 2. gRPC Transport Security
+### 2. gRPC transport (deprecated)
 
-The gRPC transport includes multiple security features.
-
-#### TLS Configuration
-
-```go
-import "github.com/openctemio/sdk-go/pkg/transport/grpc"
-
-transport := grpc.NewTransport(&grpc.Config{
-    Address: "grpc.openctem.io:9090",
-    UseTLS:  true,  // Always use TLS in production
-
-    // InsecureSkipVerify should be false in production
-    // When true, a warning is logged
-    InsecureSkipVerify: false,
-})
-```
-
-**Security features:**
-- Minimum TLS 1.2 enforced
-- Proper ServerName validation for certificate verification
-- Security warnings logged when using insecure configurations
-
-#### Address Validation
-
-Validate server addresses to prevent SSRF attacks:
-
-```go
-import "github.com/openctemio/sdk-go/pkg/transport/grpc"
-
-err := grpc.ValidateAddress("grpc.example.com:9090")  // OK
-err := grpc.ValidateAddress("file:///etc/passwd")     // Error: invalid scheme
-err := grpc.ValidateAddress("unix:///var/run/sock")   // Error: invalid scheme
-err := grpc.ValidateAddress("0.0.0.0:9090")          // Error: binding address
-```
+`pkg/transport/grpc` is deprecated: no OpenCTEM platform serves it and it is
+removed in a later minor release (see [STABILITY.md](STABILITY.md)). Use
+`pkg/client`, which speaks sensor protocol v2 over HTTPS. Sensor protocol v3
+(gRPC with mTLS and an HTTPS fallback) is planned and will be generated from
+its own protocol definitions.
 
 ### 3. Platform Sensor Security
 
@@ -490,22 +461,11 @@ store := credentials.NewFileStore(path)  // Only for non-sensitive data
 
 ### 2. Transport Security
 
-```go
-// DO: Always use TLS in production
-transport := grpc.NewTransport(&grpc.Config{
-    UseTLS: true,
-})
-
-// DO: Validate addresses from external input
-if err := grpc.ValidateAddress(userProvidedAddress); err != nil {
-    return err
-}
-
-// DON'T: Skip TLS verification
-transport := grpc.NewTransport(&grpc.Config{
-    InsecureSkipVerify: true,  // SECURITY WARNING logged
-})
-```
+- Point `API_URL` (`client.Config.BaseURL`) at an `https://` URL outside a
+  private network; plain `http` to a non-loopback host logs a warning.
+- Never disable certificate verification. Trust a private CA with
+  `SENSOR_CA_CERT_FILE`, and pin it with `SENSOR_CA_FINGERPRINT` (from the
+  install snippet).
 
 ### 3. Sensor Configuration
 
@@ -533,11 +493,10 @@ leaseConfig := &platform.LeaseConfig{
 
 ```bash
 # DO: Use environment variables for secrets
-export OPENCTEMIO_API_KEY="your-api-key"
-export OPENCTEMIO_ENCRYPTION_KEY="base64-encoded-key"
+export API_KEY="<sensor key>"   # or pair the sensor and set no key at all
 
 # DON'T: Commit secrets to version control
-# api_key: "sk_live_xxxxx"  # Never do this!
+# api_key: "<key>"  # Never do this!
 ```
 
 ---
@@ -551,11 +510,10 @@ export OPENCTEMIO_ENCRYPTION_KEY="base64-encoded-key"
 - [ ] Key validation enabled (automatic)
 
 ### Transport
-- [ ] TLS enabled for production
-- [ ] `InsecureSkipVerify` is `false`
-- [ ] Server addresses validated before use
+- [ ] `API_URL` uses `https://` in production
+- [ ] A private CA is trusted with `SENSOR_CA_CERT_FILE`, never by skipping verification
 
-### Platform Sensors
+### Platform Sensors (`pkg/platform`, platform control plane only)
 - [ ] `AllowedJobTypes` configured (whitelist)
 - [ ] `RequireAuthToken` enabled
 - [ ] `ValidateTokenClaims` enabled
@@ -571,6 +529,6 @@ export OPENCTEMIO_ENCRYPTION_KEY="base64-encoded-key"
 
 ## Reporting Security Issues
 
-Please report security vulnerabilities to: security@openctem.io
-
-Do not disclose security issues publicly until a fix is available.
+Report vulnerabilities privately to security@openctem.io. Do not open a public
+issue. See [SECURITY.md](../SECURITY.md) for what to include and the response
+targets.

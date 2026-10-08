@@ -1,7 +1,6 @@
 # SDK stability
 
-Goal (owner, 2026-10-02): the SDK is good enough that it rarely has to
-change. A new tool, a new flag, a new output format or a new platform
+Goal: the SDK is good enough that it rarely has to change. A new tool, a new flag, a new output format or a new platform
 feature must not need an SDK release. This page says what the SDK
 promises, how it grows without breaking anyone, and what moves out.
 
@@ -142,10 +141,9 @@ too, so a newer SDK's extra members reach an older platform harmlessly.
 reports strictly (`DisallowUnknownFields` after an I-JSON pre-pass, api
 `internal/app/ingest/strictjson.go`) to rule out parser-differential
 attacks. So a CTIS addition is receiver-first: the platform takes the new
-`ctis` version before any sensor sends the new member. CTIS 1.3.0 says so
-in its CHANGELOG; the platform still pins `ctis v1.2.0` (openctem#789 takes
-1.3.0). The SDK's CTIS types use `omitempty`, so a sensor that does not set
-a new member sends nothing new.
+`ctis` version before any sensor sends the new member (the CTIS CHANGELOG
+states this for every addition). The SDK's CTIS types use `omitempty`, so a
+sensor that does not set a new member sends nothing new.
 
 **Feature negotiation.** The platform's hello (`GET /api/v2/sensor/hello`,
 `protov2.Hello`) carries `protocol`, `features`, media types, encodings,
@@ -204,7 +202,7 @@ A wrapper that starts processes without these helpers must call
 `pkg/conformance` has three parts:
 
 - `FakePlatform`, an in-process platform that implements protocol v2
-  strictly (and the v1 routes), records every request and injects faults.
+  strictly, records every request and injects faults.
   The SDK's own tests run against it.
 - `RunSensorSuite(t, start, opts)`, the contract every sensor must keep:
   heartbeat with SDK identity, manifest registration, unknown command types

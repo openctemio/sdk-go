@@ -1,102 +1,83 @@
-# OpenCTEM Architecture Guide
+# SDK architecture
 
-This document explains the core architecture of the OpenCTEM platform and how the SDK components interact with the backend.
+This document explains how the SDK's parts fit together and how a sensor built
+on it talks to the OpenCTEM platform. Product documentation is at
+https://docs.openctem.io.
 
 ## Overview
 
-OpenCTEM is a security platform that collects, analyzes, and manages security findings from various sources. The architecture follows an **Sensor-Component** model.
+A **sensor** is the deployable runtime that runs security tools near the
+targets and reports to the platform. The platform never connects to a sensor:
+the sensor connects out, over HTTPS, using sensor protocol v2
+(`/api/v2/sensor/*`).
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            OPENCTEM PLATFORM                                 │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                         BACKEND API                                  │   │
-│  │   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐            │   │
-│  │   │   Sensors   │    │  Findings   │    │   Assets    │            │   │
-│  │   │  Registry   │    │   Storage   │    │  Inventory  │            │   │
-│  │   └─────────────┘    └─────────────┘    └─────────────┘            │   │
-│  │         ▲                   ▲                  ▲                    │   │
-│  │         │                   │                  │                    │   │
-│  │         └───────────────────┴──────────────────┘                    │   │
-│  │                            │                                         │   │
-│  │                     HTTP/REST or gRPC                               │   │
-│  └─────────────────────────────┬───────────────────────────────────────┘   │
-│                                │                                            │
-└────────────────────────────────┼────────────────────────────────────────────┘
-                                 │
-                    ┌────────────┴────────────┐
-                    │                         │
-     ┌──────────────▼──────────────┐  ┌──────▼───────────────────┐
-     │       SENSOR (Local)        │  │      CI/CD Pipeline      │
-     │                             │  │                          │
-     │  ┌────────────────────────┐ │  │  ┌────────────────────┐  │
-     │  │    SDK CLIENT          │ │  │  │    SDK CLIENT      │  │
-     │  │  (sensor_id: xxx)     │ │  │  │  (sensor_id: yyy) │  │
-     │  └────────────────────────┘ │  │  └────────────────────┘  │
-     │            │                │  │           │              │
-     │  ┌─────────┴─────────┐     │  │  ┌────────┴────────┐     │
-     │  │                   │     │  │  │                 │     │
-     │  ▼                   ▼     │  │  ▼                 ▼     │
-     │ Scanners         Providers │  │ Scanners      Adapters   │
-     │ (Semgrep,        (GitHub,  │  │ (Trivy,       (SARIF)    │
-     │  Trivy)          AWS)      │  │  Betterleaks)            │
-     └────────────────────────────┘  └───────────────────────────┘
+                +---------------------------------------+
+                |           OpenCTEM platform           |
+                |  sensors | scans | findings | assets  |
+                +-------------------^-------------------+
+                                    | HTTPS, sensor protocol v2
+                                    | (heartbeat, commands, results)
+                +-------------------+-------------------+
+                |    Sensor (pkg/sensorkit runtime)     |
+                |                                       |
+                |  pkg/client       command poller      |
+                |  durable outbox   local policy        |
+                |  per-task tool sandbox                |
+                +---------+-------------------+---------+
+                          |                   |
+                tools (pkg/tool,     scanners, collectors,
+                adapters)            parsers (pkg/core)
 ```
 
-## Key Concepts
+## Key concepts
 
-### 1. Sensor
+### 1. Sensor identity
 
-An **Sensor** is the identity registered on the server. Every component that pushes data to OpenCTEM does so through a Sensor.
+Every request a sensor makes is attributed to the sensor by its credential:
+either a key-bound identity created by pairing (the sensor signs every request
+with its own Ed25519 key, RFC 9421) or a bearer API key (`API_KEY`). Protocol
+v2 identifies a sensor by its credential alone.
 
 ```go
-// Sensor is identified by its sensor id
-client := client.New(&client.Config{
-    BaseURL:  "https://api.openctem.io",
-    APIKey:   "your-api-key",
-    SensorID: "sensor-123",  // ← This is the Sensor identity
+c := client.New(&client.Config{
+    BaseURL: "https://openctem.example.com", // the API base URL
+    APIKey:  os.Getenv("API_KEY"),
 })
 ```
 
-**Sensor responsibilities:**
-- Registered in the backend database
-- Receives commands from the server
-- Sends heartbeats to report status
-- All pushed data is attributed to the sensor by its key (protocol v2 identifies a sensor by its key alone)
+A sensor:
+- is registered on the platform (paired, or created with a key);
+- sends heartbeats that report its status, tools and capacity;
+- claims and runs the commands the platform dispatches to it;
+- pushes results, which the platform attributes to it.
 
-**Sensor types:**
+### 2. Sensor runtime
 
-| Type | Description | Execution Mode |
-|------|-------------|----------------|
-| `runner` | CI/CD one-shot scans | One-shot |
-| `worker` | Server-controlled daemon | Daemon |
-| `collector` | Data collection sensor | Daemon |
-| `sensor` | EASM sensor | Daemon |
-
-### 2. Sensor Process
-
-An **Sensor Process** orchestrates Scanners, Collectors, and Providers. It uses the SDK Client to communicate with the server.
+`pkg/sensorkit` is the runtime in one call: settings, connection, heartbeat,
+commands, durable outbox, key renewal, local policy, tool sandbox and drain
+(see the [README](../README.md)). `pkg/core` holds the lower-level parts it is
+built from (`BaseSensor`, `CommandPoller`, registries) for a sensor that wires
+them itself:
 
 ```go
-// Sensor process uses SDK Client
 sensor := core.NewBaseSensor(&core.BaseSensorConfig{
     Name:    "my-sensor",
     Version: "1.0.0",
-}, client)
+}, apiClient)
 
-sensor.AddScanner(scanners.Semgrep())
-sensor.AddScanner(scanners.Trivy())
-sensor.AddProvider(providers.GitHub())
+sensor.AddScanner(myScanner)
+sensor.AddCollector(myCollector)
 
 sensor.Start(ctx)
 ```
 
-**Sensor execution modes:**
-- **One-shot**: Single scan and exit (CI/CD) - for `runner` type
-- **Daemon**: Long-running, polls for commands - for `worker`, `collector`, `sensor` types
-- **Server-controlled**: Receives commands via heartbeat stream
+Modes:
+- **Daemon**: long-running; polls for the commands the platform dispatches
+  (`Kit.Run`), or runs one command and exits (`Kit.RunJob`, for a Kubernetes
+  Job).
+- **Runner**: one run in CI (`Kit.RunOnce`), authenticated by the CI job's
+  workload identity.
 
 ### Heartbeat doorbell
 
@@ -160,8 +141,7 @@ does it by default in daemon mode) makes delivery durable (`pkg/outbox`):
 - Every report and command result is written to `Dir` **before** the first
   send and removed only when the platform acknowledged it; a crash, `kill -9`
   or restart loses nothing. Replays are idempotent on v2 (same `report_id`,
-  same bytes: the server answers 200 and stores nothing); on v1 the server's
-  finding-fingerprint dedup makes them best effort.
+  same bytes: the server answers 200 and stores nothing).
 - One file per item (`pending/<id>.item` + `.state`), each written to a
   temporary file, fsynced, renamed and the directory fsynced; mode 0600 in a
   0700 directory; an exclusive `flock` so two processes never share it;
@@ -196,15 +176,18 @@ reports left in `~/.openctem/retry-queue` are imported on first start.
 
 Components are the building blocks that perform actual work:
 
-| Component | Purpose | Example |
-|-----------|---------|---------|
-| **Scanner** | Run security tools | `SemgrepScanner`, `TrivyScanner` |
-| **Parser** | Convert tool output to CTIS | `SARIFParser`, `JSONParser` |
-| **Connector** | Manage external connections | `GitHubConnector`, `AWSConnector` |
-| **Collector** | Pull data from sources | `RepoCollector`, `AlertCollector` |
-| **Provider** | Bundle Connector + Collectors | `GitHubProvider`, `AWSProvider` |
-| **Adapter** | Format translation | `SARIFAdapter`, `CycloneDXAdapter` |
-| **Enricher** | Add threat intel | `EPSSEnricher`, `KEVEnricher` |
+| Component | Purpose | Where |
+|-----------|---------|-------|
+| **Tool** | A workload described by a manifest (`tool.yaml`), run out of process in the sandbox | `pkg/tool`, `pkg/tool/adapter` |
+| **Scanner** | Runs a security tool binary (older interface; bridged to the tool contract) | `core.Scanner`, `core.BaseScanner` |
+| **Parser** | Converts tool output to CTIS | `core.Parser`, `core.SARIFParser` |
+| **Collector** | Pulls data from a source | `core.Collector` |
+| **Command executor** | Runs one command type | `core.CommandExecutor`, `Kit.HandleCommand` |
+
+The scanner wrappers for specific tools (nuclei, semgrep, trivy, betterleaks,
+the recon tools) live in the sensor (`github.com/openctemio/sensor`), not in
+the SDK. `pkg/connectors`, `pkg/providers` and `pkg/enrichers` are deprecated
+(see [STABILITY.md](STABILITY.md)).
 
 ## Data Flow
 
@@ -218,12 +201,6 @@ Components are the building blocks that perform actual work:
 │  Collector   │────▶│  CTIS Report  │─────────────┤
 │  (GitHub)    │     │              │             │
 └──────────────┘     └──────────────┘             │
-                                                  ▼
-                                          ┌──────────────┐
-                                          │  Enricher    │
-                                          │  (EPSS/KEV)  │
-                                          └──────┬───────┘
-                                                  │
                                                   ▼
                                           ┌──────────────┐
                                           │  SDK Client  │
@@ -262,29 +239,12 @@ report.Findings = append(report.Findings, ctis.Finding{
 client.PushFindings(ctx, report)
 ```
 
-## Transport Options
+## Transport
 
-The SDK supports two transport layers:
-
-### HTTP/REST (Default)
-```go
-client := client.New(&client.Config{
-    BaseURL: "https://api.openctem.io",
-    APIKey:  "xxx",
-})
-```
-
-### gRPC (High Performance)
-```go
-grpcTransport := grpc.NewTransport(&grpc.Config{
-    Address: "grpc.openctem.io:9090",
-    APIKey:  "xxx",
-    UseTLS:  true,
-})
-
-// Use gRPC for streaming findings
-// Bidirectional heartbeat stream for real-time commands
-```
+The SDK speaks sensor protocol v2 over HTTPS (`pkg/client`). Protocol v1 is
+retired and refused. `pkg/transport/grpc` is deprecated: no platform serves
+it, and it is removed in a later minor release. Sensor protocol v3 (gRPC with
+mTLS and an HTTPS fallback) is planned.
 
 ## Implementing Custom Components
 
@@ -302,53 +262,22 @@ func (s *MyScanner) Scan(ctx context.Context, target string, opts *core.ScanOpti
 }
 ```
 
-### Custom Connector
-```go
-type MyConnector struct {
-    *connectors.BaseConnector
-}
+### Custom tool
 
-func NewMyConnector(apiKey string) *MyConnector {
-    return &MyConnector{
-        BaseConnector: connectors.NewBaseConnector(&connectors.BaseConnectorConfig{
-            Name:    "my-service",
-            Type:    "api",
-            BaseURL: "https://api.myservice.com",
-            Config: &core.ConnectorConfig{
-                APIKey:    apiKey,
-                RateLimit: 1000, // requests per hour
-            },
-        }),
-    }
-}
-```
-
-### Custom Provider
-```go
-type MyProvider struct {
-    connector  *MyConnector
-    collectors map[string]core.Collector
-}
-
-func (p *MyProvider) ListCollectors() []core.Collector {
-    return []core.Collector{
-        NewDataCollector(p.connector),
-        NewAlertCollector(p.connector),
-    }
-}
-```
+New integrations should use the tool contract rather than a scanner: see
+"Write a tool" in the [README](../README.md), and
+[docs/adapter-protocol.md](adapter-protocol.md) for tools written in other
+languages.
 
 ## Best Practices
 
-1. **Always use Sensor ID**: Ensure every SDK client has a unique sensor id for traceability.
+1. **Keep the state directory.** Mount a persistent volume at
+   `/var/lib/openctem/state`: it holds the paired identity or the renewed key.
 
-2. **Rate limiting**: Use `BaseConnector` for external APIs to avoid rate limit errors.
+2. **Use CTIS.** Convert every output to CTIS reports.
 
-3. **Use CTIS format**: Always convert outputs to CTIS for consistency.
-
-4. **Enrich with threat intel**: Use `client.EnrichFindings()` to add EPSS/KEV data.
-
-5. **Never lose results**: enable the durable outbox (see "Results delivery"):
+3. **Never lose results**: enable the durable outbox (the kit does it for a
+   daemon; see "Results delivery"):
    ```go
    c := client.New(cfg)
    if err := c.EnableOutbox(client.OutboxConfig{Dir: "/var/lib/openctem/outbox"}); err != nil {
@@ -357,38 +286,28 @@ func (p *MyProvider) ListCollectors() []core.Collector {
    defer c.Close()
    ```
 
-6. **Use gRPC for streaming**: For large batches, use gRPC streaming instead of REST.
+4. **Ship a local policy.** The sensor-local policy limits targets, ports and
+   tools whatever the platform sends.
 
-7. **Security best practices**: Follow the SDK security guide for production deployments:
-   - Use `EncryptedFileStore` for credentials
-   - Enable TLS for gRPC transport
-   - Configure job validation for platform sensors
-   - Use secure lease identities (default)
+5. **Follow the [SDK security guide](./SECURITY.md)** for the target policy,
+   template signatures, scanner environment and sandbox.
 
 ## Security Features
 
-The SDK includes comprehensive security controls:
+- **Transport**: TLS always verified, optional CA pinning
+  (`SENSOR_CA_FINGERPRINT`), no redirects followed by the API clients,
+  SSRF-safe HTTP (`pkg/httpsec`).
+- **Command path**: scan-target policy, sensor-local policy, signed custom
+  templates, dangerous-flag blocklist, rate-limit ceilings.
+- **Tools**: per-task sandbox (Landlock, seccomp, rlimits, no_new_privs),
+  scanner environment allow-list, output caps.
+- **Results**: encrypted durable outbox (AES-256-GCM), idempotent delivery.
 
-### Credential Security
-- **Encrypted storage**: AES-256-GCM encryption at rest
-- **Key validation**: Path traversal and injection prevention
-- **Secure comparison**: Constant-time credential verification
-
-### Transport Security
-- **TLS enforcement**: Minimum TLS 1.2, proper ServerName validation
-- **Address validation**: SSRF prevention for server addresses
-
-### Platform Sensor Security
-- **Job validation**: Type whitelist, payload limits, auth token verification
-- **Lease security**: Cryptographic identity prevents hijacking
-- **Lease expiry**: Automatic job cancellation on expiry
-- **Template security**: Path traversal prevention, size limits
-
-See [Security Guide](./SECURITY.md) for detailed information.
+See the [Security Guide](./SECURITY.md) for detailed information.
 
 ## See Also
 
 - [SDK README](../README.md) - Quick start guide
 - [Security Guide](./SECURITY.md) - Security best practices
-- [API Documentation](https://github.com/openctemio/openctem/tree/main/api/docs/api) - Backend API reference ([OpenAPI spec](https://github.com/openctemio/openctem/blob/main/api/api/openapi/swagger.yaml))
+- [OpenCTEM documentation](https://docs.openctem.io) - product and API documentation
 - [CTIS module](https://github.com/openctemio/ctis) - CTIS type definitions (`pkg/ctis` re-exports them)

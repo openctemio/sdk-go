@@ -16,7 +16,7 @@ Exit status:
 | `init --kind K --capability id@major [--name n] [dir]` | Writes a new tool that implements one capability of the taxonomy (see [docs/capabilities.md in ctis](https://github.com/openctemio/ctis/blob/main/docs/capabilities.md)). The kinds are `exec-sarif`, `exec-ctis`, `exec-json`, `go` and `python`. It never overwrites a file. |
 | `validate [dir]` | Loads the descriptor strictly. Errors carry a JSON pointer (`/implements/0/params/rate/max`); lint warnings follow. |
 | `run [dir] --target value[@type] [--capability id@major] [--param k=json] [--config k=v] [--format table\|ctis]` | Runs one task offline and prints the outcome or the CTIS report. |
-| `test [dir] [--update] [--capability] [--scope] [--fuzz 30s]` | Runs the conformance kit (below). `--update` rewrites the fixtures' expected CTIS. |
+| `test [dir] [--update] [--capability] [--scope] [--fuzz 30s] [--timeout 30s]` | Runs the conformance kit (below). `--update` rewrites the fixtures' expected CTIS. |
 | `diff <old> <new>` | Compares two versions of a descriptor and fails when the change needs a larger version bump than the one made. |
 | `describe [--json] [dir]` | Prints the canonical descriptor and its digest, which is what the platform sees. |
 
