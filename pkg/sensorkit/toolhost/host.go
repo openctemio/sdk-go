@@ -369,7 +369,8 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		}
 	}
 	slices.SortFunc(p.secrets, func(a, b string) int { return len(b) - len(a) })
-	dir, err := os.MkdirTemp("", "openctem-tool-")
+	// Under the task root, which the sandbox hides from every other task.
+	dir, err := executor.NewTaskDir("tool-")
 	if err != nil {
 		return nil, nil, fmt.Errorf("toolhost: task directory: %w", err)
 	}

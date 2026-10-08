@@ -33,7 +33,7 @@ func confine(ls launchSpec) (Status, error) {
 		return st, fmt.Errorf("no_new_privs: %w", err)
 	}
 	st.NoNewPrivs = true
-	abi, err := applyLandlock(ls.ReadDeny, ls.WritePaths)
+	abi, err := applyLandlock(ls.ReadDeny, ls.Private, ls.WritePaths)
 	switch {
 	case err == errLandlockUnsupported:
 		st.Missing = append(st.Missing, "landlock: not supported by this kernel or blocked by the container's seccomp profile")
