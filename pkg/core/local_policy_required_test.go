@@ -184,6 +184,10 @@ func TestLocalPolicy_LegacyAbsentUnchanged(t *testing.T) {
 func TestLocalPolicy_CheckTargetBuiltinWithoutPolicy(t *testing.T) {
 	t.Setenv(EnvSensorAllowPrivateTargets, "")
 	t.Setenv(EnvAllowPrivateTargets, "")
+	// CI turns the loopback switch on for its test harnesses.
+	prev := httpsec.AllowLoopback
+	httpsec.AllowLoopback = false
+	t.Cleanup(func() { httpsec.AllowLoopback = prev })
 	ctx := context.Background()
 	for _, lp := range []*LocalPolicy{nil, absentPolicyFor(t, false, nil)} {
 		for _, target := range []string{"169.254.169.254", "http://169.254.169.254/latest/meta-data/", "127.0.0.1",
