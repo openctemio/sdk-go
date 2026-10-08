@@ -22,7 +22,7 @@ import (
 func newConfinedBackend(t *testing.T, deny ...string) *ProcessBackend {
 	t.Helper()
 	b, err := NewProcessBackend(Config{Mode: ModeRequired, ReadDeny: deny, WorkRoot: t.TempDir(),
-		Limits: Limits{Processes: 64}, ConfineNetwork: true})
+		Limits: Limits{Processes: 64}, ConfineNetwork: true, RequireNetwork: true})
 	if err != nil {
 		if os.Getenv("OPENCTEM_TEST_REQUIRE_NETNS") == "1" {
 			t.Fatalf("network confinement required by the environment, not available: %v", err)
@@ -33,6 +33,27 @@ func newConfinedBackend(t *testing.T, deny ...string) *ProcessBackend {
 		t.Fatalf("a confined backend must report NetworkEnforced: %+v", b.Status())
 	}
 	return b
+}
+
+// Without user namespaces, confinement is reported, not fatal, unless it
+// is required.
+func TestNetworkConfinementReportedOrRequired(t *testing.T) {
+	b, err := NewProcessBackend(Config{Mode: ModeAuto, WorkRoot: t.TempDir(), ConfineNetwork: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := b.Status()
+	if st.NetworkEnforced == (st.NetworkMissing != "") {
+		t.Fatalf("enforced %v, missing %q: exactly one must say", st.NetworkEnforced, st.NetworkMissing)
+	}
+	_, err = NewProcessBackend(Config{Mode: ModeOff, ConfineNetwork: true, RequireNetwork: true})
+	if err == nil {
+		t.Fatal("required network confinement accepted with the sandbox off")
+	}
+	_, err = NewProcessBackend(Config{Mode: ModeAuto, WorkRoot: t.TempDir(), ConfineNetwork: true, RequireNetwork: true})
+	if st.NetworkEnforced != (err == nil) {
+		t.Fatalf("required: enforced %v but err %v", st.NetworkEnforced, err)
+	}
 }
 
 // fakeForwarder serves a unix socket in dir: each connection gets
