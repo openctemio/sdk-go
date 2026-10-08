@@ -335,6 +335,29 @@ func TestLintDescriptor(t *testing.T) {
 	}
 }
 
+// An exec tool that maps a capability param onto a config key its argv
+// never uses would accept the param and ignore it: linted. Using the key
+// in any form, or the whole config file, clears it.
+func TestLintParamNotPassedToTheProgram(t *testing.T) {
+	m := tool.Manifest{Name: "dnsx-json", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T0,
+		Implements: []tool.Implementation{{Capability: "resolve.dns@1", Params: map[string]tool.ParamMapping{"record_types": {}, "wildcard_filter": {Key: "wildcard"}}}},
+		Run:        &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{"dnsx", "{{target.value}}"}}}
+	lint := fmt.Sprint(LintDescriptor(m))
+	for _, p := range []string{"/implements/0/params/record_types", "/implements/0/params/wildcard_filter"} {
+		if !strings.Contains(lint, p) {
+			t.Errorf("lint misses %s: %s", p, lint)
+		}
+	}
+	m.Run.Argv = []string{"dnsx", "{{config.record_types...}}", "{{config.wildcard?:-wd}}", "{{target.value}}"}
+	if lint := fmt.Sprint(LintDescriptor(m)); strings.Contains(lint, "/implements/0/params") {
+		t.Errorf("params used, yet linted: %s", lint)
+	}
+	m.Run.Argv = []string{"dnsx", "-config", "{{task.config_file}}"}
+	if lint := fmt.Sprint(LintDescriptor(m)); strings.Contains(lint, "/implements/0/params") {
+		t.Errorf("config file passed, yet linted: %s", lint)
+	}
+}
+
 func TestFuzzOutput(t *testing.T) {
 	r := &suiteRecorder{}
 	m := tool.Manifest{Name: "f", Run: &tool.RunSpec{Profile: tool.ProfileExec, Output: &tool.OutputSpec{Format: tool.OutputSARIF}}}
