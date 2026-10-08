@@ -264,6 +264,8 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 				return filepath.Join(p.workdir, outputFile)
 			case name == "task.workdir":
 				return p.workdir
+			case name == "http.user_agent":
+				v = toolrt.EffectiveUserAgent(p.m)
 			case strings.HasPrefix(name, "target."):
 				if len(p.task.Targets) != 1 {
 					subErr = tool.AsError(tool.Invalid("{{%s}} needs exactly one target per task; this task has %d", name, len(p.task.Targets)))

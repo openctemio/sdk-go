@@ -151,6 +151,10 @@ type Manifest struct {
 	Safety *Safety `json:"safety,omitempty"`
 	// Features are the optional protocol features the tool supports.
 	Features *Features `json:"features,omitempty"`
+	// HTTP is how the tool's requests to its targets look (user agent,
+	// headers, timeout, TLS): applied by ctx.HTTP(), named in exec argv
+	// ({{http.user_agent}}) and readable by an adapter from its manifest.
+	HTTP *HTTPSpec `json:"http,omitempty"`
 	// Selftest are fixtures: a task and the CTIS it must produce.
 	Selftest []Fixture `json:"selftest,omitempty"`
 	// Retest says the tool can check again what it reported (a retest

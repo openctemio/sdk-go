@@ -105,6 +105,17 @@
         "proxy": {"enum": ["honors", "ignores"]}
       }
     },
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How the tool's requests to its targets look. What a request may reach is not here: the scope, the sandbox and the forwarder decide that.",
+      "properties": {
+        "user_agent": {"type": "string", "maxLength": 256, "pattern": "^[ -~]+$"},
+        "headers": {"type": "object", "maxProperties": 32, "propertyNames": {"pattern": "^[A-Za-z0-9!#$%&'*+.^_|~-]{1,64}$"}, "additionalProperties": {"type": "string", "maxLength": 1024, "pattern": "^[ -~]*$"}},
+        "timeout": {"type": "string", "description": "A duration between 1s and 10m"},
+        "tls": {"type": "object", "additionalProperties": false, "properties": {"insecure_skip_verify": {"type": "boolean"}, "min_version": {"enum": ["1.0", "1.1", "1.2", "1.3"]}}}
+      }
+    },
     "safety": {
       "type": "object",
       "additionalProperties": false,
