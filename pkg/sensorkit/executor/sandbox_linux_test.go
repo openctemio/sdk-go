@@ -3,11 +3,13 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -98,6 +100,53 @@ func hostileTool(mode string, args []string) int {
 		return 0
 	case "kill-parent":
 		return report(syscall.Kill(os.Getppid(), 0))
+	case "dial":
+		c, err := net.DialTimeout("tcp", args[0], 3*time.Second)
+		if err == nil {
+			_ = c.Close()
+		}
+		return report(err)
+	case "relay":
+		c, err := net.DialTimeout("tcp", RelayProxyAddr, 3*time.Second)
+		if err != nil {
+			return report(err)
+		}
+		defer c.Close()
+		_, _ = io.WriteString(c, "hello\n")
+		line, err := bufio.NewReader(c).ReadString('\n')
+		if err != nil {
+			return report(err)
+		}
+		fmt.Println("OK", strings.TrimSpace(line))
+		return 0
+	case "resolve":
+		r := &net.Resolver{PreferGo: true}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		addrs, err := r.LookupHost(ctx, args[0])
+		if err != nil {
+			return report(err)
+		}
+		fmt.Println("OK", strings.Join(addrs, ","))
+		return 0
+	case "bindlow":
+		ln, err := net.Listen("tcp", "127.0.0.1:80")
+		if err == nil {
+			_ = ln.Close()
+		}
+		return report(err)
+	case "capeff":
+		b, _ := os.ReadFile("/proc/self/status")
+		for _, l := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(l, "CapEff:") || strings.HasPrefix(l, "CapPrm:") {
+				fmt.Print(strings.Fields(l)[1], " ")
+			}
+		}
+		fmt.Println()
+		return 0
+	case "proxyenv":
+		fmt.Println(os.Getenv("HTTPS_PROXY"), os.Getenv("NO_PROXY") == "")
+		return 0
 	}
 	return 99
 }
