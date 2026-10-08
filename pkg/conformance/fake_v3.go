@@ -298,9 +298,8 @@ func (v *fakeV3) v2(ctx context.Context, method, path string, hdr http.Header, b
 			code = connect.CodeUnavailable
 		}
 		ce := connect.NewError(code, errors.New(http.StatusText(rec.Code)))
-		ra, _ := strconv.Atoi(rec.Header().Get(protov2.HeaderRetryAfter))
-		if d, err := connect.NewErrorDetail(&sensorv3.Problem{HttpStatus: int32(rec.Code), //nolint:gosec // a status
-			ProblemJson: rec.Body.Bytes(), RetryAfterSeconds: int32(ra)}); err == nil { //nolint:gosec // bounded
+		if d, err := connect.NewErrorDetail(&sensorv3.Problem{HttpStatus: int32(rec.Code), //nolint:gosec // an HTTP status
+			ProblemJson: rec.Body.Bytes(), RetryAfterSeconds: retryAfter(rec)}); err == nil {
 			ce.AddDetail(d)
 		}
 		return nil, ce
@@ -309,8 +308,11 @@ func (v *fakeV3) v2(ctx context.Context, method, path string, hdr http.Header, b
 }
 
 func retryAfter(rec *httptest.ResponseRecorder) int32 {
-	n, _ := strconv.Atoi(rec.Header().Get(protov2.HeaderRetryAfter))
-	return int32(n) //nolint:gosec // a small header value
+	n, err := strconv.ParseInt(rec.Header().Get(protov2.HeaderRetryAfter), 10, 32)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return int32(n)
 }
 
 func jsonHdr() http.Header { return http.Header{"Content-Type": []string{protov2.MediaTypeJSON}} }

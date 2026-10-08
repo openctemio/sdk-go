@@ -155,8 +155,8 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 		})
 
 	case rest == protov2.CommandsPath:
-		limit, _ := strconv.Atoi(req.URL.Query().Get("limit"))
-		if limit <= 0 {
+		limit, err := strconv.ParseInt(req.URL.Query().Get("limit"), 10, 32)
+		if err != nil || limit <= 0 {
 			limit = 10
 		}
 		limit = min(limit, 100)
@@ -167,7 +167,7 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 			}
 		}
 		r, err := st.svc.ClaimCommands(ctx, connect.NewRequest(&sensorv3.ClaimCommandsRequest{
-			Limit: int32(limit), Features: features, //nolint:gosec // bounded to 100
+			Limit: int32(limit), Features: features,
 		}))
 		return answer(r, err, func(m *sensorv3.ClaimCommandsResponse) *http.Response {
 			return jsonResponse(http.StatusOK, m.GetCommandsJson())

@@ -65,7 +65,7 @@ echo "== buf lint"
 echo "== generated code is current"
 sed "s#out: \.\./\.\.#out: $out#" proto/sensor-v3/buf.gen.yaml > "$out/buf.gen.yaml"
 (cd proto/sensor-v3 && buf generate --template "$out/buf.gen.yaml")
-if ! diff -r "$out/pkg/sensorproto/v3" pkg/sensorproto/v3; then
+if ! diff -r -x doc.go "$out/pkg/sensorproto/v3" pkg/sensorproto/v3; then
   echo "::error::pkg/sensorproto/v3 is stale: run scripts/check-proto-v3.sh --generate and commit the result"
   exit 1
 fi
