@@ -33,6 +33,18 @@ type launchSpec struct {
 	Private    []string `json:"private,omitempty"`
 	WritePaths []string `json:"write_paths,omitempty"`
 	Binary     string   `json:"binary,omitempty"`
+	// Confined: the launcher runs in its own user, network and mount
+	// namespaces (made by the parent at clone time). It brings up
+	// loopback, points the resolver at 127.0.0.1, relays the proxy and DNS
+	// ports to the forwarder's sockets, and runs the tool as its child
+	// with no capabilities.
+	Confined    bool   `json:"confined,omitempty"`
+	EgressProxy string `json:"egress_proxy,omitempty"`
+	EgressDNS   string `json:"egress_dns,omitempty"`
+	// Inner marks the launcher started inside the namespaces by the
+	// confined launcher (which is a fresh, dumpable process: the sensor
+	// itself is not, so it could not write the new namespace's id maps).
+	Inner bool `json:"inner,omitempty"`
 	// Probe makes the launcher apply everything, print its Status as JSON
 	// and exit instead of running a tool.
 	Probe bool `json:"probe,omitempty"`
@@ -93,7 +105,22 @@ func runLauncher(args []string) int {
 		fmt.Fprintf(os.Stderr, "openctem sandbox: %v\n", err)
 		return launcherExit
 	}
+	if ls.Confined && !ls.Inner {
+		return runConfined(ls, args[1:])
+	}
+	if ls.Confined {
+		if err := setupNetwork(ls); err != nil {
+			if ls.Probe {
+				st := Status{Backend: "process", Missing: []string{"network: " + err.Error()}}
+				_ = json.NewEncoder(os.Stdout).Encode(st)
+				return 0
+			}
+			fmt.Fprintf(os.Stderr, "openctem sandbox: network: %v\n", err)
+			return launcherExit
+		}
+	}
 	st, err := confine(ls)
+	st.NetworkEnforced = ls.Confined
 	if ls.Probe {
 		if err != nil {
 			st.Missing = append(st.Missing, err.Error())
@@ -110,6 +137,10 @@ func runLauncher(args []string) int {
 		fmt.Fprintln(os.Stderr, "openctem sandbox: no command")
 		return launcherExit
 	}
+	if ls.Confined {
+		// The relay lives in this process: run the tool as a child.
+		return superviseTool(ls.Binary, rest[1:], os.Environ())
+	}
 	if err := execTool(ls.Binary, rest[1:], os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "openctem sandbox: run %s: %v\n", ls.Binary, err)
 	}
@@ -117,13 +148,13 @@ func runLauncher(args []string) int {
 }
 
 // probe runs the launcher in probe mode and returns what it enforced.
-func probe(launcher string, deny []string, limits Limits) (Status, error) {
+func probe(launcher string, deny []string, limits Limits, confined bool) (Status, error) {
 	dir, err := os.MkdirTemp("", "openctem-probe-")
 	if err != nil {
 		return Status{}, err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	enc, err := launchSpec{Workdir: dir, Cwd: dir, Limits: limits, ReadDeny: deny, WritePaths: []string{dir}, Probe: true}.encode()
+	enc, err := launchSpec{Workdir: dir, Cwd: dir, Limits: limits, ReadDeny: deny, WritePaths: []string{dir}, Probe: true, Confined: confined}.encode()
 	if err != nil {
 		return Status{}, err
 	}
@@ -139,6 +170,9 @@ func probe(launcher string, deny []string, limits Limits) (Status, error) {
 	var st Status
 	if err := json.Unmarshal(out.Bytes(), &st); err != nil {
 		return Status{}, fmt.Errorf("probe: the launcher answered %q (is RunLauncherIfRequested called first in main?)", strings.TrimSpace(out.String()))
+	}
+	if confined && !st.NetworkEnforced {
+		return st, fmt.Errorf("%s", strings.Join(st.Missing, "; "))
 	}
 	return st, nil
 }
