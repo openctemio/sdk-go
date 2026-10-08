@@ -160,6 +160,11 @@ type TaskSpec struct {
 	// WritePaths are paths the task may write besides its private
 	// directory (an output file's directory, a tool cache it owns).
 	WritePaths []string
+	// ReadPaths are paths the task may read even beneath a private root
+	// (Config.Private, the task root): the content packs of this task
+	// (templates, rules, wordlists), which no other task may read. Never
+	// beneath a protected path.
+	ReadPaths []string
 	// Limits bound the task (zero fields: DefaultLimits).
 	Limits Limits
 	// Network is the network class (see NetworkClass).

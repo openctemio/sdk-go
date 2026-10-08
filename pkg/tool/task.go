@@ -52,6 +52,9 @@ type Task struct {
 	// it; a tool that makes its own requests declares features.web_scope
 	// and keeps to it.
 	WebScope *webscope.Scope `json:"web_scope,omitempty"`
+	// Content are the task's content packs per slot the manifest
+	// declares, resolved by the sensor to read-only paths (ContentPaths).
+	Content []TaskContent `json:"content,omitempty"`
 }
 
 // Target is one thing to work on.

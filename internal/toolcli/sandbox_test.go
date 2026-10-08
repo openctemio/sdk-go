@@ -88,3 +88,19 @@ func TestScaffoldPinsTheCLIVersion(t *testing.T) {
 		}
 	}
 }
+
+// --content hands a local pack to a tool (development); a slot the tool
+// does not declare is refused.
+func TestRunContentFlag(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tool")
+	if code, out := run(t, "init", "--kind", KindExecCTIS, "--capability", "scan.ports@1", dir); code != ExitOK {
+		t.Fatalf("init: %d %s", code, out)
+	}
+	code, out := run(t, "run", dir, "--target", "127.0.0.1@ip_address", "--sandbox", "off", "--content", "templates="+t.TempDir())
+	if code == ExitOK || !strings.Contains(out, "content slot \"templates\" is not declared") {
+		t.Fatalf("undeclared slot: %d %s", code, out)
+	}
+	if code, out := run(t, "run", dir, "--target", "127.0.0.1@ip_address", "--content", "nodir"); code != ExitUsage {
+		t.Fatalf("malformed --content: %d %s", code, out)
+	}
+}

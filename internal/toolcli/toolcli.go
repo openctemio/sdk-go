@@ -5,6 +5,8 @@ package toolcli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -154,6 +156,8 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&params, "param", "a standard param of the capability, key=json (repeatable)")
 	fs.Var(&configs, "config", "a config key, key=value; the value is read as JSON when it parses, else as a string (repeatable)")
 	capRef := fs.String("capability", "", "run the task as this capability (id@major)")
+	var contents multi
+	fs.Var(&contents, "content", "a content slot's pack, slot=dir (repeatable; local development)")
 	format := fs.String("format", "table", "table or ctis")
 	timeout := fs.Duration("timeout", 10*time.Minute, "task timeout")
 	sandbox := fs.String("sandbox", "", "off, auto or required (default: $"+EnvSandbox+", else auto)")
@@ -201,9 +205,22 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 		}
 		task.Config, _ = json.Marshal(cfg)
 	}
+	contentRoot := ""
+	for _, c := range contents {
+		slot, dir, _ := strings.Cut(c, "=")
+		abs, err := filepath.Abs(dir)
+		if err != nil || slot == "" || dir == "" {
+			_, _ = fmt.Fprintf(stderr, "--content %q: use slot=dir\n", c)
+			return ExitUsage
+		}
+		sum := sha256.Sum256([]byte(abs))
+		task.Content = append(task.Content, tool.TaskContent{Slot: slot,
+			Packs: []tool.ContentPack{{Digest: "sha256:" + hex.EncodeToString(sum[:]), Source: "local", Path: abs}}})
+		contentRoot = string(filepath.Separator)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	host := &toolhost.Host{Sensor: "openctem-cli", RuntimeName: "openctem-cli"}
+	host := &toolhost.Host{Sensor: "openctem-cli", RuntimeName: "openctem-cli", ContentRoot: contentRoot}
 	out, err := host.RunManifest(ctx, m, task, toolhost.RunOptions{Trusted: true, Dir: filepath.Dir(path)})
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)

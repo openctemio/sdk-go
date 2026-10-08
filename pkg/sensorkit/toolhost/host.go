@@ -105,6 +105,11 @@ type Host struct {
 	// Policy admits every task before it starts (see Admit): the
 	// sensor-local policy. nil admits by the manifest alone.
 	Policy Policy
+	// ContentRoot is the sensor's content cache (api RFC-061): a task's
+	// content packs must lie beneath it, and each task may read only its
+	// own packs there (hide the root from tasks with executor
+	// Config.Private). "": tasks with content packs are refused.
+	ContentRoot string
 }
 
 // RunOptions adjust one task.
@@ -311,6 +316,8 @@ type prepared struct {
 	// notes are the runtime's own log lines for the outcome (parser
 	// issues), bounded.
 	notes []LogLine
+	// contentPaths are the task's content packs, granted read-only.
+	contentPaths []string
 }
 
 // prepare checks the manifest and the task (targets, config), admits it
@@ -348,7 +355,11 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, ierr, nil
 	}
 	task = adm.Task
-	p := &prepared{m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine}
+	contentPaths, err := tool.CheckTaskContent(m, task, h.ContentRoot)
+	if err != nil {
+		return nil, tool.AsError(err), nil
+	}
+	p := &prepared{m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine, contentPaths: contentPaths}
 	if task.IsRetest() && len(adm.Refused) > 0 {
 		// A retest never reaches a target the policy refused: its items
 		// are not sent and end unverifiable.
@@ -556,7 +567,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	defer eg.stop()
 	t, err := be.Prepare(executor.TaskSpec{
 		ID: m.Name, Argv: argv, Env: core.ScannerEnvironFor(envOwner(m), o.Env), SetEnv: o.Env, Dir: p.workdir,
-		WritePaths: append([]string{p.workdir}, o.WritePaths...), Limits: o.Limits,
+		WritePaths: append([]string{p.workdir}, o.WritePaths...), ReadPaths: p.contentPaths, Limits: o.Limits,
 		Network: networkClass(m.Permissions.Network), Stdin: inR, Stdout: outW, Stderr: stderr,
 		Hooks:       executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: core.ApplyScannerPriority, Finished: core.ReapScannerProcess},
 		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(),

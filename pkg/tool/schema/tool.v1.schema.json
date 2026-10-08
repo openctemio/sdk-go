@@ -116,6 +116,25 @@
         "tls": {"type": "object", "additionalProperties": false, "properties": {"insecure_skip_verify": {"type": "boolean"}, "min_version": {"enum": ["1.0", "1.1", "1.2", "1.3"]}}}
       }
     },
+    "content": {
+      "type": "array",
+      "maxItems": 8,
+      "description": "Kinds of content the tool reads; the task gets the resolved packs as read-only paths (api RFC-061).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["slot", "kind"],
+        "properties": {
+          "slot": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
+          "kind": {"type": "string", "pattern": "^([a-z][a-z0-9-]{1,40}|x-[a-z0-9-]{1,32}/[a-z][a-z0-9-]{1,40})$"},
+          "format": {"enum": ["dir", "file", "archive"]},
+          "default": {"enum": ["bundled", "none"]},
+          "modes": {"type": "array", "uniqueItems": true, "items": {"enum": ["default", "custom", "merge"]}},
+          "selectors": {"type": "array", "uniqueItems": true, "items": {"enum": ["tags", "ids", "severities", "paths"]}},
+          "max_bytes": {"type": "integer", "minimum": 0, "maximum": 17179869184}
+        }
+      }
+    },
     "safety": {
       "type": "object",
       "additionalProperties": false,

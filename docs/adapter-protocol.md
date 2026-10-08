@@ -191,6 +191,33 @@ http:
   - `tls.insecure_skip_verify` for a `vendor` network tool, whose credentials travel to its vendor hosts.
 - **Logged:** the task's start log line records the effective settings (header names, never values) with the task.
 
+## Templates, rules and wordlists: content slots
+
+A tool never downloads its content. It declares what it reads, and each task gets read-only paths to the packs the sensor resolved for it (api RFC-061):
+
+```yaml
+content:
+  - slot: templates
+    kind: nuclei-templates          # nuclei-templates, semgrep-rules, yara-rules, vuln-db, wordlist, signatures, or x-<vendor>/<kind>
+    format: dir                     # dir (default), file, archive
+    default: bundled                # bundled: the platform's managed pack unless a step says otherwise; none
+    modes: [default, custom, merge]
+    selectors: [tags, ids, severities, paths]
+```
+
+- **Go:** `task.ContentPaths("templates")`.
+- **Python:** `task.content_paths("templates")` (helper).
+- **Adapters:** `run.task.content` (`[{slot, mode, packs: [{digest, source, path}], selectors}]`).
+- **Exec:**
+  - `{{content.templates...}}`, as the whole argument, gives one argument per pack;
+  - `{{content.templates}}` gives the packs comma-joined;
+  - an argument naming a slot with no pack is left out, so the tool uses its own default.
+- **Rules the runtime enforces:**
+  - a slot the tool does not declare, a mode or selector it does not support, or a pack that is not a `sha256:` digest is refused with `invalid_input`;
+  - pack paths come from the sensor's content cache, never from a job; a path outside the cache is refused;
+  - a task can read its own packs and no other, even when two tenants' tasks run side by side.
+- **Selectors** are passed to the tool (`selectors`); the tool applies them.
+
 ## Installing
 
 An operator installs the tool's directory (its `tool.yaml` and program) in one

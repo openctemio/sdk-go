@@ -49,7 +49,7 @@ var extraWritable = []string{"/dev/null", "/dev/zero", "/dev/full", "/dev/tty", 
 // rename) only under the write paths, which may lie under a private path
 // (the task's own directory under the task root) but never under a deny
 // path. It returns the ABI used.
-func applyLandlock(deny, private, write []string) (int, error) {
+func applyLandlock(deny, private, write, read []string) (int, error) {
 	abiRaw, _, e := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
 	if e != 0 {
 		return 0, errLandlockUnsupported
@@ -79,6 +79,14 @@ func applyLandlock(deny, private, write []string) (int, error) {
 	}
 	if err := addReadable(rs, readable, llReadRights&handled); err != nil {
 		return 0, err
+	}
+	for _, p := range read {
+		if under(p, deny) {
+			return 0, fmt.Errorf("read path %s is protected", p)
+		}
+		if err := addPathRule(rs, p, llReadRights&handled); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return 0, err
+		}
 	}
 	for _, p := range write {
 		if under(p, deny) {
