@@ -17,7 +17,35 @@ import (
 	"github.com/openctemio/sdk-go/pkg/sdk"
 	"github.com/openctemio/sdk-go/pkg/testkit"
 	"github.com/openctemio/sdk-go/pkg/tool"
+	"github.com/openctemio/sdk-go/pkg/useragent"
 )
+
+// buildSDKVersion is the SDK version this CLI was built from (a variable
+// for tests).
+var buildSDKVersion = useragent.SDKVersion
+
+// scaffoldSDKVersion is the SDK version a Go scaffold requires and its CI
+// installs the CLI at: the version this CLI was built from (a release tag,
+// or the pseudo-version of a main commit after go install ...@<commit>), so
+// the scaffold reads every descriptor key this CLI writes. A CLI built from
+// a local checkout has no module version and falls back to sdk.Version.
+func scaffoldSDKVersion() string {
+	v := buildSDKVersion()
+	// Build metadata ("+dirty" from a modified checkout) is not a module
+	// version: keep the commit's pseudo-version.
+	v, _, _ = strings.Cut(v, "+")
+	if v == "" || strings.Contains(v, "devel") {
+		return sdk.Version
+	}
+	return v
+}
+
+// pinCLI pins the CI template's CLI install to the scaffold's SDK version
+// instead of @latest: a tool's CI checks with the CLI it was written for,
+// and a new release cannot change its checks without a commit.
+func pinCLI(ci string) string {
+	return strings.ReplaceAll(ci, "/cmd/openctem@latest", "/cmd/openctem@v"+scaffoldSDKVersion())
+}
 
 // Kinds of scaffold.
 const (
@@ -159,7 +187,7 @@ func Scaffold(kind, capRef, name string) (map[string]scaffoldFile, tool.Manifest
 	files := map[string]scaffoldFile{
 		"fixtures/task.json":                  {string(taskJSON) + "\n", 0o644},
 		"fixtures/expect.ctis.json":           {string(expect), 0o644},
-		".github/workflows/openctem-tool.yml": {githubCI, 0o644},
+		".github/workflows/openctem-tool.yml": {pinCLI(githubCI), 0o644},
 		"Makefile":                            {makefile(kind, name), 0o644},
 	}
 	if len(task.Targets) > 0 && task.Targets[0].Type == "repository" {
@@ -173,7 +201,7 @@ func Scaffold(kind, capRef, name string) (map[string]scaffoldFile, tool.Manifest
 		}
 	case KindGo:
 		files["main.go"] = scaffoldFile{goMain(c), 0o644}
-		files["go.mod"] = scaffoldFile{fmt.Sprintf("module example.com/%s\n\ngo 1.26\n\nrequire github.com/openctemio/sdk-go v%s\n", name, sdk.Version), 0o644}
+		files["go.mod"] = scaffoldFile{fmt.Sprintf("module example.com/%s\n\ngo 1.26\n\nrequire github.com/openctemio/sdk-go v%s\n", name, scaffoldSDKVersion()), 0o644}
 	case KindPython:
 		files[name+".py"] = scaffoldFile{pythonStub(name), 0o755}
 	}

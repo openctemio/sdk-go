@@ -121,7 +121,7 @@ Run the same checks the runtime relies on, against your program, with no Go
 code:
 
 ```sh
-go run github.com/openctemio/sdk-go/cmd/openctem-conformance@latest tool path/to/tool.yaml
+openctem tool test path/to/tool    # see docs/tools/cli.md
 ```
 
 or from a Go test: `conformance.RunToolSuite(t, "tool.yaml", conformance.ToolSuiteOptions{})`.
@@ -156,6 +156,9 @@ digest is recorded when the manifest is loaded, and a changed file is refused.
 
 An operator installs the tool's directory (its `tool.yaml` and program) in one
 of the sensor's adapter directories (`SENSOR_ADAPTER_DIRS`). The directory and
-files must not be writable by another user, and must not be symbolic links. A
-tool from outside the project runs only on a sandbox backend that enforces the
-network class.
+files must not be writable by another user, and must not be symbolic links.
+The sensor runs an operator-installed tool in its process sandbox (private
+task directory, rlimits, no_new_privs, Landlock, seccomp). That sandbox does
+not yet enforce the network class: the targets are admitted against the local
+policy before the task starts, and the tool must keep to them. Install only
+tools you trust.

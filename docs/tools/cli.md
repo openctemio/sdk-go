@@ -4,7 +4,14 @@
 go install github.com/openctemio/sdk-go/cmd/openctem@latest
 ```
 
-Every command reads the tool's `tool.yaml` (a directory or the file itself). Every task runs through the sensor runtime's host and sandbox (`pkg/sensorkit/toolhost`), so a tool behaves here as it will on a sensor. Nothing talks to a platform.
+Every command reads the tool's `tool.yaml` (a directory or the file itself). Every task runs through the sensor runtime's host (`pkg/sensorkit/toolhost`) and the same process sandbox a sensor uses (`pkg/sensorkit/executor`), so a tool behaves here as it will on a sensor. Nothing talks to a platform.
+
+`run` and `test` take `--sandbox off|auto|required` (default `$OPENCTEM_SANDBOX`, else `auto`):
+- `auto` enforces what the host supports and notes the rest; the sandbox is Linux only;
+- `required` refuses to run without every control (use it in CI on Linux);
+- `off` runs the tool as a plain child process.
+
+`init` pins the scaffold to the SDK version the CLI was built from: the Go scaffold's `go.mod`, and the CLI version its CI workflow installs.
 
 Exit status:
 - `0`: the command succeeded.

@@ -34,8 +34,8 @@ const usage = `usage: openctem tool <command> [flags]
 commands:
   init      --kind exec-sarif|exec-ctis|exec-json|go|python --capability <id@major> [--name n] [dir]
   validate  [dir|tool.yaml]
-  run       [dir|tool.yaml] --target value[@type] [--capability id@major] [--param k=json] [--config k=v] [--format table|ctis]
-  test      [dir|tool.yaml] [--update] [--capability] [--scope] [--fuzz 30s] [--timeout 30s]
+  run       [dir|tool.yaml] --target value[@type] [--capability id@major] [--param k=json] [--config k=v] [--format table|ctis] [--sandbox auto]
+  test      [dir|tool.yaml] [--update] [--capability] [--scope] [--fuzz 30s] [--timeout 30s] [--sandbox auto]
   diff      <old tool.yaml> <new tool.yaml>
   describe  [--json] [dir|tool.yaml]
 `
@@ -74,7 +74,12 @@ func manifestPath(arg string) string {
 		arg = "."
 	}
 	if st, err := os.Stat(arg); err == nil && st.IsDir() {
-		return filepath.Join(arg, "tool.yaml")
+		arg = filepath.Join(arg, "tool.yaml")
+	}
+	// Absolute: a relative program in run.argv is resolved against the
+	// manifest's directory, and the task runs in its own directory.
+	if abs, err := filepath.Abs(arg); err == nil {
+		return abs
 	}
 	return arg
 }
@@ -151,9 +156,14 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	capRef := fs.String("capability", "", "run the task as this capability (id@major)")
 	format := fs.String("format", "table", "table or ctis")
 	timeout := fs.Duration("timeout", 10*time.Minute, "task timeout")
+	sandbox := fs.String("sandbox", "", "off, auto or required (default: $"+EnvSandbox+", else auto)")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil || len(pos) > 1 || (*format != "table" && *format != "ctis") {
 		_, _ = fmt.Fprint(stderr, usage)
+		return ExitUsage
+	}
+	if err := InstallSandbox(*sandbox, stderr); err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
 		return ExitUsage
 	}
 	path := manifestPath(first(pos))
@@ -310,9 +320,14 @@ func cmdTest(args []string, stdout, stderr io.Writer) int {
 	scope := fs.Bool("scope", false, "run the scope check (no connection to an address the tool was not given)")
 	fuzz := fs.Duration("fuzz", 0, "fuzz the output parser for this long (0: off)")
 	timeout := fs.Duration("timeout", 30*time.Second, "bound of each check")
+	sandbox := fs.String("sandbox", "", "off, auto or required (default: $"+EnvSandbox+", else auto)")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil || len(pos) > 1 {
 		_, _ = fmt.Fprint(stderr, usage)
+		return ExitUsage
+	}
+	if err := InstallSandbox(*sandbox, stderr); err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
 		return ExitUsage
 	}
 	return Test(manifestPath(first(pos)), conformance.ContractOptions{Timeout: *timeout, Capability: *capSuites, Scope: *scope, Fuzz: *fuzz}, *update, stdout)

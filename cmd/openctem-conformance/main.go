@@ -39,5 +39,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "usage: openctem-conformance tool [-update] [-timeout 30s] <tool.yaml>  (now: openctem tool test)")
 		return toolcli.ExitUsage
 	}
+	if err := toolcli.InstallSandbox("", stderr); err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return toolcli.ExitUsage
+	}
 	return toolcli.Test(fs.Arg(0), conformance.ContractOptions{Timeout: *timeout}, *update, stdout)
 }
