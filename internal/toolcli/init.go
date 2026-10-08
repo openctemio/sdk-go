@@ -64,6 +64,15 @@ var githubCI string
 //go:embed templates/gitlab-openctem-tool.yml
 var gitlabCI string
 
+// pythonHelper is openctem_tool.py, the Python tools' protocol helper
+// (standard library only) a python scaffold gets.
+//
+//go:embed templates/openctem_tool.py
+var pythonHelper string
+
+// PythonHelper is openctem_tool.py.
+func PythonHelper() string { return pythonHelper }
+
 // GitHubCI and GitLabCI are the CI templates a scaffold gets (also in the
 // repository's ci/ directory).
 func GitHubCI() string { return githubCI }
@@ -204,6 +213,7 @@ func Scaffold(kind, capRef, name string) (map[string]scaffoldFile, tool.Manifest
 		files["go.mod"] = scaffoldFile{fmt.Sprintf("module example.com/%s\n\ngo 1.26\n\nrequire github.com/openctemio/sdk-go v%s\n", name, scaffoldSDKVersion()), 0o644}
 	case KindPython:
 		files[name+".py"] = scaffoldFile{pythonStub(name), 0o755}
+		files["openctem_tool.py"] = scaffoldFile{pythonHelper, 0o644}
 	}
 	doc, err := manifestYAML(kind, m)
 	if err != nil {
@@ -455,66 +465,28 @@ func run(ctx tool.Context, task tool.Task, cfg map[string]any) error {
 
 func pythonStub(name string) string {
 	return `#!/usr/bin/env python3
-"""` + name + `: an OpenCTEM tool speaking adapter protocol v1 (NDJSON on stdin and
-stdout). Its facts live in tool.yaml (JSON is valid YAML), which it describes
-itself with. Standard output is the protocol channel only."""
+"""` + name + `: an OpenCTEM tool in Python (standard library only).
 
-import json
-import os
-import sys
+openctem_tool.py, next to this file, speaks adapter protocol v1 for it: the
+handshake, describe (from tool.yaml, kept in its JSON form), validate,
+cancel, heartbeats and the result. This file only does the work. Standard
+output is the protocol channel: use ctx.log, or print to stderr.
+"""
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(HERE, "tool.yaml")) as f:
-    MANIFEST = json.load(f)
-MANIFEST.pop("run", None)
-KEYS = set(((MANIFEST.get("config") or {}).get("properties") or {}).keys())
+import openctem_tool as ot
 
 
-def send(msg):
-    msg["v"] = 1
-    sys.stdout.write(json.dumps(msg, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
-
-
-def run(task):
-    for target in task.get("targets", []):
-        # Look at target["value"]; send {"type": "record", ...} messages.
-        send({"type": "target_status", "target": target["ref"], "status": "done"})
-    send({"type": "result", "status": "ok"})
-
-
-def main():
-    started = False
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-        except ValueError:
-            continue
-        kind = msg.get("type")
-        if not started:
-            if kind != "hello" or 1 not in msg.get("protocol", []):
-                return 3
-            send({"type": "hello", "protocol": 1, "sdk": {"name": "` + name + `", "version": "0.1.0"}})
-            started = True
-        elif kind == "describe":
-            send({"type": "manifest", "manifest": MANIFEST})
-        elif kind == "validate":
-            unknown = sorted(set((msg.get("task", {}).get("config") or {}).keys()) - KEYS)
-            if unknown:
-                send({"type": "validation", "ok": False,
-                      "errors": [{"path": "/config/" + k, "message": "unknown key"} for k in unknown]})
-            else:
-                send({"type": "validation", "ok": True})
-        elif kind == "run":
-            run(msg["task"])
-            return 0
-    return 0
+def run(ctx, task):
+    for target in task.targets:
+        ctx.check()  # stops here when the runtime cancels the task
+        # Look at target.value (target.host_port() splits it). Report what
+        # you find with ctx.asset(target, {...}) or ctx.finding(target, {...})
+        # (CTIS); reach the network with ctx.connect(host, port), which goes
+        # through the sensor's forwarder when the task is confined.
+        ctx.done(target)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(ot.serve(run))
 `
 }
