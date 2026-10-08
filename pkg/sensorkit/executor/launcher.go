@@ -23,10 +23,14 @@ const LauncherArg = "__openctem-task"
 // base64 argument (visible in the process list: it holds paths and limits,
 // never a secret).
 type launchSpec struct {
-	Workdir    string   `json:"workdir"`
-	Cwd        string   `json:"cwd"`
-	Limits     Limits   `json:"limits"`
-	ReadDeny   []string `json:"read_deny,omitempty"`
+	Workdir  string   `json:"workdir"`
+	Cwd      string   `json:"cwd"`
+	Limits   Limits   `json:"limits"`
+	ReadDeny []string `json:"read_deny,omitempty"`
+	// Private are paths a task may not read either, though its write
+	// paths may lie beneath them: the root of every task directory, so a
+	// task sees its own directory and no sibling's.
+	Private    []string `json:"private,omitempty"`
 	WritePaths []string `json:"write_paths,omitempty"`
 	Binary     string   `json:"binary,omitempty"`
 	// Probe makes the launcher apply everything, print its Status as JSON

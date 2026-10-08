@@ -152,8 +152,8 @@ func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 	if bin, err = filepath.Abs(bin); err != nil {
 		return nil, fmt.Errorf("executor: %w", err)
 	}
-	if err := os.MkdirAll(b.cfg.WorkRoot, 0o700); err != nil {
-		return nil, fmt.Errorf("executor: work root: %w", err)
+	if err := ensurePrivateDir(b.cfg.WorkRoot); err != nil {
+		return nil, err
 	}
 	var rnd [6]byte
 	_, _ = rand.Read(rnd[:])
@@ -189,6 +189,7 @@ func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 		Cwd:        cwd,
 		Limits:     limits.withDefaults(),
 		ReadDeny:   b.deny,
+		Private:    b.private(),
 		WritePaths: append([]string{dir}, spec.WritePaths...),
 		Binary:     bin,
 	}
@@ -200,6 +201,27 @@ func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 	t.cmdPath = b.launcher
 	t.args = append([]string{LauncherArg, enc, "--"}, spec.Argv...)
 	return t, nil
+}
+
+// private are the paths hidden from every task besides the deny paths: the
+// task root, where each task's own directory is granted back as its write
+// path. Concurrent tasks, of one tenant or of several on a shared sensor,
+// cannot read or list one another's files.
+func (b *ProcessBackend) private() []string {
+	var out []string
+	for _, root := range []string{b.cfg.WorkRoot, TaskRoot()} {
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		if r, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = r
+		}
+		if abs = filepath.Clean(abs); abs != "/" && !slices.Contains(out, abs) {
+			out = append(out, abs)
+		}
+	}
+	return out
 }
 
 // denied reports whether p is, or is under, a protected path.

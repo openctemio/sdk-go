@@ -8,7 +8,8 @@
 // small launcher (the sensor's own binary, re-executed) that confines it
 // before the tool starts:
 //
-//   - a private, throwaway working directory (also its HOME and TMPDIR);
+//   - a private, throwaway working directory (also its HOME and TMPDIR),
+//     under a task root hidden from every other task;
 //   - resource limits: memory (RLIMIT_DATA), processes (RLIMIT_NPROC),
 //     file size, open files, CPU time, no core dumps;
 //   - no_new_privs: no setuid/file-capability escalation;
