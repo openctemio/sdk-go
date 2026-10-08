@@ -1,6 +1,7 @@
 # OpenCTEM SDK
 
-Go SDK for building integrations with the OpenCTEM security platform.
+Go SDK for building sensors, tools and integrations for the OpenCTEM
+platform. Product documentation: https://docs.openctem.io.
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-blue?logo=go)](https://golang.org/)
@@ -39,50 +40,58 @@ go run github.com/openctemio/sdk-go/cmd/sensor-migrate@v0.7.0 -dry-run   # revie
 go run github.com/openctemio/sdk-go/cmd/sensor-migrate@v0.7.0            # apply
 ```
 
-The wire to the platform (protocol v1) is unchanged, and the SDK migrates a
-sensor's saved credentials and old `AGENT_*` settings by itself. See
+The SDK migrates a sensor's saved credentials and old `AGENT_*` settings by
+itself. Current SDK releases speak only sensor protocol v2 (protocol v1 is
+retired), so they need an OpenCTEM platform from 2026-10 on. See
 [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## Quick Start
 
-### API Client
+### Push a report
 
 ```go
 package main
 
 import (
-    "context"
-    "github.com/openctemio/sdk-go/pkg/client"
+	"context"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/openctemio/sdk-go/pkg/client"
+	"github.com/openctemio/sdk-go/pkg/ctis"
 )
 
 func main() {
-    // Create client
-    c := client.New(
-        client.WithBaseURL("http://localhost:8080"),
-        client.WithAPIKey("your-api-key"),
-    )
+	c := client.New(&client.Config{
+		BaseURL: "https://openctem.example.com", // the API base URL, not the web UI
+		APIKey:  os.Getenv("API_KEY"),           // a sensor key from Settings > Sensors
+	})
+	defer c.Close()
 
-    // List assets
-    assets, err := c.Assets().List(context.Background())
-    if err != nil {
-        panic(err)
-    }
+	report := ctis.NewReport()
+	report.Tool = &ctis.Tool{Name: "my-scanner", Version: "1.0.0"}
+	report.Findings = append(report.Findings, ctis.Finding{
+		ID:       "finding-001",
+		Type:     ctis.FindingTypeVulnerability,
+		Title:    "SQL Injection",
+		Severity: ctis.SeverityHigh,
+		Location: &ctis.FindingLocation{Path: "src/db.go", StartLine: 42},
+	})
 
-    // Create finding
-    finding := &client.Finding{
-        Title:    "SQL Injection",
-        Severity: "HIGH",
-        // ...
-    }
-    err = c.Findings().Create(context.Background(), finding)
+	res, err := c.PushFindings(context.Background(), report)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%+v\n", res)
 }
 ```
 
 ## Build a sensor in 30 lines
 
 `pkg/sensorkit` is the whole sensor runtime in one call. A sensor implements
-its tools; the kit reads the settings, connects (protocol v2 negotiated on
-hello, v1 for what an older platform lacks), reports the tools on every
+its tools; the kit reads the settings, connects (sensor protocol v2, features
+negotiated on hello), reports the tools on every
 heartbeat, waits while the key is rejected, follows the heartbeat doorbell,
 claims commands into resource-sized slots, delivers results through the
 durable outbox, renews the API key and drains on SIGTERM.
@@ -112,7 +121,9 @@ func main() {
 }
 ```
 
-Run it with `API_URL` and `API_KEY` (a sensor key from Settings > Sensors).
+Run it with `API_URL`. Without `API_KEY` the sensor pairs on first start
+(an administrator approves it under Sensors > Pair a sensor); with `API_KEY`
+(a sensor key from Settings > Sensors) it uses that key.
 [examples/minimal-sensor](examples/minimal-sensor) is a complete one with an
 in-process tool.
 
@@ -250,55 +261,63 @@ it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
 | `pkg/client` | API client for OpenCTEM API |
 | `pkg/sensorkit` | The sensor runtime in one call: settings, connection, heartbeat, commands, outbox, key renewal, drain |
 | `pkg/core` | Core types and interfaces |
+| `pkg/tool` | The tool contract: manifest, run function, emitter, `Define` builder |
+| `pkg/testkit` | Run a tool in-process with the runtime's rules |
+| `pkg/conformance` | Fake platform and the sensor and tool conformance suites |
 | `pkg/errors` | Error types and handling |
 | `pkg/retry` | Retry utilities |
 | `pkg/metrics` | Prometheus metrics |
 | `pkg/health` | Health check utilities |
-| `pkg/transport` | HTTP/gRPC transport |
+| `pkg/transport/grpc` | Deprecated gRPC transport (no platform serves it; removal planned) |
 | `pkg/httpsec` | Hardened HTTP client (SafeHTTPClient) with SSRF protection |
 | `pkg/credentials` | Credential management |
-| `pkg/connectors` | SCM connectors (GitHub, GitLab) |
-| `pkg/enrichers` | Data enrichment (CVE, NVD) |
+| `pkg/connectors` | Deprecated SCM connector base (GitHub) |
+| `pkg/enrichers` | Deprecated EPSS and KEV enrichers (the platform enriches findings) |
 | `pkg/audit` | Structured audit logging for sensor operations |
-| `pkg/platform` | Components for running sensors in platform mode |
+| `pkg/platform` | Credentials file and key renewal used by `sensorkit` |
 | `pkg/sensorproto/legacyv1` | Migration of pre-sensor settings and credentials (frozen) |
-| `pkg/ctis` | Common Threat Intelligence Schema (CTIS) types |
+| `pkg/ctis` | CTIS (CTEM Ingest Schema) types, re-exported from `github.com/openctemio/ctis` |
 
 ## Examples
 
 See [examples/](examples/) for complete examples:
 - A tool in Python with no SDK, and how to check it with the conformance kit ([python-adapter](examples/python-adapter), [docs/adapter-protocol.md](docs/adapter-protocol.md))
 - A complete sensor on `pkg/sensorkit` ([minimal-sensor](examples/minimal-sensor))
-- Basic API client usage
-- Scanner integration
-- CI/CD pipeline integration
-- Custom scanner development
+- A custom scanner, adapter, connector and provider ([custom-scanner](examples/custom-scanner), [custom-adapter](examples/custom-adapter), [custom-connector](examples/custom-connector), [custom-provider](examples/custom-provider))
+- An integration test against a platform ([integration-test](examples/integration-test))
+- CI scanning that reports to OpenCTEM lives in [openctemio/ci](https://github.com/openctemio/ci) (GitHub Action, GitLab templates, `openctem-ci`)
 
 ## Building
 
 ```bash
 # Run tests
-go test ./...
-
-# Generate proto files
-make proto
+make test        # or: go test ./...
 
 # Lint
 make lint
 ```
 
+## Documentation
+
+- Product documentation: https://docs.openctem.io
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the SDK's parts fit together
+- [docs/SECURITY.md](docs/SECURITY.md): the SDK's security controls
+- [docs/SETTINGS.md](docs/SETTINGS.md): every sensor setting the SDK reads
+- [docs/STABILITY.md](docs/STABILITY.md): stability tiers and versioning
+- [docs/tools/cli.md](docs/tools/cli.md): the `openctem tool` CLI
+
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Security
+
+Report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
 
 ## Related Projects
 
 - [openctemio/openctem](https://github.com/openctemio/openctem) - the platform: API (`api/`) and web console (`web/`), formerly openctemio/api and openctemio/ui
 - [openctemio/sensor](https://github.com/openctemio/sensor) - the OpenCTEM sensor (binary `openctemio-sensor`, image `ghcr.io/openctemio/sensor`)
-
-## Enterprise Edition
-
-For advanced features and enterprise support, see [OpenCTEM Enterprise](https://openctem.io).
 
 ## License
 

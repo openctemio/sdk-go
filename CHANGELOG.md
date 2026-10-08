@@ -35,8 +35,7 @@ Unreleased changes are kept one file per change in
   OpenCTEM derives a secret finding's identity from `masked_value`, so the
   first scan after the upgrade reports such secrets under new identities.
 
-- **Sensor-local policy** (api RFC-040 §5.7, owner decisions Q3 (a) and
-  Q4 (a)). The network owner writes a read-only YAML file at install time
+- **Sensor-local policy** (api RFC-040 §5.7). The network owner writes a read-only YAML file at install time
   (`SENSOR_LOCAL_POLICY`, `sensorkit.Options.LocalPolicyPath`, default
   `/etc/openctem/sensor-policy.yaml` when it exists; `apiVersion:
   openctem.io/sensor-policy/v1`): `targets.allow` / `targets.deny` (CIDRs,
@@ -278,8 +277,8 @@ Unreleased changes are kept one file per change in
   `ExecResult` carries the sandbox status it ran under. No Docker socket is
   ever used.
 
-- **Preflight checks and the config report** (api RFC-033, config report;
-  OpenCTEM research/26). What a sensor used to print to stderr only is now
+- **Preflight checks and the config report** (api RFC-033, config report).
+  What a sensor used to print to stderr only is now
   also a check result with a stable id, a status, a code and typed
   parameters, delivered to a platform that lists the `config_report`
   feature (`PUT /api/v2/sensor/config-report`, at most 64 KiB) and named by
@@ -314,8 +313,8 @@ Unreleased changes are kept one file per change in
   characters are stripped, and every field is bounded
   (`core.ConfigReport.Finalize`). The conformance fake serves the feature
   (`SetConfigReport`, `ConfigReports`).
-- **Local policy schema v2; v1 frozen** (owner decision D13, api
-  research/25 §3.3). `openctem.io/sensor-policy/v1` never gains a key again
+- **Local policy schema v2; v1 frozen**.
+  `openctem.io/sensor-policy/v1` never gains a key again
   (a sensor refuses a key it does not know, so a new v1 key would stop every
   older sensor). `openctem.io/sensor-policy/v2` reads every v1 key plus
   `managed: {accept: bool}` (default true; false = the owner refuses
@@ -332,7 +331,7 @@ Unreleased changes are kept one file per change in
   policy to the running poller, executor and heartbeat;
   `Kit.ReloadLocalPolicyOnSIGHUP` reloads on every SIGHUP.
 
-- **Structured policy refusals** (api research/25 §3.6, D8). A command a
+- **Structured policy refusals**. A command a
   policy refused (the local policy's admission or executor checks, the kill
   switch, the platform's tool gate) is reported with
   `core.CommandResult.Refusal` (`core.Refusal{Layer, Rule, Detail}`; layers
@@ -344,8 +343,8 @@ Unreleased changes are kept one file per change in
   `Layer`. Values are bounded: unknown layers become `local`, malformed rules
   `unknown`, details lose control and bidi characters and stop at 512 bytes.
 
-- **HTTP probe results keep what they learned about the server** (api
-  research/22 E5). `core.LiveHost` gains `TLS` (`core.TLSLeaf`: the leaf
+- **HTTP probe results keep what they learned about the server**.
+  `core.LiveHost` gains `TLS` (`core.TLSLeaf`: the leaf
   certificate's subject, SANs, issuer, serial, validity and SHA-256
   fingerprint), `FaviconMMH3`, `JARM`, `ASN` (`core.ASN`) and `CDNType`.
   `pkg/ctis` follows ctis to the commit that adds `LiveHostInput.TLS`,
@@ -494,8 +493,8 @@ Unreleased changes are kept one file per change in
   out-of-band callbacks (interactsh), and custom templates run when
   SENSOR_TEMPLATE_SIGNING_KEYS is set" (it said both "are allowed").
 
-- **`pkg/ctis` imports `github.com/openctemio/ctis`** (owner decision Q3,
-  research 16 G2), pinned to ctis main at `7d7d5ec` (untagged; includes
+- **`pkg/ctis` imports `github.com/openctemio/ctis`**,
+  pinned to ctis main at `7d7d5ec` (untagged; includes
   ctis#14 secret-snippet masking in `FromSARIF`, ctis#15 recon hardening and
   ctis#16 SARIF suppressions). The hand copy had drifted and the sensor ran
   stale converters. Fixed by the switch:
@@ -523,7 +522,7 @@ Unreleased changes are kept one file per change in
   Bumping CTIS is `go get github.com/openctemio/ctis@<ver>` plus
   `go generate ./pkg/ctis`.
 - **Every report the runtime pushes states `coverage_type`** (CTIS spec 4.5:
-  an absent value is not `full`; research 16 G4, owner decision Q5). A scan
+  an absent value is not `full`). A scan
   command's report is `partial` when the scanner says the run stopped
   part-way (`ScanResult.Error`) or the report lists `failed_targets`, even if
   the parser declared `full`; otherwise a value the parser declared is kept;
@@ -805,8 +804,8 @@ Unreleased changes are kept one file per change in
 
 ### Deprecated
 
-- **The tool wrappers moved to the sensor** (owner decision 2026-10-02:
-  sdk-go is the shared interfaces, runtime and safety layer). These packages
+- **The tool wrappers moved to the sensor** (sdk-go is the
+  shared interfaces, runtime and safety layer). These packages
   are deprecated and are removed in v0.17.0; their code now lives in
   `github.com/openctemio/sensor/internal/...`:
   `pkg/scanners` (the registry) and `pkg/scanners/{nuclei,trivy,semgrep,betterleaks,codeql}`
@@ -944,7 +943,7 @@ Unreleased changes are kept one file per change in
   - **CA file.** `SENSOR_CA_CERT_FILE` is now also trusted for content
     downloads (`SetContentRootCAs`), so a TLS-inspecting egress proxy works
     for both paths.
-- **Scanner proxy mode** (api RFC-034 G1, owner decision O2).
+- **Scanner proxy mode** (api RFC-034 G1).
   - **Setting.** `SENSOR_SCAN_PROXY` (or `OPENCTEM_SDK_SCANNER_PROXY`):
     - `inherit` (default, unchanged behavior): scanner processes get the
       sensor's `HTTP(S)_PROXY` / `ALL_PROXY` / `NO_PROXY`;
@@ -964,8 +963,7 @@ Unreleased changes are kept one file per change in
   through a proxy, which resolves it. The KEV and EPSS enrichers register
   their default hosts.
 
-- **Platform policy and slim heartbeats** (api RFC-033 §6.12, owner decisions
-  O2 and O3).
+- **Platform policy and slim heartbeats** (api RFC-033 §6.12).
   - **Manifest answer.** It now carries the platform's policy (allowed
     tools, capabilities and capacity, after the administrator's narrowing)
     and `heartbeat.omit_inventory`.
