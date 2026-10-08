@@ -451,6 +451,10 @@ func New(opts Options) (*Kit, error) {
 			Verbose:  s.verbose,
 			Protocol: protocol,
 		})
+		if err := k.enableTransportV3(); err != nil {
+			k.closeClient()
+			return nil, err
+		}
 		// Durable outbox: results are on disk before the first send.
 		if err := EnableOutbox(k.client, s.outbox, s.verbose, k.out, k.errw); err != nil {
 			k.closeClient()
@@ -851,6 +855,7 @@ func (k *Kit) Run(ctx context.Context) error {
 		doorbell = core.NewDoorbell(&core.DoorbellConfig{OnRotateKey: renewNow, Verbose: k.s.verbose})
 		s.SetDoorbell(doorbell)
 	}
+	k.startTransport(ctx, doorbell)
 
 	if cs, ok := k.opts.Content.(ContentStarter); ok {
 		cs.Start(ctx)
@@ -1238,4 +1243,52 @@ func (r *commandRouter) Execute(ctx context.Context, cmd *core.Command) (*core.C
 		}
 	}
 	return r.fallback.Execute(ctx, cmd)
+}
+
+// reasonSuffix is " (reason)" or "".
+func reasonSuffix(r string) string {
+	if r == "" {
+		return ""
+	}
+	return " (" + r + ")"
+}
+
+// enableTransportV3 installs sensor protocol v3 for a paired sensor (api
+// RFC-059); the certificate and the pinned CA live next to the key.
+func (k *Kit) enableTransportV3() error {
+	s := &k.s
+	if s.signer == nil || k.client == nil {
+		return nil
+	}
+	mode, err := client.ParseTransportMode(os.Getenv(EnvTransport))
+	if err != nil {
+		return usageError(err)
+	}
+	certDir := ""
+	if s.stateDir != "" {
+		certDir = identity.NewStore(s.stateDir).Dir()
+	}
+	errw := k.errw
+	k.client.EnableTransportV3(client.TransportOptions{Mode: mode, CertDir: certDir,
+		Logf: func(format string, args ...any) { _, _ = fmt.Fprintf(errw, format+"\n", args...) }})
+	return nil
+}
+
+// startTransport negotiates the transport before the first heartbeat; the
+// control stream pushes the doorbell (api RFC-059). An identity refusal is
+// reported, never answered with a weaker transport.
+func (k *Kit) startTransport(ctx context.Context, doorbell *core.Doorbell) {
+	if k.client == nil {
+		return
+	}
+	if doorbell != nil {
+		k.client.SetControlEventHandler(doorbell.Handle)
+	}
+	if err := k.client.StartTransport(ctx); err != nil {
+		_, _ = fmt.Fprintf(k.errw, "Transport: %v\n", err)
+	}
+	if k.s.signer != nil {
+		st := k.client.TransportStatus()
+		_, _ = fmt.Fprintf(k.out, "  Transport: %s%s\n", st.Binding, reasonSuffix(st.FallbackReason))
+	}
 }

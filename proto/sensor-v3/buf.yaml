@@ -1,0 +1,12 @@
+# Sensor protocol v3 (openctem api RFC-059). The .proto is a byte-for-byte copy
+# of openctem api/proto/openctem/sensor/v3/sensor.proto; CI checks the copy and
+# the generated code (scripts/check-proto-v3.sh).
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE

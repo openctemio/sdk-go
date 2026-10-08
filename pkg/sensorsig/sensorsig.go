@@ -27,6 +27,7 @@ package sensorsig
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -215,6 +216,11 @@ func (s *Signer) PublicKey() ed25519.PublicKey {
 	pub, _ := s.key.Public().(ed25519.PublicKey)
 	return pub
 }
+
+// TLSKey is the key as a crypto.Signer, for the client certificate of
+// sensor protocol v3's mTLS binding (the certificate certifies this same
+// key). It never leaves the process.
+func (s *Signer) TLSKey() crypto.Signer { return s.key }
 
 // SignBytes signs msg with the key (for the pairing transcripts).
 func (s *Signer) SignBytes(msg []byte) []byte { return ed25519.Sign(s.key, msg) }
