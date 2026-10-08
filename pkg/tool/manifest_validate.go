@@ -437,10 +437,20 @@ func (m Manifest) validateRun(add func(p, format string, args ...any), schema *c
 		if strings.ContainsAny(a, "\x00\n\r") {
 			add(ptr, "contains a NUL or a line break")
 		}
+		special := 0
 		for _, mm := range placeholder.FindAllStringSubmatch(a, -1) {
 			if msg := checkPlaceholder(mm[1], schema); msg != "" {
 				add(ptr, "%s: %s", mm[0], msg)
 			}
+			if _, form, _, ok := ConfigArg(mm[1]); ok && form != ArgScalar {
+				special++
+				if form == ArgSwitch && strings.TrimSpace(a) != mm[0] {
+					add(ptr, "%s: a switch must be the whole argument", mm[0])
+				}
+			}
+		}
+		if special > 1 {
+			add(ptr, "at most one optional, list or switch placeholder per argument")
 		}
 		if rest := placeholder.ReplaceAllString(a, ""); strings.Contains(rest, "{{") || strings.Contains(rest, "}}") {
 			add(ptr, "unbalanced placeholder braces")
@@ -452,22 +462,37 @@ func checkPlaceholder(name string, schema *core.SettingsSchema) string {
 	if slices.Contains(argvPlaceholders, name) {
 		return ""
 	}
-	key, ok := strings.CutPrefix(name, "config.")
+	key, form, _, ok := ConfigArg(name)
 	if !ok {
-		return "unknown placeholder (allowed: {{config.<key>}}, " + strings.Join(argvPlaceholders, ", ") + ")"
+		if strings.HasPrefix(name, "config.") {
+			return "not a config placeholder ({{config.<key>}}, {{config.<key>?}}, {{config.<key>...}} or {{config.<key>?:-flag}})"
+		}
+		return "unknown placeholder (allowed: {{config.<key>}} and its forms, " + strings.Join(argvPlaceholders, ", ") + ")"
 	}
 	if schema == nil {
 		return "the tool has no config schema"
 	}
 	p := schema.Property(key)
-	if p == nil || strings.Contains(key, ".") {
+	if p == nil {
 		return "not a top-level config key"
 	}
-	switch p.Type {
-	case "string", "integer", "number", "boolean":
+	scalar := func(t string) bool { return t == "string" || t == "integer" || t == "number" || t == "boolean" }
+	switch form {
+	case ArgList:
+		if p.Type == "array" && p.Items != nil && scalar(p.Items.Type) {
+			return ""
+		}
+		return "{{config.<key>...}} needs an array of scalars"
+	case ArgSwitch:
+		if p.Type == "boolean" {
+			return ""
+		}
+		return "{{config.<key>?:-flag}} needs a boolean key"
+	}
+	if scalar(p.Type) {
 		return ""
 	}
-	return "only scalar config keys can be placeholders"
+	return "only scalar config keys can be placeholders (an array: {{config.<key>...}})"
 }
 
 func checkRelPath(p string) string {
