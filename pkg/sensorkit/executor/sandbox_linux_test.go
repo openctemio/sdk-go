@@ -46,6 +46,20 @@ func hostileTool(mode string, args []string) int {
 		return report(err)
 	case "write":
 		return report(os.WriteFile(args[0], []byte("pwned"), 0o600))
+	case "list":
+		_, err := os.ReadDir(args[0])
+		return report(err)
+	case "roundtrip":
+		wd, err := os.Getwd()
+		if err != nil {
+			return report(err)
+		}
+		p := filepath.Join(wd, "tmp", "roundtrip.txt")
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			return report(err)
+		}
+		_, err = os.ReadFile(p)
+		return report(err)
 	case "env":
 		fmt.Println(os.Getenv("HOME"), os.Getenv("TMPDIR"))
 		wd, _ := os.Getwd()

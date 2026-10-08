@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -44,9 +45,11 @@ const (
 var extraWritable = []string{"/dev/null", "/dev/zero", "/dev/full", "/dev/tty", "/dev/shm"}
 
 // applyLandlock restricts this process: read and execute everywhere except
-// under the deny paths; write (create, remove, truncate, rename) only under
-// the write paths. It returns the ABI used.
-func applyLandlock(deny, write []string) (int, error) {
+// under the deny and private paths; write (create, remove, truncate,
+// rename) only under the write paths, which may lie under a private path
+// (the task's own directory under the task root) but never under a deny
+// path. It returns the ABI used.
+func applyLandlock(deny, private, write []string) (int, error) {
 	abiRaw, _, e := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
 	if e != 0 {
 		return 0, errLandlockUnsupported
@@ -70,7 +73,7 @@ func applyLandlock(deny, write []string) (int, error) {
 	rs := int(fdRaw)
 	defer func() { _ = unix.Close(rs) }()
 
-	readable, err := readablePaths(deny)
+	readable, err := readablePaths(append(slices.Clone(deny), private...))
 	if err != nil {
 		return 0, err
 	}
