@@ -39,9 +39,12 @@ type Config struct {
 	// way out is its forwarder (TaskSpec.EgressProxy, EgressDNS). It needs
 	// unprivileged user namespaces (a container seccomp profile that
 	// allows them; on a host with AppArmor's restriction, a profile for the
-	// sensor). Where they are not available, auto mode runs tasks
-	// unconfined and lists why in Status.Missing; required mode refuses.
+	// sensor). Where they are not available, tasks run unconfined and
+	// Status.NetworkMissing says why, unless RequireNetwork is set.
 	ConfineNetwork bool
+	// RequireNetwork makes NewProcessBackend fail when ConfineNetwork
+	// cannot be enforced (a shared sensor, where it is a requirement).
+	RequireNetwork bool
 }
 
 // ProcessBackend runs each task as a child process, through the launcher
@@ -59,8 +62,24 @@ type ProcessBackend struct {
 // NewProcessBackend checks what this host enforces by running the launcher
 // once in probe mode, and returns the backend. With ModeRequired it fails
 // unless every control is enforced; with ModeAuto it degrades and lists what
-// is missing in Status.
+// is missing in Status. With RequireNetwork it fails unless tasks' network
+// is confined.
 func NewProcessBackend(cfg Config) (*ProcessBackend, error) {
+	b, err := newProcessBackend(cfg)
+	if err == nil && cfg.RequireNetwork && !b.confine {
+		why := b.status.NetworkMissing
+		if why == "" {
+			why = strings.Join(b.status.Missing, "; ")
+		}
+		if why == "" {
+			why = "sandbox mode " + string(b.cfg.Mode)
+		}
+		return nil, fmt.Errorf("executor: network confinement required but not available: %s", why)
+	}
+	return b, err
+}
+
+func newProcessBackend(cfg Config) (*ProcessBackend, error) {
 	if cfg.Mode == "" {
 		cfg.Mode = ModeAuto
 	}
@@ -121,10 +140,13 @@ func NewProcessBackend(cfg Config) (*ProcessBackend, error) {
 			b.confine = true
 		} else {
 			// Without network confinement the rest of the sandbox still
-			// applies: probe again and say what is missing.
+			// applies: probe again and say why the network is not.
 			netErr := err
+			if cfg.RequireNetwork {
+				return nil, fmt.Errorf("executor: network confinement required but not available: %w", netErr)
+			}
 			if st, err = probe(launcher, b.deny, cfg.Limits, false); err == nil {
-				st.Missing = append(st.Missing, "network confinement: "+netErr.Error())
+				st.NetworkMissing = netErr.Error()
 			}
 		}
 	}

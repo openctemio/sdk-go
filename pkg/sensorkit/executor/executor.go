@@ -250,6 +250,9 @@ type Status struct {
 	// apply instead. Code from outside the project must not run on a
 	// backend without it.
 	NetworkEnforced bool `json:"network_enforced"`
+	// NetworkMissing says why network confinement was asked for and is not
+	// enforced (empty when it is, or was not asked for).
+	NetworkMissing string `json:"network_missing,omitempty"`
 	// Missing lists the controls this host could not enforce, and why.
 	Missing []string `json:"missing,omitempty"`
 }
