@@ -183,7 +183,12 @@ http:
 
 - **Go tools:** `ctx.HTTP()` applies it. A request's own `User-Agent` or header still wins.
 - **Exec tools:** pass `{{http.user_agent}}` to the program (`"-H", "User-Agent: {{http.user_agent}}"`).
-- **Adapters:** read it from the manifest they describe.
+- **Adapters:** read the effective settings in `run.task.http`.
+- **The network owner decides last.** The sensor's local policy (schema `openctem.io/sensor-policy/v3`) can set `http: {user_agent: "...", allow_insecure_tls: false}`:
+  - its User-Agent replaces every tool's;
+  - a tool that skips TLS verification is refused with `refused_by_policy`.
+
+  The runtime puts the effective settings in the task (`task.http`); a job cannot set them.
 - **Refused:**
   - `Authorization`, `Cookie` and `Proxy-*` headers (credentials come from the credential broker, never from tool.yaml);
   - framing headers;
