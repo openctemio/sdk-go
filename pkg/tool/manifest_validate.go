@@ -44,6 +44,7 @@ const (
 var argvPlaceholders = []string{
 	"target.value", "target.host", "target.port", "target.url",
 	"task.targets_file", "task.targets_json", "task.config_file", "task.web_scope_file", "task.output", "task.workdir",
+	"http.user_agent",
 }
 
 // Programs an argv may not start: a shell or an interpreter given code on
@@ -71,6 +72,7 @@ func (m Manifest) Validate() error {
 	if m.APIVersion != APIVersion {
 		add("/apiVersion", "must be %q", APIVersion)
 	}
+	m.HTTP.validate(m.Permissions.Network, add)
 	if !nameRE.MatchString(m.Name) {
 		add("/name", "must match ^[a-z][a-z0-9-]{1,62}$")
 	}
