@@ -56,6 +56,12 @@ type Scope struct {
 	Vendor []string
 	// Ports, when not empty, are the only destination ports allowed.
 	Ports []int
+	// AnyPublic admits any name or address that resolves to public
+	// addresses only (a tool whose network class reaches the internet
+	// through the sensor's egress): loopback, private, link-local and
+	// metadata addresses stay refused, and every destination is still
+	// recorded.
+	AnyPublic bool
 }
 
 // Verdicts of a Record.
@@ -164,7 +170,15 @@ func normName(n string) string { return strings.TrimSuffix(strings.ToLower(strin
 func alwaysRefused(a netip.Addr) bool {
 	a = a.Unmap()
 	return !a.IsValid() || a.IsUnspecified() || a.IsMulticast() || a.IsLinkLocalUnicast() ||
-		a.IsLinkLocalMulticast() || a.IsInterfaceLocalMulticast()
+		a.IsLinkLocalMulticast() || a.IsInterfaceLocalMulticast() || slices.Contains(metadataAddrs, a)
+}
+
+// metadataAddrs are cloud metadata and host-agent addresses outside the
+// link-local range.
+var metadataAddrs = []netip.Addr{
+	netip.MustParseAddr("fd00:ec2::254"),   // AWS IMDS over IPv6
+	netip.MustParseAddr("100.100.100.200"), // Alibaba Cloud metadata
+	netip.MustParseAddr("168.63.129.16"),   // Azure host agent (wireserver)
 }
 
 // publicOnly refuses what a vendor host must never resolve to: besides
@@ -204,7 +218,9 @@ func (f *Forwarder) resolveHost(ctx context.Context, host string) ([]netip.Addr,
 		switch {
 		case alwaysRefused(a):
 			return nil, fmt.Errorf("%w: %s is a link-local, metadata or reserved address", ErrRefused, a)
-		case !f.inPrefixes(a):
+		case f.inPrefixes(a):
+		case f.scope.AnyPublic && !publicOnly(a):
+		default:
 			return nil, fmt.Errorf("%w: %s is not a target", ErrRefused, a)
 		}
 		return []netip.Addr{a}, nil
@@ -221,7 +237,7 @@ func (f *Forwarder) resolveHost(ctx context.Context, host string) ([]netip.Addr,
 		}
 		return out, nil
 	}
-	if f.isVendor(h) {
+	if f.isVendor(h) || f.scope.AnyPublic {
 		lookup := f.LookupVendor
 		if lookup == nil {
 			lookup = func(ctx context.Context, host string) ([]netip.Addr, error) {
@@ -239,7 +255,7 @@ func (f *Forwarder) resolveHost(ctx context.Context, host string) ([]netip.Addr,
 			}
 		}
 		if len(out) == 0 {
-			return nil, fmt.Errorf("%w: vendor host %s resolves to no public address", ErrRefused, h)
+			return nil, fmt.Errorf("%w: %s resolves to no public address", ErrRefused, h)
 		}
 		return out, nil
 	}

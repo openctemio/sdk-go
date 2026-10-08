@@ -2,7 +2,9 @@ package egress
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"net/netip"
 	"time"
@@ -66,6 +68,44 @@ func (f *Forwarder) resolveName(ctx context.Context, name string) ([]netip.Addr,
 		return nil, ErrRefused
 	}
 	return f.resolveHost(ctx, name)
+}
+
+// ServeDNSStream answers queries on stream connections (RFC 1035 TCP
+// framing: a two-byte length before each message), as the relay of a
+// confined task sends them, until ctx ends or ln is closed.
+func (f *Forwarder) ServeDNSStream(ctx context.Context, ln net.Listener) error {
+	go func() { <-ctx.Done(); _ = ln.Close() }()
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		go func() {
+			defer c.Close()
+			for {
+				_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+				var l [2]byte
+				if _, err := io.ReadFull(c, l[:]); err != nil {
+					return
+				}
+				q := make([]byte, binary.BigEndian.Uint16(l[:]))
+				if _, err := io.ReadFull(c, q); err != nil {
+					return
+				}
+				resp, err := f.AnswerDNS(ctx, q)
+				if err != nil || len(resp) > 65535 {
+					return
+				}
+				binary.BigEndian.PutUint16(l[:], uint16(len(resp))) //nolint:gosec // bounded above
+				if _, err := c.Write(append(l[:], resp...)); err != nil {
+					return
+				}
+			}
+		}()
+	}
 }
 
 // ServeDNS answers queries on pc until ctx ends or pc is closed.
