@@ -32,6 +32,7 @@ type launchSpec struct {
 	// task sees its own directory and no sibling's.
 	Private    []string `json:"private,omitempty"`
 	WritePaths []string `json:"write_paths,omitempty"`
+	ReadPaths  []string `json:"read_paths,omitempty"`
 	Binary     string   `json:"binary,omitempty"`
 	// Confined: the launcher runs in its own user, network and mount
 	// namespaces (made by the parent at clone time). It brings up

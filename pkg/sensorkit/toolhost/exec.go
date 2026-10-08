@@ -80,7 +80,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	defer eg.stop()
 	t, err := be.Prepare(executor.TaskSpec{
 		ID: m.Name, Argv: argv, Env: core.ScannerEnvironFor(envOwner(m), o.Env), SetEnv: o.Env, Dir: p.workdir,
-		WritePaths: append([]string{p.workdir}, o.WritePaths...), Limits: o.Limits,
+		WritePaths: append([]string{p.workdir}, o.WritePaths...), ReadPaths: p.contentPaths, Limits: o.Limits,
 		Network: networkClass(m.Permissions.Network), Stdout: stdout, Stderr: stderr,
 		Hooks:       executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: core.ApplyScannerPriority, Finished: core.ReapScannerProcess},
 		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(),
@@ -230,6 +230,11 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 		// arguments; an element whose optional or list value is empty is
 		// left out (the tool then uses its own default).
 		if whole := wholePlaceholder(a); whole != "" {
+			// A content slot's packs, one argument each.
+			if slot, ok := strings.CutSuffix(strings.TrimPrefix(whole, "content."), "..."); ok && strings.HasPrefix(whole, "content.") {
+				out = append(out, p.task.ContentPaths(slot)...)
+				continue
+			}
 			if key, form, flag, ok := tool.ConfigArg(whole); ok && (form == tool.ArgSwitch || form == tool.ArgList) {
 				if form == tool.ArgSwitch {
 					if b, _ := cfg[key].(bool); b {
@@ -245,7 +250,7 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 				continue
 			}
 		}
-		if emptyOptional(a, cfg) {
+		if emptyOptional(a, cfg) || emptyContent(a, p.task) {
 			continue
 		}
 		out = append(out, placeholderRE.ReplaceAllStringFunc(a, func(ph string) string {
@@ -266,6 +271,8 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 				return p.workdir
 			case name == "http.user_agent":
 				v = toolrt.EffectiveUserAgent(p.m)
+			case strings.HasPrefix(name, "content."):
+				return strings.Join(p.task.ContentPaths(strings.TrimSuffix(strings.TrimPrefix(name, "content."), "...")), ",")
 			case strings.HasPrefix(name, "target."):
 				if len(p.task.Targets) != 1 {
 					subErr = tool.AsError(tool.Invalid("{{%s}} needs exactly one target per task; this task has %d", name, len(p.task.Targets)))
@@ -327,6 +334,17 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 		return nil, subErr
 	}
 	return out, nil
+}
+
+// emptyContent reports whether an element names a content slot the task
+// has no pack for (the element is left out; the tool uses its default).
+func emptyContent(a string, task tool.Task) bool {
+	for _, name := range tool.ArgvPlaceholders(a) {
+		if slot, ok := strings.CutPrefix(name, "content."); ok && len(task.ContentPaths(strings.TrimSuffix(slot, "..."))) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // wholePlaceholder is the placeholder name when the element is exactly one

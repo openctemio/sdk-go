@@ -73,6 +73,8 @@ func (m Manifest) Validate() error {
 		add("/apiVersion", "must be %q", APIVersion)
 	}
 	m.HTTP.validate(m.Permissions.Network, add)
+
+	validateContent(m.Content, add)
 	if !nameRE.MatchString(m.Name) {
 		add("/name", "must match ^[a-z][a-z0-9-]{1,62}$")
 	}
@@ -439,7 +441,7 @@ func (m Manifest) validateRun(add func(p, format string, args ...any), schema *c
 		}
 		special := 0
 		for _, mm := range placeholder.FindAllStringSubmatch(a, -1) {
-			if msg := checkPlaceholder(mm[1], schema); msg != "" {
+			if msg := checkPlaceholder(mm[1], schema, m.Content); msg != "" {
 				add(ptr, "%s: %s", mm[0], msg)
 			}
 			if _, form, _, ok := ConfigArg(mm[1]); ok && form != ArgScalar {
@@ -458,9 +460,18 @@ func (m Manifest) validateRun(add func(p, format string, args ...any), schema *c
 	}
 }
 
-func checkPlaceholder(name string, schema *core.SettingsSchema) string {
+func checkPlaceholder(name string, schema *core.SettingsSchema, slots []ContentSlot) string {
 	if slices.Contains(argvPlaceholders, name) {
 		return ""
+	}
+	if slot, ok := strings.CutPrefix(name, "content."); ok {
+		slot = strings.TrimSuffix(slot, "...")
+		for _, c := range slots {
+			if c.Slot == slot {
+				return ""
+			}
+		}
+		return "not a declared content slot"
 	}
 	key, form, _, ok := ConfigArg(name)
 	if !ok {
