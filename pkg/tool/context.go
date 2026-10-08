@@ -43,7 +43,10 @@ type Context interface {
 	// permission allows: the task's targets (NetTargets), the vendor
 	// hosts (NetVendor) or nothing (NetNone); it never reaches cloud
 	// metadata endpoints. It is defense in depth: the sandbox backend's
-	// network class is the boundary.
+	// network class is the boundary. On a sensor that confines the
+	// task's network it goes through the task's forwarder (EgressProxy).
+	// Requests carry the User-Agent "openctem-<tool>/<version>" unless the
+	// tool sets its own. A tool that speaks TCP itself uses Dial.
 	HTTP() *http.Client
 }
 

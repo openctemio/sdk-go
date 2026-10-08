@@ -74,6 +74,18 @@ func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
 		MaxIdleConnsPerHost:   4,
 		IdleConnTimeout:       30 * time.Second,
 	}
+	if p := tool.EgressProxy(); p != nil {
+		// A confined task (api RFC-060): its forwarder is its only way out
+		// and checks every destination; the host check here stays as
+		// defense in depth and fails before anything is sent.
+		tr.Proxy = func(req *http.Request) (*url.URL, error) {
+			if h := strings.ToLower(req.URL.Hostname()); !allowed[h] {
+				return nil, fmt.Errorf("%w: %s", ErrHostNotAllowed, h)
+			}
+			return p, nil
+		}
+		tr.DialContext = dialer.DialContext
+	}
 	var rt http.RoundTripper = tr
 	if task.WebScope != nil {
 		hosts := make([]string, 0, len(task.Targets))
@@ -84,6 +96,7 @@ func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
 		}
 		rt = scopedTransport{next: tr, scope: task.WebScope, targets: hosts}
 	}
+	rt = userAgent{next: rt, ua: DefaultUserAgent(m)}
 	return &http.Client{
 		Transport: rt,
 		Timeout:   5 * time.Minute,
@@ -97,6 +110,33 @@ func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
 			return nil
 		},
 	}
+}
+
+// DefaultUserAgent is the User-Agent of a tool's requests when the tool sets
+// none: "openctem-<tool>/<version>". A tool sets its own per request
+// (req.Header.Set("User-Agent", ...)).
+func DefaultUserAgent(m tool.Manifest) string {
+	name := strings.Map(func(r rune) rune {
+		if r <= ' ' || r >= 0x7f || strings.ContainsRune("()<>@,;:\\\"/[]?={}", r) {
+			return -1
+		}
+		return r
+	}, m.Name)
+	return "openctem-" + name + "/" + strings.TrimPrefix(m.Version, "v")
+}
+
+// userAgent sets the default User-Agent on a request that has none.
+type userAgent struct {
+	next http.RoundTripper
+	ua   string
+}
+
+func (u userAgent) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get("User-Agent") == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("User-Agent", u.ua)
+	}
+	return u.next.RoundTrip(req)
 }
 
 // scopedTransport refuses every request outside the job's web scope,
