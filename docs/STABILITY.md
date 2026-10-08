@@ -42,6 +42,7 @@ without a tier fails the job.
 | `pkg/importtool` | The file importer as a parser-class tool: Nessus, Qualys with KnowledgeBase, DefectDojo Generic JSON, CycloneDX, SPDX, osv-scanner, CSAF and OpenVEX files to CTIS (the `ctis/importer` package), sandboxed with no network | Beta |
 | `pkg/sensorkit/toolhost` | The runtime side of the tool contract: runs one task out of process and checks, assembles and stamps its output | Beta |
 | `pkg/sensorkit/identity` | A key-bound sensor's identity on disk (permission-checked) and the interactive pairing client (api RFC-052) | Beta |
+| `pkg/sensorkit/egress` | A task's forwarder (HTTP CONNECT, absolute-form HTTP, SOCKS5, DNS): every destination checked against the task's scope, pinned, rate-limited and recorded (api RFC-060) | Experimental |
 | `pkg/sensorkit/executor` | Per-task tool sandbox behind a small backend interface (`Backend`, `TaskSpec`, `Status`) | Beta |
 | `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries, the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | Stable; its runtime internals are Internal-bound and its overlapping tool interfaces are replaced by the tool contract (RFC) |
 | `pkg/client` | Platform protocol client (protocol v2; v1 is retired) | Stable; its protocol internals are Internal-bound |
