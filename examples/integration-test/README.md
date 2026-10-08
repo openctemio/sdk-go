@@ -1,115 +1,47 @@
-# SDK Integration Test
+# SDK integration test
 
-This example demonstrates how to use the OpenCTEM SDK to:
+This example uses `pkg/client` against a running OpenCTEM API to:
 
-1. Send heartbeat to the API
-2. Push security findings
-3. Push discovered assets
-4. Push combined reports (findings + assets)
-5. Poll for commands from the server
+1. send a heartbeat;
+2. push findings;
+3. push assets;
+4. push a combined report (findings and assets);
+5. poll for commands.
 
 ## Prerequisites
 
-1. **Backend API running** with migration applied:
-   ```bash
-   # in a clone of https://github.com/openctemio/openctem
-   cd openctem/api
-   make docker-migrate-up
-   make docker-dev
-   ```
+1. An OpenCTEM API you can reach, for example a local development stack from
+   [openctemio/openctem](https://github.com/openctemio/openctem)
+   (`cd api && make docker-migrate-up && make docker-dev`). See
+   https://docs.openctem.io for installation.
+2. A sensor API key: in the web console, open **Settings > Sensors**, add a
+   sensor and copy its API key (it is shown only once).
 
-2. **Create a source and get API key**:
-   ```bash
-   # First, get a JWT token (login to get token)
-   # Then create a source:
-   curl -X POST http://localhost:8080/api/v1/sources \
-     -H "Authorization: Bearer <JWT_TOKEN>" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "name": "test-scanner",
-       "type": "scanner",
-       "description": "Test scanner for SDK integration"
-     }'
-   ```
+## Running the test
 
-   Save the `api_key` from the response - it's only shown once!
-
-## Running the Test
-
-### Option 1: Using environment variable
+From the root of this repository:
 
 ```bash
-export API_KEY="your-api-key-here"
-
-cd sdk
+export API_KEY="<sensor API key>"
 go run ./examples/integration-test/
 ```
 
-### Option 2: Using command line flag
+Flags:
 
-```bash
-cd sdk
-go run ./examples/integration-test/ -api-key="your-api-key-here"
-```
+| Flag | Default | Meaning |
+|---|---|---|
+| `-url` | `http://localhost:8080` | The API base URL (not the web console) |
+| `-api-key` | `API_KEY` | The sensor API key |
+| `-sensor-id` | none | The sensor id, when the key is not bound to one |
+| `-verbose` | `true` | Log every request |
 
-### Full options
-
-```bash
-go run ./examples/integration-test/ \
-  -url="http://localhost:8080" \
-  -api-key="your-api-key-here" \
-  -source-id="optional-source-id" \
-  -verbose=true
-```
-
-## Expected Output
-
-```
-=== OpenCTEM SDK Integration Test ===
-Base URL: http://localhost:8080
-
-1. Testing connection (heartbeat)...
-.openctem] Heartbeat sent: running
-   ✓ Heartbeat successful
-
-2. Testing push findings...
-.openctem] Pushing 3 findings to http://localhost:8080/api/v1/agent/ingest
-.openctem] Push completed: 3 findings created, 0 updated
-   Findings created: 3, updated: 0
-   ✓ Push findings successful
-
-3. Testing push assets...
-.openctem] Pushing 3 assets to http://localhost:8080/api/v1/agent/ingest
-   Assets created: 3, updated: 0
-   ✓ Push assets successful
-
-4. Testing push combined report...
-.openctem] Pushing 2 findings to http://localhost:8080/api/v1/agent/ingest
-   Assets created: 1, Findings created: 2
-   ✓ Push combined successful
-
-5. Testing poll commands...
-.openctem] Polling commands from http://localhost:8080/api/v1/agent/commands?limit=10
-.openctem] Received 0 commands
-   Pending commands: 0
-   ✓ Poll commands successful
-
-=== Integration Test Complete ===
-```
+The program prints one line per step and `=== Integration Test Complete ===`
+at the end. The client speaks sensor protocol v2 (`/api/v2/sensor/*`).
 
 ## Troubleshooting
 
-### "API key required"
-- Make sure you pass the API key via `-api-key` flag or `API_KEY` environment variable
-
-### "Invalid API key" (401)
-- The API key might be incorrect or the source was deleted
-- Create a new source to get a fresh API key
-
-### "Connection refused"
-- Make sure the backend API is running on the specified URL
-- Default URL is `http://localhost:8080`
-
-### "no target asset" errors
-- This is normal for findings without explicit targets
-- The backend creates a default asset for the source
+| Message | Fix |
+|---|---|
+| `API key required` | Pass `-api-key` or set `API_KEY`. If it is set, `-url` points at the web console or at a proxy that strips the `Authorization` header: point it at the API. |
+| `401` / invalid API key | The key is wrong, or the sensor was deleted or its key regenerated. Create or regenerate a key under Settings > Sensors. |
+| `connection refused` | The API is not running at `-url`. |

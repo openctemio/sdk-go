@@ -249,7 +249,7 @@ type Task struct {
 type Target struct {
 	Ref   string            // opaque reference; links records to the platform asset
 	Type  string            // CTIS asset type
-	Value string            // "https://a.example:8443", "10.0.4.7", "/src"
+	Value string            // "https://a.example:8443", "192.0.2.7", "/src"
 	Attrs map[string]string // typed hints from the platform (port, scheme, tech, …)
 }
 
@@ -626,8 +626,9 @@ waits for the outbox to deliver its results and stops. It never polls for
 other work. The platform's claim decides who may run the command (tenant,
 holder, state); a command the sensor does not serve is released. A Job's
 outbox belongs on a persistent volume, or undelivered results are lost with
-the pod. No pool or autoscaling logic is in the platform yet (research
-trigger: the first deployment with more than one replica of a sensor).
+the pod. No pool or autoscaling logic is in the platform yet (to be
+revisited with the first deployment that runs more than one replica of a
+sensor).
 
 #### D.5.2 Minimal sensor (Go, about 20 lines)
 
@@ -980,7 +981,7 @@ Each row is one PR. "After" names what it waits for. Every PR carries a threat m
 
 S0 lands the Executor and config-doctor work in its final place. S1 starts once the Executor package is in place; S2 starts when the adapter protocol (S1-4) is stable; S3 needs the task pipeline (S1-6) for its transport interface and runs in parallel with S2; S4 closes the major version after S1 and S3.
 
-## Owner decisions
+## Decisions
 
 | # | Question | Options | Recommendation |
 |---|---|---|---|

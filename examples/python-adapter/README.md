@@ -14,7 +14,7 @@ alone, so it needs no network (tier T0).
 To check it the way a sensor will run it:
 
 ```sh
-go run github.com/openctemio/sdk-go/cmd/openctem-conformance tool examples/python-adapter/tool.yaml
+go run github.com/openctemio/sdk-go/cmd/openctem tool test examples/python-adapter
 ```
 
 To install it on a sensor, copy the directory into one of the
