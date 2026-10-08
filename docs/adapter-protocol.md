@@ -169,6 +169,28 @@ digest is recorded when the manifest is loaded, and a changed file is refused.
 
 Every value is checked like any argument: no leading `-`, no control characters, no dangerous flags. `openctem tool validate` warns about a param whose config key no argument uses, because the tool would accept it and ignore it.
 
+## How your requests look: `http` in tool.yaml
+
+A tool decides how its requests to its targets look. What a request may reach is decided by the scope, the sandbox and the forwarder, never here.
+
+```yaml
+http:
+  user_agent: "acme-scanner/2.0 (+https://acme.example/scanner)"   # default: openctem-<tool>/<version>
+  headers: {X-Scan-Id: "acme"}       # added when a request does not set them
+  timeout: 30s                       # one request, 1s to 10m (default 5m)
+  tls: {insecure_skip_verify: true, min_version: "1.2"}            # toward targets
+```
+
+- **Go tools:** `ctx.HTTP()` applies it. A request's own `User-Agent` or header still wins.
+- **Exec tools:** pass `{{http.user_agent}}` to the program (`"-H", "User-Agent: {{http.user_agent}}"`).
+- **Adapters:** read it from the manifest they describe.
+- **Refused:**
+  - `Authorization`, `Cookie` and `Proxy-*` headers (credentials come from the credential broker, never from tool.yaml);
+  - framing headers;
+  - non-printable values;
+  - `tls.insecure_skip_verify` for a `vendor` network tool, whose credentials travel to its vendor hosts.
+- **Logged:** the task's start log line records the effective settings (header names, never values) with the task.
+
 ## Installing
 
 An operator installs the tool's directory (its `tool.yaml` and program) in one

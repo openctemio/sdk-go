@@ -225,8 +225,13 @@ func (h *Host) lifecycle(ctx context.Context, m tool.Manifest, task tool.Task, r
 		return run()
 	}
 	start := time.Now()
-	h.LogSink(ctx, m.Name, LogLine{Level: "info", Msg: fmt.Sprintf("Tool %s %s started", m.Name, m.Version),
-		Fields: map[string]any{"tool": m.Name, "tool_version": m.Version, "targets": len(task.Targets), "capability": task.Capability}})
+	started := map[string]any{"tool": m.Name, "tool_version": m.Version, "targets": len(task.Targets), "capability": task.Capability}
+	if s := m.HTTP.String(); s != "" {
+		// What the tool's requests look like to the targets (tool.yaml http),
+		// recorded with the task.
+		started["http"] = s
+	}
+	h.LogSink(ctx, m.Name, LogLine{Level: "info", Msg: fmt.Sprintf("Tool %s %s started", m.Name, m.Version), Fields: started})
 	out, err := run()
 	fields := map[string]any{"tool": m.Name, "duration_ms": time.Since(start).Milliseconds()}
 	switch {

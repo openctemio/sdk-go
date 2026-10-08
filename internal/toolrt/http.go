@@ -2,6 +2,7 @@ package toolrt
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,10 +97,23 @@ func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
 		}
 		rt = scopedTransport{next: tr, scope: task.WebScope, targets: hosts}
 	}
-	rt = userAgent{next: rt, ua: DefaultUserAgent(m)}
+	timeout := 5 * time.Minute
+	defaults := requestDefaults{next: rt, ua: EffectiveUserAgent(m)}
+	if h := m.HTTP; h != nil {
+		defaults.headers = h.Headers
+		if h.Timeout > 0 {
+			timeout = time.Duration(h.Timeout)
+		}
+		if h.TLS != nil && m.Permissions.Network != tool.NetVendor {
+			// Toward targets only: a vendor tool's credentials go to its
+			// vendor hosts, which are always verified.
+			tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: h.TLS.InsecureSkipVerify, MinVersion: h.TLS.TLSMinVersion()} //nolint:gosec // the tool's declared choice for its targets (tool.yaml http.tls), logged with the task
+		}
+	}
+	rt = defaults
 	return &http.Client{
 		Transport: rt,
-		Timeout:   5 * time.Minute,
+		Timeout:   timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return errors.New("too many redirects")
@@ -125,16 +139,38 @@ func DefaultUserAgent(m tool.Manifest) string {
 	return "openctem-" + name + "/" + strings.TrimPrefix(m.Version, "v")
 }
 
-// userAgent sets the default User-Agent on a request that has none.
-type userAgent struct {
-	next http.RoundTripper
-	ua   string
+// EffectiveUserAgent is the User-Agent of a tool's requests: its tool.yaml
+// http.user_agent, else DefaultUserAgent.
+func EffectiveUserAgent(m tool.Manifest) string {
+	if m.HTTP != nil && m.HTTP.UserAgent != "" {
+		return m.HTTP.UserAgent
+	}
+	return DefaultUserAgent(m)
 }
 
-func (u userAgent) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Header.Get("User-Agent") == "" {
-		req = req.Clone(req.Context())
-		req.Header.Set("User-Agent", u.ua)
+// requestDefaults sets the User-Agent and the tool's headers on a request
+// that does not set them itself.
+type requestDefaults struct {
+	next    http.RoundTripper
+	ua      string
+	headers map[string]string
+}
+
+func (u requestDefaults) RoundTrip(req *http.Request) (*http.Response, error) {
+	cloned := false
+	set := func(k, v string) {
+		if req.Header.Get(k) != "" {
+			return
+		}
+		if !cloned {
+			req = req.Clone(req.Context())
+			cloned = true
+		}
+		req.Header.Set(k, v)
+	}
+	set("User-Agent", u.ua)
+	for k, v := range u.headers {
+		set(k, v)
 	}
 	return u.next.RoundTrip(req)
 }
