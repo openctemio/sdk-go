@@ -11,6 +11,12 @@ form is [pkg/tool/schema/adapter.v1.schema.json](../pkg/tool/schema/adapter.v1.s
 A complete example in Python, with no dependencies:
 [examples/python-adapter](../examples/python-adapter).
 
+**Python helper.** [`openctem_tool.py`](../internal/toolcli/templates/openctem_tool.py) is one file, standard library only, that speaks this protocol so a Python tool writes only `run(ctx, task)`. `openctem tool init --kind python` puts it next to the tool. It provides:
+- the handshake, `describe` (from `tool.yaml` in its JSON form, or YAML with PyYAML installed) and `validate`;
+- `cancel`, read on a thread while `run` works (`ctx.check()` raises `Canceled`), and heartbeats;
+- records, per-target status, logs and progress, and the result (`partial` when a target failed);
+- `ctx.connect(host, port)`: a TCP connection made through the task's forwarder when the sensor confines the network (where a confined task has no other way out), else directly.
+
 ## The manifest is the contract
 
 `tool.yaml` (`apiVersion: openctem.io/tool/v1`, schema

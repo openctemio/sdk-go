@@ -42,7 +42,7 @@ Exit status:
 - `safety.rate_param` when the capability has a rate.
 
 It also writes:
-- a stub program that emits nothing;
+- a stub program that emits nothing (for `python`, a `run(ctx, task)` on the `openctem_tool.py` helper it also writes; see [adapter-protocol.md](../adapter-protocol.md));
 - a self-test fixture with its expected CTIS;
 - a `Makefile` (`validate`, `test`, `conformance`);
 - the CI workflow `.github/workflows/openctem-tool.yml`.
