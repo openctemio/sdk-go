@@ -218,6 +218,10 @@ func hostile(mode string) int {
 		}
 		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
 		return 0
+	case "argv-cli":
+		// Reports its arguments, as a finding title.
+		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(os.Args[1:], "|"))
+		return 0
 	case "env-cli":
 		// Reports, as a finding title, which vendor variables it can see.
 		var seen []string

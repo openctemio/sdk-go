@@ -261,10 +261,13 @@ type RunSpec struct {
 	Profile string `json:"profile,omitempty"`
 	// Argv is the program and its arguments. Never a shell. Placeholders
 	// are a closed set: {{config.<key>}} (a scalar key of the config
-	// schema), {{target.value}}, {{target.host}}, {{target.port}},
-	// {{target.url}}, {{task.targets_file}}, {{task.targets_json}},
-	// {{task.config_file}}, {{task.web_scope_file}}, {{task.output}},
-	// {{task.workdir}}.
+	// schema) and its forms {{config.<key>?}} (left out when not set),
+	// {{config.<key>...}} (an array key: one argument per item, or
+	// comma-joined inside a larger argument) and {{config.<key>?:-flag}}
+	// (a boolean key: the flag when true; see ConfigArg), {{target.value}},
+	// {{target.host}}, {{target.port}}, {{target.url}},
+	// {{task.targets_file}}, {{task.targets_json}}, {{task.config_file}},
+	// {{task.web_scope_file}}, {{task.output}}, {{task.workdir}}.
 	Argv []string `json:"argv"`
 	// Output is where an exec-profile tool writes its results.
 	Output *OutputSpec `json:"output,omitempty"`
