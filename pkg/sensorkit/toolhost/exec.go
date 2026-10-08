@@ -74,7 +74,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	stderr := &cappedBuffer{max: MaxStderr}
 	be := h.backend()
 	t, err := be.Prepare(executor.TaskSpec{
-		ID: m.Name, Argv: argv, Env: core.ScannerEnviron(o.Env), SetEnv: o.Env, Dir: p.workdir,
+		ID: m.Name, Argv: argv, Env: core.ScannerEnvironFor(envOwner(m), o.Env), SetEnv: o.Env, Dir: p.workdir,
 		WritePaths: append([]string{p.workdir}, o.WritePaths...), Limits: o.Limits,
 		Network: networkClass(m.Permissions.Network), Stdout: stdout, Stderr: stderr,
 		Hooks: executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: core.ApplyScannerPriority, Finished: core.ReapScannerProcess},

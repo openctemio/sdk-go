@@ -188,8 +188,42 @@ func hostile(mode string) int {
 	case "ctis-cli":
 		fmt.Println(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":"from cli","severity":"high"},{"type":"secret","title":"undeclared","severity":"high"}]}`)
 		return 2
+	case "env-cli":
+		// Reports, as a finding title, which vendor variables it can see.
+		var seen []string
+		for _, k := range []string{"TRIVY_PASSWORD", "SEMGREP_APP_TOKEN", "PDCP_API_KEY", "DOCKER_HOST"} {
+			if os.Getenv(k) != "" {
+				seen = append(seen, k)
+			}
+		}
+		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":"seen:%s","severity":"low"}]}`+"\n", strings.Join(seen, ","))
+		return 0
 	}
 	return 0
+}
+
+// SECURITY: an operator-installed program gets no tool's vendor
+// environment (TRIVY_*, SEMGREP_*, PDCP_*, DOCKER_HOST): one tool cannot
+// read another's credentials from the sensor's environment.
+func TestInstalledToolGetsNoVendorEnvironment(t *testing.T) {
+	for k, v := range map[string]string{"TRIVY_PASSWORD": "t-secret", "SEMGREP_APP_TOKEN": "s-secret", "PDCP_API_KEY": "p-secret", "DOCKER_HOST": "tcp://d:2376"} {
+		t.Setenv(k, v)
+	}
+	exe, _ := os.Executable()
+	m := tool.Manifest{
+		Name: "env-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T0,
+		Consumes: []string{"repository"}, Produces: []string{"finding:misconfiguration"},
+		Permissions: tool.Permissions{Network: tool.NetNone},
+		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
+	}
+	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "github.com/acme/app"}}}
+	out, err := testHost(t).RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "env-cli"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Report.Findings) != 1 || out.Report.Findings[0].Title != "seen:" {
+		t.Fatalf("the installed tool saw vendor variables: %+v (status %s, stderr %s)", out.Report.Findings, out.Status, out.Stderr)
+	}
 }
 
 func testHost(t *testing.T) *Host {
