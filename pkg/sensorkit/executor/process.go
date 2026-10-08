@@ -45,6 +45,11 @@ type Config struct {
 	// RequireNetwork makes NewProcessBackend fail when ConfineNetwork
 	// cannot be enforced (a shared sensor, where it is a requirement).
 	RequireNetwork bool
+	// Private are more directories hidden from every task, like the task
+	// root: a task reads beneath them only what TaskSpec.ReadPaths grants
+	// it (the sensor's content cache: one tenant's packs are never
+	// readable by another tenant's task).
+	Private []string
 }
 
 // ProcessBackend runs each task as a child process, through the launcher
@@ -215,6 +220,12 @@ func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("executor: task directory: %w", err)
 	}
+	for _, p := range spec.ReadPaths {
+		if b.denied(p) {
+			_ = os.RemoveAll(dir)
+			return nil, fmt.Errorf("executor: read path %q is a protected path", p)
+		}
+	}
 	for _, p := range spec.WritePaths {
 		if b.denied(p) {
 			_ = os.RemoveAll(dir)
@@ -236,6 +247,7 @@ func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 		ReadDeny:   b.deny,
 		Private:    b.private(),
 		WritePaths: append([]string{dir}, spec.WritePaths...),
+		ReadPaths:  spec.ReadPaths,
 		Binary:     bin,
 	}
 	if b.confine {
@@ -258,7 +270,7 @@ func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 // cannot read or list one another's files.
 func (b *ProcessBackend) private() []string {
 	var out []string
-	for _, root := range []string{b.cfg.WorkRoot, TaskRoot()} {
+	for _, root := range append([]string{b.cfg.WorkRoot, TaskRoot()}, b.cfg.Private...) {
 		abs, err := filepath.Abs(root)
 		if err != nil {
 			continue

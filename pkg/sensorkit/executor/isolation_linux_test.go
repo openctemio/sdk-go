@@ -95,3 +95,37 @@ func TestTaskUsesOwnWorkdir(t *testing.T) {
 		t.Fatalf("own workdir read back: %q", out)
 	}
 }
+
+// SECURITY: a content pack under a private root (the sensor content
+// cache) is readable only by the task granted it: another tenant task, or
+// the same task for another pack, cannot read it.
+func TestReadPathsUnderAPrivateRoot(t *testing.T) {
+	cache := t.TempDir()
+	mine := filepath.Join(cache, "sha256-aaaa")
+	theirs := filepath.Join(cache, "sha256-bbbb")
+	for _, d := range []string{mine, theirs} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "t.yaml"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := NewProcessBackend(Config{Mode: ModeRequired, WorkRoot: t.TempDir(), Limits: Limits{Processes: 64}, Private: []string{cache}})
+	if err != nil {
+		t.Skipf("sandbox not available here: %v", err)
+	}
+	spec := TaskSpec{ID: "reader", ReadPaths: []string{mine}}
+	if out, _ := runTool(t, b, spec, "read", filepath.Join(mine, "t.yaml")); out != "OK" {
+		t.Fatalf("granted pack unreadable: %q", out)
+	}
+	if out, _ := runTool(t, b, spec, "read", filepath.Join(theirs, "t.yaml")); !strings.HasPrefix(out, "ERR") {
+		t.Fatalf("a pack not granted was read: %q", out)
+	}
+	if out, _ := runTool(t, b, TaskSpec{ID: "other"}, "read", filepath.Join(mine, "t.yaml")); !strings.HasPrefix(out, "ERR") {
+		t.Fatalf("a task without the grant read the pack: %q", out)
+	}
+	if out, _ := runTool(t, b, spec, "write", filepath.Join(mine, "t.yaml")); !strings.HasPrefix(out, "ERR") {
+		t.Fatalf("a granted pack was writable: %q", out)
+	}
+}

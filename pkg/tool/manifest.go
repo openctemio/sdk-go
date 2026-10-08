@@ -155,6 +155,10 @@ type Manifest struct {
 	// headers, timeout, TLS): applied by ctx.HTTP(), named in exec argv
 	// ({{http.user_agent}}) and readable by an adapter from its manifest.
 	HTTP *HTTPSpec `json:"http,omitempty"`
+
+	// Content are the kinds of content the tool reads (templates, rules,
+	// wordlists): the task gets the resolved packs (api RFC-061).
+	Content []ContentSlot `json:"content,omitempty"`
 	// Selftest are fixtures: a task and the CTIS it must produce.
 	Selftest []Fixture `json:"selftest,omitempty"`
 	// Retest says the tool can check again what it reported (a retest

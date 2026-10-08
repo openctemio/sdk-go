@@ -91,6 +91,15 @@ class Task:
         self.workdir = raw.get("workdir", "")
         self.credentials = {c.get("name"): c.get("value") for c in raw.get("credentials") or []}
         self.retest = raw.get("retest")
+        self.content = raw.get("content") or []
+
+    def content_paths(self, slot):
+        """Read-only paths of a content slot's packs (templates, rules,
+        wordlists) the sensor resolved for this task; [] when none."""
+        for c in self.content:
+            if c.get("slot") == slot:
+                return [p["path"] for p in c.get("packs") or [] if p.get("path")]
+        return []
 
 
 class _Wire:
