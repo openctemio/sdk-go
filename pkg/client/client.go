@@ -44,8 +44,11 @@ type Client struct {
 	signed bool
 	// ctl is the control client (heartbeats), built from httpClient on first
 	// use; controlTimeout bounds its requests (control_channel.go).
-	ctl            *http.Client
-	ctlOnce        sync.Once
+	ctl     *http.Client
+	ctlOnce sync.Once
+	// v3 is sensor protocol v3 under the v2 client (EnableTransportV3);
+	// nil: v2 only.
+	v3             *v3Manager
 	controlTimeout time.Duration
 	maxRetries     int
 	retryDelay     time.Duration
@@ -1063,7 +1066,7 @@ func (c *Client) SetAPIKey(key string) {
 // (core.APIKeyHint: at most its first 8 characters).
 func (c *Client) APIKeyHint() string {
 	if c.signed {
-		if st, ok := c.httpClient.Transport.(*sensorsig.Transport); ok {
+		if st, ok := unwrapTransport(c.httpClient.Transport).(*sensorsig.Transport); ok {
 			return core.KeyBoundHint(st.Signer.KeyID())
 		}
 	}

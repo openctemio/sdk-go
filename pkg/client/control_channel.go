@@ -66,6 +66,12 @@ func (c *Client) controlHTTP() *http.Client {
 			Timeout:       timeout,
 		}
 		inner, signer := base.Transport, (*sensorsig.Transport)(nil)
+		// Protocol v3 sits above the v2 transport: the control client gets
+		// its own pool underneath the same v3 binding.
+		v3rt, _ := inner.(*v3RoundTripper)
+		if v3rt != nil {
+			inner = v3rt.next
+		}
 		if st, ok := inner.(*sensorsig.Transport); ok {
 			inner, signer = st.Base, st
 		}
@@ -79,6 +85,9 @@ func (c *Client) controlHTTP() *http.Client {
 				// A key-bound client signs its heartbeats too.
 				hc.Transport = &sensorsig.Transport{Signer: signer.Signer, Base: ctl, MaxBody: signer.MaxBody}
 			}
+		}
+		if v3rt != nil && hc.Transport != base.Transport {
+			hc.Transport = v3rt.withNext(hc.Transport)
 		}
 		c.ctl = hc
 	})
