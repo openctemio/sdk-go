@@ -337,6 +337,18 @@ type Hello struct {
 	// Deprecations announces deprecated protocols ("protocol_v1"), api
 	// RFC-029 §4.2. Empty on a server from before it.
 	Deprecations map[string]Deprecation `json:"deprecations,omitempty"`
+	// TransportV3 says where the platform serves sensor protocol v3 (api
+	// RFC-059); nil when it does not.
+	TransportV3 *TransportV3 `json:"transport_v3,omitempty"`
+}
+
+// TransportV3 locates protocol v3 on a v2 hello.
+type TransportV3 struct {
+	// HTTPSPath is the HTTPS binding's path on the platform host.
+	HTTPSPath string `json:"https_path"`
+	// GRPCEndpoint is host:port of the gRPC (mTLS) binding; "" when only
+	// the HTTPS binding is served.
+	GRPCEndpoint string `json:"grpc_endpoint,omitempty"`
 }
 
 // Supports reports whether the hello document lists feature (one of the

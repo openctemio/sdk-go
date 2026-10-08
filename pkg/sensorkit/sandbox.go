@@ -7,6 +7,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/outbox"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
 )
 
 // EnvSandbox sets the tool sandbox mode: off, auto (default) or required.
@@ -38,7 +39,8 @@ func (k *Kit) setupSandbox() error {
 }
 
 // protectedPaths are the files no tool may read: the renewable API key, the
-// outbox and its key, the local policy, and the sensor's own list.
+// paired identity (signing key, protocol v3 certificate), the outbox and its
+// key, the local policy, and the sensor's own list.
 func (k *Kit) protectedPaths() []string {
 	var out []string
 	add := func(p string) {
@@ -49,6 +51,11 @@ func (k *Kit) protectedPaths() []string {
 		}
 	}
 	add(k.s.key.file)
+	// The paired identity: the signing key, and the protocol v3 client
+	// certificate and pinned CA kept next to it.
+	if k.s.stateDir != "" {
+		add(identity.NewStore(k.s.stateDir).Dir())
+	}
 	add(k.s.outbox.Config.Dir)
 	add(k.s.outbox.Config.KeyFile)
 	if d := k.s.outbox.Config.Dir; d != "" {

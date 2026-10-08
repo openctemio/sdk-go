@@ -103,8 +103,10 @@ type FakePlatform struct {
 	// it (forward compatibility, docs/STABILITY.md).
 	FutureFields bool
 
-	mu        sync.Mutex
-	fault     Fault
+	mu    sync.Mutex
+	fault Fault
+	// v3 serves sensor protocol v3 (EnableV3); nil: v2 only.
+	v3        *fakeV3
 	seq       int
 	requests  []Request
 	reports   map[string]*StoredReport
@@ -275,7 +277,15 @@ func NewFakePlatform(v2 bool) *FakePlatform {
 func (f *FakePlatform) URL() string { return f.Server.URL }
 
 // Close stops the server.
-func (f *FakePlatform) Close() { f.Server.Close() }
+func (f *FakePlatform) Close() {
+	f.Server.Close()
+	f.mu.Lock()
+	v := f.v3
+	f.mu.Unlock()
+	if v != nil && v.grpc != nil {
+		v.grpc.Close()
+	}
+}
 
 // SetFault installs a fault injector (nil removes it).
 func (f *FakePlatform) SetFault(fl Fault) {
@@ -315,22 +325,24 @@ func (f *FakePlatform) SetPaused(on bool) {
 // QueueCommand adds a pending command a poll offers.
 func (f *FakePlatform) QueueCommand(id string) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.commands[id] = "pending"
 	f.cmdQueue = append(f.cmdQueue, id)
+	f.mu.Unlock()
+	f.v3Wake()
 }
 
 // QueueCommandPayload adds a pending command of the given type ("" is
 // "scan") and payload, as the platform dispatches it.
 func (f *FakePlatform) QueueCommandPayload(id, typ string, payload json.RawMessage) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.commands[id] = "pending"
 	f.cmdQueue = append(f.cmdQueue, id)
 	f.cmdPayload[id] = append(json.RawMessage(nil), payload...)
 	if typ != "" {
 		f.cmdType[id] = typ
 	}
+	f.mu.Unlock()
+	f.v3Wake()
 }
 
 // SetFutureFields switches FutureFields.
@@ -492,6 +504,13 @@ type recorder struct {
 	future bool
 }
 
+// Flush forwards a flush (the protocol v3 control stream).
+func (r *recorder) Flush() {
+	if fl, ok := r.ResponseWriter.(http.Flusher); ok {
+		fl.Flush()
+	}
+}
+
 func (r *recorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
@@ -545,8 +564,11 @@ func (f *FakePlatform) serve(w http.ResponseWriter, r *http.Request) {
 
 func (f *FakePlatform) authed(r *http.Request) bool {
 	f.mu.Lock()
-	key := f.APIKey
+	key, v3 := f.APIKey, f.v3
 	f.mu.Unlock()
+	if v3 != nil && v3.signedByTrusted(r) {
+		return true
+	}
 	return r.Header.Get("Authorization") == "Bearer "+key
 }
 
@@ -561,8 +583,12 @@ func (f *FakePlatform) route(w http.ResponseWriter, r *http.Request, body []byte
 	p := r.URL.Path
 	f.mu.Lock()
 	v2 := f.V2
+	v3 := f.v3
 	f.mu.Unlock()
 	switch {
+	case strings.HasPrefix(p, v3PathPrefix+"/") && v3 != nil:
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		v3.https.ServeHTTP(w, r)
 	case strings.HasPrefix(p, protov2.PathPrefix+"/"):
 		if !v2 {
 			http.NotFound(w, r)
@@ -632,6 +658,9 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 			Protocol: 2, Features: features, MediaTypes: []string{protov2.MediaTypeCTIS},
 			Encodings: []string{"gzip", "zstd"}, Digests: []string{"sha-256"}, Limits: f.Limits,
 		}
+		f.mu.Lock()
+		h.TransportV3 = f.v3Hello()
+		f.mu.Unlock()
 		w.Header().Set("Content-Type", protov2.MediaTypeJSON)
 		encodeJSON(w, h)
 		return

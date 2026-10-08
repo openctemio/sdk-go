@@ -29,7 +29,10 @@ const (
 	EnvAPIKey     = "API_KEY"
 	EnvSensorID   = "SENSOR_ID"
 	EnvSensorName = "SENSOR_NAME"
-	EnvProtocol   = "SENSOR_PROTOCOL"    // auto (default) | v1 | v2
+	EnvProtocol   = "SENSOR_PROTOCOL" // auto (default) | v1 | v2
+	// EnvTransport picks the transport of sensor protocol v3 (api
+	// RFC-059): auto (default: gRPC, then HTTPS, then v2) | grpc | https | v2.
+	EnvTransport  = "SENSOR_TRANSPORT"
 	EnvMaxJobs    = "SENSOR_MAX_JOBS"    // 1-100; unset: the slots follow the resources
 	EnvDrainGrace = "SENSOR_DRAIN_GRACE" // e.g. 45s, 2m (1s-1h; default 30s)
 	EnvTools      = "SENSOR_TOOLS"       // comma-separated allowlist
