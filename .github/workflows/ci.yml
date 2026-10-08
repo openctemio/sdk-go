@@ -76,16 +76,22 @@ jobs:
           go-version: '1.26.6'
           cache: true
 
-      - name: Build the executor tests
-        run: CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/netns/executor.test" ./pkg/sensorkit/executor/
+      - name: Build the executor and tool host tests
+        run: |
+          CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/netns/executor.test" ./pkg/sensorkit/executor/
+          CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/netns/toolhost.test" ./pkg/sensorkit/toolhost/
 
       - name: Run them confined
         run: |
-          chmod 0755 "$RUNNER_TEMP/netns"
-          docker run --rm --user 23456:23456 --security-opt seccomp=unconfined \
-            -e OPENCTEM_TEST_REQUIRE_NETNS=1 -v "$RUNNER_TEMP/netns:/t:ro" \
-            public.ecr.aws/docker/library/debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 \
-            /t/executor.test -test.v -test.count=1
+          chmod -R a+rX "$RUNNER_TEMP/netns" .
+          # Each runs in its package directory (tests read testdata/).
+          for t in executor toolhost; do
+            docker run --rm --user 23456:23456 --security-opt seccomp=unconfined \
+              -e OPENCTEM_TEST_REQUIRE_NETNS=1 -v "$RUNNER_TEMP/netns:/t:ro" \
+              -v "$PWD/pkg/sensorkit/$t:/src:ro" -w /src \
+              public.ecr.aws/docker/library/debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 \
+              "/t/$t.test" -test.v -test.count=1
+          done
 
   lint:
     runs-on: ubuntu-latest

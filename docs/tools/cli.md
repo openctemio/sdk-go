@@ -11,6 +11,8 @@ Every command reads the tool's `tool.yaml` (a directory or the file itself). Eve
 - `required` refuses to run without every control (use it in CI on Linux);
 - `off` runs the tool as a plain child process.
 
+`OPENCTEM_SANDBOX_NETWORK=auto|required|off` (default `auto`) also confines the task's network where user namespaces are available, as a sensor does. The task's only way out is then its forwarder, and `--scope` reports every destination it refused, direct connections included. On a host or container that refuses user namespaces, a note says so and the task runs unconfined.
+
 `init` pins the scaffold to the SDK version the CLI was built from: the Go scaffold's `go.mod`, and the CLI version its CI workflow installs.
 
 Exit status:

@@ -13,6 +13,12 @@ import (
 // EnvSandbox sets the tool sandbox mode: off, auto (default) or required.
 const EnvSandbox = "SENSOR_SANDBOX"
 
+// EnvSandboxNetwork sets network confinement (api RFC-060): auto (default:
+// each task in its own network namespace whose only way out is its
+// forwarder, where user namespaces are available), required (refuse to
+// start without it; for shared sensors) or off.
+const EnvSandboxNetwork = "SENSOR_SANDBOX_NETWORK"
+
 // setupSandbox installs the executor backend every tool run uses, with the
 // kit's protected paths, and logs what it enforces.
 func (k *Kit) setupSandbox() error {
@@ -20,7 +26,12 @@ func (k *Kit) setupSandbox() error {
 	if !ok {
 		return usageError(fmt.Errorf("%s must be off, auto or required", EnvSandbox))
 	}
-	b, err := executor.NewProcessBackend(executor.Config{Mode: mode, ReadDeny: k.protectedPaths()})
+	netMode, ok := executor.ParseMode(strings.TrimSpace(os.Getenv(EnvSandboxNetwork)))
+	if !ok {
+		return usageError(fmt.Errorf("%s must be off, auto or required", EnvSandboxNetwork))
+	}
+	b, err := executor.NewProcessBackend(executor.Config{Mode: mode, ReadDeny: k.protectedPaths(),
+		ConfineNetwork: netMode != executor.ModeOff, RequireNetwork: netMode == executor.ModeRequired})
 	if err != nil {
 		return usageError(err)
 	}
@@ -34,6 +45,12 @@ func (k *Kit) setupSandbox() error {
 	}
 	for _, m := range st.Missing {
 		_, _ = fmt.Fprintf(k.errw, "Warning: tool sandbox: %s\n", m)
+	}
+	switch {
+	case st.NetworkEnforced:
+		_, _ = fmt.Fprintf(k.out, "  Tool network: confined (each task reaches only its targets, through its forwarder)\n")
+	case st.NetworkMissing != "":
+		_, _ = fmt.Fprintf(k.errw, "Warning: tool network not confined (%s=%s): %s\n", EnvSandboxNetwork, netMode, st.NetworkMissing)
 	}
 	return nil
 }

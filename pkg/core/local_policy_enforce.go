@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -500,6 +501,32 @@ func (lp *LocalPolicy) nameAllowed(name string) bool {
 		}
 	}
 	return false
+}
+
+// AdmittedAddrs checks a host name or address as CheckTarget does and
+// returns the addresses it checked: a confined task's forwarder dials a
+// target at these addresses only, never at what the name resolves to
+// later. Without a policy the name is resolved and every address returned
+// (the forwarder still refuses metadata and link-local ones).
+func (lp *LocalPolicy) AdmittedAddrs(ctx context.Context, host string) ([]netip.Addr, error) {
+	if !lp.Present() {
+		addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", strings.Trim(host, "[]"))
+		if err != nil {
+			return nil, err
+		}
+		return addrs, nil
+	}
+	ips, err := lp.checkHost(ctx, host, true)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]netip.Addr, 0, len(ips))
+	for _, ip := range ips {
+		if a, ok := netip.AddrFromSlice(ip); ok {
+			out = append(out, a.Unmap())
+		}
+	}
+	return out, nil
 }
 
 // checkHost checks a host (name or address literal) and returns the

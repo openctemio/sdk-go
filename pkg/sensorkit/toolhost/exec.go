@@ -73,11 +73,17 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	stdout := &cappedBuffer{max: int(min(maxBytes, 1<<30))}
 	stderr := &cappedBuffer{max: MaxStderr}
 	be := h.backend()
+	eg, err := h.startEgress(ctx, be, p)
+	if err != nil {
+		return nil, err
+	}
+	defer eg.stop()
 	t, err := be.Prepare(executor.TaskSpec{
 		ID: m.Name, Argv: argv, Env: core.ScannerEnvironFor(envOwner(m), o.Env), SetEnv: o.Env, Dir: p.workdir,
 		WritePaths: append([]string{p.workdir}, o.WritePaths...), Limits: o.Limits,
 		Network: networkClass(m.Permissions.Network), Stdout: stdout, Stderr: stderr,
-		Hooks: executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: core.ApplyScannerPriority, Finished: core.ReapScannerProcess},
+		Hooks:       executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: core.ApplyScannerPriority, Finished: core.ReapScannerProcess},
+		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("toolhost: %w", err)
@@ -160,6 +166,16 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		out.Logs = append(out.Logs, *p.rateLine)
 	}
 	out.Logs = append(out.Logs, p.notes...)
+	if eg != nil {
+		out.Egress, out.EgressDropped = eg.stop()
+		lines := egressLog(out.Egress)
+		out.Logs = append(out.Logs, lines...)
+		if h.LogSink != nil {
+			for _, l := range lines {
+				h.LogSink(ctx, m.Name, l)
+			}
+		}
+	}
 	out.Duration = time.Since(start)
 	h.stamp(out, m, p.task, "exec profile")
 	return out, nil
