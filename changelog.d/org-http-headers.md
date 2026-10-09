@@ -7,3 +7,7 @@
   - credentials: `Authorization`, `Cookie`, `Proxy-*`;
   - headers the HTTP client and the forwarder own: `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, and similar.
 - A policy that breaks these rules fails the job.
+
+### Upgrade notes
+
+- `core.OrgHTTPPolicy` is no longer comparable with `==` (its new `Headers` field is a map). Code that compared two policies compares their fields instead; nothing in the SDK or the sensor does.
