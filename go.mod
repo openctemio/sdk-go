@@ -10,7 +10,7 @@ require (
 	github.com/openctemio/ctis v1.2.1-0.20261007105007-986a2023c50e
 	github.com/prometheus/client_golang v1.24.1
 	gitlab.com/gitlab-org/api/client-go v1.46.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/time v0.16.0
