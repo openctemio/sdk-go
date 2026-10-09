@@ -34,6 +34,9 @@ type Command struct {
 	// as of this answer.
 	LeaseEpoch     int        `json:"lease_epoch,omitempty"`
 	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
+	// SignedJob is the job signer's envelope for this delivery (claim-N
+	// answers; api RFC-040 §5.6).
+	SignedJob json.RawMessage `json:"signed_job,omitempty"`
 }
 
 // PollCommands retrieves pending commands for this sensor
@@ -86,6 +89,7 @@ func (c *Client) GetCommandsLimit(ctx context.Context, limit int) (*core.GetComm
 			cc.ExpiresAt = *cmd.ExpiresAt
 		}
 		cc.LeaseEpoch = cmd.LeaseEpoch
+		cc.SignedJob = cmd.SignedJob
 		// Claim-N: the platform already claimed it for this sensor.
 		cc.Claimed = cmd.Status == "acknowledged"
 		if cmd.LeaseExpiresAt != nil {

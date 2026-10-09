@@ -110,6 +110,17 @@ poller.SetDoorbell(bell) // polls when the doorbell rings
 The hints only say *that* work is waiting; jobs are still fetched and claimed
 through `GET /api/v2/sensor/commands`. There is no free-text or shell action.
 
+**Order of the checks on a claimed command.** A command passes, in order:
+the command types the sensor serves and its expiry (before the claim); the
+claim itself; its **job signature** (`CommandPoller.SetJobGuard`,
+`pkg/jobsig`: with a pinned signer key the payload, signed job and lease
+epoch of the claim answer are verified, and a sensor that requires signed
+jobs refuses an unsigned command; [security guide](./SECURITY.md#signed-jobs));
+the start transition; the sensor-local policy; the platform's tool gate;
+then the executor and the tool. A refusal at any step fails the command
+with its layer and rule (`job_signature`, `targets.allow`, …) and nothing
+after it runs.
+
 ### Results delivery: protocol v2 and the durable outbox
 
 **Protocol.** Protocol v2 is the only sensor protocol (the platform retired
@@ -302,12 +313,16 @@ languages.
   bundle is sticky and a certificate failure never falls back to another
   binding; no redirects followed by the API clients, SSRF-safe HTTP
   (`pkg/httpsec`).
-- **Command path**: scan-target policy, sensor-local policy (fail closed
-  without one on new installs), signed custom templates, dangerous-flag
-  blocklist, rate-limit ceilings.
+- **Command path**: signed jobs (the platform's separate job signer signs
+  every claimed command; a sensor that pinned its key verifies the
+  signature, this sensor, the command, its payload bytes, its lease and a
+  replay-proof sequence number before the command starts, `pkg/jobsig`;
+  required for sensors paired with a signing platform), scan-target
+  policy, sensor-local policy (fail closed without one on new installs),
+  signed custom templates, dangerous-flag blocklist, rate-limit ceilings.
 - **Posture**: the manifest reports the local policy state and requirement,
-  the platform TLS pin and the tool sandbox, so the platform can flag
-  unhardened sensors.
+  the platform TLS pin, the tool sandbox and whether signed jobs are
+  required (`jobs.signed`), so the platform can flag unhardened sensors.
 - **Tools**: per-task sandbox (Landlock, seccomp, rlimits, no_new_privs),
   scanner environment allow-list, output caps.
 - **Results**: encrypted durable outbox (AES-256-GCM), idempotent delivery.

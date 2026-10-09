@@ -340,6 +340,25 @@ type Hello struct {
 	// TransportV3 says where the platform serves sensor protocol v3 (api
 	// RFC-059); nil when it does not.
 	TransportV3 *TransportV3 `json:"transport_v3,omitempty"`
+	// SignedJobs lists the job signer's keys when the platform signs jobs
+	// (FeatureSignedJobs); nil when it does not. Keys is empty while the
+	// signer has not answered the platform yet.
+	SignedJobs *SignedJobs `json:"signed_jobs,omitempty"`
+}
+
+// SignedJobs is the hello's description of job signing.
+type SignedJobs struct {
+	PayloadType string         `json:"payload_type"`
+	Keys        []SignedJobKey `json:"keys"`
+}
+
+// SignedJobKey is one signer key: KeyID is "SHA256:" + lower-case hex of
+// the SHA-256 of the raw key, PublicKey the raw 32-byte Ed25519 key in
+// standard base64. A sensor recomputes the id; it never trusts it.
+type SignedJobKey struct {
+	KeyID     string `json:"keyid"`
+	Algorithm string `json:"algorithm"`
+	PublicKey string `json:"public_key"`
 }
 
 // TransportV3 locates protocol v3 on a v2 hello.

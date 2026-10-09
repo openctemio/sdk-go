@@ -64,6 +64,10 @@ type Command struct {
 	// Zero from a platform without leases.
 	LeaseEpoch     int       `json:"lease_epoch,omitempty"`
 	LeaseExpiresAt time.Time `json:"lease_expires_at,omitzero"`
+	// SignedJob is the platform job signer's DSSE envelope for this
+	// delivery ("signed_job" of a claim answer; api RFC-040 §5.6). It binds
+	// Payload's exact bytes, so Payload must be kept as received.
+	SignedJob json.RawMessage `json:"signed_job,omitempty"`
 	// Claimed is true when the poll already claimed the command for this
 	// sensor (claim-N, api RFC-046 §11). The poller still acknowledges it
 	// (a replay) when it runs it, and releases it when it does not.
@@ -299,6 +303,10 @@ type CommandPoller struct {
 	local  atomic.Pointer[LocalPolicy]
 	killed atomic.Bool
 
+	// jobs checks each command's job signature right after its claim,
+	// before it is started (SetJobGuard).
+	jobs atomic.Pointer[JobGuard]
+
 	// logSink takes the poller's own lines about each command
 	// (SetCommandLogSink); handBacks dedupes its hand-back lines.
 	logSink   CommandLogSink
@@ -324,6 +332,18 @@ const KillSwitchCheckInterval = 2 * time.Second
 // widen it. Call before Start.
 func (p *CommandPoller) SetLocalPolicy(lp *LocalPolicy) {
 	p.local.Store(lp)
+}
+
+// SetJobGuard makes the poller check every command's signed job (api
+// RFC-040 §5.6) right after it is claimed, before it is started and before
+// the local policy, the command gate or any executor sees it. A command the
+// guard refuses is reported failed with rule "job_signature" and never
+// run. With a guard that verifies, commands are claimed through
+// CommandClaimer when the client implements it, so the payload, the signed
+// job and the lease epoch checked are those of the claim answer. Call
+// before Start.
+func (p *CommandPoller) SetJobGuard(g *JobGuard) {
+	p.jobs.Store(g)
 }
 
 // LocalKillSwitch reports whether the local kill switch is engaged now.
@@ -871,7 +891,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		}
 
 		// Claim (acknowledge) it now that a slot is held.
-		if err := p.client.AcknowledgeCommand(ctx, cmd.ID); err != nil {
+		if err := p.claim(ctx, cmd); err != nil {
 			p.queue.forget(cmd.ID)
 			<-p.sem
 			if p.verbose.Load() {
@@ -879,18 +899,47 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			}
 			continue
 		}
+		// The job signature, here in claim order (the signer's sequence
+		// numbers increase with the claims) and before anything runs.
+		jobErr := p.jobs.Load().Check(ctx, cmd)
 
 		// Execute asynchronously, in a context of its own: stopping the
 		// poller drains (DrainGrace) instead of killing it at once.
 		cmdCtx, cancel := context.WithCancelCause(p.cmdBase)
 		p.queue.setCancel(cmd.ID, cancel)
 		p.activeCmds.Add(1)
-		go p.executeCommand(cmdCtx, cmd)
+		go p.executeCommand(cmdCtx, cmd, jobErr)
 	}
 }
 
-// executeCommand executes a single command.
-func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
+// claim acknowledges cmd. With a JobGuard that verifies and a client that
+// returns the claim answer (CommandClaimer), the answer's payload, signed
+// job and lease epoch replace the poll's: the signer signed the claim.
+func (p *CommandPoller) claim(ctx context.Context, cmd *Command) error {
+	claimer, ok := p.client.(CommandClaimer)
+	if !ok || !p.jobs.Load().verifies() {
+		return p.client.AcknowledgeCommand(ctx, cmd.ID)
+	}
+	ans, err := claimer.ClaimCommand(ctx, cmd.ID)
+	if err != nil {
+		return err
+	}
+	if ans.ID != cmd.ID {
+		return fmt.Errorf("claim answered command %q for %q", ans.ID, cmd.ID)
+	}
+	cmd.LeaseEpoch = ans.LeaseEpoch
+	if !ans.LeaseExpiresAt.IsZero() {
+		cmd.LeaseExpiresAt = ans.LeaseExpiresAt
+	}
+	if len(ans.SignedJob) > 0 {
+		cmd.Payload, cmd.SignedJob = ans.Payload, ans.SignedJob
+	}
+	return nil
+}
+
+// executeCommand executes a single command. jobErr is the JobGuard's
+// verdict: a command it refused is reported failed and never started.
+func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr error) {
 	defer func() {
 		p.queue.cancel(cmd.ID, context.Canceled) // free the context
 		p.queue.forget(cmd.ID)
@@ -914,6 +963,15 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command) {
 	// Stopping (or canceled) before it started: hand it back unstarted.
 	if p.draining.Load() || ctx.Err() != nil {
 		p.handBack(cmd.ID, releaseReason(ctx, ReleaseReasonDraining))
+		return
+	}
+
+	// A job signature that does not verify (or a missing one where signed
+	// jobs are required): failed from the claimed state, never started.
+	if jobErr != nil {
+		p.clog(ctx, cmd.ID, "error", "Refused before running: "+jobErr.Error(), refusalFields(jobErr))
+		p.finishLog(ctx, cmd.ID)
+		p.refuseCommand(ctx, cmd, jobErr)
 		return
 	}
 

@@ -56,6 +56,11 @@ const (
 	// keys (base64 Ed25519, comma-separated) custom templates must be
 	// signed with; unset, commands carrying custom templates are refused.
 	EnvTemplateSigningKeys = "SENSOR_TEMPLATE_SIGNING_KEYS"
+	// EnvJobSigningKeys pins the platform job signer's keys (api RFC-040
+	// §5.6): comma-separated key ids ("SHA256:<hex>", the public key then
+	// comes from the platform's hello) or base64 Ed25519 public keys. They
+	// add to the keys pinned at pairing.
+	EnvJobSigningKeys = "SENSOR_JOB_SIGNING_KEYS"
 
 	EnvOutbox         = "SENSOR_OUTBOX"           // on | off (default: on for a daemon)
 	EnvOutboxDir      = "SENSOR_OUTBOX_DIR"       // default DefaultOutboxDir

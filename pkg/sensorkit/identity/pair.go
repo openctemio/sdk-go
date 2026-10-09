@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/jobsig"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/pairing"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 	"github.com/openctemio/sdk-go/pkg/sensorsig"
@@ -211,6 +212,7 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 		// A sensor paired from now on fails closed without a local policy.
 		RequireLocalPolicy: true}
 	id.PlatformTLSPinElement, id.PlatformTLSPin = pc.tlsPin()
+	id.JobSigningKeys = pc.jobSigningKeys(ctx, o)
 	if err := o.Store.Save(id); err != nil {
 		return nil, err
 	}
@@ -223,7 +225,44 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 		_, _ = fmt.Fprintf(o.Out, "Platform TLS pinned: %s (%s); a platform certificate from another CA is refused until the sensor is paired again.\n",
 			id.PlatformTLSPin, id.PlatformTLSPinElement)
 	}
+	if len(id.JobSigningKeys) > 0 {
+		ids := make([]string, 0, len(id.JobSigningKeys))
+		for _, k := range id.JobSigningKeys {
+			ids = append(ids, k.KeyID)
+		}
+		_, _ = fmt.Fprintf(o.Out, "Job signer pinned: %s; this sensor runs only jobs the platform's signer signed.\n", strings.Join(ids, ", "))
+	}
 	return id, nil
+}
+
+// jobSigningKeys are the job signer's keys the platform's hello lists now,
+// over the pairing connection (the platform TLS pin and the sensor's new
+// signature). Each key's id is recomputed; one that does not match is left
+// out. A hello that cannot be read pins nothing (the sensor then runs
+// unsigned jobs, as one paired with a platform that does not sign them),
+// with a warning.
+func (c *pairClient) jobSigningKeys(ctx context.Context, o PairOptions) []jobsig.PublicKey {
+	var h protov2.Hello
+	if err := c.do(ctx, o, http.MethodGet, protov2.HelloPath, nil, http.StatusOK, &h); err != nil {
+		_, _ = fmt.Fprintf(o.Out, "WARNING: could not read the platform's job-signing keys (%v); signed jobs are not required on this sensor. Set SENSOR_JOB_SIGNING_KEYS and SENSOR_REQUIRE_SIGNED_JOBS=true, or pair again.\n", err)
+		return nil
+	}
+	if h.SignedJobs == nil || h.SignedJobs.PayloadType != jobsig.PayloadType {
+		return nil
+	}
+	var keys []jobsig.PublicKey
+	for _, k := range h.SignedJobs.Keys {
+		pk := jobsig.PublicKey{KeyID: k.KeyID, Algorithm: k.Algorithm, PublicKey: k.PublicKey}
+		if _, err := pk.Decode(); err != nil {
+			_, _ = fmt.Fprintf(o.Out, "WARNING: the platform lists a job-signing key that is not valid; not pinned: %v\n", err)
+			continue
+		}
+		keys = append(keys, pk)
+	}
+	if len(keys) == 0 && h.Supports(protov2.FeatureSignedJobs) {
+		_, _ = fmt.Fprintf(o.Out, "WARNING: the platform signs jobs but listed no signer key yet; signed jobs are not required on this sensor. Set SENSOR_JOB_SIGNING_KEYS and SENSOR_REQUIRE_SIGNED_JOBS=true, or pair again.\n")
+	}
+	return keys
 }
 
 // tlsPin is the platform TLS pin the identity stores: SENSOR_CA_FINGERPRINT

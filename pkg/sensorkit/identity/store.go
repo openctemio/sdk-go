@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/jobsig"
 	"github.com/openctemio/sdk-go/pkg/sensorsig"
 )
 
@@ -83,6 +84,13 @@ type Identity struct {
 	// older SDK, which keeps trusting the trust store (posture pin none).
 	PlatformTLSPin        string `json:"platform_tls_pin,omitempty"`
 	PlatformTLSPinElement string `json:"platform_tls_pin_element,omitempty"`
+	// JobSigningKeys are the platform job signer's keys the hello listed
+	// right after pairing (trust on first use, over the pinned and signed
+	// pairing connection; api RFC-040 §5.6). A sensor whose identity pins
+	// them requires signed jobs (SENSOR_REQUIRE_SIGNED_JOBS overrides it).
+	// Empty: paired by an older SDK or with a platform that does not sign
+	// jobs; such a sensor runs unsigned jobs as before.
+	JobSigningKeys []jobsig.PublicKey `json:"job_signing_keys,omitempty"`
 }
 
 // TLSPin parses the platform TLS pin: the element and the SHA-256
