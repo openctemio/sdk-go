@@ -157,3 +157,25 @@ func TestManifestDescriptorBudget(t *testing.T) {
 		t.Fatal("a manifest within the budget is unchanged")
 	}
 }
+
+// The organization HTTP policy rides on every job, for any scanner (a
+// scanner off the tool contract has no tool.yaml http to narrow); an
+// invalid one fails the job.
+func TestApplyCapabilityJob_OrgHTTPPolicy(t *testing.T) {
+	no := false
+	pol := &OrgHTTPPolicy{UserAgent: "org-scan", AllowInsecureTLS: &no}
+	opts := &ScanOptions{}
+	if err := applyCapabilityJob(opts, &fakeScanner{name: "legacy"}, &ScanCommandPayload{Scanner: "legacy", HTTPPolicy: pol}); err != nil || opts.OrgHTTP != pol {
+		t.Fatalf("policy not carried: %v %+v", err, opts.OrgHTTP)
+	}
+	for _, ua := range []string{strings.Repeat("a", 257), "a\nb", "é"} {
+		if err := applyCapabilityJob(&ScanOptions{}, &fakeScanner{name: "x"}, &ScanCommandPayload{HTTPPolicy: &OrgHTTPPolicy{UserAgent: ua}}); err == nil {
+			t.Errorf("user agent %q accepted", ua)
+		}
+	}
+	var payload ScanCommandPayload
+	if err := json.Unmarshal([]byte(`{"scanner":"x","http_policy":{"user_agent":"org-scan","allow_insecure_tls":false}}`), &payload); err != nil ||
+		payload.HTTPPolicy == nil || payload.HTTPPolicy.UserAgent != "org-scan" || payload.HTTPPolicy.AllowInsecureTLS == nil || *payload.HTTPPolicy.AllowInsecureTLS {
+		t.Fatalf("wire form: %+v %v", payload.HTTPPolicy, err)
+	}
+}

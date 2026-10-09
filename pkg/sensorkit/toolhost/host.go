@@ -231,7 +231,7 @@ func (h *Host) lifecycle(ctx context.Context, m tool.Manifest, task tool.Task, r
 	}
 	start := time.Now()
 	started := map[string]any{"tool": m.Name, "tool_version": m.Version, "targets": len(task.Targets), "capability": task.Capability}
-	if eff, _ := effectiveHTTP(m, h.Policy); eff.String() != "" {
+	if eff, _ := effectiveHTTP(m, h.Policy, task.OrgHTTP); eff.String() != "" {
 		s := eff.String()
 		// What the tool's requests look like to the targets (tool.yaml http),
 		// recorded with the task.
@@ -356,11 +356,11 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, ierr, nil
 	}
 	task = adm.Task
-	eff, ierr := effectiveHTTP(m, h.Policy)
+	eff, ierr := effectiveHTTP(m, h.Policy, task.OrgHTTP)
 	if ierr != nil {
 		return nil, ierr, nil
 	}
-	task.HTTP = eff
+	task.HTTP, task.OrgHTTP = eff, nil
 	contentPaths, err := tool.CheckTaskContent(m, task, h.ContentRoot)
 	if err != nil {
 		return nil, tool.AsError(err), nil

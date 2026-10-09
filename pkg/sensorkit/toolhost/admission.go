@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
 
@@ -110,7 +111,7 @@ type HTTPPolicy interface {
 // effectiveHTTP is the task's http settings: the manifest's, with the
 // policy's User-Agent; a tool that skips TLS verification is refused
 // where the policy forbids it. nil when nothing is set.
-func effectiveHTTP(m tool.Manifest, pol Policy) (*tool.HTTPSpec, *tool.Error) {
+func effectiveHTTP(m tool.Manifest, pol Policy, org *core.OrgHTTPPolicy) (*tool.HTTPSpec, *tool.Error) {
 	var eff *tool.HTTPSpec
 	if m.HTTP != nil {
 		c := *m.HTTP
@@ -121,13 +122,22 @@ func effectiveHTTP(m tool.Manifest, pol Policy) (*tool.HTTPSpec, *tool.Error) {
 		}
 		eff = &c
 	}
-	hp, ok := pol.(HTTPPolicy)
-	if !ok || hp == nil {
-		return eff, nil
+	ua, allowInsecure := "", true
+	if hp, ok := pol.(HTTPPolicy); ok && hp != nil {
+		ua, allowInsecure = hp.HTTPPolicy()
 	}
-	ua, allowInsecure := hp.HTTPPolicy()
-	if !allowInsecure && eff != nil && eff.TLS != nil && eff.TLS.InsecureSkipVerify {
+	skips := eff != nil && eff.TLS != nil && eff.TLS.InsecureSkipVerify
+	if !allowInsecure && skips {
 		return nil, refusedErr("the local policy forbids skipping TLS verification (http.allow_insecure_tls: false); %s sets tls.insecure_skip_verify", m.Name)
+	}
+	if org != nil {
+		if org.AllowInsecureTLS != nil && !*org.AllowInsecureTLS && skips {
+			return nil, refusedErr("the organization's policy forbids skipping TLS verification; %s sets tls.insecure_skip_verify", m.Name)
+		}
+		// The local policy's User-Agent wins over the organization's.
+		if ua == "" {
+			ua = org.UserAgent
+		}
 	}
 	if ua != "" {
 		if eff == nil {

@@ -117,6 +117,9 @@ type ScanCommandPayload struct {
 	// WebScope is the hosts, paths and methods a web tool may request
 	// (webscope.Scope); an invalid one fails the job.
 	WebScope *webscope.Scope `json:"web_scope,omitempty"`
+	// HTTPPolicy is the organization's narrowing of its tools' requests
+	// (OrgHTTPPolicy); the local policy decides first.
+	HTTPPolicy *OrgHTTPPolicy `json:"http_policy,omitempty"`
 }
 
 // CapabilityScanner is a scanner that runs capability jobs: it takes the

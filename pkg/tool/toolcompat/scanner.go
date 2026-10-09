@@ -193,6 +193,7 @@ func (s *toolScanner) ScanTargets(ctx context.Context, targets []string, opts *c
 	if opts != nil {
 		task.Capability, task.Params, task.MaxTier = opts.Capability, opts.Params, tool.Tier(opts.MaxTier)
 		task.WebScope = opts.WebScope
+		task.OrgHTTP = opts.OrgHTTP
 	}
 	if opts != nil && opts.Settings != nil && len(s.m.Config) > 0 {
 		raw, err := json.Marshal(opts.Settings.Values())

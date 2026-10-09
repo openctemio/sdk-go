@@ -189,6 +189,10 @@ http:
   - a tool that skips TLS verification is refused with `refused_by_policy`.
 
   The runtime puts the effective settings in the task (`task.http`); a job cannot set them.
+- **The organization narrows in between.** A scan job can carry the organization's `http_policy` (`user_agent`, `allow_insecure_tls`).
+  - Its User-Agent applies unless the local policy forces one.
+  - `allow_insecure_tls: false` refuses a tool that skips TLS verification, even where the local policy allows it.
+  - It can never allow what the local policy forbids.
 - **Refused:**
   - `Authorization`, `Cookie` and `Proxy-*` headers (credentials come from the credential broker, never from tool.yaml);
   - framing headers;

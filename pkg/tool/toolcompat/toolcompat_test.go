@@ -130,7 +130,7 @@ func (legacyCollector) Collect(_ context.Context, o *core.CollectOptions) (*core
 
 func TestMain(m *testing.M) {
 	executor.RunLauncherIfRequested()
-	adapter.Dispatch(plain, stateful, configured, multi, coll, capTool)
+	adapter.Dispatch(plain, stateful, configured, multi, coll, capTool, insecureTool)
 	os.Exit(m.Run())
 }
 

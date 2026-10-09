@@ -92,6 +92,8 @@ type ScanOptions struct {
 	// WebScope is the job's web scope (see ScanCommandPayload); only a
 	// CapabilityScanner receives it.
 	WebScope *webscope.Scope `yaml:"-" json:"-"`
+	// OrgHTTP is the job's organization HTTP policy (see ScanCommandPayload).
+	OrgHTTP *OrgHTTPPolicy `yaml:"-" json:"-"`
 }
 
 // ScanResult holds the raw scan result before conversion.
