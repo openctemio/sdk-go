@@ -62,6 +62,9 @@ const (
 	// LocalPolicyAPIVersionV2 is the apiVersion of schema v2: every v1 key
 	// plus managed (see policyFileV2).
 	LocalPolicyAPIVersionV2 = "openctem.io/sensor-policy/v2"
+	// LocalPolicyAPIVersionV3 is the apiVersion of schema v3: every v2 key
+	// plus http (see policyFileV3).
+	LocalPolicyAPIVersionV3 = "openctem.io/sensor-policy/v3"
 	// MaxLocalPolicyBytes bounds the policy file.
 	MaxLocalPolicyBytes = 1 << 20
 	// MaxLocalPolicyEntries bounds each list in the policy.
@@ -76,7 +79,7 @@ const (
 // as LocalPolicyReport.Schemas reports them: the platform generates a
 // recommended policy only in a version the sensor lists, so a downloaded
 // file never stops a sensor.
-var LocalPolicySchemas = []string{"v1", "v2"}
+var LocalPolicySchemas = []string{"v1", "v2", "v3"}
 
 // Local policy states, as LocalPolicyReport.State reports them.
 const (
@@ -164,6 +167,10 @@ type LocalPolicy struct {
 
 	allowCustomTemplates bool
 	allowInteractsh      bool
+	// httpUserAgent replaces every tool's User-Agent ("": the tools');
+	// allowInsecureTLS false refuses tools that skip TLS verification.
+	httpUserAgent    string
+	allowInsecureTLS bool
 
 	// schema is the file's schema version ("v1", "v2"); "" without a file.
 	schema string
@@ -225,6 +232,22 @@ type policyFileV2 struct {
 		// and the platform shows it as locked by its owner. Default true.
 		Accept *bool `yaml:"accept"`
 	} `yaml:"managed"`
+}
+
+// policyFileV3 is schema v3: every v2 key, plus http. Frozen once
+// released, like v1 and v2.
+type policyFileV3 struct {
+	policyFileV2 `yaml:",inline"`
+	// HTTP is what the owner of this network decides about the tools'
+	// requests, whatever a tool's tool.yaml says (api RFC-060 §4.1).
+	HTTP *struct {
+		// UserAgent replaces every tool's User-Agent (a scanner the
+		// network's owners recognize in their logs).
+		UserAgent *string `yaml:"user_agent"`
+		// AllowInsecureTLS false refuses tasks of tools that skip
+		// certificate verification. Default true.
+		AllowInsecureTLS *bool `yaml:"allow_insecure_tls"`
+	} `yaml:"http"`
 }
 
 // domainPattern is a targets entry naming hosts: an exact name, or
@@ -398,6 +421,7 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 		doc    policyFile
 		target any
 		v2     policyFileV2
+		v3     policyFileV3
 		schema string
 	)
 	switch head.APIVersion {
@@ -405,8 +429,10 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 		target, schema = &doc, "v1"
 	case LocalPolicyAPIVersionV2:
 		target, schema = &v2, "v2"
+	case LocalPolicyAPIVersionV3:
+		target, schema = &v3, "v3"
 	default:
-		return nil, fmt.Errorf("apiVersion is %q; it must be %q or %q", head.APIVersion, LocalPolicyAPIVersion, LocalPolicyAPIVersionV2)
+		return nil, fmt.Errorf("apiVersion is %q; it must be %q, %q or %q", head.APIVersion, LocalPolicyAPIVersion, LocalPolicyAPIVersionV2, LocalPolicyAPIVersionV3)
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -418,7 +444,10 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 		return nil, errors.New("invalid policy: more than one YAML document")
 	}
 	managedAccept := true
-	if schema == "v2" {
+	if schema == "v3" {
+		v2 = v3.policyFileV2
+	}
+	if schema == "v2" || schema == "v3" {
 		doc = v2.policyFile
 		if m := v2.Managed; m != nil && m.Accept != nil {
 			managedAccept = *m.Accept
@@ -472,6 +501,19 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 	}
 	lp.allowCustomTemplates = doc.AllowCustomTemplates != nil && *doc.AllowCustomTemplates
 	lp.allowInteractsh = doc.AllowInteractsh != nil && *doc.AllowInteractsh
+	lp.allowInsecureTLS = true
+	if h := v3.HTTP; h != nil {
+		if h.UserAgent != nil {
+			ua := *h.UserAgent
+			if ua == "" || len(ua) > 256 || strings.IndexFunc(ua, func(r rune) bool { return r < 0x20 || r > 0x7e }) >= 0 {
+				return nil, errors.New("http.user_agent must be 1 to 256 printable ASCII characters")
+			}
+			lp.httpUserAgent = ua
+		}
+		if h.AllowInsecureTLS != nil {
+			lp.allowInsecureTLS = *h.AllowInsecureTLS
+		}
+	}
 	if r := doc.Rate; r != nil {
 		if r.MaxRPS != nil {
 			if *r.MaxRPS < 1 || *r.MaxRPS > MaxScanLimit {
@@ -765,6 +807,16 @@ func (lp *LocalPolicy) AllowsCustomTemplates() bool {
 // allow_interactsh.
 func (lp *LocalPolicy) AllowsInteractsh() bool {
 	return lp == nil || lp.allowInteractsh
+}
+
+// HTTPPolicy is what the policy decides about the tools' requests: a
+// User-Agent that replaces every tool's ("" none), and whether a tool may
+// skip TLS verification toward its targets. Without a policy: none, yes.
+func (lp *LocalPolicy) HTTPPolicy() (userAgent string, allowInsecureTLS bool) {
+	if !lp.Present() {
+		return "", true
+	}
+	return lp.httpUserAgent, lp.allowInsecureTLS
 }
 
 // Schema is the policy file's schema version ("v1", "v2"), "" without a

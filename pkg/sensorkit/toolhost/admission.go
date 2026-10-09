@@ -3,6 +3,7 @@ package toolhost
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -97,6 +98,44 @@ func Admit(ctx context.Context, m tool.Manifest, task tool.Task, pol Policy, mod
 	}
 	a.Task.Targets = admitted
 	return a, nil
+}
+
+// HTTPPolicy is a policy that decides about the tools' requests
+// (*core.LocalPolicy, schema v3): a User-Agent that replaces every tool's,
+// and whether a tool may skip TLS verification.
+type HTTPPolicy interface {
+	HTTPPolicy() (userAgent string, allowInsecureTLS bool)
+}
+
+// effectiveHTTP is the task's http settings: the manifest's, with the
+// policy's User-Agent; a tool that skips TLS verification is refused
+// where the policy forbids it. nil when nothing is set.
+func effectiveHTTP(m tool.Manifest, pol Policy) (*tool.HTTPSpec, *tool.Error) {
+	var eff *tool.HTTPSpec
+	if m.HTTP != nil {
+		c := *m.HTTP
+		c.Headers = maps.Clone(m.HTTP.Headers)
+		if m.HTTP.TLS != nil {
+			t := *m.HTTP.TLS
+			c.TLS = &t
+		}
+		eff = &c
+	}
+	hp, ok := pol.(HTTPPolicy)
+	if !ok || hp == nil {
+		return eff, nil
+	}
+	ua, allowInsecure := hp.HTTPPolicy()
+	if !allowInsecure && eff != nil && eff.TLS != nil && eff.TLS.InsecureSkipVerify {
+		return nil, refusedErr("the local policy forbids skipping TLS verification (http.allow_insecure_tls: false); %s sets tls.insecure_skip_verify", m.Name)
+	}
+	if ua != "" {
+		if eff == nil {
+			eff = &tool.HTTPSpec{}
+		}
+		eff.UserAgent = ua
+	}
+	return eff, nil
 }
 
 func refusedErr(format string, args ...any) *tool.Error {

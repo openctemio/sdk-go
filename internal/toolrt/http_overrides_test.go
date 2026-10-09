@@ -55,3 +55,15 @@ func TestHTTPOverridesFromTheDescriptor(t *testing.T) {
 		t.Fatal("a vendor tool skipped certificate verification")
 	}
 }
+
+// The task carries the effective settings (the local policy may force the
+// User-Agent): they win over the manifest in the tool's client.
+func TestHTTPTaskSettingsWin(t *testing.T) {
+	srv := uaServer(t)
+	m := httpTool
+	m.HTTP = &tool.HTTPSpec{UserAgent: "from-the-manifest/1"}
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Value: srv.URL}}, HTTP: &tool.HTTPSpec{UserAgent: "corp-security-scan"}}
+	if got, err := get(t, NewHTTPClient(m, task), srv.URL, ""); err != nil || got != "corp-security-scan" {
+		t.Fatalf("%q %v", got, err)
+	}
+}
