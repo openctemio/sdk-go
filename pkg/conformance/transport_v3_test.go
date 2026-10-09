@@ -161,24 +161,62 @@ func TestTransportV3_FallsBackWhenGRPCIsUnreachable(t *testing.T) {
 	}
 }
 
-// An intermediary that does not speak HTTP/2 (a TLS proxy, an old load
-// balancer): the gRPC host answers with HTTP/1.1 only.
-func TestTransportV3_FallsBackWhenHTTP2IsRefused(t *testing.T) {
-	f, signer := v3Fake(t, true)
+// boxInTheWay replaces the fake's gRPC listener with an HTTP/1.1-only TLS
+// server on the same address presenting cert.
+func boxInTheWay(t *testing.T, f *FakePlatform, cert tls.Certificate) {
+	t.Helper()
 	endpoint := f.V3GRPCEndpoint()
 	f.StopV3GRPC()
-	// An HTTP/1.1-only TLS server on the same address, with a certificate
-	// the client does not trust either: a box in the way.
 	ln, err := net.Listen("tcp", endpoint)
 	if err != nil {
 		t.Skipf("address reuse: %v", err)
 	}
-	cert := selfSigned(t)
 	srv := &http.Server{Handler: http.NotFoundHandler(), ReadHeaderTimeout: time.Second,
 		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
 		TLSConfig:    &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS12}}
 	go func() { _ = srv.ServeTLS(ln, "", "") }()
 	t.Cleanup(func() { _ = srv.Close() })
+}
+
+// interceptor replaces the fake's gRPC listener with a TLS endpoint that
+// speaks HTTP/2 (ALPN h2) with a certificate of its own CA.
+func interceptor(t *testing.T, f *FakePlatform, cert tls.Certificate) {
+	t.Helper()
+	endpoint := f.V3GRPCEndpoint()
+	f.StopV3GRPC()
+	ln, err := tls.Listen("tcp", endpoint, &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2"}, MinVersion: tls.VersionTLS12})
+	if err != nil {
+		t.Skipf("address reuse: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			if tc, ok := conn.(*tls.Conn); ok {
+				_ = tc.Handshake()
+			}
+			_ = conn.Close()
+		}
+	}()
+}
+
+// An intermediary that does not speak HTTP/2 (an old load balancer that
+// holds the platform's gRPC certificate): the gRPC host answers with
+// HTTP/1.1 only, a transport failure the HTTPS binding may stand in for.
+func TestTransportV3_FallsBackWhenHTTP2IsRefused(t *testing.T) {
+	f, signer := v3Fake(t, true)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := f.v3.issue(&key.PublicKey, false, "127.0.0.1", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boxInTheWay(t, f, tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key})
 
 	c := v3Client(t, f, signer, client.TransportAuto)
 	if err := c.StartTransport(context.Background()); err != nil {
@@ -209,6 +247,37 @@ func TestTransportV3_NeverFallsBackOnAnIdentityError(t *testing.T) {
 	}
 }
 
+// A gRPC endpoint whose certificate the pinned platform CA bundle does not
+// verify (a TLS-inspecting box, a rogue endpoint): a hard error, never the
+// HTTPS binding or v2, and nothing is sent until gRPC verifies again.
+func TestTransportV3_CertificateFailureNeverFallsBack(t *testing.T) {
+	f, signer := v3Fake(t, true)
+	interceptor(t, f, selfSigned(t))
+	c := v3Client(t, f, signer, client.TransportAuto)
+	err := c.StartTransport(context.Background())
+	if !errors.Is(err, client.ErrPlatformCertificate) {
+		t.Fatalf("err %v", err)
+	}
+	if st := c.TransportStatus(); st.FallbackReason != client.ReasonPlatformCertificate || st.Binding == client.BindingHTTPS || st.Binding == client.BindingV2 {
+		t.Fatalf("status %+v", st)
+	}
+	noTrafficAfter(t, f, c)
+}
+
+// noTrafficAfter checks that a blocked client sends no heartbeat on any
+// binding.
+func noTrafficAfter(t *testing.T, f *FakePlatform, c *client.Client) {
+	t.Helper()
+	if _, err := c.SendHeartbeatWithHints(context.Background(), status()); err == nil {
+		t.Fatal("a heartbeat went out on another binding")
+	}
+	for _, r := range f.Requests() {
+		if r.Header.Get(HeaderV3Binding) == "https" || r.Path == "/api/v2/sensor/heartbeat" {
+			t.Fatalf("a call reached the platform: %s %s", r.Header.Get(HeaderV3Binding), r.Path)
+		}
+	}
+}
+
 func TestTransportV3_ForcedGRPCDoesNotFallBack(t *testing.T) {
 	f, signer := v3Fake(t, true)
 	f.StopV3GRPC()
@@ -216,6 +285,25 @@ func TestTransportV3_ForcedGRPCDoesNotFallBack(t *testing.T) {
 	if err := c.StartTransport(context.Background()); err == nil {
 		t.Fatal("SENSOR_TRANSPORT=grpc fell back")
 	}
+	if st := c.TransportStatus(); st.Binding != client.BindingGRPC || st.FallbackReason != client.ReasonGRPCUnreachable {
+		t.Fatalf("status %+v", st)
+	}
+	noTrafficAfter(t, f, c)
+}
+
+// SENSOR_TRANSPORT=grpc against a platform whose hello lists no protocol
+// v3 does not drop to v2.
+func TestTransportV3_ForcedGRPCDoesNotDropToV2(t *testing.T) {
+	f, signer := v3Fake(t, true)
+	f.HideV3()
+	c := v3Client(t, f, signer, client.TransportGRPC)
+	if err := c.StartTransport(context.Background()); err == nil {
+		t.Fatal("SENSOR_TRANSPORT=grpc dropped to v2")
+	}
+	if st := c.TransportStatus(); st.Binding == client.BindingV2 || st.FallbackReason != client.ReasonPlatformWithoutV3 {
+		t.Fatalf("status %+v", st)
+	}
+	noTrafficAfter(t, f, c)
 }
 
 func TestTransportV3_PlatformWithoutV3AndForcedV2(t *testing.T) {

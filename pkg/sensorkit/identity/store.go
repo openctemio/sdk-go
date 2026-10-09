@@ -27,8 +27,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/sensorsig"
 )
 
@@ -71,6 +73,39 @@ type Identity struct {
 	// it). An identity written by an older SDK has no such field and is a
 	// legacy install that keeps its behavior.
 	RequireLocalPolicy bool `json:"require_local_policy,omitempty"`
+	// PlatformTLSPin is the platform's TLS identity pinned at pairing,
+	// "sha256:<64 hex digits>", and PlatformTLSPinElement what it is the
+	// fingerprint of: httpsec.PinElementAnchorSPKI (the SubjectPublicKeyInfo
+	// of the trust anchor the pairing connection verified) or
+	// httpsec.PinElementCACert (a CA certificate, SENSOR_CA_FINGERPRINT at
+	// pairing). Every platform client enforces it (SENSOR_CA_FINGERPRINT
+	// overrides it). Empty: an identity paired over plain http or by an
+	// older SDK, which keeps trusting the trust store (posture pin none).
+	PlatformTLSPin        string `json:"platform_tls_pin,omitempty"`
+	PlatformTLSPinElement string `json:"platform_tls_pin_element,omitempty"`
+}
+
+// TLSPin parses the platform TLS pin: the element and the SHA-256
+// fingerprint, or "" and nil when the identity has none. A malformed pin is
+// an error (the sensor refuses to start rather than run unpinned).
+func (id *Identity) TLSPin() (string, []byte, error) {
+	if id.PlatformTLSPin == "" && id.PlatformTLSPinElement == "" {
+		return "", nil, nil
+	}
+	switch id.PlatformTLSPinElement {
+	case httpsec.PinElementAnchorSPKI, httpsec.PinElementCACert:
+	default:
+		return "", nil, fmt.Errorf("identity: platform_tls_pin_element %q is not %s or %s; pair again",
+			id.PlatformTLSPinElement, httpsec.PinElementAnchorSPKI, httpsec.PinElementCACert)
+	}
+	if !strings.HasPrefix(id.PlatformTLSPin, "sha256:") {
+		return "", nil, errors.New("identity: platform_tls_pin must be sha256:<64 hex digits>; pair again")
+	}
+	fp, err := httpsec.ParseCAFingerprint(id.PlatformTLSPin)
+	if err != nil {
+		return "", nil, fmt.Errorf("identity: platform_tls_pin: %w; pair again", err)
+	}
+	return id.PlatformTLSPinElement, fp, nil
 }
 
 // Store is the identity directory under a state directory.

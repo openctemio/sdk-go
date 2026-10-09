@@ -15,8 +15,9 @@ import (
 
 // Platform TLS pins, as PlatformTLSPosture.Pin reports them.
 const (
-	// TLSPinFingerprint: platform requests trust only the CA certificate
-	// with a pinned SHA-256 fingerprint (SENSOR_CA_FINGERPRINT).
+	// TLSPinFingerprint: platform requests trust only a pinned TLS
+	// identity: the CA certificate of SENSOR_CA_FINGERPRINT, or the trust
+	// anchor key recorded at pairing (identity.json platform_tls_pin).
 	TLSPinFingerprint = "fingerprint"
 	// TLSPinCAFile: platform requests trust a private CA file
 	// (SENSOR_CA_CERT_FILE) besides the system trust store.
@@ -35,7 +36,8 @@ type SensorPosture struct {
 }
 
 // PlatformTLSPosture is the platform TLS pin of the sensor's HTTPS
-// requests (the gRPC transport always pins its own CA).
+// requests (the gRPC transport always pins its own CA bundle, which it
+// fetches over these requests).
 type PlatformTLSPosture struct {
 	// Pin is TLSPinFingerprint, TLSPinCAFile or TLSPinNone.
 	Pin string `json:"pin"`
@@ -54,12 +56,12 @@ type SandboxPosture struct {
 }
 
 // PlatformTLSPin is the platform TLS pin of API clients created now:
-// TLSPinFingerprint when a CA fingerprint is pinned
-// (httpsec.SetAPIPinnedCA), TLSPinCAFile when only a private CA pool is
-// set (httpsec.SetAPIRootCAs), else TLSPinNone.
+// TLSPinFingerprint when a CA fingerprint or an anchor key is pinned
+// (httpsec.SetAPIPinnedCA, httpsec.SetAPIPinnedSPKI), TLSPinCAFile when
+// only a private CA pool is set (httpsec.SetAPIRootCAs), else TLSPinNone.
 func PlatformTLSPin() string {
 	switch {
-	case len(httpsec.APIPinnedCA()) > 0:
+	case httpsec.HasAPIPin():
 		return TLSPinFingerprint
 	case httpsec.APIRootCAs() != nil:
 		return TLSPinCAFile

@@ -46,12 +46,16 @@ const (
 	BindingV2    Binding = "v2"
 )
 
-// v3State is the binding in use: svc is nil on v2.
+// v3State is the binding in use: svc is nil on v2. A blocked state
+// carries no traffic at all (only the v2 hello that negotiation needs):
+// the gRPC endpoint's certificate was refused, or SENSOR_TRANSPORT=grpc
+// cannot be honored, and no other binding may stand in.
 type v3State struct {
 	svc     sensorv3connect.SensorServiceClient
 	binding Binding
 	reason  string
 	since   time.Time
+	blocked error
 }
 
 // maxV3RequestBytes bounds a request body the round tripper reads (the v2
@@ -79,6 +83,10 @@ func (t *v3RoundTripper) Unwrap() http.RoundTripper { return t.next }
 // RoundTrip implements http.RoundTripper.
 func (t *v3RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	st := t.state.Load()
+	if st != nil && st.blocked != nil && strings.HasPrefix(req.URL.Path, t.prefix+"/") &&
+		(req.Method != http.MethodGet || req.URL.Path != t.prefix+protov2.HelloPath) {
+		return nil, st.blocked
+	}
 	if st != nil && st.svc == nil && req.Method == http.MethodPost && req.URL.Path == t.prefix+protov2.HeartbeatPath {
 		return t.next.RoundTrip(withTransportReport(req, st))
 	}
