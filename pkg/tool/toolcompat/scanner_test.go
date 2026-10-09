@@ -153,3 +153,32 @@ func TestCapabilityJobReachesTheTool(t *testing.T) {
 		t.Fatal("adapter origin")
 	}
 }
+
+// The organization HTTP policy from the job reaches the tool host: a tool
+// that skips TLS verification is refused when the organization forbids it.
+// insecureTool skips TLS verification toward its targets (tool.yaml http).
+var insecureTool = tool.Define("insecure-ports", "1.0.0").
+	ImplementsWith(tool.Implementation{Capability: "scan.ports@1"}).
+	Targets("domain").Produces("asset:open_port").
+	Manifest(func(m *tool.Manifest) {
+		m.Permissions.Network = tool.NetTargets
+		m.HTTP = &tool.HTTPSpec{TLS: &tool.TLSSpec{InsecureSkipVerify: true}}
+	}).
+	Handle(func(ctx tool.Context, job *tool.Job, _ tool.Emit) error {
+		for _, t := range job.Targets() {
+			ctx.TargetDone(t)
+		}
+		return nil
+	}).MustBuild()
+
+func TestOrgHTTPPolicyReachesTheHost(t *testing.T) {
+	s := AsScanner(insecureTool, ScannerConfig{Host: host(t)})
+	no := false
+	_, err := s.Scan(context.Background(), "a.example", &core.ScanOptions{Capability: "scan.ports@1", OrgHTTP: &core.OrgHTTPPolicy{AllowInsecureTLS: &no}})
+	if err == nil || !strings.Contains(err.Error(), "organization") {
+		t.Fatalf("organization policy not applied: %v", err)
+	}
+	if _, err := s.Scan(context.Background(), "a.example", &core.ScanOptions{Capability: "scan.ports@1"}); err != nil {
+		t.Fatalf("without the policy: %v", err)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
@@ -56,6 +57,10 @@ type Task struct {
 	// with what the sensor's local policy decides (a forced User-Agent).
 	// Set by the runtime, never taken from a job; ctx.HTTP() applies it.
 	HTTP *HTTPSpec `json:"http,omitempty"`
+	// OrgHTTP is the organization's HTTP policy from the job. The tool host
+	// merges it into HTTP (after the local policy) and clears it; a tool
+	// never acts on it.
+	OrgHTTP *core.OrgHTTPPolicy `json:"-"`
 	// Content are the task's content packs per slot the manifest
 	// declares, resolved by the sensor to read-only paths (ContentPaths).
 	Content []TaskContent `json:"content,omitempty"`

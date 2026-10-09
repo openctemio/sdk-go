@@ -34,6 +34,12 @@ const (
 // Whether the tool implements the capability and supports each value is
 // checked by the tool runtime (tool.Manifest.ApplyParams).
 func applyCapabilityJob(opts *ScanOptions, scanner Scanner, p *ScanCommandPayload) error {
+	// The organization's HTTP policy narrows whatever the tool runs; an
+	// invalid one fails the job rather than being dropped.
+	if err := p.HTTPPolicy.Validate(); err != nil {
+		return err
+	}
+	opts.OrgHTTP = p.HTTPPolicy
 	if p.Capability == "" && len(p.Params) == 0 && p.MaxTier == "" && p.WebScope == nil {
 		return nil
 	}
