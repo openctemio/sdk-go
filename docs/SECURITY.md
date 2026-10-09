@@ -191,9 +191,31 @@ err := core.ValidateTemplate(&core.EmbeddedTemplate{
 
 #### Template Signatures
 
-A scan command's custom templates run only with the platform's signed
-manifest of them (`ScanCommandPayload.CustomTemplatesEnvelope`), or the
-command fails before any template is written or any scanner runs. The
+A scan command's custom templates run only when something the sensor pins
+vouches for exactly those bytes, or the command fails before any template
+is written or any scanner runs. Two ways, in this order:
+
+1. **The signed job** (preferred). When the command's signed job verified
+   (see [Signed jobs](#signed-jobs)), its statement lists the SHA-256 of
+   every custom template (`templates`, `"sha256:<hex>"` of the decoded
+   content, in the payload's order). The platform's job signer names a
+   template only when its digest is approved in the signer's scope ledger
+   (api RFC-040 P2). `jobsig.Verify` refuses a statement whose list is not
+   exactly the payload's (reason `templates`), and the executor compares
+   the decoded templates with the verified list again before writing them.
+   No `SENSOR_TEMPLATE_SIGNING_KEYS` is needed.
+2. **The per-tenant manifest** (fallback for sensors without signed jobs):
+   the platform's signed manifest of the templates
+   (`ScanCommandPayload.CustomTemplatesEnvelope`) against keys pinned in
+   `SENSOR_TEMPLATE_SIGNING_KEYS`. That key is held by the API, so this path
+   is weaker; it is to be removed once signed jobs are required
+   everywhere.
+
+Either way the local policy's `allow_custom_templates` gate and the
+template validation above still apply: a signature never lets a template
+the sensor's owner refused, or a dangerous protocol, through.
+
+The
 manifest (`core.TemplateManifest`, kind `openctem.template-manifest/v1`)
 names the tenant, the sensor and the command it is for, when it was issued
 and when it expires, and the id, name, type and SHA-256 of every template in
@@ -420,8 +442,12 @@ before the local policy, the command gate or any executor sees it:
 6. `lease_epoch` is the epoch of the claim answer;
 7. `payload_sha256` is the SHA-256 of the command's `payload` bytes as the
    claim answer carried them (kept as `json.RawMessage`, never
-   re-encoded), and the `tool` and `targets` the statement names are
-   those that payload names: what the signer checked is what runs;
+   re-encoded), and the `tool`, `targets` and custom `templates` (their
+   SHA-256 digests, in order; absent when there are none) the statement
+   names are those that payload names: what the signer checked is what
+   runs. A sensor on an older SDK refuses a statement that carries
+   `templates` (unknown field): jobs with custom templates fail closed
+   there;
 8. the nonce was not seen before (kept until its statement expires,
    bounded), and `seq` is above the last one accepted from that key. The
    new `seq` is written to `<state dir>/job-signing-seq.json` (temporary

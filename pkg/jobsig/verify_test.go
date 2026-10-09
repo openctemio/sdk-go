@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -450,5 +451,58 @@ func TestPayloadTargetsMatchesPlatform(t *testing.T) {
 	}
 	if PayloadTool([]byte(`{"preferred_tool":"x"}`)) != "x" || PayloadTool([]byte(`{"scanner":"y","preferred_tool":"x"}`)) != "y" {
 		t.Fatal("PayloadTool")
+	}
+}
+
+// A statement binds the payload custom templates by digest: dropping,
+// adding or swapping one is refused even under a valid signature.
+func TestVerifyBindsCustomTemplates(t *testing.T) {
+	a, b := base64.StdEncoding.EncodeToString([]byte("id: a\n")), base64.StdEncoding.EncodeToString([]byte("id: b\n"))
+	payload := []byte(`{"scanner":"nuclei","targets":["a.example.com"],"custom_templates":[{"name":"a","content":" ` + a + ` "},{"name":"b","content":"` + b + `"}]}`)
+	digests := []string{TemplateDigest([]byte("id: a\n")), TemplateDigest([]byte("id: b\n"))}
+	if got, err := PayloadTemplateDigests(payload); err != nil || !slices.Equal(got, digests) {
+		t.Fatalf("PayloadTemplateDigests = %v, %v", got, err)
+	}
+	cases := map[string]struct {
+		templates []string
+		reason    string
+	}{
+		"exact":   {digests, ""},
+		"omitted": {nil, ReasonTemplates},
+		"one":     {digests[:1], ReasonTemplates},
+		"extra":   {append(append([]string{}, digests...), digests[0]), ReasonTemplates},
+		"swapped": {[]string{digests[1], digests[0]}, ReasonTemplates},
+		"other":   {[]string{digests[0], TemplateDigest([]byte("id: b2\n"))}, ReasonTemplates},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, "")
+			f.b.Payload = payload
+			st := f.statement()
+			st.PayloadSHA256, st.Targets, st.Templates = PayloadDigest(payload), []string{"a.example.com"}, tc.templates
+			got, err := f.ver.Verify(context.Background(), f.envelope(t, st), f.b)
+			if tc.reason == "" {
+				if err != nil || !slices.Equal(got.Templates, digests) {
+					t.Fatalf("valid job refused: %v", err)
+				}
+				return
+			}
+			if ReasonOf(err) != tc.reason {
+				t.Fatalf("err = %v, want reason %q", err, tc.reason)
+			}
+		})
+	}
+	// A statement naming templates for a payload that carries none.
+	f := newFixture(t, "")
+	st := f.statement()
+	st.Templates = digests
+	if ReasonOf(func() error { _, err := f.ver.Verify(context.Background(), f.envelope(t, st), f.b); return err }()) != ReasonTemplates {
+		t.Fatal("templates named for a payload without templates were accepted")
+	}
+	if _, err := PayloadTemplateDigests([]byte(`{"custom_templates":[{"content":"%%%"}]}`)); err == nil {
+		t.Fatal("undecodable template content accepted")
+	}
+	if got, _ := PayloadTemplateDigests([]byte(`{"custom_templates":[]}`)); got != nil {
+		t.Fatalf("empty custom_templates = %#v", got)
 	}
 }

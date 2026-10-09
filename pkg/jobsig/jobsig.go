@@ -72,11 +72,16 @@ type Statement struct {
 	Tool string `json:"tool"`
 	// PayloadSHA256 is "sha256:" + lower-case hex SHA-256 of the command's
 	// payload bytes as the claim response carried them.
-	PayloadSHA256 string    `json:"payload_sha256"`
-	Targets       []string  `json:"targets"`
-	LeaseEpoch    int       `json:"lease_epoch"`
-	IssuedAt      time.Time `json:"issued_at"`
-	ExpiresAt     time.Time `json:"expires_at"`
+	PayloadSHA256 string   `json:"payload_sha256"`
+	Targets       []string `json:"targets"`
+	// Templates are the payload's custom templates, as the signer approved
+	// them in its scope ledger (api RFC-040 P2): "sha256:" + lower-case hex
+	// of each decoded template, in the payload's order. Absent when the
+	// payload carries none.
+	Templates  []string  `json:"templates,omitempty"`
+	LeaseEpoch int       `json:"lease_epoch"`
+	IssuedAt   time.Time `json:"issued_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
 	// Seq is per sensor and strictly increasing (gaps are possible).
 	Seq uint64 `json:"seq"`
 	// Nonce is 16 random bytes, base64url without padding.
@@ -194,6 +199,38 @@ func PayloadTool(payload []byte) string {
 		return p.Scanner
 	}
 	return p.PreferredTool
+}
+
+// PayloadTemplateDigests are the digests of a command payload's custom
+// templates, as the platform puts them in the statement: for each element
+// of "custom_templates", in order and duplicates kept, "sha256:" + lower-case
+// hex SHA-256 of its base64 (standard) "content" after trimming spaces. Nil
+// when the payload carries none; an error when a content does not decode.
+func PayloadTemplateDigests(payload []byte) ([]string, error) {
+	var p struct {
+		CustomTemplates []struct {
+			Content string `json:"content"`
+		} `json:"custom_templates"`
+	}
+	if len(payload) == 0 || json.Unmarshal(payload, &p) != nil || len(p.CustomTemplates) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(p.CustomTemplates))
+	for i, t := range p.CustomTemplates {
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(t.Content))
+		if err != nil {
+			return nil, fmt.Errorf("custom template %d: content is not base64: %w", i, err)
+		}
+		out = append(out, TemplateDigest(raw))
+	}
+	return out, nil
+}
+
+// TemplateDigest is the statement form of one template's digest:
+// "sha256:" + lower-case hex SHA-256 of its decoded bytes.
+func TemplateDigest(content []byte) string {
+	sum := sha256.Sum256(content)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // PayloadTargets are the targets a command payload names, as the platform
