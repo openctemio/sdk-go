@@ -76,11 +76,17 @@ type JobGuard struct {
 	tenantID string
 	sensorID string
 
-	// configVersion is the platform's config_version (the doorbell's);
-	// when it moves, the key set is fetched again before the next check.
-	configVersion func() string
-	cvMu          sync.Mutex
-	lastCV        string
+	// cv follows the platform's config_version (SetConfigVersion); a
+	// pointer keeps JobGuard comparable.
+	cv *configVersionWatch
+}
+
+// configVersionWatch is the config_version the key set was last fetched
+// under.
+type configVersionWatch struct {
+	current func() string
+	mu      sync.Mutex
+	last    string
 }
 
 // SetConfigVersion gives the guard the platform's current config_version
@@ -88,24 +94,24 @@ type JobGuard struct {
 // guard then fetches the key set again before it checks the next command,
 // so a rotated or revoked signer key takes effect without a restart.
 func (g *JobGuard) SetConfigVersion(f func() string) {
-	if g != nil {
-		g.configVersion = f
+	if g != nil && f != nil {
+		g.cv = &configVersionWatch{current: f}
 	}
 }
 
 // refreshKeySet fetches the key set again when config_version moved.
 func (g *JobGuard) refreshKeySet(ctx context.Context) {
 	ks := g.v.KeySet()
-	if ks == nil || g.configVersion == nil {
+	if ks == nil || g.cv == nil {
 		return
 	}
-	cv := g.configVersion()
-	g.cvMu.Lock()
-	changed := cv != "" && cv != g.lastCV
+	cv := g.cv.current()
+	g.cv.mu.Lock()
+	changed := cv != "" && cv != g.cv.last
 	if changed {
-		g.lastCV = cv
+		g.cv.last = cv
 	}
-	g.cvMu.Unlock()
+	g.cv.mu.Unlock()
 	if changed {
 		_ = ks.Refresh(ctx, true)
 	}
