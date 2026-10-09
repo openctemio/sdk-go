@@ -61,6 +61,12 @@ const (
 	// comes from the platform's hello) or base64 Ed25519 public keys. They
 	// add to the keys pinned at pairing.
 	EnvJobSigningKeys = "SENSOR_JOB_SIGNING_KEYS"
+	// EnvJobSigningRoot pins the installation's offline job-signing root
+	// (api RFC-040 §5.6 K3): its key id ("SHA256:<hex>") or base64 Ed25519
+	// public key. Job signatures are then accepted from the keys of the
+	// current key set the root signed (and SENSOR_JOB_SIGNING_KEYS). It
+	// overrides the root pinned at pairing.
+	EnvJobSigningRoot = "SENSOR_JOB_SIGNING_ROOT"
 
 	EnvOutbox         = "SENSOR_OUTBOX"           // on | off (default: on for a daemon)
 	EnvOutboxDir      = "SENSOR_OUTBOX_DIR"       // default DefaultOutboxDir

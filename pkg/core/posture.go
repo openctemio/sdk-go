@@ -9,6 +9,8 @@ package core
 // local policy's own posture (state, required) is in "local_policy".
 
 import (
+	"time"
+
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 )
@@ -43,6 +45,13 @@ type JobsPosture struct {
 	// Signed is JobsSignedRequired, JobsSignedVerifiedWhenPresent or
 	// JobsSignedOff.
 	Signed string `json:"signed"`
+	// Root is the pinned job-signing root key id; "" when none is pinned.
+	Root string `json:"root,omitempty"`
+	// KeySetVersion and KeySetExpiresAt describe the accepted key set of
+	// the pinned root (absent without one): the sensor refuses every signed
+	// job once it expires, until the platform deploys a new one.
+	KeySetVersion   uint64     `json:"keyset_version,omitempty"`
+	KeySetExpiresAt *time.Time `json:"keyset_expires_at,omitempty"`
 }
 
 // PlatformTLSPosture is the platform TLS pin of the sensor's HTTPS
@@ -90,6 +99,13 @@ func CurrentPosture() *SensorPosture {
 	}
 	if s := jobsPosture.Load(); s != nil {
 		p.Jobs = &JobsPosture{Signed: *s}
+		if t := jobsKeySet.Load(); t != nil {
+			p.Jobs.Root = t.Root()
+			if ks := t.Current(); ks != nil {
+				exp := ks.NotAfter.UTC()
+				p.Jobs.KeySetVersion, p.Jobs.KeySetExpiresAt = ks.Version, &exp
+			}
+		}
 	}
 	return p
 }

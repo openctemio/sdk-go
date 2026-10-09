@@ -350,6 +350,12 @@ type Hello struct {
 type SignedJobs struct {
 	PayloadType string         `json:"payload_type"`
 	Keys        []SignedJobKey `json:"keys"`
+	// KeySet is the current key set: a DSSE envelope signed by the
+	// installation's offline root key (payload type
+	// application/vnd.openctem.keyset.v1+json) listing the online signer
+	// keys, with a version and an expiry. Absent when the platform serves
+	// none. A sensor verifies it against its pinned root (pkg/jobsig).
+	KeySet json.RawMessage `json:"keyset,omitempty"`
 }
 
 // SignedJobKey is one signer key: KeyID is "SHA256:" + lower-case hex of

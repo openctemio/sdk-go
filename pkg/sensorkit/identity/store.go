@@ -91,6 +91,13 @@ type Identity struct {
 	// Empty: paired by an older SDK or with a platform that does not sign
 	// jobs; such a sensor runs unsigned jobs as before.
 	JobSigningKeys []jobsig.PublicKey `json:"job_signing_keys,omitempty"`
+	// JobSigningRoot is the key id of the installation's offline
+	// job-signing root, taken at pairing from the key set the hello served
+	// (trust on first use, like JobSigningKeys). With a root, job
+	// signatures are accepted from the keys of its current key set, and
+	// JobSigningKeys are not used: rotating or revoking a signer key is a
+	// new key set, not a new pairing. SENSOR_JOB_SIGNING_ROOT overrides it.
+	JobSigningRoot string `json:"job_signing_root,omitempty"`
 }
 
 // TLSPin parses the platform TLS pin: the element and the SHA-256

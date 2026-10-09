@@ -45,7 +45,7 @@ func TestNew_JobSigningPosture(t *testing.T) {
 		{name: "legacy identity, env keys", envKeys: key.KeyID, want: core.JobsSignedVerifiedWhenPresent, log: key.KeyID},
 		{name: "legacy identity, env keys, required", envKeys: key.PublicKey, require: "true", want: core.JobsSignedRequired,
 			log: "required (" + core.EnvRequireSignedJobs + "=true)"},
-		{name: "required without a key", require: "true", failure: "no job-signing key is pinned"},
+		{name: "required without a key", require: "true", failure: "no job-signing key or root is pinned"},
 		{name: "bad key", envKeys: "SHA256:00", failure: EnvJobSigningKeys},
 		{name: "bad require", require: "maybe", failure: core.EnvRequireSignedJobs},
 	} {
@@ -99,5 +99,65 @@ func TestNew_JobSigningNeedsAPairedSensor(t *testing.T) {
 	t.Setenv(EnvJobSigningKeys, "SHA256:"+strings.Repeat("ab", 32))
 	if _, err := New(opts); err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), "paired") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A root pinned at pairing makes signed jobs required and replaces the
+// keys pinned at pairing; SENSOR_JOB_SIGNING_ROOT overrides it; a bad root
+// stops the start.
+func TestNew_JobSigningRoot(t *testing.T) {
+	key := jobsig.NewPublicKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{5}, 32)).Public().(ed25519.PublicKey))
+	idRoot := "SHA256:" + strings.Repeat("ab", 32)
+	envRoot := "SHA256:" + strings.Repeat("cd", 32)
+	for _, tc := range []struct {
+		name, env, wantRoot, failure string
+	}{
+		{name: "identity root", wantRoot: idRoot},
+		{name: "env root overrides", env: envRoot, wantRoot: envRoot},
+		{name: "bad env root", env: "SHA256:00", failure: EnvJobSigningRoot},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() { core.SetJobsPosture(""); core.SetJobsKeySet(nil) })
+			f := conformance.NewFakePlatform(true)
+			t.Cleanup(f.Close)
+			opts, out, errw := baseOptions(t, f)
+			opts.APIKey = ""
+			pairedStore(t, opts.StateDir)
+			st := identity.NewStore(opts.StateDir)
+			id, _, err := st.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			id.JobSigningKeys, id.JobSigningRoot = []jobsig.PublicKey{key}, idRoot
+			if err := st.Save(id); err != nil {
+				t.Fatal(err)
+			}
+			if tc.env != "" {
+				t.Setenv(EnvJobSigningRoot, tc.env)
+			}
+			k, err := New(opts)
+			if tc.failure != "" {
+				if err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), tc.failure) {
+					t.Fatalf("err = %v, want a usage error naming %q", err, tc.failure)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k.closeClient)
+			if got := k.s.jobs.Posture(); got != core.JobsSignedRequired {
+				t.Fatalf("posture %s", got)
+			}
+			p := k.sensor.Posture()
+			if p == nil || p.Jobs == nil || p.Jobs.Root != tc.wantRoot || p.Jobs.KeySetExpiresAt != nil {
+				t.Fatalf("posture %+v", p.Jobs)
+			}
+			logs := out.String() + errw.String()
+			if !strings.Contains(logs, "the key set of root "+tc.wantRoot) || strings.Contains(logs, key.KeyID) ||
+				!strings.Contains(logs, "no job-signing key set") {
+				t.Fatalf("log:\n%s", logs)
+			}
+		})
 	}
 }
