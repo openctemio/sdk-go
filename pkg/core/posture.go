@@ -33,6 +33,16 @@ type SensorPosture struct {
 	PlatformTLS *PlatformTLSPosture `json:"platform_tls,omitempty"`
 	// Sandbox is how tool runs are confined.
 	Sandbox *SandboxPosture `json:"sandbox,omitempty"`
+	// Jobs is how the sensor checks the platform's job signatures; nil
+	// when the runtime did not decide it (SetJobsPosture).
+	Jobs *JobsPosture `json:"jobs,omitempty"`
+}
+
+// JobsPosture is the sensor's signed-job checking (api RFC-040 §5.6).
+type JobsPosture struct {
+	// Signed is JobsSignedRequired, JobsSignedVerifiedWhenPresent or
+	// JobsSignedOff.
+	Signed string `json:"signed"`
 }
 
 // PlatformTLSPosture is the platform TLS pin of the sensor's HTTPS
@@ -69,12 +79,17 @@ func PlatformTLSPin() string {
 	return TLSPinNone
 }
 
-// CurrentPosture is the posture now: the platform TLS pin and the status of
-// the tool sandbox installed with executor.SetCurrent.
+// CurrentPosture is the posture now: the platform TLS pin, the status of
+// the tool sandbox installed with executor.SetCurrent and the signed-job
+// checking set with SetJobsPosture.
 func CurrentPosture() *SensorPosture {
 	st := executor.Current().Status()
-	return &SensorPosture{
+	p := &SensorPosture{
 		PlatformTLS: &PlatformTLSPosture{Pin: PlatformTLSPin()},
 		Sandbox:     &SandboxPosture{Mode: string(st.Mode), Sandboxed: st.Sandboxed, NetworkEnforced: st.NetworkEnforced},
 	}
+	if s := jobsPosture.Load(); s != nil {
+		p.Jobs = &JobsPosture{Signed: *s}
+	}
+	return p
 }

@@ -382,6 +382,77 @@ themselves. The window between the executor's check and the tool's own
 lookup is not closed for them. To close it, route the tool through the egress
 forwarder, or list addresses instead of names in `targets.allow`.
 
+#### Signed jobs
+
+The platform's job signer is a process apart from the API (api RFC-040
+§5.6, `docs/architecture/job-signing.md` in openctemio/openctem): it holds
+the signing key, checks every job against its own rules and signs a
+statement for each command a claim hands out. A sensor that pins the
+signer's key runs only what the signer signed, so whoever can write the
+commands table or run code in the API can no longer decide on their own
+what the sensor scans.
+
+The claim answer (protocol v2 claim and claim-N, protocol v3
+`ClaimCommands`) carries `signed_job`, a DSSE envelope:
+
+```json
+{"payloadType": "application/vnd.openctem.job.v1+json",
+ "payload": "<standard base64 of the statement bytes>",
+ "signatures": [{"keyid": "SHA256:<64 hex>", "sig": "<standard base64 Ed25519>"}]}
+```
+
+`pkg/jobsig` verifies it, and the `CommandPoller` (`SetJobGuard`) does so
+right after the claim, in claim order, before the command is started and
+before the local policy, the command gate or any executor sees it:
+
+1. the payload type is `application/vnd.openctem.job.v1+json`;
+2. a signature verifies, with Ed25519 over the DSSE pre-authentication
+   encoding of the exact payload bytes, under a pinned key. The pinned
+   keys are indexed by their recomputed id (`SHA256:` + hex SHA-256 of
+   the raw key); a signature's `keyid` only selects a key;
+3. only then is the statement parsed: one JSON object, no unknown field,
+   `kind` `openctem.job/v1`, `signer.keyid` the key that verified;
+4. `tenant_id` and `sensor_id` are the sensor's own (from its identity),
+   `command_id` and `command_type` those of the command being run;
+5. `issued_at` within 2 minutes of the sensor's clock, `expires_at` in the
+   future and at most 1 hour after `issued_at`;
+6. `lease_epoch` is the epoch of the claim answer;
+7. `payload_sha256` is the SHA-256 of the command's `payload` bytes as the
+   claim answer carried them (kept as `json.RawMessage`, never
+   re-encoded), and the `tool` and `targets` the statement names are
+   those that payload names: what the signer checked is what runs;
+8. the nonce was not seen before (kept until its statement expires,
+   bounded), and `seq` is above the last one accepted from that key. The
+   new `seq` is written to `<state dir>/job-signing-seq.json` (temporary
+   file, fsync, rename, directory fsync) before the job is accepted, so a
+   restart does not open a replay window. A corrupt file stops the sensor.
+
+A command that fails any check, or comes unsigned to a sensor that
+requires signed jobs, is failed from the claimed state with a structured
+refusal (layer `builtin`, rule `job_signature`) and the reason, logged
+locally and in the command's log, and never started or run. Nothing is
+retried on another key or relaxed by anything the platform sends.
+
+| Setting | Effect |
+|---|---|
+| `SENSOR_JOB_SIGNING_KEYS` | Pins signer keys, comma-separated: key ids (`SHA256:<hex>`, as the platform shows them; the public key then comes from the hello, used only when its recomputed id is pinned) or base64 Ed25519 public keys. Added to the keys pinned at pairing. |
+| `identity.json` `job_signing_keys` | Pairing reads the hello right after the confirmation, over the pinned and signed pairing connection, and pins the keys it lists (trust on first use; a listed key whose id is not its own is dropped). |
+| `SENSOR_REQUIRE_SIGNED_JOBS` | `true`: every command needs a valid signed job. `false`: unsigned commands run, signed ones are still verified when a key is pinned. Unset: `true` when the identity pinned keys at pairing, else `false`. |
+
+Verification needs the sensor's own organization and id, which a paired
+(key-bound) sensor knows: a bearer-key sensor with signer keys or
+`SENSOR_REQUIRE_SIGNED_JOBS=true` refuses to start, and so does a sensor
+that requires signed jobs without a pinned key. The manifest's posture
+reports `jobs.signed`: `required`, `verified_when_present` or `off`.
+
+Not covered yet: rotation of signer keys without re-pinning (an offline
+root and a signed key set, RFC-040 K3), and the signed scope document the
+sensor would check targets against besides its local policy. Today a
+sensor pins the online signer key itself; a new key means updating
+`SENSOR_JOB_SIGNING_KEYS` or pairing again. The local policy schema has no
+signer settings: v1 is frozen and the keys live in the environment and the
+identity.
+
 #### Per-command logs of the poller
 
 With a log sink (`CommandPoller.SetCommandLogSink`; `sensorkit` wires its
@@ -671,6 +742,12 @@ export API_KEY="<sensor key>"   # or pair the sensor and set no key at all
 - [ ] `ValidateTokenClaims` enabled
 - [ ] Secure lease identity enabled (default)
 - [ ] Lease expiry callback handles graceful shutdown
+
+### Signed jobs
+
+- [ ] Paired sensors pin the job signer (`identity.json` `job_signing_keys`, or `SENSOR_JOB_SIGNING_KEYS`)
+- [ ] `posture.jobs.signed` is `required` everywhere the platform signs jobs
+- [ ] `<state dir>/job-signing-seq.json` is on a persistent volume
 
 ### Templates
 - [ ] Template validation enabled (automatic)

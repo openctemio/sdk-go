@@ -76,6 +76,13 @@ type Options struct {
 	// a scan command must carry a signature one of them verifies; without
 	// any, such commands fail (core.ErrNoTemplateKeys).
 	TemplateSigningKeys string
+	// JobSigningKeys pins the platform job signer's keys
+	// (SENSOR_JOB_SIGNING_KEYS; "SHA256:<hex>" key ids or base64 Ed25519
+	// keys, comma-separated), in addition to the keys pinned at pairing.
+	// With a pinned key, every signed job is verified before it runs; with
+	// SENSOR_REQUIRE_SIGNED_JOBS=true (the default for an identity that
+	// pinned keys at pairing) unsigned jobs are refused (api RFC-040 §5.6).
+	JobSigningKeys string
 	// ControlProxy, ContentProxy and ScanProxy are the proxy settings of
 	// the three outbound paths (SENSOR_CONTROL_PROXY, SENSOR_CONTENT_PROXY,
 	// SENSOR_SCAN_PROXY; see ResolveProxies for values and precedence).
@@ -279,7 +286,9 @@ type settings struct {
 	signer    *sensorsig.Signer
 	identity  *identity.Identity
 	templates *core.TemplateVerifier
-	local     *core.LocalPolicy
+	// jobs checks each command's job signature (resolveJobSigning).
+	jobs  *core.JobGuard
+	local *core.LocalPolicy
 	// requireLocal: a sensor without a local policy fails closed
 	// (ResolveRequireLocalPolicy); every policy the kit installs keeps it.
 	requireLocal bool
@@ -401,12 +410,8 @@ func New(opts Options) (*Kit, error) {
 		}
 		httpsec.SetAPIPinnedCA(fp)
 	}
-	if keys := envOr(opts.TemplateSigningKeys, EnvTemplateSigningKeys); strings.TrimSpace(keys) != "" {
-		v, err := core.ParseTemplateSigningKeys(keys)
-		if err != nil {
-			return nil, usageError(fmt.Errorf("%s: %w", EnvTemplateSigningKeys, err))
-		}
-		s.templates = v
+	if s.templates, err = resolveTemplateKeys(opts.TemplateSigningKeys); err != nil {
+		return nil, err
 	}
 	proxyOpts := ProxyOptions{Control: opts.ControlProxy, Content: opts.ContentProxy, Scan: opts.ScanProxy}
 	proxies, err := ResolveProxies(proxyOpts)
@@ -467,6 +472,12 @@ func New(opts Options) (*Kit, error) {
 			_, _ = fmt.Fprintf(k.out, "  Sensor protocol: %s\n", protocol)
 		}
 	}
+	// Signed jobs: the keys pinned here and at pairing, and whether
+	// unsigned jobs are refused.
+	if err := k.resolveJobSigning(); err != nil {
+		k.closeClient()
+		return nil, err
+	}
 
 	// The tool sandbox and the runtime limits (drain grace, slots, scanner
 	// priority, OOM protection).
@@ -519,6 +530,20 @@ func New(opts Options) (*Kit, error) {
 	return k, nil
 }
 
+// resolveTemplateKeys parses the template-signing keys (opt, else
+// SENSOR_TEMPLATE_SIGNING_KEYS); nil when none are set.
+func resolveTemplateKeys(opt string) (*core.TemplateVerifier, error) {
+	keys := envOr(opt, EnvTemplateSigningKeys)
+	if strings.TrimSpace(keys) == "" {
+		return nil, nil
+	}
+	v, err := core.ParseTemplateSigningKeys(keys)
+	if err != nil {
+		return nil, usageError(fmt.Errorf("%s: %w", EnvTemplateSigningKeys, err))
+	}
+	return v, nil
+}
+
 // initSettings sets up the settings registry (the SDK's settings, the
 // ones the sensor set itself) and the preflight checks.
 func (k *Kit) initSettings() {
@@ -533,7 +558,7 @@ func (k *Kit) initSettings() {
 	for name, v := range map[string]string{EnvAPIURL: opts.APIURL, EnvAPIKey: opts.APIKey, EnvSensorID: opts.SensorID,
 		EnvSensorName: opts.Name, EnvProtocol: opts.Protocol, EnvCACertFile: opts.CACertFile,
 		EnvCAFingerprint: opts.CAFingerprint, EnvPlatformKey: opts.PlatformKey,
-		EnvTemplateSigningKeys: opts.TemplateSigningKeys, EnvControlProxy: opts.ControlProxy,
+		EnvTemplateSigningKeys: opts.TemplateSigningKeys, EnvJobSigningKeys: opts.JobSigningKeys, EnvControlProxy: opts.ControlProxy,
 		EnvContentProxy: opts.ContentProxy, EnvScanProxy: opts.ScanProxy, EnvStateDir: opts.StateDir,
 		core.EnvLocalPolicy: opts.LocalPolicyPath} {
 		if v != "" {
@@ -1209,6 +1234,9 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// The sensor-local policy decides first: admission before any executor
 	// or tool, and the local kill switch (api RFC-040 §5.7).
 	poller.SetLocalPolicy(k.LocalPolicy())
+	// Before both: the job signature, checked right after the claim
+	// (api RFC-040 §5.6).
+	poller.SetJobGuard(k.s.jobs)
 	if ship := k.logs.Load(); ship != nil {
 		// The poller's own lines (received, the policy check and its
 		// refused targets, the outcome, a hand-back) go to the command's

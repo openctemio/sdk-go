@@ -24,9 +24,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/jobsig"
 )
 
 // TemplateManifestPayloadType is the DSSE payload type of a template
@@ -69,16 +70,7 @@ type EnvelopeSignature struct {
 // DSSEPreAuthEncoding is DSSE v1's PAE: "DSSEv1 <len(type)> <type>
 // <len(body)> <body>", lengths in ASCII decimal.
 func DSSEPreAuthEncoding(payloadType string, payload []byte) []byte {
-	var b bytes.Buffer
-	b.WriteString("DSSEv1 ")
-	b.WriteString(strconv.Itoa(len(payloadType)))
-	b.WriteByte(' ')
-	b.WriteString(payloadType)
-	b.WriteByte(' ')
-	b.WriteString(strconv.Itoa(len(payload)))
-	b.WriteByte(' ')
-	b.Write(payload)
-	return b.Bytes()
+	return jobsig.PreAuthEncoding(payloadType, payload)
 }
 
 // TemplateManifest is the signed description of a command's custom

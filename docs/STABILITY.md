@@ -49,6 +49,7 @@ without a tier fails the job.
 | `pkg/sensorproto/v2` | Protocol v2 wire types | Frozen once protocol v3 ships; Stable until then |
 | `pkg/sensorproto/legacyv1` | Pre-sensor names still read from existing installations (AGENT_* settings, credentials file) and the platform-sensor header | Frozen |
 | `pkg/sensorproto/pairing` | Interactive pairing protocol (api RFC-052): wire types, commitment, SAS, codes, shared test vectors | Beta |
+| `pkg/jobsig` | Signed jobs (api RFC-040 §5.6): the DSSE envelope and statement of the platform's job signer, pinned keys, and the verifier (binding, validity, nonce and persisted sequence number) | Beta |
 | `pkg/sensorsig` | RFC 9421 request signatures of a key-bound sensor (api RFC-052 §4.3): signer, verifier, signing transport | Beta |
 | `pkg/ctis` | CTIS types: re-exports `github.com/openctemio/ctis` (generated aliases; the `ctis-parity` CI job fails when they are stale) | Stable, follows CTIS |
 | `pkg/httpsec` | SSRF-safe HTTP clients and URL validation | Stable |

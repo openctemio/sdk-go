@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/sensorproto/pairing"
+	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 	"github.com/openctemio/sdk-go/pkg/sensorsig"
 )
 
@@ -43,6 +44,10 @@ type fakePlatform struct {
 	tamperSignature bool
 	grantKeyID      string // identity for another key
 	finalStatus     string // what the poll answers after the first poll
+	// signedJobs is what the hello lists after pairing; nil: an older
+	// platform (no hello route here).
+	signedJobs *protov2.SignedJobs
+	helloAsked int
 }
 
 func newFakePlatform(t *testing.T) (*fakePlatform, *httptest.Server) {
@@ -151,6 +156,10 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.confirmed = true
 		f.status = pairing.StatusCompleted
 		_ = json.NewEncoder(w).Encode(pairing.StatusResponse{Status: pairing.StatusCompleted})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v2/sensor/hello" && f.signedJobs != nil:
+		f.verify(r, f.sensorPub)
+		f.helloAsked++
+		_ = json.NewEncoder(w).Encode(protov2.Hello{Protocol: 2, Features: []string{protov2.FeatureSignedJobs}, SignedJobs: f.signedJobs})
 	default:
 		http.NotFound(w, r)
 	}
