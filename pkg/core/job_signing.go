@@ -17,6 +17,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/openctemio/sdk-go/pkg/jobsig"
@@ -31,6 +32,11 @@ const EnvRequireSignedJobs = "SENSOR_REQUIRE_SIGNED_JOBS"
 // RefusalRuleJobSignature is the rule of a command refused for its job
 // signature.
 const RefusalRuleJobSignature = "job_signature"
+
+// RefusalRuleJobKeySet is the rule of a signed command refused because the
+// sensor pins a job-signing root and holds no valid key set (none yet,
+// expired, or refused).
+const RefusalRuleJobKeySet = "job_keyset"
 
 // Job signing postures (JobsPosture.Signed).
 const (
@@ -69,6 +75,46 @@ type JobGuard struct {
 	required bool
 	tenantID string
 	sensorID string
+
+	// cv follows the platform's config_version (SetConfigVersion); a
+	// pointer keeps JobGuard comparable.
+	cv *configVersionWatch
+}
+
+// configVersionWatch is the config_version the key set was last fetched
+// under.
+type configVersionWatch struct {
+	current func() string
+	mu      sync.Mutex
+	last    string
+}
+
+// SetConfigVersion gives the guard the platform's current config_version
+// (Doorbell.ConfigVersion). A new job-signing key set changes it, and the
+// guard then fetches the key set again before it checks the next command,
+// so a rotated or revoked signer key takes effect without a restart.
+func (g *JobGuard) SetConfigVersion(f func() string) {
+	if g != nil && f != nil {
+		g.cv = &configVersionWatch{current: f}
+	}
+}
+
+// refreshKeySet fetches the key set again when config_version moved.
+func (g *JobGuard) refreshKeySet(ctx context.Context) {
+	ks := g.v.KeySet()
+	if ks == nil || g.cv == nil {
+		return
+	}
+	cv := g.cv.current()
+	g.cv.mu.Lock()
+	changed := cv != "" && cv != g.cv.last
+	if changed {
+		g.cv.last = cv
+	}
+	g.cv.mu.Unlock()
+	if changed {
+		_ = ks.Refresh(ctx, true)
+	}
 }
 
 // NewJobGuard returns a guard for this sensor (tenantID, sensorID) that
@@ -77,7 +123,7 @@ type JobGuard struct {
 // ids; a required guard needs a verifier.
 func NewJobGuard(v *jobsig.Verifier, required bool, tenantID, sensorID string) (*JobGuard, error) {
 	if required && v == nil {
-		return nil, fmt.Errorf("signed jobs are required (%s) but no job-signing key is pinned: set SENSOR_JOB_SIGNING_KEYS or pair the sensor again", EnvRequireSignedJobs)
+		return nil, fmt.Errorf("signed jobs are required (%s) but no job-signing key or root is pinned: set SENSOR_JOB_SIGNING_ROOT or SENSOR_JOB_SIGNING_KEYS, or pair the sensor again", EnvRequireSignedJobs)
 	}
 	if v != nil && (tenantID == "" || sensorID == "") {
 		return nil, errors.New("signed jobs need the sensor's own organization and sensor id: verify them on a paired (key-bound) sensor")
@@ -114,11 +160,15 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 		// cannot be checked.
 		return nil
 	}
+	g.refreshKeySet(ctx)
 	_, err := g.v.Verify(ctx, cmd.SignedJob, jobsig.Binding{
 		TenantID: g.tenantID, SensorID: g.sensorID, CommandID: cmd.ID, CommandType: cmd.Type,
 		LeaseEpoch: cmd.LeaseEpoch, Payload: cmd.Payload,
 	})
 	if err != nil {
+		if jobsig.ReasonOf(err) == jobsig.ReasonKeySet {
+			return &LocalPolicyError{Layer: RefusalLayerBuiltin, Rule: RefusalRuleJobKeySet, Detail: err.Error()}
+		}
 		return jobRefusal(err.Error())
 	}
 	return nil
@@ -139,6 +189,13 @@ type CommandClaimer interface {
 
 // jobsPosture is the posture CurrentPosture reports (SetJobsPosture).
 var jobsPosture atomic.Pointer[string]
+
+// jobsKeySet is the key set trust CurrentPosture reports (SetJobsKeySet).
+var jobsKeySet atomic.Pointer[jobsig.KeySetTrust]
+
+// SetJobsKeySet sets the key set trust whose root, version and expiry
+// CurrentPosture reports; nil reports none.
+func SetJobsKeySet(t *jobsig.KeySetTrust) { jobsKeySet.Store(t) }
 
 // SetJobsPosture sets the JobsSigned* posture CurrentPosture reports; ""
 // reports none.

@@ -407,7 +407,8 @@ before the local policy, the command gate or any executor sees it:
 
 1. the payload type is `application/vnd.openctem.job.v1+json`;
 2. a signature verifies, with Ed25519 over the DSSE pre-authentication
-   encoding of the exact payload bytes, under a pinned key. The pinned
+   encoding of the exact payload bytes, under a pinned key or, when the
+   sensor pins a root, a key of the root's current key set (below). The
    keys are indexed by their recomputed id (`SHA256:` + hex SHA-256 of
    the raw key); a signature's `keyid` only selects a key;
 3. only then is the statement parsed: one JSON object, no unknown field,
@@ -445,13 +446,63 @@ Verification needs the sensor's own organization and id, which a paired
 that requires signed jobs without a pinned key. The manifest's posture
 reports `jobs.signed`: `required`, `verified_when_present` or `off`.
 
-Not covered yet: rotation of signer keys without re-pinning (an offline
-root and a signed key set, RFC-040 K3), and the signed scope document the
-sensor would check targets against besides its local policy. Today a
-sensor pins the online signer key itself; a new key means updating
-`SENSOR_JOB_SIGNING_KEYS` or pairing again. The local policy schema has no
-signer settings: v1 is frozen and the keys live in the environment and the
-identity.
+##### The offline root and the key set
+
+A sensor that pins an online signer key must be paired again when that key
+changes. Instead it can pin the installation's **root** (api RFC-040 §5.6
+K3): an Ed25519 key kept offline by the installation owner, which signs a
+**key set**, the online keys a sensor accepts, with a version that only
+goes up and an expiry at most 30 days out. Rotating or revoking a signer
+key is then a new key set; no sensor is paired again. The platform serves
+the current key set in hello (`signed_jobs.keyset`) and changes the
+doorbell's `config_version` when it changes. Format and the operator
+ceremony: `docs/architecture/job-signing.md` in openctemio/openctem ("Key
+sets and the offline root"); the shared test vector is
+`pkg/jobsig/testdata/keyset_vector.json`.
+
+`pkg/jobsig` (`KeySetTrust`, `VerifyKeySet`) accepts a key set only when:
+
+1. the envelope (at most 64 KiB) has payload type
+   `application/vnd.openctem.keyset.v1+json` and the payload decodes as
+   one object with no unknown field: `kind` `openctem.keyset/v1`,
+   `version` ≥ 1, `not_after` after `issued_at` and at most 30 days later,
+   1 to 16 keys whose ids are their own, no duplicate, never the root;
+2. `root_keyid` is the **pinned** root, `root_public_key` is the key of
+   that id, and its Ed25519 signature over the PAE of the exact payload
+   bytes verifies;
+3. `issued_at` is at most 2 minutes ahead of the sensor's clock and
+   `not_after` later than the clock minus 2 minutes;
+4. its version is not below the accepted one (rollback), and the same
+   version only with the same bytes. A newer key set is written to
+   `<state dir>/job-signing-keyset.json` (fsync, rename) before it is used,
+   so a restart keeps the version; a corrupt file, or one of another root,
+   stops the sensor.
+
+The sensor fetches the key set from hello at start, again before the next
+job check when the doorbell's `config_version` moved, and when a job is
+signed by a key the current key set does not list (at most every 30
+seconds). With a root pinned and no valid key set (none yet, expired, or
+the platform's refused), every signed job is refused with rule
+`job_keyset`, and a job signed by a key the key set no longer lists with
+rule `job_signature`: fail closed. The sensor warns from 7 days before the
+key set expires; the posture reports `jobs.root`, `jobs.keyset_version` and
+`jobs.keyset_expires_at`.
+
+| Setting | Effect |
+|---|---|
+| `SENSOR_JOB_SIGNING_ROOT` | Pins the root: its key id (`SHA256:<hex>`, as `openctem-signer root keygen` prints it) or base64 Ed25519 key. Overrides the root pinned at pairing. The strongest pin: the network owner sets it from the installation owner's record, not from the platform. |
+| `identity.json` `job_signing_root` | Pairing pins the root of the key set the hello serves (trust on first use over the pinned and signed pairing connection), only when that key set is signed by it and current. |
+
+With a root pinned, the online keys pinned at pairing (`job_signing_keys`)
+are not used: the key set decides, so a revoked key is refused. Keys in
+`SENSOR_JOB_SIGNING_KEYS` are still accepted next to the key set (an
+operator's explicit choice). A root pinned at pairing makes signed jobs
+required, as pinned keys do.
+
+The local policy schema has no signer settings: v1 is frozen, so the root
+and the keys live in the environment and the identity. Not covered yet:
+the signed scope document the sensor would check targets against besides
+its local policy.
 
 #### Per-command logs of the poller
 
@@ -745,7 +796,8 @@ export API_KEY="<sensor key>"   # or pair the sensor and set no key at all
 
 ### Signed jobs
 
-- [ ] Paired sensors pin the job signer (`identity.json` `job_signing_keys`, or `SENSOR_JOB_SIGNING_KEYS`)
+- [ ] Paired sensors pin the job-signing root (`SENSOR_JOB_SIGNING_ROOT`, or `identity.json` `job_signing_root`), or the signer itself (`job_signing_keys`, `SENSOR_JOB_SIGNING_KEYS`)
+- [ ] `posture.jobs.keyset_expires_at` is more than 7 days away; `<state dir>/job-signing-keyset.json` is on a persistent volume
 - [ ] `posture.jobs.signed` is `required` everywhere the platform signs jobs
 - [ ] `<state dir>/job-signing-seq.json` is on a persistent volume
 

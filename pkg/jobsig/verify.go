@@ -11,7 +11,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -93,6 +92,10 @@ type Config struct {
 	StateFile string
 	// KeySource resolves keys pinned by id (optional).
 	KeySource KeySource
+	// KeySet, when the sensor pins a job-signing root: a signature is also
+	// accepted from a key of its current key set (an expired or missing
+	// key set refuses with ReasonKeySet). Keys may then be empty.
+	KeySet *KeySetTrust
 	// MaxNonces bounds the nonces kept (default 65536); the one closest to
 	// expiry is dropped first. The persisted sequence number still refuses
 	// a replay of a dropped one.
@@ -107,6 +110,7 @@ type Config struct {
 type Verifier struct {
 	keys      *Keys
 	keySource KeySource
+	keySet    *KeySetTrust
 	stateFile string
 	maxNonces int
 	now       func() time.Time
@@ -126,10 +130,10 @@ type state struct {
 // cannot be read is an error (the sensor refuses to start rather than
 // accept old sequence numbers again).
 func NewVerifier(cfg Config) (*Verifier, error) {
-	if cfg.Keys.Len() == 0 {
-		return nil, errors.New("signed jobs: no job-signing key is pinned")
+	if cfg.Keys.Len() == 0 && cfg.KeySet == nil {
+		return nil, errors.New("signed jobs: no job-signing key or root is pinned")
 	}
-	v := &Verifier{keys: cfg.Keys.clone(), keySource: cfg.KeySource, stateFile: cfg.StateFile,
+	v := &Verifier{keys: cfg.Keys.clone(), keySource: cfg.KeySource, keySet: cfg.KeySet, stateFile: cfg.StateFile,
 		maxNonces: cfg.MaxNonces, now: cfg.Now, last: map[string]uint64{}, nonces: map[string]time.Time{}}
 	if v.maxNonces <= 0 {
 		v.maxNonces = 1 << 16
@@ -155,6 +159,10 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 	}
 	return v, nil
 }
+
+// KeySet is the key set trust of a pinned root; nil when no root is
+// pinned.
+func (v *Verifier) KeySet() *KeySetTrust { return v.keySet }
 
 // KeyIDs are the pinned key ids.
 func (v *Verifier) KeyIDs() []string {
@@ -224,8 +232,12 @@ func (v *Verifier) Verify(ctx context.Context, envelope []byte, b Binding) (*Sta
 func (v *Verifier) checkSignature(ctx context.Context, env *Envelope) (string, error) {
 	pae := PreAuthEncoding(env.PayloadType, env.Payload)
 	trusted := false
+	var keySetErr error
 	for _, s := range env.Signatures {
 		pub := v.key(ctx, s.KeyID)
+		if pub == nil {
+			pub, keySetErr = v.keySetKey(ctx, s.KeyID)
+		}
 		if pub == nil {
 			continue
 		}
@@ -233,6 +245,9 @@ func (v *Verifier) checkSignature(ctx context.Context, env *Envelope) (string, e
 		if len(s.Sig) == ed25519.SignatureSize && ed25519.Verify(pub, pae, s.Sig) {
 			return s.KeyID, nil
 		}
+	}
+	if !trusted && keySetErr != nil {
+		return "", keySetErr
 	}
 	if !trusted {
 		ids := make([]string, 0, len(env.Signatures))
@@ -272,6 +287,25 @@ func (v *Verifier) key(ctx context.Context, id string) ed25519.PublicKey {
 		return p
 	}
 	return nil
+}
+
+// keySetKey is the key id of the current key set, refreshing the key set
+// (at most every KeySetRefreshInterval) when it does not list id or is
+// missing or expired: a rotated key reaches the sensor this way without a
+// restart. A key set that cannot be had is a ReasonKeySet refusal.
+func (v *Verifier) keySetKey(ctx context.Context, id string) (ed25519.PublicKey, error) {
+	if v.keySet == nil {
+		return nil, nil
+	}
+	if pub, err := v.keySet.key(id); pub != nil && err == nil {
+		return pub, nil
+	}
+	_ = v.keySet.Refresh(ctx, false)
+	pub, err := v.keySet.key(id)
+	if err != nil {
+		return nil, err
+	}
+	return pub, nil
 }
 
 func (v *Verifier) checkStatement(st *Statement, keyID string, b Binding) error {
@@ -378,8 +412,8 @@ func (v *Verifier) rememberNonce(nonce string, exp, now time.Time) {
 	v.nonces[nonce] = exp
 }
 
-// persist writes the sequence numbers: a temporary file, fsync, rename,
-// then the directory fsync'd. Called with mu held.
+// persist writes the sequence numbers durably (writeFileSync). Called with
+// mu held.
 func (v *Verifier) persist() error {
 	if v.stateFile == "" {
 		return nil
@@ -388,40 +422,7 @@ func (v *Verifier) persist() error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(v.stateFile)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(v.stateFile)+".*")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer func() { _ = os.Remove(name) }()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(append(b, '\n')); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(name, v.stateFile); err != nil {
-		return err
-	}
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = d.Close() }()
-	return d.Sync()
+	return writeFileSync(v.stateFile, append(b, '\n'))
 }
 
 func orNone(ids []string) string {
