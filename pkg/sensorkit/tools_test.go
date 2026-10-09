@@ -16,6 +16,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/outbox"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
 	"github.com/openctemio/sdk-go/pkg/tool/adapter"
 	"github.com/openctemio/sdk-go/pkg/tool/toolcompat"
@@ -218,6 +219,44 @@ func TestKitPolicy_FollowsReload(t *testing.T) {
 	k.SetLocalPolicy(lp)
 	if pol.AllowsTool("kit-contract") || !pol.KillSwitchEngaged() {
 		t.Fatal("the reloaded policy is not used for admission")
+	}
+}
+
+// TestKitPolicy_HTTPAndAddresses: the kit's host applies the local
+// policy's http section (schema v3) and pins a confined task's addresses
+// to the ones the policy admitted. Both were read by type assertion and
+// were silently off for kit-hosted tools.
+func TestKitPolicy_HTTPAndAddresses(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	opts, _, _ := baseOptions(t, f)
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol := k.toolHost().Policy
+	hp, ok := pol.(toolhost.HTTPPolicy)
+	if !ok {
+		t.Fatal("the kit's policy has no http section")
+	}
+	if ua, insecure := hp.HTTPPolicy(); ua != "" || !insecure {
+		t.Fatalf("no policy: %q %v", ua, insecure)
+	}
+	lp, err := core.ParseLocalPolicy([]byte("apiVersion: openctem.io/sensor-policy/v3\nhttp:\n  user_agent: corp-scan\n  allow_insecure_tls: false\n"), core.LocalPolicyOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.SetLocalPolicy(lp)
+	if ua, insecure := hp.HTTPPolicy(); ua != "corp-scan" || insecure {
+		t.Fatalf("v3 http not applied: %q %v", ua, insecure)
+	}
+	r, ok := pol.(toolhost.HostResolver)
+	if !ok {
+		t.Fatal("the kit's policy does not pin admitted addresses")
+	}
+	addrs, err := r.AdmittedAddrs(context.Background(), "192.0.2.10")
+	if err != nil || len(addrs) != 1 || addrs[0].String() != "192.0.2.10" {
+		t.Fatalf("admitted addresses: %v %v", addrs, err)
 	}
 }
 
