@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -77,11 +78,24 @@ const (
 	ReasonGRPCFailed          = "grpc_failed"
 	ReasonHTTPSUnavailable    = "https_binding_unavailable"
 	ReasonIdentityRefused     = "identity_refused"
+	// ReasonPlatformCertificate: the gRPC endpoint's certificate does not
+	// verify against the pinned platform CA bundle. Never a fallback.
+	ReasonPlatformCertificate = "platform_certificate_refused"
 )
 
 // ErrIdentityRefused is an identity error from the platform on v3: no
 // weaker transport is tried.
 var ErrIdentityRefused = errors.New("protocol v3: the platform refused the sensor's identity")
+
+// ErrPlatformCertificate is a gRPC endpoint whose certificate does not
+// verify against the pinned platform CA bundle (a TLS-inspecting proxy, a
+// rogue endpoint): the client sends nothing until a later negotiation
+// verifies it, and never falls back to the HTTPS binding or v2.
+var ErrPlatformCertificate = errors.New("protocol v3: the gRPC endpoint's certificate does not verify against the pinned platform CA; no other binding is tried")
+
+// ErrCABundleChanged is a certificate answer with another gRPC CA bundle
+// than the pinned one, received over a channel that is not pinned itself.
+var ErrCABundleChanged = errors.New("protocol v3: the platform sent another gRPC CA bundle over an unpinned channel; keeping the pinned one")
 
 // TransportOptions configure protocol v3 (Client.EnableTransportV3).
 type TransportOptions struct {
@@ -114,6 +128,7 @@ const (
 	certFile          = "transport-v3-client.pem"
 	pinFile           = "transport-v3-platform-ca.pem"
 	probeTimeout      = 15 * time.Second
+	blockedRetry      = time.Minute
 	defaultReprobe    = 30 * time.Minute
 	streamMaxBackoff  = 30 * time.Second
 	defaultFailStreak = 3
@@ -128,17 +143,25 @@ type v3Manager struct {
 
 	state atomic.Pointer[v3State]
 
-	mu        sync.Mutex
-	cert      atomic.Pointer[tls.Certificate]
-	notAfter  time.Time
-	renewAt   time.Time
-	pin       *x509.CertPool
-	pinPEM    string
-	endpoint  string
-	failures  int
-	renegoNow chan struct{}
-	onEvent   func(*core.HeartbeatHints)
-	streamGen chan struct{} // closed when the binding changes
+	mu       sync.Mutex
+	cert     atomic.Pointer[tls.Certificate]
+	notAfter time.Time
+	renewAt  time.Time
+	pin      *x509.CertPool
+	pinPEM   string
+	endpoint string
+	// sticky is the pinned gRPC CA bundle (PEM): the first one received,
+	// persisted in CertDir. A different bundle replaces it only when it
+	// arrives over a pinned channel (the gRPC binding itself, or the HTTPS
+	// binding of a sensor with a platform TLS pin).
+	sticky       string
+	stickyLoaded bool
+	// httpsPinned: the HTTPS requests enforce a platform TLS pin.
+	httpsPinned bool
+	failures    int
+	renegoNow   chan struct{}
+	onEvent     func(*core.HeartbeatHints)
+	streamGen   chan struct{} // closed when the binding changes
 }
 
 // EnableTransportV3 installs protocol v3 under the client (key-bound
@@ -153,7 +176,8 @@ func (c *Client) EnableTransportV3(opts TransportOptions) {
 	if opts.FailureThreshold <= 0 {
 		opts.FailureThreshold = defaultFailStreak
 	}
-	m := &v3Manager{c: c, opts: opts, renegoNow: make(chan struct{}, 1), streamGen: make(chan struct{})}
+	m := &v3Manager{c: c, opts: opts, renegoNow: make(chan struct{}, 1), streamGen: make(chan struct{}),
+		httpsPinned: httpsec.HasAPIPin() && strings.HasPrefix(strings.ToLower(c.baseURL), "https://")}
 	if st, ok := c.httpClient.Transport.(*sensorsig.Transport); ok && c.signed {
 		m.signer = st.Signer
 	}
@@ -222,7 +246,7 @@ func (m *v3Manager) logf(format string, args ...any) {
 // set installs a binding and restarts the control stream.
 func (m *v3Manager) set(svc sensorv3connect.SensorServiceClient, b Binding, reason string) {
 	old := m.state.Load()
-	if old != nil && old.binding == b && old.reason == reason && old.svc == svc {
+	if old != nil && old.blocked == nil && old.binding == b && old.reason == reason && old.svc == svc {
 		return
 	}
 	since := time.Now()
@@ -240,6 +264,17 @@ func (m *v3Manager) set(svc sensorv3connect.SensorServiceClient, b Binding, reas
 	} else {
 		m.logf("transport: %s", b)
 	}
+}
+
+// block stops all traffic (a hard transport error): see v3State.blocked.
+func (m *v3Manager) block(b Binding, reason string, err error) {
+	m.state.Store(&v3State{binding: b, reason: reason, since: time.Now(), blocked: err})
+	m.mu.Lock()
+	m.failures = 0
+	close(m.streamGen)
+	m.streamGen = make(chan struct{})
+	m.mu.Unlock()
+	m.logf("transport: no binding, sending nothing (%s): %v", reason, err)
 }
 
 // failed counts a transport failure of the binding in use.
@@ -275,10 +310,23 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 		m.set(nil, BindingV2, ReasonNotKeyBound)
 		return nil
 	}
-	// The v2 hello says whether and where v3 is served. It runs on v2.
-	m.state.Store(&v3State{binding: BindingV2, since: time.Now()})
+	// The v2 hello says whether and where v3 is served. It runs on v2;
+	// a blocked sensor, or one that must use gRPC, lets only the hello
+	// through meanwhile.
+	if old := m.state.Load(); mode == TransportGRPC || (old != nil && old.blocked != nil) {
+		blocked := errors.New("protocol v3: negotiating the transport")
+		if old != nil && old.blocked != nil {
+			blocked = old.blocked
+		}
+		m.state.Store(&v3State{binding: BindingGRPC, reason: "negotiating", since: time.Now(), blocked: blocked})
+	} else {
+		m.state.Store(&v3State{binding: BindingV2, since: time.Now()})
+	}
 	hello, err := m.c.Hello(ctx)
 	if err != nil || hello.TransportV3 == nil || hello.TransportV3.HTTPSPath == "" {
+		if mode == TransportGRPC {
+			return m.grpcRequired(ReasonPlatformWithoutV3)
+		}
 		m.set(nil, BindingV2, ReasonPlatformWithoutV3)
 		return nil
 	}
@@ -289,10 +337,17 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 	case mode == TransportHTTPS:
 		reason = ReasonForcedByConfig
 	case hello.TransportV3.GRPCEndpoint == "":
+		if mode == TransportGRPC {
+			return m.grpcRequired(ReasonPlatformWithoutGRPC)
+		}
 		reason = ReasonPlatformWithoutGRPC
 	default:
 		svc, r, err := m.tryGRPC(ctx, https, hello.TransportV3.GRPCEndpoint)
-		if err != nil {
+		switch {
+		case errors.Is(err, ErrPlatformCertificate):
+			m.block(BindingGRPC, ReasonPlatformCertificate, err)
+			return err
+		case err != nil:
 			m.set(nil, BindingV2, ReasonIdentityRefused)
 			return err
 		}
@@ -301,8 +356,7 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 			return nil
 		}
 		if mode == TransportGRPC {
-			m.set(nil, BindingV2, r)
-			return fmt.Errorf("protocol v3 gRPC binding unavailable (%s) and SENSOR_TRANSPORT=grpc", r)
+			return m.grpcRequired(r)
 		}
 		reason = r
 	}
@@ -322,6 +376,15 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 	return nil
 }
 
+// grpcRequired blocks a sensor with SENSOR_TRANSPORT=grpc whose gRPC
+// binding is unavailable: it never drops to the HTTPS binding or v2, and
+// tries again later.
+func (m *v3Manager) grpcRequired(reason string) error {
+	err := fmt.Errorf("protocol v3 gRPC binding unavailable (%s) and SENSOR_TRANSPORT=grpc: not falling back", reason)
+	m.block(BindingGRPC, reason, err)
+	return err
+}
+
 // httpsClient is the HTTPS binding's client: the platform host, the signed
 // v2 transport (RFC 9421) underneath.
 func (m *v3Manager) httpsClient(path string) sensorv3connect.SensorServiceClient {
@@ -335,7 +398,7 @@ func (m *v3Manager) httpsClient(path string) sensorv3connect.SensorServiceClient
 func (m *v3Manager) tryGRPC(ctx context.Context, https sensorv3connect.SensorServiceClient, endpoint string) (sensorv3connect.SensorServiceClient, string, error) {
 	fresh := false
 	if !m.haveCert(endpoint) {
-		if err := m.issue(ctx, https); err != nil {
+		if err := m.issue(ctx, https, m.httpsPinned); err != nil {
 			if identityError(err) {
 				return nil, "", fmt.Errorf("%w: %v", ErrIdentityRefused, err)
 			}
@@ -351,6 +414,9 @@ func (m *v3Manager) tryGRPC(ctx context.Context, https sensorv3connect.SensorSer
 		if err == nil {
 			return svc, "", nil
 		}
+		if platformCertRejected(err) {
+			return nil, ReasonPlatformCertificate, fmt.Errorf("%w (%s): %v", ErrPlatformCertificate, endpoint, err)
+		}
 		if !identityError(err) && !certRefused(err) {
 			m.logf("transport: gRPC binding at %s unavailable: %v", endpoint, err)
 			return nil, fallbackReason(err), nil
@@ -360,7 +426,7 @@ func (m *v3Manager) tryGRPC(ctx context.Context, https sensorv3connect.SensorSer
 		if fresh || attempt == 1 {
 			return nil, "", fmt.Errorf("%w: %v", ErrIdentityRefused, err)
 		}
-		if err := m.issue(ctx, https); err != nil {
+		if err := m.issue(ctx, https, m.httpsPinned); err != nil {
 			if identityError(err) {
 				return nil, "", fmt.Errorf("%w: %v", ErrIdentityRefused, err)
 			}
@@ -474,11 +540,55 @@ func (m *v3Manager) install(chainPEM, caPEM, endpoint string) error {
 	life := leaf.NotAfter.Sub(leaf.NotBefore)
 	m.renewAt = leaf.NotBefore.Add(life * 2 / 3)
 	m.pin, m.pinPEM, m.endpoint = pool, caPEM, endpoint
+	m.sticky, m.stickyLoaded = caPEM, true
 	return nil
 }
 
+// loadSticky reads the pinned gRPC CA bundle persisted by an earlier run,
+// whatever endpoint it was for: an endpoint change alone never replaces
+// it. Callers hold m.mu.
+func (m *v3Manager) loadSticky() {
+	if m.stickyLoaded {
+		return
+	}
+	m.stickyLoaded = true
+	if m.opts.CertDir == "" {
+		return
+	}
+	if b, err := os.ReadFile(filepath.Join(m.opts.CertDir, pinFile)); err == nil && len(certificatesOf(string(b))) > 0 {
+		m.sticky = string(b)
+	}
+}
+
+// certificatesOf is the DER of each certificate in a PEM bundle.
+func certificatesOf(pemData string) []string {
+	var out []string
+	for rest := []byte(pemData); ; {
+		var b *pem.Block
+		b, rest = pem.Decode(rest)
+		if b == nil {
+			return out
+		}
+		if b.Type == "CERTIFICATE" {
+			out = append(out, string(b.Bytes))
+		}
+	}
+}
+
+// sameCertificates reports whether two PEM bundles hold the same set of
+// certificates.
+func sameCertificates(a, b string) bool {
+	ca, cb := certificatesOf(a), certificatesOf(b)
+	slices.Sort(ca)
+	slices.Sort(cb)
+	return slices.Equal(slices.Compact(ca), slices.Compact(cb))
+}
+
 // issue asks the platform for a certificate (over svc) and installs it.
-func (m *v3Manager) issue(ctx context.Context, svc sensorv3connect.SensorServiceClient) error {
+// pinned says whether svc's channel authenticates the platform by a pin
+// (the gRPC binding, or the HTTPS binding under a platform TLS pin): only
+// then may the answer replace the pinned gRPC CA bundle.
+func (m *v3Manager) issue(ctx context.Context, svc sensorv3connect.SensorServiceClient, pinned bool) error {
 	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	r, err := svc.IssueCertificate(pctx, connect.NewRequest(&sensorv3.IssueCertificateRequest{}))
@@ -488,6 +598,11 @@ func (m *v3Manager) issue(ctx context.Context, svc sensorv3connect.SensorService
 	msg := r.Msg
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.loadSticky()
+	if m.sticky != "" && !pinned && !sameCertificates(m.sticky, msg.GetCaBundlePem()) {
+		m.logf("transport: %v (re-pair, set SENSOR_CA_FINGERPRINT, or remove %s to accept it)", ErrCABundleChanged, pinFile)
+		return ErrCABundleChanged
+	}
 	if err := m.install(msg.GetCertificateChainPem(), msg.GetCaBundlePem(), msg.GetGrpcEndpoint()); err != nil {
 		return err
 	}
@@ -529,8 +644,11 @@ func (m *v3Manager) loop(ctx context.Context) {
 		if st != nil && st.binding == BindingGRPC && renewIn > 0 && renewIn < wait {
 			wait = renewIn
 		}
-		if st != nil && st.binding == BindingGRPC && renewIn <= 0 {
+		if st != nil && st.blocked == nil && st.binding == BindingGRPC && renewIn <= 0 {
 			wait = time.Second
+		}
+		if st != nil && st.blocked != nil {
+			wait = blockedRetry + jitterDuration(blockedRetry/2)
 		}
 		select {
 		case <-ctx.Done():
@@ -541,12 +659,15 @@ func (m *v3Manager) loop(ctx context.Context) {
 		case <-time.After(wait):
 			st = m.state.Load()
 			switch {
+			case st != nil && st.blocked != nil:
+				_ = m.negotiate(ctx)
 			case st != nil && st.binding == BindingGRPC:
 				m.mu.Lock()
 				due := !time.Now().Before(m.renewAt)
 				m.mu.Unlock()
 				if due {
-					if err := m.issue(ctx, st.svc); err != nil {
+					// Over the gRPC binding, which the pinned CA bundle authenticates.
+					if err := m.issue(ctx, st.svc, true); err != nil {
 						m.logf("transport: certificate renewal failed: %v", err)
 						if identityError(err) {
 							_ = m.negotiate(ctx)
@@ -661,6 +782,21 @@ func certRefused(err error) bool {
 		strings.Contains(s, "remote error: tls: expired certificate") ||
 		strings.Contains(s, "remote error: tls: revoked certificate") ||
 		strings.Contains(s, "remote error: tls: certificate unknown")
+}
+
+// platformCertRejected reports a gRPC endpoint certificate this client
+// refused (unknown authority, wrong name, expired): never a reason to fall
+// back, unlike a network or ALPN failure.
+func platformCertRejected(err error) bool {
+	var cve *tls.CertificateVerificationError
+	var ua x509.UnknownAuthorityError
+	var he x509.HostnameError
+	var ci x509.CertificateInvalidError
+	if errors.As(err, &cve) || errors.As(err, &ua) || errors.As(err, &he) || errors.As(err, &ci) {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "tls: failed to verify certificate") || strings.Contains(s, "x509:")
 }
 
 // fallbackReason classifies a transport failure of the gRPC binding.

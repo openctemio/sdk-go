@@ -56,7 +56,9 @@ type PairOptions struct {
 	// Out receives the lines a person reads (the code, the fingerprint).
 	Out io.Writer
 	// HTTPClient sends the requests; it is wrapped to sign them. Default:
-	// httpsec.NewAPIClient (SSRF guard, CA pin, no redirects).
+	// httpsec.NewAPIClientRecordingPin (SSRF guard, CA pin, no redirects),
+	// which also learns the platform TLS pin the identity stores; with
+	// another client only a SENSOR_CA_FINGERPRINT pin is stored.
 	HTTPClient *http.Client
 	// UserAgent is the product token ("openctemio-sensor/0.8.0").
 	UserAgent string
@@ -109,12 +111,16 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 		return nil, err
 	}
 	base := o.HTTPClient
+	var rec *httpsec.PinRecorder
 	if base == nil {
-		base = httpsec.NewAPIClient(30 * time.Second)
+		// Every request of the pairing must lead to the CA the first one
+		// verified; that CA's key becomes the stored pin.
+		rec = &httpsec.PinRecorder{}
+		base = httpsec.NewAPIClientRecordingPin(30*time.Second, rec)
 	}
 	hc := *base
 	hc.Transport = &sensorsig.Transport{Signer: signer, Base: base.Transport, MaxBody: 64 << 10}
-	pc := &pairClient{base: strings.TrimRight(o.BaseURL, "/") + protov2.PathPrefix, hc: &hc, ua: o.UserAgent}
+	pc := &pairClient{base: strings.TrimRight(o.BaseURL, "/") + protov2.PathPrefix, hc: &hc, ua: o.UserAgent, rec: rec}
 
 	for {
 		id, err := pairOnce(ctx, pc, signer, o)
@@ -204,6 +210,7 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 		PlatformKey: pairing.Encode(platformPub), PairedAt: time.Now().UTC(),
 		// A sensor paired from now on fails closed without a local policy.
 		RequireLocalPolicy: true}
+	id.PlatformTLSPinElement, id.PlatformTLSPin = pc.tlsPin()
 	if err := o.Store.Save(id); err != nil {
 		return nil, err
 	}
@@ -212,7 +219,26 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 		org = id.TenantID
 	}
 	_, _ = fmt.Fprintf(o.Out, "Paired: sensor %q (%s) in organization %s. Identity saved in %s.\n", id.Name, id.SensorID, org, o.Store.Dir())
+	if id.PlatformTLSPin != "" {
+		_, _ = fmt.Fprintf(o.Out, "Platform TLS pinned: %s (%s); a platform certificate from another CA is refused until the sensor is paired again.\n",
+			id.PlatformTLSPin, id.PlatformTLSPinElement)
+	}
 	return id, nil
+}
+
+// tlsPin is the platform TLS pin the identity stores: SENSOR_CA_FINGERPRINT
+// (httpsec.SetAPIPinnedCA) when set, else the anchor key the pairing
+// connections verified; none over plain http.
+func (c *pairClient) tlsPin() (element, pin string) {
+	if fp := httpsec.APIPinnedCA(); len(fp) > 0 {
+		return httpsec.PinElementCACert, httpsec.FormatFingerprint(fp)
+	}
+	if c.rec != nil {
+		if fp := c.rec.Pin(); len(fp) > 0 {
+			return httpsec.PinElementAnchorSPKI, httpsec.FormatFingerprint(fp)
+		}
+	}
+	return "", ""
 }
 
 func printInstructions(o PairOptions, start pairing.StartResponse, sas pairing.SAS, keyID string) {
@@ -248,6 +274,7 @@ type pairClient struct {
 	base string
 	hc   *http.Client
 	ua   string
+	rec  *httpsec.PinRecorder
 }
 
 type httpError struct {

@@ -319,13 +319,15 @@ The manifest reports what the platform needs to flag an unhardened sensor
 |---|---|---|
 | `local_policy.state` (`local_policy`) | `enforced`, `absent` | A policy is loaded or not |
 | `local_policy.required` (`local_policy`) | `true`, `false` | Without a policy, network jobs are refused (`true`) or admitted (`false`, legacy). Also on every heartbeat |
-| `posture.platform_tls.pin` (`posture`) | `fingerprint`, `ca_file`, `none` | Platform requests over HTTPS trust only the CA pinned by `SENSOR_CA_FINGERPRINT`; a private CA file (`SENSOR_CA_CERT_FILE`) besides the system trust store; or the system trust store only |
+| `posture.platform_tls.pin` (`posture`) | `fingerprint`, `ca_file`, `none` | Platform requests over HTTPS trust only a pinned TLS identity (the pin stored at pairing, or `SENSOR_CA_FINGERPRINT`); a private CA file (`SENSOR_CA_CERT_FILE`) besides the system trust store; or the system trust store only |
 | `posture.sandbox.mode` (`posture`) | `off`, `auto`, `required` | `SENSOR_SANDBOX` |
 | `posture.sandbox.sandboxed` (`posture`) | `true`, `false` | Tool runs go through the sandbox launcher |
 | `posture.sandbox.network_enforced` (`posture`) | `true`, `false` | Each tool run's network is confined to its forwarder (`SENSOR_SANDBOX_NETWORK`) |
 
-The gRPC transport always pins its own CA; `platform_tls.pin` is about the
-HTTPS requests (pairing, protocol v2, the HTTPS fallback).
+The gRPC transport always pins its own CA bundle; `platform_tls.pin` is
+about the HTTPS requests (pairing, protocol v2, the HTTPS binding, the
+certificate requests that fetch that bundle). See
+[Platform TLS pin](#platform-tls-pin-stored-at-pairing).
 
 #### Domain patterns in `targets.allow` and `targets.deny`
 
@@ -533,6 +535,64 @@ SDK enforces it:
 - Response bodies are capped (10 MiB success, 64 KiB error) and error text
   is truncated.
 
+#### Platform TLS pin stored at pairing
+
+Pairing records the platform's TLS identity in `identity/identity.json`
+(api RFC-040 §11.4 Q10), and every platform client the SDK builds enforces
+it from then on: protocol v2, the v3 HTTPS binding, the certificate requests
+of the gRPC binding, and the pairing requests themselves.
+
+```json
+"platform_tls_pin": "sha256:<64 hex digits>",
+"platform_tls_pin_element": "anchor_spki"
+```
+
+| `platform_tls_pin_element` | Fingerprint of | Recorded when |
+|---|---|---|
+| `anchor_spki` | the SubjectPublicKeyInfo of the trust anchor of the chain the pairing connection verified: the root CA the trust store (system roots plus `SENSOR_CA_CERT_FILE`) found, or the platform's self-signed certificate | pairing over HTTPS without `SENSOR_CA_FINGERPRINT` |
+| `ca_cert` | a CA certificate in the presented chain (the `SENSOR_CA_FINGERPRINT` semantics) | `SENSOR_CA_FINGERPRINT` was set at pairing |
+
+Why the anchor's key: servers rarely send their root, so the pin must be on
+something the sensor builds itself, which the verified chain is. A leaf or
+intermediate pin would break on routine renewal (public CAs rotate their
+issuing intermediates on their own); the anchor's key survives leaf and
+intermediate rotation and a re-issued root certificate with the same key. A
+certificate from any other CA, such as a TLS-inspecting proxy whose CA is in
+the trust store or a publicly trusted certificate from another CA, leads to
+another anchor and is refused. The trust store still checks the chain, name
+and validity first: the pin narrows it and never widens it. It does not
+stop a mis-issued certificate from the same CA; for that, and for the
+first contact itself (the pin is learned on first use, inside the pairing
+whose fingerprint an administrator compares), pin with
+`SENSOR_CA_FINGERPRINT` from the install snippet.
+
+- Within one pairing, every request must lead to the anchor of the first;
+  a change is refused (`httpsec.ErrPlatformChangedDuringPairing`).
+- A mismatch afterwards is a hard error on every request, never a fallback
+  to the system roots: `platform certificate does not match the pin stored
+  at pairing; re-pair or set SENSOR_CA_FINGERPRINT`.
+- `SENSOR_CA_FINGERPRINT` always wins over the stored pin (and is what a
+  pairing stores when set). Re-pairing records a new pin: that is the way
+  to move a sensor to a platform behind another CA.
+- An identity without the fields (paired by an older SDK, or over plain
+  http) keeps trusting the trust store, reports `pin: none`, and logs a
+  start-up warning.
+- A malformed pin stops the sensor rather than run unpinned.
+
+**Protocol v3 gRPC CA bundle.** The gRPC binding trusts only the CA bundle
+of the platform's certificate service, fetched with the client certificate
+(`transport-v3-platform-ca.pem` next to the identity). The bundle is
+sticky: a different one replaces it only when it arrives over a pinned
+channel (the gRPC binding itself, or the HTTPS binding of a sensor with a
+platform TLS pin); a change of the advertised gRPC endpoint alone never
+replaces it. A gRPC endpoint whose certificate does not verify against the
+bundle is a hard error (`platform_certificate_refused`): the client sends
+nothing, on no binding, and negotiates again about every minute. Only
+network and protocol-level failures (unreachable, HTTP/2 refused, stream
+resets, unimplemented) fall back to the HTTPS binding. With
+`SENSOR_TRANSPORT=grpc` the client never uses the HTTPS binding or v2,
+even when the platform's hello lists no protocol v3.
+
 ---
 
 ## Security Best Practices
@@ -556,7 +616,7 @@ store := credentials.NewFileStore(path)  // Only for non-sensitive data
   private network; plain `http` to a non-loopback host logs a warning.
 - Never disable certificate verification. Trust a private CA with
   `SENSOR_CA_CERT_FILE`, and pin it with `SENSOR_CA_FINGERPRINT` (from the
-  install snippet).
+  install snippet). Without it, pairing pins the CA it verified.
 
 ### 3. Sensor Configuration
 
@@ -603,6 +663,7 @@ export API_KEY="<sensor key>"   # or pair the sensor and set no key at all
 ### Transport
 - [ ] `API_URL` uses `https://` in production
 - [ ] A private CA is trusted with `SENSOR_CA_CERT_FILE`, never by skipping verification
+- [ ] The sensor reports `posture.platform_tls.pin: fingerprint` (paired by this SDK, or `SENSOR_CA_FINGERPRINT`)
 
 ### Platform Sensors (`pkg/platform`, platform control plane only)
 - [ ] `AllowedJobTypes` configured (whitelist)

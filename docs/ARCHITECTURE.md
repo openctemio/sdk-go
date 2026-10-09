@@ -296,9 +296,12 @@ languages.
 
 ## Security Features
 
-- **Transport**: TLS always verified, optional CA pinning
-  (`SENSOR_CA_FINGERPRINT`), no redirects followed by the API clients,
-  SSRF-safe HTTP (`pkg/httpsec`).
+- **Transport**: TLS always verified; the platform's TLS identity is
+  pinned at pairing (`identity.json` `platform_tls_pin`) or by
+  `SENSOR_CA_FINGERPRINT`, with no fallback to the trust store; the gRPC CA
+  bundle is sticky and a certificate failure never falls back to another
+  binding; no redirects followed by the API clients, SSRF-safe HTTP
+  (`pkg/httpsec`).
 - **Command path**: scan-target policy, sensor-local policy (fail closed
   without one on new installs), signed custom templates, dangerous-flag
   blocklist, rate-limit ceilings.

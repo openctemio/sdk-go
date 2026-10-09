@@ -326,3 +326,17 @@ func TestPlatformTLSPin(t *testing.T) {
 		t.Fatalf("posture %+v %+v, sandbox %+v", p.PlatformTLS, p.Sandbox, st)
 	}
 }
+
+// A platform TLS pin stored at pairing (an anchor key) reports fingerprint.
+func TestPlatformTLSPin_StoredAnchorKey(t *testing.T) {
+	t.Cleanup(func() { httpsec.SetAPIPinnedSPKI(nil); httpsec.SetAPIRootCAs(nil) })
+	httpsec.SetAPIPinnedCA(nil)
+	httpsec.SetAPIRootCAs(x509.NewCertPool())
+	httpsec.SetAPIPinnedSPKI(make([]byte, 32))
+	if got := PlatformTLSPin(); got != TLSPinFingerprint {
+		t.Fatalf("stored pin: %q", got)
+	}
+	if got := CurrentPosture().PlatformTLS.Pin; got != TLSPinFingerprint {
+		t.Fatalf("posture: %q", got)
+	}
+}

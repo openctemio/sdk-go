@@ -64,7 +64,9 @@ func (k *Kit) resolveIdentity() error {
 	id, signer, err := store.Load()
 	switch {
 	case err == nil:
-		k.useIdentity(id, signer)
+		if err := k.useIdentity(id, signer); err != nil {
+			return err
+		}
 		if id.PlatformURL != "" && strings.TrimRight(id.PlatformURL, "/") != strings.TrimRight(s.apiURL, "/") {
 			_, _ = fmt.Fprintf(k.errw, "WARNING: this sensor was paired with %s but %s is %s; the platform must still know its key\n",
 				id.PlatformURL, EnvAPIURL, s.apiURL)
@@ -107,11 +109,10 @@ func (k *Kit) resolveIdentity() error {
 	if err != nil {
 		return err
 	}
-	k.useIdentity(id, signer)
-	return nil
+	return k.useIdentity(id, signer)
 }
 
-func (k *Kit) useIdentity(id *identity.Identity, signer *sensorsig.Signer) {
+func (k *Kit) useIdentity(id *identity.Identity, signer *sensorsig.Signer) error {
 	s := &k.s
 	s.signer = signer
 	s.identity = id
@@ -120,6 +121,34 @@ func (k *Kit) useIdentity(id *identity.Identity, signer *sensorsig.Signer) {
 		k.opts.Name = id.Name
 	}
 	_, _ = fmt.Fprintf(k.out, "  Identity: key-bound sensor %s (key SHA256:%s)\n", id.SensorID, id.KeyID)
+	return k.applyTLSPin(id)
+}
+
+// applyTLSPin enforces the platform TLS pin stored at pairing on every
+// platform client created from now on (api RFC-040 §11.4 Q10).
+// SENSOR_CA_FINGERPRINT, applied before, wins. An identity without a pin
+// (paired over plain http or by an older SDK) keeps trusting the trust
+// store; a malformed pin stops the sensor.
+func (k *Kit) applyTLSPin(id *identity.Identity) error {
+	element, fp, err := id.TLSPin()
+	if err != nil {
+		return usageError(err)
+	}
+	switch {
+	case len(httpsec.APIPinnedCA()) > 0:
+		if fp != nil {
+			_, _ = fmt.Fprintf(k.out, "  Platform TLS pin: %s (overrides the pin stored at pairing)\n", EnvCAFingerprint)
+		}
+	case fp == nil:
+		_, _ = fmt.Fprintf(k.errw, "Warning: this sensor was paired without a platform TLS pin; it trusts any CA in the trust store for the platform. Re-pair, or set %s, to pin it\n", EnvCAFingerprint)
+	case element == httpsec.PinElementCACert:
+		httpsec.SetAPIPinnedCA(fp)
+		_, _ = fmt.Fprintf(k.out, "  Platform TLS pin: %s (CA certificate, stored at pairing)\n", id.PlatformTLSPin)
+	default:
+		httpsec.SetAPIPinnedSPKI(fp)
+		_, _ = fmt.Fprintf(k.out, "  Platform TLS pin: %s (trust anchor key, stored at pairing)\n", id.PlatformTLSPin)
+	}
+	return nil
 }
 
 func productToken(name, version string) string {
