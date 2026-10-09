@@ -283,7 +283,7 @@ func (c *Client) pollCommandsV2(ctx context.Context, limit int) ([]Command, erro
 			ID: v.ID, Type: v.Type, Priority: v.Priority, Status: v.Status, Payload: v.Payload,
 			ErrorMessage: v.ErrorMessage, CreatedAt: v.CreatedAt, ExpiresAt: v.ExpiresAt,
 			AcknowledgedAt: v.AcknowledgedAt, StartedAt: v.StartedAt, CompletedAt: v.CompletedAt, Result: v.Result,
-			LeaseEpoch: v.LeaseEpoch, LeaseExpiresAt: v.LeaseExpiresAt,
+			LeaseEpoch: v.LeaseEpoch, LeaseExpiresAt: v.LeaseExpiresAt, SignedJob: v.SignedJob,
 		}
 		if v.SensorID != nil {
 			cmd.SourceID = *v.SensorID

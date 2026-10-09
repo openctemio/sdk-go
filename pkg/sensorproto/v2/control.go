@@ -112,6 +112,11 @@ const (
 	// (CommandLogsRequest), kept with the task on the platform for a
 	// limited time. Without it a sensor keeps its logs local.
 	FeatureLogs = "logs"
+	// FeatureSignedJobs: every command a claim hands out carries
+	// "signed_job", a DSSE envelope from the platform's separate job signer
+	// (api RFC-040 §5.6), and hello lists the signer's keys in
+	// "signed_jobs". The platform hands out nothing its signer did not sign.
+	FeatureSignedJobs = "signed_jobs"
 )
 
 // LogsAction is the command resource that takes log lines:
@@ -291,6 +296,13 @@ type Command struct {
 	// fail. Zero and nil from a platform that predates leases.
 	LeaseEpoch     int        `json:"lease_epoch"`
 	LeaseExpiresAt *time.Time `json:"lease_expires_at"`
+	// SignedJob is the platform job signer's DSSE envelope for this
+	// delivery (FeatureSignedJobs, api RFC-040 §5.6): on every command a
+	// claim hands out (the claim-N answer of GET /commands and POST
+	// /commands/{id}/claim) when the platform signs jobs, never on a
+	// listing poll or another transition. Its payload_sha256 is over the
+	// exact bytes of Payload.
+	SignedJob json.RawMessage `json:"signed_job,omitempty"`
 }
 
 // CommandList is the answer of GET /commands.

@@ -15,7 +15,9 @@ var ErrNotRun = errors.New("command not run")
 // when its result was reported (or queued in the outbox): the sensor that
 // runs one job and exits (a Kubernetes Job). The command passes every
 // check a polled command passes: the local kill switch, the command types
-// this sensor serves, the expiry, then (as for any command) the local
+// this sensor serves, the expiry, its job signature (SetJobGuard; cmd must
+// come from the claim answer, as client.ClaimCommand returns it), then (as
+// for any command) the local
 // policy admission, the start transition, the platform's tool gate, the
 // executor and the result report. A command that is not run is released
 // to the platform (an error wrapping ErrNotRun says why). Canceling ctx
@@ -54,6 +56,6 @@ func (p *CommandPoller) RunClaimed(ctx context.Context, cmd *Command) error {
 	stop := context.AfterFunc(ctx, func() { cancel(errDrained) })
 	defer stop()
 	p.activeCmds.Add(1)
-	p.executeCommand(cmdCtx, cmd)
+	p.executeCommand(cmdCtx, cmd, p.jobs.Load().Check(ctx, cmd))
 	return nil
 }

@@ -377,7 +377,7 @@ func TestQueue_ClaimedDuringDrainIsReleasedUnstarted(t *testing.T) {
 	_ = c.AcknowledgeCommand(context.Background(), "x")
 	p.draining.Store(true)
 	p.activeCmds.Add(1)
-	p.executeCommand(context.Background(), c.cmds["x"])
+	p.executeCommand(context.Background(), c.cmds["x"], nil)
 	_, st, rel := c.snapshot()
 	if rel["x"] != ReleaseReasonDraining || st["x"] != "pending" || len(e.runCounts()) != 0 {
 		t.Fatalf("state %v released %v runs %v", st, rel, e.runCounts())
