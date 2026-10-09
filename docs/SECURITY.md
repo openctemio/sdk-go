@@ -270,6 +270,63 @@ exec.SetScanTargetPolicy(&core.ScanTargetPolicy{
 | `OPENCTEM_SDK_SCAN_ROOTS` | Allowed roots (`:`-separated) for the default policy |
 | `OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS=1` | Allow RFC1918/ULA targets (`SENSOR_ALLOW_PRIVATE_TARGETS=1` — or its pre-rename name `AGENT_ALLOW_PRIVATE_TARGETS=1`, read with a deprecation warning — and `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1` are honored too; setting the sensor and agent names to different values refuses every target) |
 
+#### A sensor without a local policy: fail closed or legacy
+
+The sensor-local policy (`/etc/openctem/sensor-policy.yaml`, or the
+`SENSOR_ALLOWED_RANGES` / `SENSOR_ALLOWED_PORTS` shorthands) is the network
+owner's limit on what the sensor scans. It holds even against a compromised
+platform or a TLS man-in-the-middle on the control path: those can send any
+job, but cannot make the sensor scan outside its policy (api RFC-040). A
+sensor with no policy depends on whether it **requires** one:
+
+| | No policy, required (new installs) | No policy, legacy |
+|---|---|---|
+| Job with a network target (URL, host, IP, CIDR, image reference) | Refused before any tool starts: `refused by local policy: no_local_policy: ...` | Admitted outside the built-in deny list |
+| Job without network targets (repository or filesystem scan, health check, collector, content refresh) | Runs | Runs |
+| Custom templates, out-of-band callbacks (interactsh) | Refused (`no_local_policy`) | Allowed (templates still need a signature) |
+| `LocalPolicy.CheckTarget` called directly (retests, tool tasks) | Every network target refused | Built-in deny list: loopback, link-local and `169.254.169.254`, multicast, unspecified, CGNAT, reserved, private unless the private-range switch |
+| Kill switch | Applies | Applies |
+| Report (`local_policy`) | `{"state": "absent", "required": true}` | `{"state": "absent", "required": false}` |
+
+Whether the sensor requires a policy:
+
+1. `SENSOR_REQUIRE_LOCAL_POLICY=true|false`, when set, wins.
+2. Otherwise a sensor whose key-bound identity was paired by this SDK
+   requires one: pairing writes `"require_local_policy": true` into
+   `<state dir>/identity/identity.json` (`identity.Identity.RequireLocalPolicy`).
+3. An identity written by an older SDK has no such field, and a bearer-key
+   sensor has no identity: both are legacy installs and keep their behavior,
+   with a warning at start and `required: false` in the report so the
+   platform can flag them.
+
+The start log names the mode (`Local policy mode: fail closed ...` or a
+`legacy install` warning), and the config report's `policy.local` check is
+`fail` with code `required_absent` while a required policy is missing.
+
+**Upgrade.** Existing paired sensors are unchanged until they set
+`SENSOR_REQUIRE_LOCAL_POLICY=true` or pair again (a re-pair writes a new
+identity, which requires a policy). Sensors paired from this release on fail
+closed without a policy: install the policy file, or set
+`SENSOR_ALLOWED_RANGES`, before they run network scans; or set
+`SENSOR_REQUIRE_LOCAL_POLICY=false` to keep the legacy behavior on purpose.
+
+#### Posture report
+
+The manifest reports what the platform needs to flag an unhardened sensor
+(sent only to a platform that lists the hello feature named in brackets):
+
+| Member | Values | Meaning |
+|---|---|---|
+| `local_policy.state` (`local_policy`) | `enforced`, `absent` | A policy is loaded or not |
+| `local_policy.required` (`local_policy`) | `true`, `false` | Without a policy, network jobs are refused (`true`) or admitted (`false`, legacy). Also on every heartbeat |
+| `posture.platform_tls.pin` (`posture`) | `fingerprint`, `ca_file`, `none` | Platform requests over HTTPS trust only the CA pinned by `SENSOR_CA_FINGERPRINT`; a private CA file (`SENSOR_CA_CERT_FILE`) besides the system trust store; or the system trust store only |
+| `posture.sandbox.mode` (`posture`) | `off`, `auto`, `required` | `SENSOR_SANDBOX` |
+| `posture.sandbox.sandboxed` (`posture`) | `true`, `false` | Tool runs go through the sandbox launcher |
+| `posture.sandbox.network_enforced` (`posture`) | `true`, `false` | Each tool run's network is confined to its forwarder (`SENSOR_SANDBOX_NETWORK`) |
+
+The gRPC transport always pins its own CA; `platform_tls.pin` is about the
+HTTPS requests (pairing, protocol v2, the HTTPS fallback).
+
 #### Domain patterns in `targets.allow` and `targets.deny`
 
 | Entry | Covers |

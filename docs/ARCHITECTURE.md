@@ -287,7 +287,9 @@ languages.
    ```
 
 4. **Ship a local policy.** The sensor-local policy limits targets, ports and
-   tools whatever the platform sends.
+   tools whatever the platform sends. A sensor paired by this SDK refuses
+   every job with network targets until it has one (`SENSOR_REQUIRE_LOCAL_POLICY`;
+   see [the security guide](./SECURITY.md#a-sensor-without-a-local-policy-fail-closed-or-legacy)).
 
 5. **Follow the [SDK security guide](./SECURITY.md)** for the target policy,
    template signatures, scanner environment and sandbox.
@@ -297,8 +299,12 @@ languages.
 - **Transport**: TLS always verified, optional CA pinning
   (`SENSOR_CA_FINGERPRINT`), no redirects followed by the API clients,
   SSRF-safe HTTP (`pkg/httpsec`).
-- **Command path**: scan-target policy, sensor-local policy, signed custom
-  templates, dangerous-flag blocklist, rate-limit ceilings.
+- **Command path**: scan-target policy, sensor-local policy (fail closed
+  without one on new installs), signed custom templates, dangerous-flag
+  blocklist, rate-limit ceilings.
+- **Posture**: the manifest reports the local policy state and requirement,
+  the platform TLS pin and the tool sandbox, so the platform can flag
+  unhardened sensors.
 - **Tools**: per-task sandbox (Landlock, seccomp, rlimits, no_new_privs),
   scanner environment allow-list, output caps.
 - **Results**: encrypted durable outbox (AES-256-GCM), idempotent delivery.

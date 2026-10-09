@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -72,7 +73,12 @@ func TestHTTPThroughTheForwarder(t *testing.T) {
 	if got, err := get(t, c, srv.URL, ""); err != nil || got != "openctem-acme-probe/1.2.0" {
 		t.Fatalf("through the forwarder: %q %v", got, err)
 	}
+	// The forwarder records a proxied request once the upstream closes,
+	// which may be after the client has read the whole response.
 	recs, _ := fw.Records()
+	for deadline := time.Now().Add(5 * time.Second); len(recs) == 0 && time.Now().Before(deadline); recs, _ = fw.Records() {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if len(recs) != 1 || recs[0].Verdict != egress.Allowed {
 		t.Fatalf("the request did not go through the forwarder: %+v", recs)
 	}
