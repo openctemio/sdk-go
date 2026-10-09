@@ -402,7 +402,10 @@ func (k *Kit) reportLocalPolicyChecks(lp *core.LocalPolicy) {
 				Keys: []string{core.EnvLocalPolicy, core.EnvRequireLocalPolicy}, Summary: "no sensor-local policy is installed"})
 		}
 		switch {
-		case rep.Summary == nil || !rep.Summary.AllowCustomTemplates:
+		case rep.Summary == nil || !rep.Summary.AllowCustomTemplates,
+			// Signed jobs required: custom templates are trusted through the
+			// verified job statement (api RFC-040 P2), never the template keys.
+			k.s.jobs.Posture() == core.JobsSignedRequired:
 			k.ReportCheck(core.ConfigCheck{ID: CheckTemplateKeys, Status: core.CheckSkip, Code: "not_needed"})
 		case k.s.templates == nil:
 			k.ReportCheck(core.ConfigCheck{ID: CheckTemplateKeys, Status: core.CheckWarn, Code: "missing",
