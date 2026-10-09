@@ -99,8 +99,11 @@ const maxPolicyRefusals = 5
 // list (host names are resolved; every address must pass) and ports.allow.
 // A single violation refuses the whole job with a *LocalPolicyError naming
 // the rule; nothing in the payload can widen the policy. Without a policy
-// only the kill switch applies. AdmitCommandTargets is the same check that
-// removes refused targets from a scan job instead of refusing all of it.
+// the kill switch applies, and a sensor that requires a policy refuses
+// every job with a network target, custom templates or callbacks (rule
+// no_local_policy); a legacy install admits the rest. AdmitCommandTargets
+// is the same check that removes refused targets from a scan job instead
+// of refusing all of it.
 func (lp *LocalPolicy) AdmitCommand(ctx context.Context, cmd *Command) error {
 	targets, err := lp.admitJob(cmd)
 	if err != nil || len(targets) == 0 {
@@ -249,7 +252,13 @@ func (lp *LocalPolicy) admitJob(cmd *Command) ([]string, error) {
 	if why := lp.killSwitchReason(); why != "" {
 		return nil, refuse("kill_switch", "%s", why)
 	}
-	if !lp.Present() || cmd == nil {
+	if cmd == nil {
+		return nil, nil
+	}
+	if !lp.Present() {
+		if lp.failsClosed() {
+			return nil, admitWithoutPolicy(cmd)
+		}
 		return nil, nil
 	}
 	if !lp.AllowsCheck(cmd.Type) {
@@ -294,12 +303,58 @@ func (lp *LocalPolicy) admitJob(cmd *Command) ([]string, error) {
 	return targets, nil
 }
 
+// admitWithoutPolicy is admission on a sensor that requires a local policy
+// and has none: a job with a network target, custom templates or
+// out-of-band callbacks is refused (rule no_local_policy). A job without
+// network targets (a repository or filesystem scan, a health check) is
+// admitted; the scan workspace confines its paths.
+func admitWithoutPolicy(cmd *Command) error {
+	var job policyJob
+	if len(cmd.Payload) > 0 {
+		if err := json.Unmarshal(cmd.Payload, &job); err != nil {
+			return refuse("payload", "the job payload cannot be read for the policy check: %v", err)
+		}
+	}
+	if len(job.CustomTemplates) > 0 {
+		return refuse(LocalPolicyRuleNoPolicy, "the job carries %d custom template(s); %s", len(job.CustomTemplates), noLocalPolicyHelp)
+	}
+	if v, ok := job.Config["allow_interactsh"].(bool); ok && v {
+		return refuse(LocalPolicyRuleNoPolicy, "the job asks for out-of-band callbacks (interactsh); %s", noLocalPolicyHelp)
+	}
+	targets, err := job.targets()
+	if err != nil {
+		return refuse("payload", "%v", err)
+	}
+	for _, t := range targets {
+		if isNetworkTarget(t) {
+			return noLocalPolicyTarget(t)
+		}
+	}
+	return nil
+}
+
+// isNetworkTarget reports whether a job target reaches a network (a URL, a
+// host, an address, a range or an image reference) rather than a path.
+func isNetworkTarget(t string) bool {
+	t = strings.TrimSpace(t)
+	if t == "" {
+		return false
+	}
+	return strings.Contains(t, "://") || !isPathLike(t)
+}
+
+// noLocalPolicyTarget is the refusal of a network target on a sensor that
+// requires a local policy and has none.
+func noLocalPolicyTarget(t string) error {
+	return refuse(LocalPolicyRuleNoPolicy, "%q is a network target; %s", t, noLocalPolicyHelp)
+}
+
 // CommandWarnings are what the sensor logs about cmd when no policy
 // decides for it: a job that uses custom templates or out-of-band
 // callbacks only because no local policy forbids them (owner decision
 // Q4 (a)).
 func (lp *LocalPolicy) CommandWarnings(cmd *Command) []string {
-	if lp.Present() || cmd == nil || len(cmd.Payload) == 0 {
+	if lp.Present() || lp.failsClosed() || cmd == nil || len(cmd.Payload) == 0 {
 		return nil
 	}
 	var job policyJob
@@ -319,17 +374,45 @@ func (lp *LocalPolicy) CommandWarnings(cmd *Command) []string {
 // CheckTarget checks one job target (URL, host, host:port, IP, CIDR) against
 // the policy. Host names are resolved and every address must pass, so a
 // name that resolves to a denied address is refused. Filesystem targets
-// are not network targets; the scan workspace confines them. Without a
-// policy it allows everything (ScanTargetPolicy applies the built-in deny
-// list).
+// are not network targets; the scan workspace confines them.
+//
+// Without a policy, a sensor that requires one refuses every network
+// target (rule no_local_policy); a legacy install still applies the
+// built-in deny list (loopback, link-local and metadata, multicast,
+// unspecified, CGNAT, reserved, and private ranges unless the private-range
+// switch allows them), so a caller that checks a target directly (a retest,
+// a tool task) never reaches those addresses.
 func (lp *LocalPolicy) CheckTarget(ctx context.Context, target string) error {
-	if !lp.Present() {
-		return nil
-	}
 	t := strings.TrimSpace(target)
 	if t == "" {
 		return nil
 	}
+	if !lp.Present() {
+		if lp.failsClosed() {
+			if isNetworkTarget(t) {
+				return noLocalPolicyTarget(t)
+			}
+			return nil
+		}
+		return lp.builtinOnly().checkTarget(ctx, t)
+	}
+	return lp.checkTarget(ctx, t)
+}
+
+// builtinOnly is the policy a legacy install without a policy file checks
+// targets with: no allow or deny lists, so only the built-in deny list and
+// the private-range switch (read as the default scan target policy reads
+// it) apply.
+func (lp *LocalPolicy) builtinOnly() *LocalPolicy {
+	b := &LocalPolicy{allowPrivate: DefaultScanTargetPolicy().AllowPrivate}
+	if lp != nil {
+		b.allowLoopback, b.lookupIP = lp.allowLoopback, lp.lookupIP
+	}
+	return b
+}
+
+// checkTarget is CheckTarget against lp's rules (t is trimmed, not empty).
+func (lp *LocalPolicy) checkTarget(ctx context.Context, t string) error {
 	host, port := "", 0
 	switch {
 	case strings.Contains(t, "://"):
@@ -509,6 +592,9 @@ func (lp *LocalPolicy) nameAllowed(name string) bool {
 // later. Without a policy the name is resolved and every address returned
 // (the forwarder still refuses metadata and link-local ones).
 func (lp *LocalPolicy) AdmittedAddrs(ctx context.Context, host string) ([]netip.Addr, error) {
+	if lp.failsClosed() {
+		return nil, noLocalPolicyTarget(host)
+	}
 	if !lp.Present() {
 		addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", strings.Trim(host, "[]"))
 		if err != nil {
@@ -633,7 +719,8 @@ func (lp *LocalPolicy) resolve(ctx context.Context, host string) ([]net.IP, erro
 // ("host:port") and returns the addresses the connection may use. Callers
 // must connect to one of them, never resolve the name again (that is what
 // defeats DNS rebinding). The built-in deny list applies even without a
-// policy; with one, ports.allow and the target rules apply too.
+// policy; with one, ports.allow and the target rules apply too. A sensor
+// that requires a policy and has none refuses every dial.
 func (lp *LocalPolicy) CheckDial(ctx context.Context, network, address string) ([]net.IP, error) {
 	host, portStr, err := net.SplitHostPort(address)
 	if err != nil {
@@ -642,6 +729,9 @@ func (lp *LocalPolicy) CheckDial(ctx context.Context, network, address string) (
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port < 1 || port > 65535 {
 		return nil, refuse("ports.allow", "%q: port %q is not valid", address, portStr)
+	}
+	if lp.failsClosed() {
+		return nil, noLocalPolicyTarget(address)
 	}
 	if !lp.Present() {
 		// No policy: the built-in deny list, with the private-range switch

@@ -42,7 +42,7 @@ func TestLocalPolicy_V2(t *testing.T) {
 	if r2.Schema != "v2" || r1.Schema != "v1" || !s2.ManagedAccept {
 		t.Errorf("schemas %q/%q, managed_accept %v", r1.Schema, r2.Schema, s2.ManagedAccept)
 	}
-	if !slices.Equal(r2.Schemas, []string{"v1", "v2"}) || !slices.Equal(lp1.Report().Schemas, []string{"v1", "v2"}) {
+	if !slices.Equal(r2.Schemas, []string{"v1", "v2", "v3"}) || !slices.Equal(lp1.Report().Schemas, []string{"v1", "v2", "v3"}) {
 		t.Errorf("supported schemas not reported: %v", r2.Schemas)
 	}
 
@@ -54,7 +54,8 @@ func TestLocalPolicy_V2(t *testing.T) {
 		"apiVersion: openctem.io/sensor-policy/v2\nmanaged: {accept: false, require_signed: true}\n",
 		"apiVersion: openctem.io/sensor-policy/v2\ntiers: {max: T2}\n",
 		"apiVersion: openctem.io/sensor-policy/v2\nmanaged: {accept: maybe}\n",
-		"apiVersion: openctem.io/sensor-policy/v3\n",
+		"apiVersion: openctem.io/sensor-policy/v9\n",
+		"apiVersion: openctem.io/sensor-policy/v2\nhttp: {user_agent: x}\n",
 		"apiVersion: [openctem.io/sensor-policy/v2]\n",
 	} {
 		if _, err := ParseLocalPolicy([]byte(bad), LocalPolicyOptions{}); err == nil {
@@ -151,5 +152,28 @@ func TestReloadLocalPolicy(t *testing.T) {
 	// From no policy at all, a failed reload engages the kill switch too.
 	if f, err := ReloadLocalPolicy(nil, LocalPolicyOptions{Path: filepath.Join(dir, "missing.yaml")}); err == nil || !f.KillSwitchEngaged() {
 		t.Error("failed reload from no policy")
+	}
+}
+
+// Schema v3 adds http: the network owner can force the tools User-Agent
+// and forbid skipping TLS verification; v1 and v2 files cannot.
+func TestLocalPolicy_V3HTTP(t *testing.T) {
+	if ua, ok := (*LocalPolicy)(nil).HTTPPolicy(); ua != "" || !ok {
+		t.Fatalf("no policy: %q %v", ua, ok)
+	}
+	lp := mustPolicy(t, "apiVersion: openctem.io/sensor-policy/v3\nhttp:\n  user_agent: \"acme-security-scan (+soc@acme.example)\"\n  allow_insecure_tls: false\nmanaged: {accept: false}\n")
+	if ua, ok := lp.HTTPPolicy(); ua != "acme-security-scan (+soc@acme.example)" || ok {
+		t.Fatalf("v3 http: %q %v", ua, ok)
+	}
+	if lp.Schema() != "v3" || lp.AcceptsManagedPolicy() {
+		t.Fatalf("v3 keeps the v2 keys: schema %s managed %v", lp.Schema(), lp.AcceptsManagedPolicy())
+	}
+	if ua, ok := mustPolicy(t, "apiVersion: openctem.io/sensor-policy/v3\n").HTTPPolicy(); ua != "" || !ok {
+		t.Fatalf("v3 without http: %q %v", ua, ok)
+	}
+	for _, bad := range []string{"\"\"", "\"a\\nb\""} {
+		if _, err := ParseLocalPolicy([]byte("apiVersion: openctem.io/sensor-policy/v3\nhttp: {user_agent: "+bad+"}\n"), LocalPolicyOptions{}); err == nil {
+			t.Errorf("user_agent %s accepted", bad)
+		}
 	}
 }

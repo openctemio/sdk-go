@@ -64,6 +64,13 @@ type Identity struct {
 	// later re-pair can be checked against it.
 	PlatformKey string    `json:"platform_key,omitempty"`
 	PairedAt    time.Time `json:"paired_at"`
+	// RequireLocalPolicy is true for an identity paired by an SDK that
+	// fails closed without a sensor-local policy: such a sensor refuses
+	// every job with network targets until one is installed
+	// (core.LocalPolicy.Required; SENSOR_REQUIRE_LOCAL_POLICY overrides
+	// it). An identity written by an older SDK has no such field and is a
+	// legacy install that keeps its behavior.
+	RequireLocalPolicy bool `json:"require_local_policy,omitempty"`
 }
 
 // Store is the identity directory under a state directory.

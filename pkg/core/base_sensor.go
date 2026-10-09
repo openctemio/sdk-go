@@ -90,6 +90,9 @@ type BaseSensor struct {
 	// localPolicy is the sensor-local policy every heartbeat and manifest
 	// reports (SetLocalPolicy); nil reports nothing.
 	localPolicy atomic.Pointer[LocalPolicy]
+	// posture is what the manifest reports as the sensor's posture
+	// (SetPosture); nil reports nothing.
+	posture atomic.Pointer[SensorPosture]
 
 	// configReport is the delivery state of the config report
 	// (config_report_sync.go).
@@ -110,6 +113,16 @@ const LocalPolicyPausedMessage = "paused by local policy"
 func (a *BaseSensor) SetLocalPolicy(lp *LocalPolicy) {
 	a.localPolicy.Store(lp)
 }
+
+// SetPosture makes every manifest report p (SensorPosture: the platform
+// TLS pin and the tool sandbox), to a platform that lists the "posture"
+// feature. nil reports nothing. Call before Start.
+func (a *BaseSensor) SetPosture(p *SensorPosture) {
+	a.posture.Store(p)
+}
+
+// Posture is what SetPosture set (nil: none).
+func (a *BaseSensor) Posture() *SensorPosture { return a.posture.Load() }
 
 // withLocalPolicy puts the local policy report on a heartbeat.
 func (a *BaseSensor) withLocalPolicy(status *SensorStatus) {
@@ -168,6 +181,9 @@ func (a *BaseSensor) syncManifest(ctx context.Context, status *SensorStatus) {
 		model = ConcurrencyModelFixed
 	}
 	m := BuildManifest(status, status.Resources, model)
+	if p := a.posture.Load(); p != nil {
+		m.Posture = p
+	}
 	local, err := m.Digest()
 	if err != nil {
 		return
@@ -268,7 +284,8 @@ func slimHeartbeat(status *SensorStatus) {
 	// The manifest carries the policy summary; a slim heartbeat keeps what
 	// changes or identifies it.
 	if lp := status.LocalPolicy; lp != nil {
-		status.LocalPolicy = &LocalPolicyReport{State: lp.State, Source: lp.Source, Digest: lp.Digest, KillSwitch: lp.KillSwitch}
+		status.LocalPolicy = &LocalPolicyReport{State: lp.State, Required: lp.Required, Source: lp.Source, Digest: lp.Digest,
+			KillSwitch: lp.KillSwitch}
 	}
 }
 

@@ -31,6 +31,7 @@ Setup & health checklist shows each one's presence, never its value.
 | [`SENSOR_ALLOWED_RANGES`](https://docs.openctem.io/sensors/settings/#SENSOR_ALLOWED_RANGES) | list |  |  |  | Shorthand local policy: allowed target ranges. |
 | [`SENSOR_ALLOWED_PORTS`](https://docs.openctem.io/sensors/settings/#SENSOR_ALLOWED_PORTS) | list |  |  |  | Shorthand local policy: allowed ports. |
 | [`SENSOR_KILL_SWITCH_FILE`](https://docs.openctem.io/sensors/settings/#SENSOR_KILL_SWITCH_FILE) | path |  |  |  | A file whose presence stops every job. |
+| [`SENSOR_REQUIRE_LOCAL_POLICY`](https://docs.openctem.io/sensors/settings/#SENSOR_REQUIRE_LOCAL_POLICY) | bool |  | `auto` |  | true: without a local policy, refuse every job with network targets, custom templates and callbacks; false: legacy behavior. Unset: true for a sensor paired by an SDK that fails closed, false for older identities and API-key sensors. |
 | [`SENSOR_ALLOW_PRIVATE_TARGETS`](https://docs.openctem.io/sensors/settings/#SENSOR_ALLOW_PRIVATE_TARGETS) | enum |  |  |  | 1 allows private (RFC 1918 / ULA) targets; the local policy must allow them too. |
 | [`OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS`](https://docs.openctem.io/sensors/settings/#OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS) | enum |  |  |  | SDK name of the private-target switch. |
 | [`OPENCTEM_SDK_SCAN_ROOTS`](https://docs.openctem.io/sensors/settings/#OPENCTEM_SDK_SCAN_ROOTS) | list |  |  |  | Directories code scans may read. |

@@ -124,6 +124,8 @@ type FakePlatform struct {
 	manifests []json.RawMessage
 	// localPolicy: hello lists "local_policy" (SetLocalPolicy).
 	localPolicy bool
+	// posture: hello lists "posture" (SetPosture).
+	posture bool
 	// configReport: hello lists "config_report" and PUT /config-report is
 	// served (SetConfigReport); configReports are the reports received.
 	configReport  bool
@@ -172,6 +174,15 @@ func (f *FakePlatform) SetLocalPolicy(on bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.localPolicy = on
+}
+
+// SetPosture lists or stops listing the "posture" feature on hello (api
+// RFC-040): with it, manifests carry the sensor's posture (platform TLS
+// pin, tool sandbox).
+func (f *FakePlatform) SetPosture(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.posture = on
 }
 
 // SetConfigReport lists or stops listing the "config_report" feature on
@@ -648,6 +659,9 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 			}
 			if f.localPolicy {
 				features = append(features, protov2.FeatureLocalPolicy)
+			}
+			if f.posture {
+				features = append(features, protov2.FeaturePosture)
 			}
 			if f.logs {
 				features = append(features, protov2.FeatureLogs)

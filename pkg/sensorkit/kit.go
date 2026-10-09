@@ -182,8 +182,10 @@ type Options struct {
 	// LocalPolicyPath is the policy file (SENSOR_LOCAL_POLICY; default
 	// core.DefaultLocalPolicyPath when that file exists). Without a file,
 	// SENSOR_ALLOWED_RANGES / SENSOR_ALLOWED_PORTS make a shorthand policy;
-	// without those the policy is absent: the sensor works as before and
-	// reports local_policy "absent".
+	// without those the policy is absent and reported local_policy
+	// "absent": a sensor paired by this SDK (or with
+	// SENSOR_REQUIRE_LOCAL_POLICY=true) then refuses every job with network
+	// targets; a legacy install works as before (ResolveRequireLocalPolicy).
 	LocalPolicyPath string
 	// WorkDir is where scans write; its free disk is part of the slot
 	// sizing (default StateDir).
@@ -278,6 +280,9 @@ type settings struct {
 	identity  *identity.Identity
 	templates *core.TemplateVerifier
 	local     *core.LocalPolicy
+	// requireLocal: a sensor without a local policy fails closed
+	// (ResolveRequireLocalPolicy); every policy the kit installs keeps it.
+	requireLocal bool
 }
 
 // scannerEntry is an added scanner.
@@ -366,8 +371,8 @@ func New(opts Options) (*Kit, error) {
 		return nil, err
 	}
 	// The sensor-local policy: a policy that cannot be loaded stops the
-	// sensor (fail closed); none at all keeps today's behavior, with a
-	// warning (api RFC-040 Q3 (a)).
+	// sensor (fail closed). Whether a sensor without one refuses network
+	// jobs is decided once the identity is known (applyRequireLocalPolicy).
 	local, err := k.loadLocalPolicy()
 	if err != nil {
 		return nil, err
@@ -418,10 +423,8 @@ func New(opts Options) (*Kit, error) {
 	// The API key: a key renewed by an earlier run is in the state
 	// directory (the renewal retired the configured one), whether or not
 	// this run renews.
-	if !opts.Standalone && s.apiURL != "" && s.apiKey == "" {
-		if err := k.resolveIdentity(); err != nil {
-			return nil, err
-		}
+	if err := k.resolveIdentityAndPolicy(); err != nil {
+		return nil, err
 	}
 	if !opts.Standalone && s.signer == nil {
 		renewSetting := os.Getenv(EnvKeyAutoRenew)
@@ -508,9 +511,11 @@ func New(opts Options) (*Kit, error) {
 	}
 	// NewBaseSensor fills the config's defaults (the banner prints them).
 	k.sensor = core.NewBaseSensor(&k.bcfg, pusher)
-	// Every heartbeat and manifest reports the local policy (to a platform
-	// that reads it).
+	// Every heartbeat and manifest reports the local policy, and every
+	// manifest the platform TLS pin and the tool sandbox (to a platform
+	// that reads them).
 	k.sensor.SetLocalPolicy(s.local)
+	k.sensor.SetPosture(core.CurrentPosture())
 	return k, nil
 }
 
@@ -561,6 +566,11 @@ func (k *Kit) SetLocalPolicy(lp *core.LocalPolicy) {
 	if lp == nil {
 		return
 	}
+	// A sensor that requires a local policy keeps requiring one, whatever
+	// policy it is handed.
+	if k.s.requireLocal && !lp.Required() {
+		lp = lp.WithRequired(true)
+	}
 	k.localMu.Lock()
 	k.s.local = lp
 	k.localMu.Unlock()
@@ -584,6 +594,7 @@ func (k *Kit) SetLocalPolicy(lp *core.LocalPolicy) {
 // switch engaged. It logs the outcome and returns the policy now in force
 // and the load error.
 func (k *Kit) ReloadLocalPolicy(opts core.LocalPolicyOptions) (*core.LocalPolicy, error) {
+	opts.Required = opts.Required || k.s.requireLocal
 	prev := k.LocalPolicy()
 	lp, err := core.ReloadLocalPolicy(prev, opts)
 	k.SetLocalPolicy(lp)
@@ -637,7 +648,7 @@ func (k *Kit) resolveRuntime() error {
 }
 
 // loadLocalPolicy is Options.LocalPolicy, else the policy loaded from
-// Options.LocalPolicyPath, and logs it with its warnings.
+// Options.LocalPolicyPath. applyRequireLocalPolicy logs it.
 func (k *Kit) loadLocalPolicy() (*core.LocalPolicy, error) {
 	lp := k.opts.LocalPolicy
 	if lp == nil {
@@ -646,11 +657,75 @@ func (k *Kit) loadLocalPolicy() (*core.LocalPolicy, error) {
 			return nil, usageError(err)
 		}
 	}
+	return lp, nil
+}
+
+// Where the local policy requirement came from, for the startup log.
+const (
+	requireFromIdentity = "identity"
+	requireFromEnv      = "env"
+)
+
+// ResolveRequireLocalPolicy decides whether a sensor without a local policy
+// fails closed: SENSOR_REQUIRE_LOCAL_POLICY when set, else true for an
+// identity paired by an SDK that fails closed (identity.RequireLocalPolicy)
+// and false for a legacy identity, a bearer-key sensor or no identity.
+// from is "env", "identity" or "" (the legacy default).
+func ResolveRequireLocalPolicy(id *identity.Identity) (required bool, from string, err error) {
+	v, set, err := core.RequireLocalPolicyFromEnv(nil)
+	if err != nil {
+		return false, "", usageError(err)
+	}
+	if set {
+		return v, requireFromEnv, nil
+	}
+	if id != nil && id.RequireLocalPolicy {
+		return true, requireFromIdentity, nil
+	}
+	return false, "", nil
+}
+
+// resolveIdentityAndPolicy loads (or pairs) a key-bound identity when the
+// sensor has no API key, then decides whether it requires a local policy
+// (applyRequireLocalPolicy), which depends on that identity.
+func (k *Kit) resolveIdentityAndPolicy() error {
+	s := &k.s
+	if !k.opts.Standalone && s.apiURL != "" && s.apiKey == "" {
+		if err := k.resolveIdentity(); err != nil {
+			return err
+		}
+	}
+	return k.applyRequireLocalPolicy()
+}
+
+// applyRequireLocalPolicy applies ResolveRequireLocalPolicy to the loaded
+// local policy and logs the policy and the mode.
+func (k *Kit) applyRequireLocalPolicy() error {
+	required, from, err := ResolveRequireLocalPolicy(k.s.identity)
+	if err != nil {
+		return err
+	}
+	k.s.requireLocal = required
+	lp := k.s.local.WithRequired(required)
+	k.s.local = lp
 	_, _ = fmt.Fprintf(k.out, "  Local policy: %s\n", lp.Describe())
+	switch {
+	case required && from == requireFromEnv:
+		_, _ = fmt.Fprintf(k.out, "  Local policy mode: fail closed (%s=true): without a policy, jobs with network targets are refused\n", core.EnvRequireLocalPolicy)
+	case required:
+		_, _ = fmt.Fprintf(k.out, "  Local policy mode: fail closed (paired by this SDK): without a policy, jobs with network targets are refused\n")
+	case from == requireFromEnv:
+		_, _ = fmt.Fprintf(k.errw, "Warning: local policy mode: legacy (%s=false): without a policy this sensor admits any target outside the built-in deny list\n", core.EnvRequireLocalPolicy)
+	default:
+		_, _ = fmt.Fprintf(k.errw, "Warning: local policy mode: legacy install: without a policy this sensor admits any target outside the built-in deny list; set %s=true or re-pair to fail closed\n", core.EnvRequireLocalPolicy)
+	}
 	for _, w := range lp.Warnings() {
 		_, _ = fmt.Fprintf(k.errw, "Warning: %s\n", w)
 	}
-	return lp, nil
+	if k.doc != nil {
+		k.reportLocalPolicyChecks(lp)
+	}
+	return nil
 }
 
 func (k *Kit) closeClient() {

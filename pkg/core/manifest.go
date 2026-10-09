@@ -63,6 +63,10 @@ type Manifest struct {
 	// carries that). The API client sends it only to a platform that lists
 	// the "local_policy" feature.
 	LocalPolicy *LocalPolicyReport `json:"local_policy,omitempty"`
+	// Posture is the sensor's platform TLS pin and tool sandbox
+	// (SensorPosture; BaseSensor.SetPosture). The API client sends it only
+	// to a platform that lists the "posture" feature.
+	Posture *SensorPosture `json:"posture,omitempty"`
 }
 
 // ManifestPlatform is the operating system and architecture.
