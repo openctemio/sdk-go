@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -76,6 +77,26 @@ func (p kitPolicy) KillSwitchEngaged() bool                  { return p.k.LocalP
 
 // CapRate caps a tool's rate key by the policy's rate.max_rps.
 func (p kitPolicy) CapRate(requested int) int { return p.k.LocalPolicy().CapRate(requested) }
+
+// HTTPPolicy is the policy's http section (schema v3): a forced
+// User-Agent, and whether a tool may skip TLS verification.
+func (p kitPolicy) HTTPPolicy() (string, bool) { return p.k.LocalPolicy().HTTPPolicy() }
+
+// AdmittedAddrs are the addresses the policy admitted for a host: a
+// confined task's forwarder dials only those (no second lookup between
+// the check and the dial).
+func (p kitPolicy) AdmittedAddrs(ctx context.Context, host string) ([]netip.Addr, error) {
+	return p.k.LocalPolicy().AdmittedAddrs(ctx, host)
+}
+
+// The host reads these optional policies by type assertion: a missing
+// method would silently switch the feature off, so each is asserted here.
+var (
+	_ toolhost.Policy       = kitPolicy{}
+	_ toolhost.RatePolicy   = kitPolicy{}
+	_ toolhost.HTTPPolicy   = kitPolicy{}
+	_ toolhost.HostResolver = kitPolicy{}
+)
 
 func (k *Kit) toolCredentials(name string) func() map[string]string {
 	if k.opts.ToolCredentials == nil {
