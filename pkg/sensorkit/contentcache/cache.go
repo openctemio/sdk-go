@@ -16,6 +16,8 @@
 // It is unpacked read-only under <root>/packs/sha256-<hex>/. Tasks read a
 // pack through the tool host's per-task read grants (K1); the root itself
 // is private to the sensor.
+//
+// Stability: Experimental (docs/STABILITY.md).
 package contentcache
 
 import (
@@ -307,8 +309,14 @@ func (c *Cache) store(digest string, files []file, statement []byte) (string, er
 		return "", err
 	}
 	defer func() { _ = removeTree(staging) }()
+	base := filepath.Clean(staging) + string(os.PathSeparator)
 	for _, f := range files {
 		dst := filepath.Join(staging, filepath.FromSlash(f.path))
+		// readArchive already refused unclean paths; this keeps every write
+		// inside the staging directory whatever the entry says.
+		if !strings.HasPrefix(dst, base) {
+			return "", fmt.Errorf("%w: %q leaves the pack directory", ErrVerify, f.path)
+		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return "", err
 		}
