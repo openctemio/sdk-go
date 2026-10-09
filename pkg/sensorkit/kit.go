@@ -83,6 +83,12 @@ type Options struct {
 	// SENSOR_REQUIRE_SIGNED_JOBS=true (the default for an identity that
 	// pinned keys at pairing) unsigned jobs are refused (api RFC-040 §5.6).
 	JobSigningKeys string
+	// JobSigningRoot pins the installation's offline job-signing root
+	// (SENSOR_JOB_SIGNING_ROOT; its "SHA256:<hex>" key id or base64
+	// Ed25519 key): signed jobs are accepted from the keys of the root's
+	// current key set, which the platform's hello serves. It overrides the
+	// root pinned at pairing.
+	JobSigningRoot string
 	// ControlProxy, ContentProxy and ScanProxy are the proxy settings of
 	// the three outbound paths (SENSOR_CONTROL_PROXY, SENSOR_CONTENT_PROXY,
 	// SENSOR_SCAN_PROXY; see ResolveProxies for values and precedence).
@@ -558,7 +564,7 @@ func (k *Kit) initSettings() {
 	for name, v := range map[string]string{EnvAPIURL: opts.APIURL, EnvAPIKey: opts.APIKey, EnvSensorID: opts.SensorID,
 		EnvSensorName: opts.Name, EnvProtocol: opts.Protocol, EnvCACertFile: opts.CACertFile,
 		EnvCAFingerprint: opts.CAFingerprint, EnvPlatformKey: opts.PlatformKey,
-		EnvTemplateSigningKeys: opts.TemplateSigningKeys, EnvJobSigningKeys: opts.JobSigningKeys, EnvControlProxy: opts.ControlProxy,
+		EnvTemplateSigningKeys: opts.TemplateSigningKeys, EnvJobSigningKeys: opts.JobSigningKeys, EnvJobSigningRoot: opts.JobSigningRoot, EnvControlProxy: opts.ControlProxy,
 		EnvContentProxy: opts.ContentProxy, EnvScanProxy: opts.ScanProxy, EnvStateDir: opts.StateDir,
 		core.EnvLocalPolicy: opts.LocalPolicyPath} {
 		if v != "" {
@@ -1237,6 +1243,11 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// Before both: the job signature, checked right after the claim
 	// (api RFC-040 §5.6).
 	poller.SetJobGuard(k.s.jobs)
+	if doorbell != nil {
+		// A new key set changes config_version: fetch it before the next
+		// check, so a rotated or revoked signer key takes effect.
+		k.s.jobs.SetConfigVersion(doorbell.ConfigVersion)
+	}
 	if ship := k.logs.Load(); ship != nil {
 		// The poller's own lines (received, the policy check and its
 		// refused targets, the outcome, a hand-back) go to the command's
