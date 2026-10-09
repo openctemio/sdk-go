@@ -98,8 +98,8 @@ func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
 		rt = scopedTransport{next: tr, scope: task.WebScope, targets: hosts}
 	}
 	timeout := 5 * time.Minute
-	defaults := requestDefaults{next: rt, ua: EffectiveUserAgent(m)}
-	if h := m.HTTP; h != nil {
+	defaults := requestDefaults{next: rt, ua: EffectiveUserAgent(m, task)}
+	if h := SpecOf(m, task); h != nil {
 		defaults.headers = h.Headers
 		if h.Timeout > 0 {
 			timeout = time.Duration(h.Timeout)
@@ -139,11 +139,20 @@ func DefaultUserAgent(m tool.Manifest) string {
 	return "openctem-" + name + "/" + strings.TrimPrefix(m.Version, "v")
 }
 
-// EffectiveUserAgent is the User-Agent of a tool's requests: its tool.yaml
-// http.user_agent, else DefaultUserAgent.
-func EffectiveUserAgent(m tool.Manifest) string {
-	if m.HTTP != nil && m.HTTP.UserAgent != "" {
-		return m.HTTP.UserAgent
+// SpecOf is a task's http settings: the effective ones the runtime put in
+// the task, else the manifest's.
+func SpecOf(m tool.Manifest, task tool.Task) *tool.HTTPSpec {
+	if task.HTTP != nil {
+		return task.HTTP
+	}
+	return m.HTTP
+}
+
+// EffectiveUserAgent is the User-Agent of a task's requests: the
+// effective http.user_agent, else DefaultUserAgent.
+func EffectiveUserAgent(m tool.Manifest, task tool.Task) string {
+	if h := SpecOf(m, task); h != nil && h.UserAgent != "" {
+		return h.UserAgent
 	}
 	return DefaultUserAgent(m)
 }

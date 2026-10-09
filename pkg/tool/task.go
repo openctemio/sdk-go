@@ -52,6 +52,10 @@ type Task struct {
 	// it; a tool that makes its own requests declares features.web_scope
 	// and keeps to it.
 	WebScope *webscope.Scope `json:"web_scope,omitempty"`
+	// HTTP is the effective http settings of the task: the manifest's,
+	// with what the sensor's local policy decides (a forced User-Agent).
+	// Set by the runtime, never taken from a job; ctx.HTTP() applies it.
+	HTTP *HTTPSpec `json:"http,omitempty"`
 	// Content are the task's content packs per slot the manifest
 	// declares, resolved by the sensor to read-only paths (ContentPaths).
 	Content []TaskContent `json:"content,omitempty"`

@@ -270,7 +270,7 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 			case name == "task.workdir":
 				return p.workdir
 			case name == "http.user_agent":
-				v = toolrt.EffectiveUserAgent(p.m)
+				v = toolrt.EffectiveUserAgent(p.m, p.task)
 			case strings.HasPrefix(name, "content."):
 				return strings.Join(p.task.ContentPaths(strings.TrimSuffix(strings.TrimPrefix(name, "content."), "...")), ",")
 			case strings.HasPrefix(name, "target."):
