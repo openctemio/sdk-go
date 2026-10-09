@@ -53,8 +53,9 @@ const (
 	SourceUnset Source = "unset"
 )
 
-// DocsBase is the root of the sensor settings reference.
-const DocsBase = "https://docs.openctem.io/sensor/settings"
+// DocsBase is the sensor settings reference page (openctemio/docs
+// sensors/settings.md); each setting has an anchor named after it.
+const DocsBase = "https://docs.openctem.io/sensors/settings/"
 
 // Setting is one declared setting.
 type Setting struct {

@@ -86,7 +86,7 @@ func TestSecretValuesAndDocs(t *testing.T) {
 		t.Fatalf("%v", v)
 	}
 	md := r.Markdown()
-	if !strings.Contains(md, "[`API_KEY`](https://docs.openctem.io/sensor/settings#API_KEY)") {
+	if !strings.Contains(md, "[`API_KEY`](https://docs.openctem.io/sensors/settings/#API_KEY)") {
 		t.Fatal(md)
 	}
 	if Closest("max_job", []string{"max_jobs", "tools"}) != "max_jobs" || Distance("kitten", "sitting") != 3 {
