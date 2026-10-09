@@ -204,12 +204,20 @@ func (p *ScanTargetPolicy) Validate(ctx context.Context, target string) (string,
 
 	switch {
 	case strings.Contains(target, "://"):
+		if p.Local.failsClosed() {
+			return "", noLocalPolicyTarget(target)
+		}
 		return target, p.validateURLTarget(ctx, target)
 	case strings.HasPrefix(strings.ToLower(target), "file:"):
 		return "", fmt.Errorf("file: URLs are not allowed as scan targets")
 	case isPathLike(target):
 		return p.validatePathTarget(target)
 	default:
+		// A sensor that requires a local policy and has none scans no
+		// network target (admission refused the job already).
+		if p.Local.failsClosed() {
+			return "", noLocalPolicyTarget(target)
+		}
 		return target, p.validateNetworkTarget(ctx, target)
 	}
 }

@@ -201,7 +201,9 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 	}
 	id := &Identity{PlatformURL: o.BaseURL, SensorID: granted.SensorID, TenantID: granted.TenantID,
 		TenantName: granted.TenantName, Name: granted.Name, KeyID: granted.KeyID,
-		PlatformKey: pairing.Encode(platformPub), PairedAt: time.Now().UTC()}
+		PlatformKey: pairing.Encode(platformPub), PairedAt: time.Now().UTC(),
+		// A sensor paired from now on fails closed without a local policy.
+		RequireLocalPolicy: true}
 	if err := o.Store.Save(id); err != nil {
 		return nil, err
 	}

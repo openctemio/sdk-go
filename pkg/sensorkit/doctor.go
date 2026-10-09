@@ -264,6 +264,8 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "Shorthand local policy: allowed ports."},
 		settingsreg.Setting{Name: core.EnvKillSwitchFile, Type: settingsreg.Path, Group: "policy",
 			Description: "A file whose presence stops every job."},
+		settingsreg.Setting{Name: core.EnvRequireLocalPolicy, Type: settingsreg.Bool, Default: "auto", Group: "policy",
+			Description: "true: without a local policy, refuse every job with network targets, custom templates and callbacks; false: legacy behavior. Unset: true for a sensor paired by an SDK that fails closed, false for older identities and API-key sensors."},
 		settingsreg.Setting{Name: core.EnvSensorAllowPrivateTargets, Type: settingsreg.Enum, Enum: []string{"", "0", "1"}, Group: "policy",
 			Description: "1 allows private (RFC 1918 / ULA) targets; the local policy must allow them too."},
 		settingsreg.Setting{Name: core.EnvAllowPrivateTargets, Type: settingsreg.Enum, Enum: []string{"", "0", "1"}, Group: "policy",
@@ -381,11 +383,17 @@ func (k *Kit) preflightNew(proxies Proxies, proxyOpts ProxyOptions) {
 func (k *Kit) reportLocalPolicyChecks(lp *core.LocalPolicy) {
 	if lp != nil {
 		rep := lp.Report()
-		if rep.State == core.LocalPolicyStateEnforced {
+		switch {
+		case rep.State == core.LocalPolicyStateEnforced:
 			k.ReportCheck(core.ConfigCheck{ID: CheckLocalPolicy, Status: core.CheckPass, Code: "enforced"})
-		} else {
+		case rep.Required:
+			// Fail closed: network jobs are refused until a policy exists.
+			k.ReportCheck(core.ConfigCheck{ID: CheckLocalPolicy, Status: core.CheckFail, Code: "required_absent",
+				Keys:    []string{core.EnvLocalPolicy, core.EnvAllowedRanges, core.EnvRequireLocalPolicy},
+				Summary: "this sensor requires a sensor-local policy and has none: jobs with network targets are refused"})
+		default:
 			k.ReportCheck(core.ConfigCheck{ID: CheckLocalPolicy, Status: core.CheckWarn, Code: "absent",
-				Keys: []string{core.EnvLocalPolicy}, Summary: "no sensor-local policy is installed"})
+				Keys: []string{core.EnvLocalPolicy, core.EnvRequireLocalPolicy}, Summary: "no sensor-local policy is installed"})
 		}
 		switch {
 		case rep.Summary == nil || !rep.Summary.AllowCustomTemplates:

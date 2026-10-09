@@ -90,6 +90,10 @@ const (
 	// and manifests (api RFC-040 §5.7). Without it a sensor sends none; it
 	// enforces its local policy either way.
 	FeatureLocalPolicy = "local_policy"
+	// FeaturePosture: the platform reads the manifest member "posture"
+	// (platform TLS pin, tool sandbox; api RFC-040). Without it a sensor
+	// sends none.
+	FeaturePosture = "posture"
 	// FeatureConfigReport: PUT /config-report and the heartbeat's
 	// config_report summary (api RFC-033, config report). Without it a
 	// sensor sends neither.

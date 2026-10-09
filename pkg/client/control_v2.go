@@ -140,10 +140,16 @@ func (c *Client) PutManifest(ctx context.Context, m *core.Manifest) (*core.Manif
 	if !c.PlatformSupports(ctx, protov2.FeatureManifest) {
 		return nil, core.ErrManifestUnsupported
 	}
-	// The local policy report goes only to a platform that announces it.
+	// The local policy report and the posture go only to a platform that
+	// announces them.
 	if m != nil && m.LocalPolicy != nil && !c.PlatformSupports(ctx, protov2.FeatureLocalPolicy) {
 		cp := *m
 		cp.LocalPolicy = nil
+		m = &cp
+	}
+	if m != nil && m.Posture != nil && !c.PlatformSupports(ctx, protov2.FeaturePosture) {
+		cp := *m
+		cp.Posture = nil
 		m = &cp
 	}
 	var resp protov2.ManifestResponse
