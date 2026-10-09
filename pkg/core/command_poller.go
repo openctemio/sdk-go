@@ -19,6 +19,7 @@ import (
 	"unicode"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/jobsig"
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/webscope"
 )
@@ -72,6 +73,12 @@ type Command struct {
 	// sensor (claim-N, api RFC-046 §11). The poller still acknowledges it
 	// (a replay) when it runs it, and releases it when it does not.
 	Claimed bool `json:"-"`
+	// jobVerified and signedTemplates are the JobGuard's verdict: the
+	// signed job verified against a pinned key, and the custom template
+	// digests its statement names (equal to the payload's at that point).
+	// Unexported: only JobGuard.Check sets them, never the platform's JSON.
+	jobVerified     bool
+	signedTemplates []string
 }
 
 // CommandResult represents the result of command execution.
@@ -1203,15 +1210,17 @@ func (e *DefaultCommandExecutor) SetSensorID(id string) {
 	e.sensorID.Store(&id)
 }
 
-// verifyCustomTemplates checks the command's signed template manifest: the
-// templates run only if a pinned key signed exactly them for this command
-// (and this sensor, when it knows its id), and the manifest has not
-// expired.
-func (e *DefaultCommandExecutor) verifyCustomTemplates(cmdID string, payload *ScanCommandPayload) error {
-	verifier := e.templates.Load()
-	if verifier == nil {
-		return ErrNoTemplateKeys
-	}
+// verifyCustomTemplates decides whether the command's custom templates may
+// run. A command whose signed job the JobGuard verified carries them in its
+// statement: the platform's job signer approved exactly these digests
+// (api RFC-040 P2, its scope ledger), so they run when the templates
+// received are byte for byte the ones signed, with no template-signing key
+// needed. Otherwise (a sensor without signed jobs) the templates run only
+// if a pinned template-signing key signed exactly them for this command
+// (and this sensor, when it knows its id) in a manifest that has not
+// expired. This per-tenant key path is a fallback, to be removed once
+// signed jobs are required everywhere.
+func (e *DefaultCommandExecutor) verifyCustomTemplates(cmd *Command, payload *ScanCommandPayload) error {
 	contents := make([][]byte, len(payload.CustomTemplates))
 	for i := range payload.CustomTemplates {
 		c, err := decodeTemplateContent(&payload.CustomTemplates[i])
@@ -1220,7 +1229,22 @@ func (e *DefaultCommandExecutor) verifyCustomTemplates(cmdID string, payload *Sc
 		}
 		contents[i] = c
 	}
-	b := TemplateBinding{CommandID: cmdID}
+	if cmd.jobVerified {
+		got := make([]string, len(contents))
+		for i, c := range contents {
+			got[i] = jobsig.TemplateDigest(c)
+		}
+		if len(got) == 0 || !slices.Equal(got, cmd.signedTemplates) {
+			return fmt.Errorf("custom templates refused: they are not the templates the signed job names (%d signed, %d received)",
+				len(cmd.signedTemplates), len(got))
+		}
+		return nil
+	}
+	verifier := e.templates.Load()
+	if verifier == nil {
+		return ErrNoTemplateKeys
+	}
+	b := TemplateBinding{CommandID: cmd.ID}
 	if id := e.sensorID.Load(); id != nil {
 		b.SensorID = *id
 	}
@@ -1435,7 +1459,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		}
 		// SECURITY: only templates the platform signed for this command are
 		// written (see verifyCustomTemplates); nothing is written before.
-		if err := e.verifyCustomTemplates(cmd.ID, &payload); err != nil {
+		if err := e.verifyCustomTemplates(cmd, &payload); err != nil {
 			return nil, err
 		}
 		var err error

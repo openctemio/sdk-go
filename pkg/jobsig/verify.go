@@ -35,6 +35,7 @@ const (
 	ReasonPayloadDigest = "payload_digest"
 	ReasonTool          = "tool"
 	ReasonTargets       = "targets"
+	ReasonTemplates     = "templates"
 	ReasonNonce         = "nonce"
 	ReasonReplay        = "replay"
 	ReasonSeq           = "seq"
@@ -353,6 +354,15 @@ func (v *Verifier) checkStatement(st *Statement, keyID string, b Binding) error 
 	}
 	if got := PayloadTargets(b.Payload); !slices.Equal(st.Targets, got) {
 		return refusef(ReasonTargets, "statement names %d target(s), the payload %d, or they differ", len(st.Targets), len(got))
+	}
+	// The custom templates too: the signer approved exactly these digests,
+	// so none may be dropped, added or swapped.
+	tmpl, err := PayloadTemplateDigests(b.Payload)
+	if err != nil {
+		return refusef(ReasonTemplates, "%v", err)
+	}
+	if !slices.Equal(st.Templates, tmpl) {
+		return refusef(ReasonTemplates, "statement names %d custom template(s), the payload %d, or they differ", len(st.Templates), len(tmpl))
 	}
 	if raw, err := base64.RawURLEncoding.DecodeString(st.Nonce); err != nil || len(raw) != NonceBytes {
 		return refusef(ReasonNonce, "nonce is not %d bytes of base64url", NonceBytes)
