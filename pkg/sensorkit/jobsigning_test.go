@@ -161,3 +161,46 @@ func TestNew_JobSigningRoot(t *testing.T) {
 		})
 	}
 }
+
+// A sensor that requires signed jobs trusts custom templates through the
+// verified job statement: its config report does not ask for
+// SENSOR_TEMPLATE_SIGNING_KEYS. One that only verifies when present still
+// needs them for unsigned jobs.
+func TestNew_TemplateKeysCheckWithSignedJobs(t *testing.T) {
+	key := jobsig.NewPublicKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{6}, 32)).Public().(ed25519.PublicKey))
+	lp, err := core.ParseLocalPolicy([]byte("apiVersion: openctem.io/sensor-policy/v1\n"+
+		"targets:\n  allow: [\"203.0.113.0/24\"]\nallow_custom_templates: true\n"), core.LocalPolicyOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		require string
+		want    string
+	}{
+		{name: "signed jobs required", want: "not_needed"},
+		{name: "verified when present", require: "false", want: "missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() { core.SetJobsPosture("") })
+			f := conformance.NewFakePlatform(true)
+			t.Cleanup(f.Close)
+			opts, _, _ := baseOptions(t, f)
+			opts.APIKey = ""
+			opts.LocalPolicy = lp
+			pairedStore(t, opts.StateDir)
+			pinJobKeysOnIdentity(t, opts.StateDir, key)
+			if tc.require != "" {
+				t.Setenv(core.EnvRequireSignedJobs, tc.require)
+			}
+			k, err := New(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k.closeClient)
+			if got := checkCode(k, CheckTemplateKeys); got != tc.want {
+				t.Fatalf("%s = %q, want %q", CheckTemplateKeys, got, tc.want)
+			}
+		})
+	}
+}

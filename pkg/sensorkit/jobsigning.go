@@ -156,6 +156,10 @@ func (k *Kit) resolveJobSigning() error {
 	s.jobs = g
 	core.SetJobsPosture(g.Posture())
 	core.SetJobsKeySet(trust)
+	if k.doc != nil {
+		// The template-keys check depends on the guard (reported before it).
+		k.reportLocalPolicyChecks(s.local)
+	}
 
 	signers := strings.Join(keys.IDs(), ", ")
 	if trust != nil {
