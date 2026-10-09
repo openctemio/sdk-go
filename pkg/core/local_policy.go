@@ -1057,6 +1057,10 @@ type LocalPolicySummary struct {
 	// ManagedAccept is managed.accept (v2): false when the sensor owner
 	// refuses platform-managed policy documents.
 	ManagedAccept bool `json:"managed_accept"`
+	// HTTPUserAgent is http.user_agent (v3): the User-Agent forced on
+	// every tool ("" none). AllowInsecureTLS is http.allow_insecure_tls.
+	HTTPUserAgent    string `json:"http_user_agent,omitempty"`
+	AllowInsecureTLS bool   `json:"allow_insecure_tls"`
 }
 
 // Report is the policy's state now (the kill switch is read live).
@@ -1079,6 +1083,8 @@ func (lp *LocalPolicy) Report() *LocalPolicyReport {
 		MaxRPS:               lp.maxRPS,
 		MaxJobSeconds:        lp.maxJobSeconds,
 		ManagedAccept:        lp.managedAccept,
+		HTTPUserAgent:        lp.httpUserAgent,
+		AllowInsecureTLS:     lp.allowInsecureTLS,
 	}
 	if lp.targetsAllowSet {
 		s.TargetsAllow = len(lp.allowNets) + len(lp.allowDomains)

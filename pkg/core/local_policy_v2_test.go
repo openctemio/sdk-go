@@ -177,3 +177,15 @@ func TestLocalPolicy_V3HTTP(t *testing.T) {
 		}
 	}
 }
+
+// The report names the http section, so the platform shows what the owner
+// decided about the tools requests.
+func TestLocalPolicy_V3HTTPReported(t *testing.T) {
+	s := mustPolicy(t, "apiVersion: openctem.io/sensor-policy/v3\nhttp: {user_agent: corp-scan, allow_insecure_tls: false}\n").Report().Summary
+	if s.HTTPUserAgent != "corp-scan" || s.AllowInsecureTLS {
+		t.Fatalf("summary %+v", s)
+	}
+	if s := mustPolicy(t, "apiVersion: openctem.io/sensor-policy/v3\n").Report().Summary; s.HTTPUserAgent != "" || !s.AllowInsecureTLS {
+		t.Fatalf("defaults %+v", s)
+	}
+}
