@@ -161,7 +161,7 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 		return nil
 	}
 	g.refreshKeySet(ctx)
-	_, err := g.v.Verify(ctx, cmd.SignedJob, jobsig.Binding{
+	st, err := g.v.Verify(ctx, cmd.SignedJob, jobsig.Binding{
 		TenantID: g.tenantID, SensorID: g.sensorID, CommandID: cmd.ID, CommandType: cmd.Type,
 		LeaseEpoch: cmd.LeaseEpoch, Payload: cmd.Payload,
 	})
@@ -171,6 +171,9 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 		}
 		return jobRefusal(err.Error())
 	}
+	// The statement binds the payload's custom templates (Verify checked
+	// they are the payload's): the executor trusts them through it.
+	cmd.jobVerified, cmd.signedTemplates = true, st.Templates
 	return nil
 }
 

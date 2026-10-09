@@ -643,7 +643,7 @@ func absentWarnings(required bool) []string {
 		// What actually happens (api research/25 §0.5): callbacks run
 		// only when a job asks for them, and custom templates only
 		// with pinned signing keys.
-		"no local policy: jobs may enable out-of-band callbacks (interactsh), and custom templates run when SENSOR_TEMPLATE_SIGNING_KEYS is set; install " + DefaultLocalPolicyPath + " with allow_interactsh and allow_custom_templates to decide",
+		"no local policy: jobs may enable out-of-band callbacks (interactsh), and custom templates run when the job is signed by a pinned job signer or SENSOR_TEMPLATE_SIGNING_KEYS is set; install " + DefaultLocalPolicyPath + " with allow_interactsh and allow_custom_templates to decide",
 	}
 }
 
