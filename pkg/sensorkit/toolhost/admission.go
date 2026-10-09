@@ -145,6 +145,24 @@ func effectiveHTTP(m tool.Manifest, pol Policy, org *core.OrgHTTPPolicy) (*tool.
 		}
 		eff.UserAgent = ua
 	}
+	// The organization's headers (a program's identification header)
+	// replace a tool.yaml header of the same name, whatever its case.
+	if org != nil && len(org.Headers) > 0 {
+		if eff == nil {
+			eff = &tool.HTTPSpec{}
+		}
+		if eff.Headers == nil {
+			eff.Headers = map[string]string{}
+		}
+		for name, value := range org.Headers {
+			for have := range eff.Headers {
+				if strings.EqualFold(have, name) {
+					delete(eff.Headers, have)
+				}
+			}
+			eff.Headers[name] = value
+		}
+	}
 	return eff, nil
 }
 

@@ -54,3 +54,33 @@ func TestOrgHTTPPolicyNarrowsAfterTheLocalPolicy(t *testing.T) {
 		t.Fatalf("both allow: %v", ierr)
 	}
 }
+
+// The organization policy headers (a bug-bounty program identification
+// header, api RFC-065) reach the tool and replace a tool.yaml header of the
+// same name, whatever its case; the policy itself never reaches the tool.
+func TestOrgHTTPPolicyHeaders(t *testing.T) {
+	ctx := context.Background()
+	m := httpManifest
+	m.HTTP = &tool.HTTPSpec{Headers: map[string]string{"x-bug-bounty": "tool", "Accept": "*/*"}}
+	task := httpTask
+	task.OrgHTTP = &core.OrgHTTPPolicy{Headers: map[string]string{"X-Bug-Bounty": "jdoe"}}
+	p, ierr, err := (&Host{}).prepare(ctx, m, task, RunOptions{})
+	if err != nil || ierr != nil {
+		t.Fatal(err, ierr)
+	}
+	h := p.task.HTTP.Headers
+	if len(h) != 2 || h["X-Bug-Bounty"] != "jdoe" || h["Accept"] != "*/*" || p.task.OrgHTTP != nil {
+		t.Fatalf("headers: %+v", h)
+	}
+	if m.HTTP.Headers["x-bug-bounty"] != "tool" {
+		t.Fatal("the manifest must not be changed")
+	}
+
+	// A tool without http settings still gets them.
+	bare := httpManifest
+	bare.HTTP = nil
+	p, ierr, err = (&Host{}).prepare(ctx, bare, task, RunOptions{})
+	if err != nil || ierr != nil || p.task.HTTP == nil || p.task.HTTP.Headers["X-Bug-Bounty"] != "jdoe" {
+		t.Fatalf("bare tool: %+v %v %v", p, err, ierr)
+	}
+}
