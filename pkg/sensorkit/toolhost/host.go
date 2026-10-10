@@ -641,6 +641,8 @@ func networkClass(n tool.Network) executor.NetworkClass {
 		return executor.NetworkTargetsOnly
 	case tool.NetEgressProxy:
 		return executor.NetworkEgressProxy
+	case tool.NetResolver:
+		return executor.NetworkResolver
 	}
 	return executor.NetworkAny
 }

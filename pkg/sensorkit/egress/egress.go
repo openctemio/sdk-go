@@ -62,6 +62,10 @@ type Scope struct {
 	// metadata addresses stay refused, and every destination is still
 	// recorded.
 	AnyPublic bool
+	// DNSOnly answers DNS for the admitted names and refuses every
+	// connection, to the admitted names too (a tool whose network is DNS
+	// resolution learns records; it never reaches a host).
+	DNSOnly bool
 }
 
 // Verdicts of a Record.
@@ -207,6 +211,9 @@ func (f *Forwarder) inPrefixes(a netip.Addr) bool {
 
 // Resolve checks host:port and returns the addresses to dial, in order.
 func (f *Forwarder) Resolve(ctx context.Context, host string, port int) ([]netip.Addr, error) {
+	if f.scope.DNSOnly {
+		return nil, fmt.Errorf("%w: the task may resolve names, not connect", ErrRefused)
+	}
 	if !f.portAllowed(port) {
 		return nil, fmt.Errorf("%w: port %d not allowed", ErrRefused, port)
 	}

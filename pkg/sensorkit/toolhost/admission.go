@@ -79,7 +79,7 @@ func Admit(ctx context.Context, m tool.Manifest, task tool.Task, pol Policy, mod
 	if t := pol.CapTimeout(timeout); t > 0 {
 		a.Timeout = t
 	}
-	if m.Permissions.Network != tool.NetTargets || len(task.Targets) == 0 {
+	if (m.Permissions.Network != tool.NetTargets && m.Permissions.Network != tool.NetResolver) || len(task.Targets) == 0 {
 		return a, nil
 	}
 	admitted := make([]tool.Target, 0, len(task.Targets))

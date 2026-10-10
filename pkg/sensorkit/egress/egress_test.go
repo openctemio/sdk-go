@@ -158,6 +158,31 @@ func connect(t *testing.T, proxyAddr, target string) string {
 	return line
 }
 
+// SECURITY: a DNS-only scope answers questions about its admitted names
+// and refuses every connection, to those names and addresses too.
+func TestDNSOnlyRefusesConnections(t *testing.T) {
+	_, port := echoServer(t)
+	f := New(Scope{DNSOnly: true, Names: map[string][]netip.Addr{"target.test": {addr("127.0.0.1")}},
+		Prefixes: []netip.Prefix{pfx("127.0.0.1/32")}}, Limits{})
+	p := serve(t, f)
+	for _, target := range []string{fmt.Sprintf("127.0.0.1:%d", port), fmt.Sprintf("target.test:%d", port)} {
+		if got := connect(t, p, target); !strings.HasPrefix(got, "403") {
+			t.Errorf("%s: %q, want 403", target, got)
+		}
+	}
+	q := dnsmessage.Message{Header: dnsmessage.Header{ID: 9, RecursionDesired: true},
+		Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName("target.test."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}}}
+	b, _ := q.Pack()
+	out, err := f.AnswerDNS(context.Background(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m dnsmessage.Message
+	if err := m.Unpack(out); err != nil || len(m.Answers) != 1 {
+		t.Fatalf("DNS answer %+v %v", m, err)
+	}
+}
+
 func TestConnectRefusesOutOfScope(t *testing.T) {
 	_, port := echoServer(t)
 	f := New(Scope{Prefixes: []netip.Prefix{pfx("127.0.0.1/32")}}, Limits{})

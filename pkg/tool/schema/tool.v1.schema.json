@@ -84,7 +84,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "network": {"enum": ["none", "targets", "egress-proxy", "vendor"]},
+        "network": {"enum": ["none", "targets", "resolver", "egress-proxy", "vendor"]},
         "vendor_hosts": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 270}},
         "filesystem": {"enum": ["workdir", "scan-roots-read-only"]},
         "credentials": {

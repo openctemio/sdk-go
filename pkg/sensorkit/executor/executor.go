@@ -94,7 +94,10 @@ const (
 	NetworkAny         NetworkClass = "any"
 	NetworkTargetsOnly NetworkClass = "targets-only"
 	NetworkEgressProxy NetworkClass = "egress-proxy"
-	NetworkNone        NetworkClass = "none"
+	// NetworkResolver: DNS questions through the task's forwarder only, no
+	// connection to any host.
+	NetworkResolver NetworkClass = "resolver"
+	NetworkNone     NetworkClass = "none"
 )
 
 // Limits bound one task. Zero means the backend's default (DefaultLimits).

@@ -22,7 +22,7 @@ var ErrHostNotAllowed = errors.New("host not allowed by the tool's network permi
 
 // NewHTTPClient returns the client of tool.Context.HTTP: it reaches the
 // task's targets (targets, egress-proxy), the vendor hosts (vendor) or
-// nothing (none), re-checks every redirect, and never dials a link-local
+// nothing (none, resolver), re-checks every redirect, and never dials a link-local
 // or cloud-metadata address whatever a name resolves to.
 func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
 	m = m.Normalized()
