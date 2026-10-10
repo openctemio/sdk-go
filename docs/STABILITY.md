@@ -44,6 +44,7 @@ without a tier fails the job.
 | `pkg/sensorkit/identity` | A key-bound sensor's identity on disk (permission-checked) and the interactive pairing client (api RFC-052) | Beta |
 | `pkg/sensorkit/egress` | A task's forwarder (HTTP CONNECT, absolute-form HTTP, SOCKS5, DNS): every destination checked against the task's scope, pinned, rate-limited and recorded (api RFC-060) | Experimental |
 | `pkg/sensorkit/contentcache` | The sensor cache of content packs: digest, pinned-key statement and canonical archive verified before storing; read-only packs per task; desired-set sync, revocation and budget (api RFC-061) | Experimental |
+| `pkg/transfer`, `pkg/transfer/bundle` | Feed transfer: resumable, retrying, mirror-aware fetcher with a content-addressed cache; chunked signed bundle format (v2), its writer and the checkpointed consumer (api RFC-070) | Experimental |
 | `pkg/sensorkit/executor` | Per-task tool sandbox behind a small backend interface (`Backend`, `TaskSpec`, `Status`) | Beta |
 | `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries, the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | Stable; its runtime internals are Internal-bound and its overlapping tool interfaces are replaced by the tool contract (RFC) |
 | `pkg/client` | Platform protocol client (protocol v2; v1 is retired) | Stable; its protocol internals are Internal-bound |
