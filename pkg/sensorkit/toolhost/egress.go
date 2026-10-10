@@ -117,7 +117,8 @@ func (e *taskEgress) stop() ([]egress.Record, int) {
 func (h *Host) taskScope(ctx context.Context, m tool.Manifest, task tool.Task) egress.Scope {
 	s := egress.Scope{Names: map[string][]netip.Addr{}}
 	switch m.Permissions.Network {
-	case tool.NetTargets:
+	case tool.NetTargets, tool.NetResolver:
+		s.DNSOnly = m.Permissions.Network == tool.NetResolver
 		for _, t := range task.Targets {
 			if pfx, err := netip.ParsePrefix(strings.TrimSpace(t.Value)); err == nil {
 				s.Prefixes = append(s.Prefixes, pfx.Masked())
