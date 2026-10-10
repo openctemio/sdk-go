@@ -338,6 +338,9 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if ierr := toolrt.CheckRetest(m, task); ierr != nil {
 		return nil, ierr, nil
 	}
+	if ierr := h.checkLimits(m, task); ierr != nil {
+		return nil, ierr, nil
+	}
 	task, ierr := admitContract(m, task)
 	if ierr != nil {
 		return nil, ierr, nil

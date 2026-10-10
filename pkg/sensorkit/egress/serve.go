@@ -101,6 +101,10 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 			f.record(*rec)
 			return
 		}
+		if g := f.guardFor(host, port); g != nil {
+			f.serveGuarded(ctx, c, br, up, g, rec)
+			return
+		}
 		f.pipe(c, br, up, rec)
 		return
 	}
@@ -116,6 +120,13 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 		}
 	}
 	host := req.URL.Hostname()
+	if g := f.guardFor(host, port); g != nil {
+		if err := g.check(req); err != nil {
+			g.refuse(req.Host, err)
+			writeRefusal(c, err)
+			return
+		}
+	}
 	up, rec, err := f.dial(ctx, "http", host, port)
 	if err != nil {
 		writeHTTPError(c, statusOf(err), err.Error())
@@ -244,6 +255,10 @@ func (f *Forwarder) serveSOCKS5(ctx context.Context, c net.Conn, br *bufio.Reade
 	}
 	lift()
 	socksReply(c, repSucceeded)
+	if g := f.guardFor(host, port); g != nil {
+		f.serveGuarded(ctx, c, br, up, g, rec)
+		return
+	}
 	f.pipe(c, br, up, rec)
 }
 

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/scopelimit"
 )
 
 // vector is api pkg/jobsign/testdata/vector.json (openctemio/openctem): the
@@ -504,5 +506,61 @@ func TestVerifyBindsCustomTemplates(t *testing.T) {
 	}
 	if got, _ := PayloadTemplateDigests([]byte(`{"custom_templates":[]}`)); got != nil {
 		t.Fatalf("empty custom_templates = %#v", got)
+	}
+}
+
+// A statement carries the targets' scope limits; a malformed limit, or one
+// for a host the job does not target, is refused under a valid signature.
+func TestVerifyScopeLimits(t *testing.T) {
+	payload := []byte(`{"scanner":"katana","targets":["https://a.example.com/api/"]}`)
+	cases := map[string]struct {
+		limits []scopelimit.Limit
+		reason string
+	}{
+		"none":         {nil, ""},
+		"path":         {[]scopelimit.Limit{{Host: "a.example.com", Ports: "443", PathPrefix: "/api"}}, ""},
+		"other host":   {[]scopelimit.Limit{{Host: "b.example.com", Ports: "443"}}, ReasonLimits},
+		"dot segment":  {[]scopelimit.Limit{{Host: "a.example.com", PathPrefix: "/api/../"}}, ReasonLimits},
+		"bad ports":    {[]scopelimit.Limit{{Host: "a.example.com", Ports: "443,80"}}, ReasonLimits},
+		"empty limit":  {[]scopelimit.Limit{{Host: "a.example.com"}}, ReasonLimits},
+		"upper host":   {[]scopelimit.Limit{{Host: "A.example.com", Ports: "443"}}, ReasonLimits},
+		"udp and path": {[]scopelimit.Limit{{Host: "a.example.com", Protocol: "udp", PathPrefix: "/api"}}, ReasonLimits},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, "")
+			f.b.Payload = payload
+			st := f.statement()
+			st.PayloadSHA256, st.Tool, st.Targets, st.Limits = PayloadDigest(payload), "katana", []string{"https://a.example.com/api/"}, tc.limits
+			got, err := f.ver.Verify(context.Background(), f.envelope(t, st), f.b)
+			if tc.reason == "" {
+				if err != nil || len(got.Limits) != len(tc.limits) {
+					t.Fatalf("valid job refused: %v", err)
+				}
+				return
+			}
+			if ReasonOf(err) != tc.reason {
+				t.Fatalf("err = %v, want reason %q", err, tc.reason)
+			}
+		})
+	}
+}
+
+// A verifier that predates a statement field refuses it: the limits field
+// is what an older sensor sees, and it must not run the job without them.
+func TestUnknownStatementFieldRefused(t *testing.T) {
+	f := newFixture(t, "")
+	st := f.statement()
+	raw, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	_ = json.Unmarshal(raw, &m)
+	m["limits_v2"] = []any{map[string]any{"host": "a.example.com", "ports": "443"}}
+	raw, _ = json.Marshal(m)
+	_, err = f.ver.Verify(context.Background(), sign(t, f.priv, KeyID(f.priv.Public().(ed25519.PublicKey)), raw), f.b)
+	if ReasonOf(err) != ReasonMalformed {
+		t.Fatalf("err = %v, want malformed", err)
 	}
 }
