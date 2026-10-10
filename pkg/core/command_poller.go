@@ -21,6 +21,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
 	"github.com/openctemio/sdk-go/pkg/resource"
+	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
@@ -79,6 +80,8 @@ type Command struct {
 	// Unexported: only JobGuard.Check sets them, never the platform's JSON.
 	jobVerified     bool
 	signedTemplates []string
+	// signedLimits are the scope limits of the verified statement.
+	signedLimits []scopelimit.Limit
 }
 
 // CommandResult represents the result of command execution.
@@ -1404,7 +1407,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		return nil, fmt.Errorf("scanner %s takes one target per job; the command carries %d", payload.Scanner, len(targets))
 	}
 
-	opts, err := e.newScanOptions(target, targets, scanner, &payload)
+	opts, err := e.newScanOptions(cmd, target, targets, scanner, &payload)
 	if err != nil {
 		return nil, err
 	}

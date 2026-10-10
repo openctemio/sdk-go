@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/webscope"
 
 	"github.com/openctemio/sdk-go/pkg/resource"
@@ -94,6 +95,19 @@ type ScanOptions struct {
 	WebScope *webscope.Scope `yaml:"-" json:"-"`
 	// OrgHTTP is the job's organization HTTP policy (see ScanCommandPayload).
 	OrgHTTP *OrgHTTPPolicy `yaml:"-" json:"-"`
+	// Limits are the port, protocol and path limits of the job's targets,
+	// from its verified signed statement only (never the payload); only a
+	// ScopeLimitScanner receives them.
+	Limits []scopelimit.Limit `yaml:"-" json:"-"`
+}
+
+// ScopeLimitScanner is a scanner that runs a job whose targets carry scope
+// limits (scopelimit): it hands them to a tool runtime that enforces them
+// outside the tool (the task's egress forwarder). A job with limits for any
+// other scanner is refused, never run unlimited.
+type ScopeLimitScanner interface {
+	Scanner
+	EnforcesScopeLimits() bool
 }
 
 // ScanResult holds the raw scan result before conversion.

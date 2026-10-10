@@ -84,6 +84,10 @@ var (
 // capability jobs (the runtime maps their params, tool.Manifest.ApplyParams).
 func (s *toolScanner) TakesCapabilityJobs() bool { return len(s.m.Implements) > 0 }
 
+// EnforcesScopeLimits: the tool host enforces a task's scope limits (it
+// refuses the task on a sandbox that cannot).
+func (s *toolScanner) EnforcesScopeLimits() bool { return true }
+
 func (s *toolScanner) legacy() core.Scanner {
 	if b, ok := s.t.(ScannerBridge); ok {
 		return b.Scanner()
@@ -193,6 +197,7 @@ func (s *toolScanner) ScanTargets(ctx context.Context, targets []string, opts *c
 	if opts != nil {
 		task.Capability, task.Params, task.MaxTier = opts.Capability, opts.Params, tool.Tier(opts.MaxTier)
 		task.WebScope = opts.WebScope
+		task.Limits = opts.Limits
 		task.OrgHTTP = opts.OrgHTTP
 	}
 	if opts != nil && opts.Settings != nil && len(s.m.Config) > 0 {

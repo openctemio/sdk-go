@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/scopelimit"
 )
 
 // Refusal reasons (Error.Reason).
@@ -36,6 +38,7 @@ const (
 	ReasonTool          = "tool"
 	ReasonTargets       = "targets"
 	ReasonTemplates     = "templates"
+	ReasonLimits        = "limits"
 	ReasonNonce         = "nonce"
 	ReasonReplay        = "replay"
 	ReasonSeq           = "seq"
@@ -363,6 +366,11 @@ func (v *Verifier) checkStatement(st *Statement, keyID string, b Binding) error 
 	}
 	if !slices.Equal(st.Templates, tmpl) {
 		return refusef(ReasonTemplates, "statement names %d custom template(s), the payload %d, or they differ", len(st.Templates), len(tmpl))
+	}
+	// The limits must name the statement's own targets and be well formed:
+	// a limit the sensor cannot read is refused, never dropped.
+	if err := scopelimit.Validate(st.Limits, st.Targets); err != nil {
+		return refusef(ReasonLimits, "%v", err)
 	}
 	if raw, err := base64.RawURLEncoding.DecodeString(st.Nonce); err != nil || len(raw) != NonceBytes {
 		return refusef(ReasonNonce, "nonce is not %d bytes of base64url", NonceBytes)
