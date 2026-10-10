@@ -37,6 +37,14 @@ import (
 // guard read (allowed requests are not recorded one by one; refusals are).
 const ProtocolHTTPPath = "http-path"
 
+// insecureSkipTargetVerify: the connection the guard opens to a target
+// does not verify the target's certificate. Scanners probe targets with
+// self-signed and expired certificates and do not verify them; the guard
+// stands in for the tool's own connection, which would not either. The
+// request's authority is checked on the tool's side (Host, server name)
+// and the address was pinned at admission.
+const insecureSkipTargetVerify = true
+
 // maxLeafCerts bounds the per-host certificates a forwarder keeps.
 const maxLeafCerts = 256
 
@@ -205,10 +213,8 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 				serverName = g.host
 			}
 		}
-		// The tool chose not to verify the target (scanners do not); the
-		// target's certificate is not checked here either.
-		upTLS := tls.Client(up, &tls.Config{ServerName: serverName, InsecureSkipVerify: true, //nolint:gosec // scanner semantics, see above
-			NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS10})
+		upTLS := tls.Client(up, &tls.Config{ServerName: serverName, InsecureSkipVerify: insecureSkipTargetVerify, //nolint:gosec // see insecureSkipTargetVerify
+			NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS12})
 		if err := upTLS.Handshake(); err != nil {
 			return
 		}
