@@ -104,4 +104,17 @@ func TestTaskScope(t *testing.T) {
 	if s = h.taskScope(context.Background(), tool.Manifest{Permissions: tool.Permissions{Network: tool.NetEgressProxy}}, tool.Task{}); !s.AnyPublic {
 		t.Fatal("egress-proxy is any public address")
 	}
+	// SECURITY: a resolver tool gets its targets' names for DNS and no
+	// connection at all.
+	s = h.taskScope(context.Background(), tool.Manifest{Permissions: tool.Permissions{Network: tool.NetResolver}},
+		tool.Task{Targets: []tool.Target{{Value: "localhost"}}})
+	if !s.DNSOnly || s.AnyPublic || len(s.Names["localhost"]) == 0 {
+		t.Fatalf("resolver scope %+v", s)
+	}
+	if s = h.taskScope(context.Background(), tool.Manifest{Permissions: tool.Permissions{Network: tool.NetTargets}}, tool.Task{}); s.DNSOnly {
+		t.Fatal("targets is not DNS-only")
+	}
+	if networkClass(tool.NetResolver) != executor.NetworkResolver {
+		t.Fatal("resolver network class")
+	}
 }

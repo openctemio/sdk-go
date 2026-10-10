@@ -63,6 +63,11 @@ const (
 	NetNone Network = "none"
 	// NetTargets: the task's targets only, through the zone's egress.
 	NetTargets Network = "targets"
+	// NetResolver: DNS questions about the task's targets only, answered
+	// through the sensor's resolvers; no connection to any host, the
+	// targets included. A DNS resolution tool that never contacts the
+	// target hosts declares it.
+	NetResolver Network = "resolver"
 	// NetEgressProxy: through the sensor's egress proxy only.
 	NetEgressProxy Network = "egress-proxy"
 	// NetVendor: the declared vendor hosts only.

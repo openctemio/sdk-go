@@ -625,6 +625,7 @@ first thing in `main`), which confines itself and then becomes the tool:
 |---|---|
 | `targets` | The admitted targets only. Names are dialed at the addresses the local policy admitted (`core.LocalPolicy.AdmittedAddrs`) and never resolved again; IP and CIDR targets as given |
 | `vendor` | The manifest's vendor hosts, at public addresses |
+| `resolver` | No connection at all. DNS questions about the admitted targets are answered (A and AAAA from the admitted addresses, other record types from the sensor's resolver); any other name is NXDOMAIN |
 | `egress-proxy` | Any public address. Loopback, private ranges, link-local and cloud metadata addresses are refused |
 | `none` | Nothing: no forwarder, no way out |
 

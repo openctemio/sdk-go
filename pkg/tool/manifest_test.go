@@ -114,6 +114,8 @@ func TestManifestCases(t *testing.T) {
 		{"secret in config (sensitive)", patch(baseYAML, "config", "config: {type: object, additionalProperties: false, properties: {key: {type: string, x-octm-sensitive: true}}}"), "/config/properties/key"},
 		{"secret in config (name)", patch(baseYAML, "config", "config: {type: object, additionalProperties: false, properties: {api_token: {type: string}}}"), "/config/properties/api_token"},
 		{"config outside the subset", patch(baseYAML, "config", "config: {type: object, additionalProperties: false, properties: {a: {oneOf: [{type: string}]}}}"), "/config"},
+		{"resolver network on a target scan", "apiVersion: openctem.io/tool/v1\nname: dns\nversion: 1.0.0\nclass: target-scan\ntier: T0\nconsumes: [domain]\nproduces: [asset:domain]\npermissions: {network: resolver}\n", ""},
+		{"resolver network on a parser", "apiVersion: openctem.io/tool/v1\nname: p\nversion: 1.0.0\nclass: parser\ntier: T0\nconsumes: [file:text/plain]\nproduces: [finding:secret]\npermissions: {network: resolver}\n", "/permissions/network"},
 		{"targets network on a parser", "apiVersion: openctem.io/tool/v1\nname: p\nversion: 1.0.0\nclass: parser\ntier: T0\nconsumes: [file:text/plain]\nproduces: [finding:secret]\npermissions: {network: targets}\n", "/permissions/network"},
 		{"connector without vendor hosts", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain]\n", "/permissions/vendor_hosts"},
 		{"connector with targets network", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain]\npermissions: {network: targets}\n", "/permissions/network"},
@@ -265,7 +267,7 @@ func TestManifestJSONSchemaMatchesTypes(t *testing.T) {
 	if got := enum(schema.Properties["class"]); !slices.Equal(got, []string{"connector", "enricher", "parser", "target-scan"}) {
 		t.Errorf("class enum %v", got)
 	}
-	if got := enum(sub("permissions")["network"]); !slices.Equal(got, []string{"egress-proxy", "none", "targets", "vendor"}) {
+	if got := enum(sub("permissions")["network"]); !slices.Equal(got, []string{"egress-proxy", "none", "resolver", "targets", "vendor"}) {
 		t.Errorf("network enum %v", got)
 	}
 }

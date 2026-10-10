@@ -263,7 +263,7 @@ func (m Manifest) validatePermissions(add func(p, format string, args ...any), s
 	p := m.Permissions
 	switch p.Network {
 	case NetNone:
-	case NetTargets, NetEgressProxy:
+	case NetTargets, NetResolver, NetEgressProxy:
 		if m.Class != TargetScan {
 			add("/permissions/network", "%s is for target-scan tools only", p.Network)
 		}
@@ -275,7 +275,7 @@ func (m Manifest) validatePermissions(add func(p, format string, args ...any), s
 			add("/permissions/vendor_hosts", "a vendor-network tool must name its hosts")
 		}
 	default:
-		add("/permissions/network", "must be none, targets, egress-proxy or vendor")
+		add("/permissions/network", "must be none, targets, resolver, egress-proxy or vendor")
 	}
 	if m.Class == Connector && p.Network != NetVendor {
 		add("/permissions/network", "a connector must use vendor with its hosts")
