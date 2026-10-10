@@ -9,13 +9,17 @@ import (
 )
 
 // newScanOptions are the scan options of a job, before its config is read:
-// the target and, for a capability job, its capability, params and tier.
-func (e *DefaultCommandExecutor) newScanOptions(target string, targets []string, scanner Scanner, p *ScanCommandPayload) (*ScanOptions, error) {
+// the target, for a capability job its capability, params and tier, and
+// the scope limits of the command's verified signed statement.
+func (e *DefaultCommandExecutor) newScanOptions(cmd *Command, target string, targets []string, scanner Scanner, p *ScanCommandPayload) (*ScanOptions, error) {
 	if e.verbose.Load() {
 		fmt.Printf("[executor] Running scanner %s on %s\n", p.Scanner, strings.Join(targets, ", "))
 	}
 	opts := &ScanOptions{TargetDir: target, Verbose: e.verbose.Load()}
 	if err := applyCapabilityJob(opts, scanner, p); err != nil {
+		return nil, err
+	}
+	if err := applySignedLimits(cmd, scanner, opts, p.Scanner); err != nil {
 		return nil, err
 	}
 	return opts, nil
@@ -69,5 +73,19 @@ func applyCapabilityJob(opts *ScanOptions, scanner Scanner, p *ScanCommandPayloa
 	}
 	opts.Capability, opts.MaxTier, opts.WebScope = p.Capability, p.MaxTier, p.WebScope
 	opts.Params = p.Params
+	return nil
+}
+
+// applySignedLimits gives the scan the scope limits of the command's
+// verified signed statement. A scanner that cannot enforce them refuses
+// the job: it never runs unlimited.
+func applySignedLimits(cmd *Command, scanner Scanner, opts *ScanOptions, name string) error {
+	if len(cmd.signedLimits) == 0 {
+		return nil
+	}
+	if ls, ok := scanner.(ScopeLimitScanner); !ok || !ls.EnforcesScopeLimits() {
+		return refuse(RefusalRuleScopeLimits, "the job's targets are limited to some ports or paths and scanner %s cannot enforce the limits", name)
+	}
+	opts.Limits = cmd.signedLimits
 	return nil
 }

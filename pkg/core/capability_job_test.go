@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
@@ -177,5 +179,39 @@ func TestApplyCapabilityJob_OrgHTTPPolicy(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"scanner":"x","http_policy":{"user_agent":"org-scan","allow_insecure_tls":false}}`), &payload); err != nil ||
 		payload.HTTPPolicy == nil || payload.HTTPPolicy.UserAgent != "org-scan" || payload.HTTPPolicy.AllowInsecureTLS == nil || *payload.HTTPPolicy.AllowInsecureTLS {
 		t.Fatalf("wire form: %+v %v", payload.HTTPPolicy, err)
+	}
+}
+
+type limitingScanner struct {
+	fakeScanner
+	enforces bool
+}
+
+func (l *limitingScanner) EnforcesScopeLimits() bool { return l.enforces }
+
+// SECURITY: the scope limits of a verified statement reach only a scanner
+// that enforces them; any other scanner refuses the job, and a command
+// without a verified statement carries none (the payload cannot set them).
+func TestApplySignedLimits(t *testing.T) {
+	limits := []scopelimit.Limit{{Host: "a.example", Ports: "443"}}
+	cmd := &Command{signedLimits: limits}
+	opts := &ScanOptions{}
+	if err := applySignedLimits(cmd, &limitingScanner{fakeScanner: fakeScanner{name: "k"}, enforces: true}, opts, "k"); err != nil || len(opts.Limits) != 1 {
+		t.Fatalf("enforcing scanner: %v %+v", err, opts.Limits)
+	}
+	for name, s := range map[string]Scanner{"legacy": &fakeScanner{name: "x"}, "not enforcing": &limitingScanner{fakeScanner: fakeScanner{name: "x"}}} {
+		err := applySignedLimits(cmd, s, &ScanOptions{}, "x")
+		var pe *LocalPolicyError
+		if !errors.As(err, &pe) || pe.Rule != RefusalRuleScopeLimits {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	var unsigned Command
+	if err := json.Unmarshal([]byte(`{"id":"c","signedLimits":[{"host":"a.example","ports":"443"}],"signed_limits":[{"host":"x"}]}`), &unsigned); err != nil {
+		t.Fatal(err)
+	}
+	opts = &ScanOptions{}
+	if err := applySignedLimits(&unsigned, &fakeScanner{name: "x"}, opts, "x"); err != nil || opts.Limits != nil {
+		t.Fatalf("limits from JSON: %v %+v", err, opts.Limits)
 	}
 }

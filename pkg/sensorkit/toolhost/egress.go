@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/openctemio/sdk-go/internal/toolrt"
+	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -119,6 +120,7 @@ func (h *Host) taskScope(ctx context.Context, m tool.Manifest, task tool.Task) e
 	switch m.Permissions.Network {
 	case tool.NetTargets, tool.NetResolver:
 		s.DNSOnly = m.Permissions.Network == tool.NetResolver
+		s.Limits = task.Limits
 		for _, t := range task.Targets {
 			if pfx, err := netip.ParsePrefix(strings.TrimSpace(t.Value)); err == nil {
 				s.Prefixes = append(s.Prefixes, pfx.Masked())
@@ -141,6 +143,36 @@ func (h *Host) taskScope(ctx context.Context, m tool.Manifest, task tool.Task) e
 		s.AnyPublic = true
 	}
 	return s
+}
+
+// checkLimits refuses a task whose scope limits it cannot enforce: limits
+// that do not name the task's targets, a tool whose network class reaches
+// more than its targets, or a sandbox that does not confine the network
+// (the forwarder would then be a proxy the tool may ignore). Tool flags
+// alone are never the enforcement.
+func (h *Host) checkLimits(m tool.Manifest, task tool.Task) *tool.Error {
+	if len(task.Limits) == 0 {
+		return nil
+	}
+	values := make([]string, len(task.Targets))
+	for i, t := range task.Targets {
+		values[i] = t.Value
+	}
+	if err := scopelimit.Validate(task.Limits, values); err != nil {
+		return tool.AsError(tool.Invalid("%v", err))
+	}
+	switch m.Permissions.Network {
+	case tool.NetNone:
+		return nil
+	case tool.NetTargets, tool.NetResolver:
+	default:
+		return tool.AsError(tool.Refused(fmt.Sprintf("the job's targets are limited to some ports or paths; tool %s reaches the network as %q, not only its targets",
+			m.Name, m.Permissions.Network)))
+	}
+	if !h.backend().Status().NetworkEnforced {
+		return tool.AsError(tool.Refused("the job's targets are limited to some ports or paths; this sensor's sandbox does not confine the network, so the limits cannot be enforced"))
+	}
+	return nil
 }
 
 func (h *Host) admittedAddrs(ctx context.Context, host string) []netip.Addr {

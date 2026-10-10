@@ -33,6 +33,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/scopelimit"
 )
 
 // PayloadType is the DSSE payload type of a signed job.
@@ -78,10 +80,17 @@ type Statement struct {
 	// them in its scope ledger (api RFC-040 P2): "sha256:" + lower-case hex
 	// of each decoded template, in the payload's order. Absent when the
 	// payload carries none.
-	Templates  []string  `json:"templates,omitempty"`
-	LeaseEpoch int       `json:"lease_epoch"`
-	IssuedAt   time.Time `json:"issued_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
+	Templates []string `json:"templates,omitempty"`
+	// Limits are the port, protocol and path limits of the targets that
+	// only port- or path-limited scope entries cover, as the signer's
+	// ledger holds them (scopelimit). A sensor enforces them outside the
+	// tool (egress forwarder, HTTP path guard). Absent when no target is
+	// limited. A verifier that predates the field refuses the statement
+	// (unknown field), so a limited job never runs unlimited.
+	Limits     []scopelimit.Limit `json:"limits,omitempty"`
+	LeaseEpoch int                `json:"lease_epoch"`
+	IssuedAt   time.Time          `json:"issued_at"`
+	ExpiresAt  time.Time          `json:"expires_at"`
 	// Seq is per sensor and strictly increasing (gaps are possible).
 	Seq uint64 `json:"seq"`
 	// Nonce is 16 random bytes, base64url without padding.

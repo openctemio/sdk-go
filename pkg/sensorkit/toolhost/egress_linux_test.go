@@ -5,11 +5,17 @@ package toolhost
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -116,5 +122,71 @@ func TestTaskScope(t *testing.T) {
 	}
 	if networkClass(tool.NetResolver) != executor.NetworkResolver {
 		t.Fatal("resolver network class")
+	}
+}
+
+// SECURITY (acceptance, scope limits): on a backend that confines the
+// network, a task whose target is limited to a port and a path reaches the
+// path through its forwarder; a request outside the prefix and a
+// connection to another port of the target are refused, recorded and never
+// reach the server, whatever the tool asks.
+func TestConfinedTaskKeepsToScopeLimits(t *testing.T) {
+	be, err := executor.NewProcessBackend(executor.Config{Mode: executor.ModeRequired, ConfineNetwork: true, RequireNetwork: true,
+		Limits: executor.Limits{Processes: 256}})
+	if err != nil {
+		if os.Getenv("OPENCTEM_TEST_REQUIRE_NETNS") == "1" {
+			t.Fatalf("network confinement required by the environment, not available: %v", err)
+		}
+		t.Skipf("network confinement not available here: %v", err)
+	}
+	var mu sync.Mutex
+	var served []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		served = append(served, r.URL.EscapedPath())
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	other := httptest.NewServer(http.NotFoundHandler())
+	defer other.Close()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	otherPort := other.Listener.Addr().(*net.TCPAddr).Port
+	target := fmt.Sprintf("http://localhost:%d", port)
+	exe, _ := os.Executable()
+	m := tool.Manifest{
+		Name: "limits-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
+		Consumes: []string{"http_service"}, Produces: []string{"finding:misconfiguration"},
+		Permissions: tool.Permissions{Network: tool.NetTargets},
+		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
+	}
+	h := testHost(t)
+	h.Backend = be
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "http_service", Value: target + "/api/"}},
+		Limits: []scopelimit.Limit{{Host: "localhost", Ports: strconv.Itoa(port), PathPrefix: "/api"}}}
+	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,
+		Env: map[string]string{"TOOLHOST_HOSTILE": "limits-probe", "TOOLHOST_TARGET": target, "TOOLHOST_OTHER_PORT": strconv.Itoa(otherPort)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Report.Findings) != 1 || out.Report.Findings[0].Title != "api=200 admin=403 dotdot=403 port=403" {
+		b, _ := json.Marshal(out.Report.Findings)
+		t.Fatalf("probe: %s (status %s, stderr %s, err %+v)", b, out.Status, out.Stderr, out.Err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(served) != 1 || served[0] != "/api/x" {
+		t.Fatalf("the server served %v", served)
+	}
+	var paths, ports int
+	for _, r := range out.Egress {
+		switch {
+		case r.Verdict == egress.Refused && r.Protocol == egress.ProtocolHTTPPath:
+			paths++
+		case r.Verdict == egress.Refused && r.Port == otherPort:
+			ports++
+		}
+	}
+	if paths != 2 || ports != 1 {
+		t.Fatalf("egress records %+v", out.Egress)
 	}
 }

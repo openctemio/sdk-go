@@ -38,6 +38,11 @@ const RefusalRuleJobSignature = "job_signature"
 // expired, or refused).
 const RefusalRuleJobKeySet = "job_keyset"
 
+// RefusalRuleScopeLimits is the refusal of a job whose signed statement
+// limits its targets to some ports or paths, for a scanner or a sandbox
+// that cannot enforce the limits.
+const RefusalRuleScopeLimits = "scope_limits"
+
 // Job signing postures (JobsPosture.Signed).
 const (
 	// JobsSignedRequired: every command must carry a signed job that
@@ -173,7 +178,7 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 	}
 	// The statement binds the payload's custom templates (Verify checked
 	// they are the payload's): the executor trusts them through it.
-	cmd.jobVerified, cmd.signedTemplates = true, st.Templates
+	cmd.jobVerified, cmd.signedTemplates, cmd.signedLimits = true, st.Templates, st.Limits
 	return nil
 }
 

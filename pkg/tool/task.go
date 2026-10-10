@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
@@ -53,6 +54,13 @@ type Task struct {
 	// it; a tool that makes its own requests declares features.web_scope
 	// and keeps to it.
 	WebScope *webscope.Scope `json:"web_scope,omitempty"`
+	// Limits are the port, protocol and path limits of the targets (from
+	// the job's verified signed statement; scopelimit). The tool host
+	// enforces them outside the tool: the task's egress forwarder refuses
+	// a connection to a limited host on another port and an HTTP request
+	// outside its path prefixes. A task with limits runs only on a sandbox
+	// that confines its network.
+	Limits []scopelimit.Limit `json:"limits,omitempty"`
 	// HTTP is the effective http settings of the task: the manifest's,
 	// with what the sensor's local policy decides (a forced User-Agent).
 	// Set by the runtime, never taken from a job; ctx.HTTP() applies it.

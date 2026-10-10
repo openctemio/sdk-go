@@ -39,6 +39,8 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
+
+	"github.com/openctemio/sdk-go/pkg/scopelimit"
 )
 
 // Scope is what a task may reach.
@@ -66,6 +68,13 @@ type Scope struct {
 	// connection, to the admitted names too (a tool whose network is DNS
 	// resolution learns records; it never reaches a host).
 	DNSOnly bool
+	// Limits are the port, protocol and path limits of the task's targets
+	// (from the job's signed statement). A limited host, and every address
+	// a limited name is pinned to, is reached only on an allowed port; on a
+	// port whose limits name path prefixes every HTTP request is checked
+	// (TLS is terminated with the forwarder's own authority) and one
+	// outside the prefixes is refused and recorded.
+	Limits []scopelimit.Limit
 }
 
 // Verdicts of a Record.
@@ -147,6 +156,10 @@ type Forwarder struct {
 	// admitted name (UpstreamDNS; nil: such queries get an empty answer).
 	Upstream func(ctx context.Context, query []byte) ([]byte, error)
 
+	scopeLimits scopelimit.Set
+	addrLimits  map[netip.Addr][]string
+	authority   tlsAuthority
+
 	rate    *rate.Limiter
 	mu      sync.Mutex
 	perHost map[string]*rate.Limiter
@@ -167,6 +180,8 @@ func New(scope Scope, limits Limits) *Forwarder {
 		f.names[key] = append(f.names[key], addrs...)
 	}
 	f.prefixes = slices.Clone(scope.Prefixes)
+	f.scopeLimits = scopelimit.NewSet(scope.Limits)
+	f.indexLimits()
 	return f
 }
 
@@ -216,6 +231,9 @@ func (f *Forwarder) Resolve(ctx context.Context, host string, port int) ([]netip
 	}
 	if !f.portAllowed(port) {
 		return nil, fmt.Errorf("%w: port %d not allowed", ErrRefused, port)
+	}
+	if !f.limitPortAllowed(host, port) {
+		return nil, fmt.Errorf("%w: port %d of %s is outside the job's scope limits", ErrRefused, port, normName(host))
 	}
 	return f.resolveHost(ctx, host)
 }

@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -216,6 +219,35 @@ func hostile(mode string) int {
 		} else {
 			res = append(res, "direct=blocked")
 		}
+		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
+		return 0
+	case "limits-probe":
+		// HTTP requests to its path-limited target through the proxy it was
+		// given (inside and outside the prefix), and a CONNECT to another
+		// port of the target; the statuses go in the finding title.
+		pu, _ := url.Parse(os.Getenv("HTTPS_PROXY"))
+		c := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(pu), DisableKeepAlives: true}}
+		status := func(u string) string {
+			resp, err := c.Get(u)
+			if err != nil {
+				return "err"
+			}
+			_ = resp.Body.Close()
+			return strconv.Itoa(resp.StatusCode)
+		}
+		base := os.Getenv("TOOLHOST_TARGET") // http://localhost:PORT
+		res := []string{"api=" + status(base+"/api/x"), "admin=" + status(base+"/admin"), "dotdot=" + status(base+"/api/%2e%2e/admin")}
+		other := "?"
+		if conn, err := net.DialTimeout("tcp", pu.Host, 3*time.Second); err == nil {
+			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+			fmt.Fprintf(conn, "CONNECT localhost:%s HTTP/1.1\r\nHost: localhost\r\n\r\n", os.Getenv("TOOLHOST_OTHER_PORT"))
+			line, _ := bufio.NewReader(conn).ReadString('\n')
+			if f := strings.Fields(line); len(f) > 1 {
+				other = f[1]
+			}
+			_ = conn.Close()
+		}
+		res = append(res, "port="+other)
 		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
 		return 0
 	case "argv-cli":
