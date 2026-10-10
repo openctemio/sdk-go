@@ -183,6 +183,66 @@ the first delivery and otherwise returns `PushResult{Queued: true}`. The old
 `pkg/retry` file queue and the SQLite chunk store were replaced by the outbox;
 reports left in `~/.openctem/retry-queue` are imported on first start.
 
+### Feed transfer: chunked signed bundles
+
+Large data moves in two directions, and each direction has one code path
+(api `docs/rfcs/RFC-070-chunked-feed-transfer.md`):
+
+- **Push** (sensor or collector to platform): the results protocol and the
+  outbox above. Segments are the chunks (`chunk.SplitSegments`), the
+  `report_id` plus segment number is the idempotency key, `V2Progress`
+  resumes after a restart, and the outbox is the encrypted, capped
+  store-and-forward spool.
+- **Pull** (published feed to platform or sensor): `pkg/transfer` and
+  `pkg/transfer/bundle`.
+
+`transfer.Fetcher` downloads from an ordered list of origins (release URL,
+mirrors, a local directory for air-gapped installs) through the SSRF-guarded
+client. Per origin: retries with exponential back-off and jitter, Retry-After
+on 429/503 (capped; a longer wait moves to the next origin), a per-attempt
+timeout, a stall guard, and resume of a partial download with a Range
+request. A 404 or a hash mismatch moves to the next origin at once; an origin
+that keeps failing opens its circuit for a cool-down. `Small` reads a pointer
+or manifest (capped; conditional GET with the cached ETag); `Blob` returns a
+content-addressed file from `<cache>/blobs`, verified against its sha256 and
+size before it is moved there, so a chunk shared by two releases is fetched
+once.
+
+A v2 bundle is a flat set of files: `latest.v2.dsse.json` (signed pointer:
+sequence, the snapshot and delta manifest names, sizes and digests),
+`snapshot.v2.manifest.dsse.json` and `delta.v2.manifest.dsse.json` (signed
+manifests: per record stream, the chunks with sha256, size, uncompressed
+size, record count and id range) and `sha256-<hex>.jsonl.gz` chunks. Chunk
+boundaries come from a hash of the record id (records in ascending id order),
+so one changed record changes one chunk. `bundle.Writer` writes them;
+`bundle.WritePointer` signs the pointer.
+
+`bundle.Consumer.Run`:
+
+1. loads the `Checkpoint` (applied sequence; bundle in progress and next chunk);
+2. verifies the key set (caller's `Trust`), the pointer (signature, feed,
+   expiry, at most 8 days valid) and refuses a sequence older than the
+   applied one (`ErrRollback`);
+3. takes the delta only when its base is the applied sequence, otherwise the
+   snapshot; resumes the bundle in progress when its manifest digest matches;
+4. fetches the manifest, checks it against the pointer's pin, its signature
+   and the caps (chunk count, sizes, total), all before any chunk;
+5. per chunk: `Blob` (hash and size verified), then `Applier.ApplyChunk`
+   streams the records (`Chunk.Records` refuses more decompressed bytes or a
+   different record count than declared, and lines over the cap), then the
+   checkpoint is saved;
+6. `Applier.Complete` (a snapshot removes what it no longer holds), then the
+   sequence is saved as applied and cached chunks of older bundles are
+   pruned.
+
+A crash between chunks resumes at the next chunk; a chunk may be applied
+twice, so appliers upsert by record id and never replace a record of a newer
+sequence. `FileCheckpoint` stores the state in a 0600 file; the platform
+implements `Checkpoint` on a table. `Fetcher.Register` and
+`Consumer.Register` expose the counters (files, bytes, retries, resumes,
+fall-backs, failures; chunks applied and failed, resumes, refusals). Logs
+carry names, origins, sizes and errors, never record content.
+
 ### 3. Components
 
 Components are the building blocks that perform actual work:
