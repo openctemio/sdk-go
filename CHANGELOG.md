@@ -8,6 +8,573 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.19.0 — 2026-10-11
+
+### Security
+
+- The mapping file is part of the contract:
+  - it must be a regular file inside the manifest's directory (no symlink, no `..`), of at most 256 KiB;
+  - a bad mapping file refuses the tool at load;
+  - a mapping file changed after load, or a missing one, refuses the task before the tool starts.
+- The mapping language is closed (paths, constants, templates, a fixed set of transforms, bounded RE2 predicates; no code). It is bounded by the task's output limits.
+- The report's tool is always the manifest's, never one the output claims.
+- Output in a named format goes through the hardened, fuzzed `ctis/importer` parsers and then through the same record checks as any tool output: CTIS validity, declared outputs and limits.
+
+- A capability job sent to a scanner that cannot apply it fails. This covers a job carrying a capability, params or a tier ceiling. Its settings are never dropped silently.
+- The executor refuses:
+  - malformed capability references, including a ref without its major and look-alike case;
+  - params without a capability;
+  - an unknown tier;
+  - more than 64 params, or a param over 16 KiB.
+- The platform derives a tool's trust level from `origin`, which the sensor sets from how the tool was loaded, never from the tool's own claim.
+
+- The kit runs a tool under test only through the runtime's host and sandbox, as a sensor would. Its fixtures listen on loopback only, and nothing is reached beyond them.
+- Scope check: the tool is given one target while another address listens. Any connection to that address fails the check.
+- `secrets.code@1` plants fresh fake credentials and fails when a raw value reaches the report or the logs, in any field.
+- `diff` treats these as breaking changes that need a major version bump:
+  - narrowing what a tool takes or emits;
+  - raising its tier or adding a side effect;
+  - adding a required config key.
+
+- Each of these is `invalid_input` before anything starts:
+  - a standard param the tool does not map;
+  - a value outside the capability's enum or the tool's narrowed values;
+  - an integer outside either bound;
+  - a malformed port list;
+  - a config key that the task also sets to another value;
+  - params without a capability;
+  - a capability the tool does not implement.
+
+  Nothing is dropped silently.
+- A tool's minimum tier is the highest of its declared tier, the capability floors, and T2 for any side effect. When it is above the job's `max_tier`, the task is `refused_by_policy` before it starts.
+- The local policy's rate cap applies whatever the workflow asked.
+
+- A manifest is refused when it:
+  - implements a capability outside the taxonomy (matched exactly), or a reserved one;
+  - declares a tier below a capability's tier floor;
+  - declares side effects without tier T2;
+  - consumes an asset type no implemented capability takes, or produces an output none may emit;
+  - maps a param to a missing or mistyped config key, or widens a standard param's values or bounds.
+- With `implements` set, the old `capabilities` list may only repeat its ids.
+- `MinimumTier` is the highest of the declared tier, the capability floors, and T2 for any side effect. The platform may assign a higher tier, never a lower one.
+- Display strings are refused when they contain control or bidirectional-override characters. Icons come from a closed set, never a URL. `docs_url` must be https without credentials. `engine.version_probe` refuses shells and placeholders.
+
+### Security: a task can no longer read another task's files
+
+- The process sandbox hid only the sensor's protected paths, so a task could read and list the directories of the tasks running beside it (on a shared sensor, another tenant's checkout and tool output). The task root (`executor.TaskRoot()` and the backend's `WorkRoot`) is now hidden from every task; a task reads and writes only its own directory and the paths it is given.
+- The tool host's protocol directory moved from `$TMPDIR/openctem-tool-*` to the task root (`executor.NewTaskDir`).
+- A task root must be a directory owned by the sensor's user: a symbolic link or another user's directory is refused, and an owned one is closed to other users (0700).
+
+### Security: the SSRF guard refuses IPv6 ranges that translate to IPv4
+
+- `pkg/httpsec` also hard-blocks four IPv6 ranges that carry an IPv4 address:
+  - NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`;
+  - 6to4 `2002::/16`;
+  - Teredo `2001::/32`.
+- On a network with NAT64/DNS64, a name that resolved to `64:ff9b::a9fe:a9fe` reached the cloud metadata address `169.254.169.254` through the translator.
+- `192.0.0.0/24` and `198.18.0.0/15` are refused too.
+- The table matches the platform's copy (api `pkg/httpsec`), which the platform's security lint compares line by line.
+
+### Security: sensors pin the job-signing root and accept signer keys from its signed, expiring key set
+
+- A sensor can pin the installation's offline job-signing root (api RFC-040 §5.6 K3) instead of the online signer key. The platform's hello serves the current key set (`signed_jobs.keyset`): a DSSE envelope signed by the root listing the online keys, with a version and an expiry at most 30 days out. Job signatures are then accepted only from keys of the current, verified key set (and from keys in `SENSOR_JOB_SIGNING_KEYS`), so a signer key is rotated or revoked by a new key set, without pairing the sensor again.
+- `pkg/jobsig` verifies a key set against the pinned root before it parses it further: payload type `application/vnd.openctem.keyset.v1+json`, strict decode, the root's Ed25519 signature over the exact bytes, not expired (2-minute skew), version never lower than the accepted one and the same version only with the same bytes. The accepted key set is kept in `<state dir>/job-signing-keyset.json` (fsync before use), so a rollback is refused across restarts too.
+- The key set is fetched from hello at start, before the next job check when the doorbell's `config_version` moves, and when a job's key is not in it (at most every 30 seconds). With a root pinned and no valid key set (none, expired or refused), signed jobs are refused with rule `job_keyset`; a key the key set no longer lists is refused with rule `job_signature`. The sensor warns 7 days before expiry; the posture adds `jobs.root`, `jobs.keyset_version` and `jobs.keyset_expires_at`.
+- Pairing pins the root of the key set the hello serves (`identity.json` `job_signing_root`, trust on first use), only when the key set is signed by it and current. A root pinned at pairing makes signed jobs required, and the online keys pinned at pairing are then not used.
+- New setting `SENSOR_JOB_SIGNING_ROOT` (the root's `SHA256:<hex>` key id or base64 key; overrides the root pinned at pairing). The local policy schema is unchanged (v1 is frozen).
+- New API: `jobsig.KeySet`, `KeySetTrust`, `NewKeySetTrust`, `KeySetConfig`, `KeySetSource`, `VerifyKeySet`, `TrustOnFirstUse`, `ParseRoot`, `ReasonKeySet`, `KeySetPayloadType`, `KeySetKind`, `Config.KeySet`, `Verifier.KeySet`; `core.RefusalRuleJobKeySet`, `JobGuard.SetConfigVersion`, `SetJobsKeySet`, `JobsPosture.Root/KeySetVersion/KeySetExpiresAt`; `protov2.SignedJobs.KeySet`; `identity.Identity.JobSigningRoot`; `sensorkit.Options.JobSigningRoot`, `EnvJobSigningRoot`, `JobSigningKeySetFile`, `KeySetWarnBefore`.
+
+### Security: golang.org/x/net v0.60.0 (GO-2026-6617, HTTP/2 HPACK encoder race)
+
+- govulncheck found the vulnerable symbols reachable through net/http; the module is bumped, and CI builds and checks with Go 1.26.9 (GO-2026-6611/6612/6613/6617 in net/http).
+
+### Security: new sensors fail closed without a local policy
+
+- A sensor that requires a sensor-local policy and has none refuses every job with a network target (URL, host, IP, CIDR, image reference), custom templates and out-of-band callbacks before any tool starts: `refused by local policy: no_local_policy: ...`, with the refusal rule `no_local_policy`. Jobs without network targets (repository and filesystem scans, health checks, collectors, content refresh) keep running, and the kill switch still applies.
+- A sensor requires a policy when `SENSOR_REQUIRE_LOCAL_POLICY=true`, or, with the variable unset, when its key-bound identity was paired by this SDK: pairing now writes `"require_local_policy": true` into `identity/identity.json` (`identity.Identity.RequireLocalPolicy`). `core.LocalPolicyOptions.Required`, `LocalPolicy.Required`, `LocalPolicy.WithRequired` and `sensorkit.ResolveRequireLocalPolicy` expose it.
+- Without a policy, `LocalPolicy.CheckTarget` now applies the built-in deny list (loopback, link-local and `169.254.169.254`, multicast, unspecified, CGNAT, reserved, private unless the private-range switch) instead of allowing every target, so a retest or tool task that checks its targets directly cannot reach them.
+
+### Security: the platform TLS identity is pinned at pairing
+
+- Pairing over HTTPS records the platform's TLS identity in `identity/identity.json`: `"platform_tls_pin": "sha256:<hex>"` with `"platform_tls_pin_element": "anchor_spki"` (the SHA-256 of the SubjectPublicKeyInfo of the trust anchor of the chain the pairing verified, so leaf and intermediate renewals by the same CA keep working while any other CA is refused), or `"ca_cert"` when `SENSOR_CA_FINGERPRINT` was set at pairing (it wins and is stored). Every request of one pairing must lead to the same anchor.
+- Every platform client the SDK builds (protocol v2, the v3 HTTPS binding, the gRPC certificate requests) enforces the stored pin, with no fallback to the system roots: `platform certificate does not match the pin stored at pairing; re-pair or set SENSOR_CA_FINGERPRINT`. `SENSOR_CA_FINGERPRINT` overrides the stored pin. A malformed stored pin stops the sensor.
+- Protocol v3: the gRPC CA bundle is sticky. A different bundle replaces it only over a pinned channel (the gRPC binding, or the HTTPS binding under a platform TLS pin); an endpoint change alone never does. A gRPC certificate that does not verify against the bundle is a hard error (`platform_certificate_refused`, `client.ErrPlatformCertificate`): nothing is sent on any binding until gRPC verifies again. `SENSOR_TRANSPORT=grpc` no longer drops to the HTTPS binding or v2, also when the platform lists no protocol v3.
+- `posture.platform_tls.pin` reports `fingerprint` when a stored pin is enforced.
+- New API: `identity.Identity.PlatformTLSPin`, `PlatformTLSPinElement`, `Identity.TLSPin`; `httpsec.SetAPIPinnedSPKI`, `APIPinnedSPKI`, `HasAPIPin`, `PinRecorder`, `NewAPIClientRecordingPin`, `AnchorSPKI`, `FormatFingerprint`, `PinElementAnchorSPKI`, `PinElementCACert`, `ErrPlatformPinMismatch`, `ErrPlatformChangedDuringPairing`; `client.ErrPlatformCertificate`, `client.ErrCABundleChanged`, `client.ReasonPlatformCertificate`.
+
+### Security: port- and path-limited targets are enforced outside the tool (pkg/scopelimit)
+
+- A signed job statement can carry `limits` (`jobsig.Statement.Limits`, `scopelimit.Limit`): for each target the organization's scope covers only through a port-limited or path-limited entry, the allowed ports, protocol and URL path prefix, as the platform's job signer holds them in its ledger. The verifier checks every limit names one of the statement's targets and is well formed (`ReasonLimits`). A verifier that predates the field refuses such a statement (unknown field), so a limited job never runs unlimited on an older sensor.
+- The limits reach the scan only from the verified statement (`ScanOptions.Limits`, `tool.Task.Limits`), never from the payload. A scanner that does not implement `core.ScopeLimitScanner` refuses a job with limits (`RefusalRuleScopeLimits`); contract tools (`toolcompat`) implement it.
+- The tool host refuses a task with limits on a sandbox that does not confine the network, and for a tool whose network class reaches more than its targets (vendor, egress proxy).
+- The task's egress forwarder enforces them: a connection to a limited host (or address) on another port is refused; on a port whose limits name path prefixes, every HTTP request is read (TLS is terminated with a per-forwarder authority, `Forwarder.AuthorityPEM`) and refused with `403` and a `http-path` record when its Host is not the destination or its path is outside the prefixes. Paths are compared after percent-decoding and dot-segment removal, case sensitive; an encoded `/` or `\`, a backslash, NUL, an invalid escape and `..;` segments are refused. Protocol upgrades and non-HTTP/1.x traffic to such a port are refused.
+- A sensor that enforces limits advertises `scope.limits@1` (`scopelimit.Capability`) in its manifest.
+
+### Security: a secret scanner's raw match no longer survives in the title or other fields
+
+- The adapters (`betterleaks`, `sarif`, `trivy`), `core.SARIFParser` and `importtool` run on `github.com/openctemio/ctis` with `RedactSecretFinding`. A secret that a scanner repeats in its message, description, commit message, tags or properties is masked there too, not only in the snippet. Before, a SARIF snippet holding the whole code line, or a leak record with only a match line, left the bare secret in the finding title.
+- The tool runtime's output rules (`internal/toolrt`, applied on both sides of the process boundary) mask any secret finding whose snippet or masked value a tool left unmasked, and the same value wherever another field repeats it.
+- `pkg/ctis` re-exports `RedactSecretFinding` and `ContainsSecret`.
+
+### Security: custom templates are trusted through the signed job
+
+- The job statement (`jobsig.Statement`) gains `templates`: the SHA-256 of
+  every custom template the payload carries, in order. `jobsig.Verify`
+  refuses a statement whose list differs from the payload's (new reason
+  `templates`, helpers `jobsig.PayloadTemplateDigests` and
+  `jobsig.TemplateDigest`).
+- When a command's signed job verified, its custom templates run without
+  `SENSOR_TEMPLATE_SIGNING_KEYS`: the platform's job signer names a template
+  only when its digest is approved in the signer's scope ledger (api
+  RFC-040 P2). The executor compares the decoded templates with the
+  verified list before writing them. The local `allow_custom_templates`
+  gate and the template validation still apply.
+- Sensors without signed jobs keep the per-tenant manifest path
+  (`SENSOR_TEMPLATE_SIGNING_KEYS`), now a fallback planned for removal.
+
+### Security: a tool no longer receives another tool's credentials from the environment
+
+- Every tool task got every bundled tool's environment namespace: `TRIVY_*`, `SEMGREP_*` (incl. `SEMGREP_APP_TOKEN`), `PDCP_*`, `NUCLEI_*`, `DOCKER_HOST`, and others. That included a program the operator installed from outside the project. A tool, or a hostile template it loads, could read another tool's credentials.
+- `core.ScannerEnvironFor(tool, extra...)` passes a namespace only to the tool it belongs to. The tool host uses it: a compiled-in tool gets its own namespace, and an operator-installed tool gets none (its credentials come from its manifest, in the run message).
+- Unchanged:
+  - variables the caller passes;
+  - names the operator allows (`OPENCTEM_SDK_SCANNER_ENV_ALLOW`, `core.SetScannerEnvAllowlist`);
+  - inherit mode;
+  - the legacy `core.ExecuteScanner` path.
+- Upgrade note: an operator-installed tool that read a vendor variable from the sensor's environment must declare it as a credential, or the operator must allow the name explicitly.
+
+### Security: credentials in log text are masked
+
+- Every command log line's text is now also masked for credentials a tool prints about its targets:
+  - `Authorization`, `Cookie` and `Set-Cookie` header values;
+  - `key=value` or `key: value` pairs (JSON-quoted keys included) whose key names a secret (token, api_key, password, secret, session);
+  - the user info of URLs.
+- This comes on top of the existing masking of the sensor's key, tool secrets and secret-named fields. The platform redacts again.
+
+### Security: confined tool tasks reach only their targets, through their own forwarder
+
+- Where the sandbox confines the network (`executor.Config.ConfineNetwork`), the tool host starts a forwarder (`pkg/sensorkit/egress`) for every task whose manifest network is not `none`. Its sockets live in a task directory no task can read. The scope follows the manifest's network:
+  - `targets`: the admitted targets, names at the addresses the local policy admitted (`core.LocalPolicy.AdmittedAddrs`), never resolved again;
+  - `vendor`: the vendor hosts at public addresses;
+  - `egress-proxy`: any public address.
+
+  Every destination is recorded in `Outcome.Egress`. Each refusal is a warning in the task's command log.
+- sensorkit turns confinement on by default: `SENSOR_SANDBOX_NETWORK=auto` (where user namespaces are available; otherwise a warning), `required` (refuse to start without it; for shared sensors) or `off`. `openctem tool run|test` do the same (`OPENCTEM_SANDBOX_NETWORK`), and `--scope` reports every destination the task's forwarder refused.
+- The forwarder now refuses the cloud metadata addresses outside link-local (`168.63.129.16`, `100.100.100.200`, `fd00:ec2::254`). It also gained `Scope.AnyPublic` and `ServeDNSStream`.
+- DNS for an admitted name: A and AAAA come from the scope. Other record types (CNAME, MX, TXT, NS, ...) are asked of the sensor's upstream resolver (`Forwarder.Upstream`, `egress.UpstreamDNS`) and passed back only when the answer matches the question. An unadmitted name is never asked upstream.
+- A confined task with a forwarder also gets `OPENCTEM_EGRESS_PROXY` (`executor.EnvEgressProxy`), the relay's proxy URL, for wrappers whose tool takes a proxy flag rather than the proxy variables.
+- Upgrade notes:
+  - A tool that dials raw sockets instead of honouring the proxy variables gets "network unreachable" when confined.
+  - A sensor container needs a seccomp profile that allows user namespaces for confinement; without one it runs as before, with a warning.
+
+### Security: the paired identity directory is a protected path of the tool sandbox
+
+- No tool may read the identity directory (the signing key, the protocol v3 client certificate and pinned CA).
+
+### Security: sensors verify the platform's signed jobs before they run them
+
+- New package `pkg/jobsig` verifies the job signer's DSSE envelope (api RFC-040 §5.6): Ed25519 over the pre-authentication encoding of the exact statement bytes with a pinned key (indexed by its recomputed `SHA256:<hex>` id), then a strict v1 statement bound to this sensor's organization and id, the command's id, type and lease epoch, the SHA-256 of the payload bytes as received and the tool and targets that payload names, issued within 2 minutes and not expired (at most 1 hour), a nonce not seen before and a sequence number above the last accepted from that key, persisted with fsync in `<state dir>/job-signing-seq.json` before the job is accepted.
+- `core.CommandPoller.SetJobGuard` checks every command right after its claim, in claim order, before the start transition, the local policy, the command gate and the executor. With a pinned key the poller claims through `core.CommandClaimer` (`client.ClaimCommand`) so it verifies the claim answer's payload, signed job and lease epoch. A command that fails, or comes unsigned to a sensor that requires signed jobs, is failed with a structured refusal (layer `builtin`, rule `job_signature`) and never run. `Kit.RunJob` checks the claimed job the same way.
+- Pairing reads the platform's hello right after the confirmation and pins the job signer keys it lists in `identity.json` (`job_signing_keys`, trust on first use over the pinned and signed pairing connection). A sensor whose identity pinned keys requires signed jobs.
+- New settings: `SENSOR_JOB_SIGNING_KEYS` (key ids `SHA256:<hex>`, resolved through the hello, or base64 Ed25519 keys; added to the keys pinned at pairing) and `SENSOR_REQUIRE_SIGNED_JOBS` (`true`/`false`; unset: required when the identity pinned keys). Both need a paired (key-bound) sensor; `SENSOR_REQUIRE_SIGNED_JOBS=true` without a pinned key stops the sensor at start.
+- The manifest's posture reports `jobs.signed`: `required`, `verified_when_present` or `off`.
+- New API: `jobsig` (`Verifier`, `Keys`, `ParseKeys`, `Statement`, `Envelope`, …); `core.JobGuard`, `NewJobGuard`, `CommandPoller.SetJobGuard`, `CommandClaimer`, `Command.SignedJob`, `EnvRequireSignedJobs`, `RequireSignedJobsFromEnv`, `RefusalRuleJobSignature`, `JobsPosture`, `SetJobsPosture`; `client.Command.SignedJob`; `protov2.Command.SignedJob`, `Hello.SignedJobs`, `SignedJobs`, `SignedJobKey`, `FeatureSignedJobs`; `identity.Identity.JobSigningKeys`; `sensorkit.Options.JobSigningKeys`, `EnvJobSigningKeys`, `ResolveRequireSignedJobs`, `JobSigningStateFile`.
+
+### Security: jobs can carry a web scope that the SDK enforces
+
+- A job (`ScanCommandPayload.web_scope`, `tool.Task.WebScope`) can carry a web scope (`pkg/webscope`). It names:
+  - the hosts a web tool may request (`*.example.com` covers the domain and every name under it);
+  - the path prefixes it may request, and the paths it never requests (`deny_paths`);
+  - the methods it may use (GET, HEAD and OPTIONS when none are named).
+- `tool.Context.HTTP` refuses every request outside the scope, redirects included. The path is checked as the server sees it: decoded, with dot segments resolved. A path with an encoded slash, backslash or NUL is refused.
+- A networked tool must declare `features.web_scope` to take a job with a web scope; otherwise the job is refused (`refused_by_policy`). An invalid scope is refused, never ignored, and a scanner that cannot take capability jobs fails such a job.
+- Exec-profile tools read the scope from the new `{{task.web_scope_file}}` placeholder.
+- The conformance kit's new `crawl.web` and `dast.web` suite fails a tool that requests a denied path, or that does not declare `features.web_scope`.
+
+### Upgrade notes
+
+- Nothing changes for a sensor without a root pin. A sensor paired from this release with a platform that serves a key set pins its root. To move an existing sensor to the root, set `SENSOR_JOB_SIGNING_ROOT` to the root key id the installation owner recorded (`openctem-signer root keygen` printed it).
+- Once a root is pinned, the platform must keep a current key set deployed and renew it before `not_after`: an expired key set makes the sensor refuse every signed job until a new one is served. Keep `<state dir>/job-signing-keyset.json` on the persistent state volume.
+
+- Existing paired sensors and bearer-key sensors are unchanged (legacy, with a start-up warning) until they set `SENSOR_REQUIRE_LOCAL_POLICY=true` or pair again. A sensor paired with this release, or re-paired, refuses network jobs until `/etc/openctem/sensor-policy.yaml` is installed or `SENSOR_ALLOWED_RANGES` is set; `SENSOR_REQUIRE_LOCAL_POLICY=false` keeps the legacy behavior on purpose.
+- A legacy sensor without a policy now refuses built-in-denied targets (metadata, loopback, private without the switch) on paths that called `CheckTarget` directly, as the scan executor already did.
+
+- `core.OrgHTTPPolicy` is no longer comparable with `==` (its new `Headers` field is a map). Code that compared two policies compares their fields instead; nothing in the SDK or the sensor does.
+
+- Existing paired sensors are unchanged (pin `none`, with a start-up warning) until they pair again or set `SENSOR_CA_FINGERPRINT`. Sensors paired with this release pin automatically; to move one to a platform behind another CA, pair it again or set `SENSOR_CA_FINGERPRINT`.
+- A sensor that already holds a gRPC CA bundle (`transport-v3-platform-ca.pem`) and has no platform TLS pin refuses a different bundle sent over HTTPS: it stays on the HTTPS binding in auto mode (reason `certificates_unavailable`) with a log line. Pair again, set `SENSOR_CA_FINGERPRINT`, or remove that file to accept the new bundle. Rotations sent over the gRPC binding are accepted as before.
+- `SENSOR_TRANSPORT=grpc` sensors that relied on the silent drop to v2 or HTTPS now send nothing until the gRPC binding works; use `auto` for fallback.
+
+- Replace `adapters/<tool>.NewAdapter().Convert(ctx, data, opts)` with `importer.Parse(ctx, bytes.NewReader(data), importer.Options{Format: importer.Format<Tool>, ...})` from `github.com/openctemio/ctis/importer`. The result is the same CTIS, with the importer limits applied. `core.SARIFParser` already uses it. For a tool you run, prefer the exec profile with `run.output.format: <tool>` (no code).
+- `examples/custom-adapter` now shows the importer.
+
+- `pkg/scanners/tenable` is removed. Nothing in the sensor, the platform or the asset collector imported it. Convert `.nessus` exports with `github.com/openctemio/ctis/importer` (`importer.Parse` with format `nessus`), which reads the same NessusClientData_v2 format with credential redaction and the CTIS limits.
+
+- `settings.DocsBase` changed value (a page URL with a trailing slash; the
+  anchor is still `#<NAME>`). Code that only calls `Setting.DocsURL()`
+  needs no change; code that built links from `DocsBase` itself gets the new
+  page.
+
+- ctis is now at CTIS 1.5: reports the SDK builds are stamped `"version": "1.5"`. No new 1.5 member is emitted yet, so receivers on CTIS 1.4 (any minor of major 1 is accepted) read them unchanged.
+
+- **A networked tool's `fixed` on a finding now needs the attempt's HTTP exchange.** The runtime keeps `fixed` only when the verdict carries an `http_exchange` evidence item whose response arrived; otherwise the verdict is `unverifiable`. Tools without network (code scanners) and asset retests are unchanged. Report retest verdicts with `ctx.Report` and the exchange. A sensor should bump to this release together with the evidence its retest tools emit.
+- `tool.Emitter` gained `Endpoint` and `tool.RetestContext` gained `Report`. Only the runtime implements them, so a tool needs no change; a test double that implements either interface must add the method. `tool.RetestVerdict` is no longer comparable with `==`, because it holds evidence.
+- `ctis.SchemaVersion` is `1.6`. Reports keep validating at every older version.
+
+- Existing sensors are unchanged (`jobs.signed: off`, unsigned jobs run) unless they set `SENSOR_JOB_SIGNING_KEYS` or `SENSOR_REQUIRE_SIGNED_JOBS`, or pair again with a platform that signs jobs; a sensor paired from this release with such a platform requires signed jobs. To require them on an existing paired sensor, set `SENSOR_JOB_SIGNING_KEYS` to the signer's key id (`openctem-signer pubkey`) and `SENSOR_REQUIRE_SIGNED_JOBS=true`.
+- The platform signs jobs only when the API has `SIGNER_SOCKET` set and the separate `openctem-signer` runs (openctem `deploy/docker-compose.job-signer.yml`). A sensor that requires signed jobs refuses every command of a platform that does not sign them.
+- Keep `<state dir>/job-signing-seq.json` on the persistent state volume; a corrupt file stops the sensor rather than accept old jobs again. A new signer key is pinned by updating `SENSOR_JOB_SIGNING_KEYS` or pairing again (rotation through a signed key set is not built yet).
+
+### Upgrade notes: older SDKs refuse statements with templates
+
+- A sensor on an earlier SDK that verifies signed jobs refuses a statement
+  carrying `templates` (unknown field), so jobs with custom templates fail
+  on it until it is upgraded. Jobs without custom templates are unchanged.
+
+### Behaviour change: a refused scan target no longer fails the whole job
+
+- A scan job target that the sensor-local policy refuses, or cannot check, is removed from the job, and the job runs on the other targets. "Cannot check" means the name does not resolve or the target is a wildcard pattern. The same applies to the executor's own check before the scanner starts.
+- The command completes with `metadata.refused_targets` (`{target, reason, rule, detail}`, at most 100), `metadata.refused_targets_total` and `metadata.partial: true`. Reasons: `unresolvable`, `wildcard_pattern`, `denied_by_policy`, `invalid_target`.
+- The command still fails when every target is refused, or when the single target of a single-target job is refused. The error lists the targets.
+- Retest and validation commands still refuse the whole job when one target is refused.
+- An address the policy cannot check is still never scanned. A refused target never reaches an executor or a tool.
+
+### Behaviour change: `*.x` in the sensor-local policy covers `x` itself
+
+- A `targets.allow` or `targets.deny` entry `*.x` now covers `x` and every name below it, at any depth. It used to cover only the names below `x`. This matches the platform's scope patterns (api RFC-054 §4.1).
+- Allow lists: a policy with `*.example.com` now also admits `example.com`. To keep the apex out, add `example.com` to `targets.deny`.
+- Deny lists: `*.example.com` in `targets.deny` now also refuses `example.com`. A policy that relied on the old reading to scan the apex while denying its subdomains must deny the subdomains it means instead.
+- Patterns and hosts are compared case-insensitively, without one trailing dot, and in IDNA ASCII form: an upper-case or internationalized entry now matches the names it spells.
+
+### Removed
+
+- `pkg/scanners/tenable`: the deprecated Nessus REST client and `.nessus` converter.
+
+### Removed: pkg/adapters (deprecated)
+
+- The deprecated tool adapters `pkg/adapters` and `pkg/adapters/{betterleaks,nuclei,sarif,semgrep,trivy,vuls}` are removed (about 3,600 lines), together with the internal `importbridge` that ran them. Neither the sensor, the platform nor the asset collector imported them. Every tool output is now parsed by one library, `github.com/openctemio/ctis/importer` (OpenCTEM Tool Contract v1, decision TC5).
+
+### Deprecated
+
+- `capabilities` in tool.yaml and `Builder.Capabilities`: use `implements` / `Builder.Implements`. The top-level `retest` key is the older spelling of `features.retest`; a manifest may set one, not both.
+
+### Added: `sensorkit/contentcache`, the sensor's content pack cache (api RFC-061 K3)
+
+- Packs are addressed by digest.
+- **Before a pack is stored:**
+  - the downloaded bytes must hash to the digest;
+  - the platform's DSSE statement must verify against an operator-pinned key: the tenant content key, naming this sensor's organization, or the platform content key;
+  - the statement must name the same digest;
+  - the archive must pass the canonical rules again (regular files only, clean relative paths, caps).
+- Packs are unpacked read-only under `<root>/packs/sha256-<hex>/`, and the root is private (0700).
+- **Using packs:**
+  - `Acquire`/`Release` hold a pack per task;
+  - `Resolve` sets a task's pack paths from the cache and replaces any path a job sent.
+- `Sync` installs the desired set (two downloads at a time) and purges revoked digests, refusing them from then on. It drops least recently used packs outside the desired set while the cache is over its budget; a pack in use is never removed.
+- `testdata/platform-vector.json` pins the platform's archive, statement and envelope format.
+
+### Added: content slots — a tool declares its templates, rules and wordlists; tasks get read-only packs
+
+- `tool.yaml` `content:` declares the content a tool reads (api RFC-061), slot by slot:
+  - `kind`: a known one (`nuclei-templates`, `semgrep-rules`, `yara-rules`, `vuln-db`, `wordlist`, `signatures`) or a namespaced `x-<vendor>/<kind>`;
+  - `format`, `default`, `modes` (default, custom, merge), `selectors`.
+- A task carries `content` per slot: packs by `sha256:` digest with the path the sensor's cache resolved. A tool reads them through:
+  - `task.ContentPaths(slot)` in Go;
+  - `task.content_paths(slot)` in the Python helper;
+  - `run.task.content` for adapters;
+  - `{{content.<slot>}}` / `{{content.<slot>...}}` in exec argv.
+- Isolation:
+  - `executor.Config.Private` hides more roots (the content cache) from every task, and `TaskSpec.ReadPaths` grants a task read-only access to exactly its packs;
+  - `toolhost.Host.ContentRoot` and `tool.CheckTaskContent` refuse a pack outside the cache, an undeclared slot, an unsupported mode or selector, and a non-digest.
+- `openctem tool run --content slot=dir` hands a local directory to a slot for development.
+- Delivery of packs from the platform (desired state, prefetch, pin at dispatch) follows.
+
+### Added: pkg/sensorkit/egress, the per-task forwarder; the scope check records every destination
+
+- `egress.Forwarder` serves HTTP CONNECT, absolute-form HTTP and SOCKS5 on a listener the caller gives it, and answers DNS queries (`AnswerDNS`, `ServeDNS`). For every connection it:
+  - checks the destination against the task's `Scope` (admitted names at their pinned addresses, never resolved again; admitted prefixes; vendor hosts at public addresses only; metadata, link-local, multicast and unspecified addresses always refused);
+  - applies a token-bucket rate per task and per host;
+  - records the destination, verdict and bytes.
+
+  DNS answers only admitted names; anything else gets NXDOMAIN. Experimental; it is the forwarder of api RFC-060 (per-task network confinement) and RFC-034 (egress profiles).
+- `openctem tool test --scope` runs the tool with its proxy variables pointing at a recording forwarder whose scope is the task's targets. A request through the proxy for anything else fails the check and names the destination. A tool that fetched an outside URL used to pass.
+
+### Added: zero-code tools for any JSON CLI and for every ctis importer format
+
+- An exec-profile tool can write `json` or `jsonl` output with a mapping file:
+  - `run.output: {format: jsonl, from: stdout, mapping: mapping.yaml}`;
+  - the mapping uses the declarative language of `ctis/importer/mapping`, in JSON or YAML;
+  - the runtime turns each record into CTIS, and the tool needs no code.
+- An exec-profile tool can also write a named format of `ctis/importer`: `nuclei`, `semgrep`, `trivy`, `betterleaks`, `gitleaks`, `grype`, `zap`, `vuls`, `cyclonedx`, `spdx`, `osv`, `csaf`, `openvex`, `nessus`, `qualys`, `defectdojo` (`tool.ImporterFormats`).
+- `LoadManifestFile` loads the mapping file and records its digest in `run.output.mapping_digest`, which the manifest digest covers. `tool.LoadMappingFile` loads a mapping file on its own.
+- Parser and mapping issues appear in the outcome's logs, at most 10.
+
+### Added: exec tools take list, optional and switch settings in run.argv
+
+- Besides `{{config.k}}`, an exec tool's `run.argv` may use:
+  - `{{config.k?}}`: the argument is left out when the key is not set, empty or false;
+  - `{{config.k...}}`: an array key, one argument per item, or comma-joined inside a larger argument; left out when empty;
+  - `{{config.k?:-flag}}`: a boolean key, the flag only when true.
+
+  Before, a list param (`record_types`, `tags`) could not reach a CLI at all, and an unset key became an empty argument. Every value keeps the flag-injection and dangerous-flag checks.
+- `openctem tool validate` (and the kit's lint) warns when an exec tool maps a capability param onto a config key that no argument uses: the tool would accept the param and ignore it.
+- `tool.ConfigArg` and `tool.ArgvPlaceholders` parse the placeholders.
+
+### Added: per-task network confinement in the process sandbox (opt-in)
+
+- `executor.Config.ConfineNetwork` runs every task in its own user, network and mount namespaces (api RFC-060). Only loopback exists inside, and the task's way out is its forwarder: `TaskSpec.EgressProxy` and `EgressDNS` are the forwarder's unix sockets. The task sees a proxy on `127.0.0.1:1080` (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, set whatever the caller passed) and a resolver on `127.0.0.1:53`, or on each address `/etc/resolv.conf` names where the file cannot be bind-mounted. With no sockets, a confined task has no network at all.
+- The launcher creates the namespaces itself: it re-executes as the inner launcher, because the sensor is non-dumpable and could not write the new namespace's id maps. The tool runs as the inner launcher's child, on the confined thread (`no_new_privs`, Landlock and seccomp are inherited), with no capabilities (`SECBIT_NOROOT` locked, empty bounding set).
+- `Status.NetworkEnforced` is true only when the probe proved confinement works; otherwise `Status.NetworkMissing` names the reason (user namespaces refused by the container seccomp profile or the host AppArmor restriction) and tasks run unconfined. `Config.RequireNetwork` makes that an error instead (for shared sensors).
+- Off by default: nothing changes until a caller sets it. The tool host, sensorkit and the CLI turn it on in a follow-up.
+
+### Added: `transfer` and `transfer/bundle`, chunked signed feed transfer (api RFC-070)
+
+- `transfer.Fetcher` downloads from ordered origins (release URL, mirrors, a local directory):
+  - retries with exponential back-off and jitter; Retry-After on 429/5xx, capped (a longer wait moves to the next origin);
+  - per-attempt and overall deadlines, a stall guard, and Range resume of a partial download;
+  - conditional GET (ETag) for pointers;
+  - a circuit breaker per origin; 404 and hash mismatches move to the next origin at once;
+  - every request through the SSRF-guarded client by default; file names are one path element.
+- `Blob` keeps content-addressed files in `<cache>/blobs`, verified against sha256 and size before they are stored, so chunks shared by two releases are fetched once.
+- `bundle.Writer` writes format v2: gzip JSON Lines chunks named by their digest, with content-defined boundaries from record ids, and a signed manifest per snapshot or delta. `bundle.WritePointer` signs the pointer that pins the manifests.
+- `bundle.Consumer` verifies the key set, pointer, manifest pin, signature and caps before any chunk. It then applies chunk by chunk, each through the `Applier` in its own transaction, with a durable `Checkpoint`:
+  - a crash resumes at the next chunk;
+  - an older sequence is refused;
+  - a partial bundle is never marked applied;
+  - a delta is used only on top of its base.
+- `FileCheckpoint` (0600) is included. Prometheus counters are exposed through `Register` on both types.
+
+### Added: posture report
+
+- `local_policy.required` (`true`/`false`) on every heartbeat and manifest: `absent` with `required: false` is a legacy install without a policy.
+- The manifest member `posture` (sent to a platform that lists the new hello feature `posture`): `platform_tls.pin` (`fingerprint`, `ca_file`, `none`) and `sandbox` (`mode`, `sandboxed`, `network_enforced`). `core.SensorPosture`, `core.CurrentPosture`, `core.PlatformTLSPin`, `BaseSensor.SetPosture`; the kit sets it.
+- The config report's `policy.local` check fails with code `required_absent` while a required policy is missing. The new setting `SENSOR_REQUIRE_LOCAL_POLICY` is registered.
+
+### Added: per-target admission and the poller's lines in the command log
+
+- `LocalPolicy.AdmitCommandTargets` returns a `CommandAdmission` with the refused targets. It also rewrites the payload of a scan job. `AdmitCommand` keeps refusing the whole job.
+- Added `core.RefusedTarget`, the `RefusedTarget*` reasons, the `Meta*` keys and `RefusedTargetsMetadata`.
+- `CommandPoller.SetCommandLogSink` (`core.CommandLogSink`) writes the poller's own lines to the command's log, tagged `source: sensor`. They cover: received, the policy check with each refused target and its reason, a refusal before running, the tool gate, the outcome (completed, partial, failed, timed out, kill switch) and a hand-back (no free slot, busy hosts, drain).
+- `sensorkit` wires its log shipper as that sink, so a command refused before any tool started still has a log saying why. Its lines are queued ahead of its result. A hand-back line is sent directly before the release.
+- The log shipper continues a command's batch sequence across finishes. The platform keeps the first batch of each number, so a restarted sequence was dropped.
+
+### Added: the sensor manifest carries each tool's full descriptor; scan jobs carry their capability
+
+- `core.ToolContract` gains two fields:
+  - `Descriptor`: the tool's full manifest in canonical JSON. Its SHA-256 is `Digest`, and it is left out above 64 KiB.
+  - `Origin`: `builtin` for a tool compiled into the sensor, `adapter` for one the operator installed.
+
+  Both travel in the sensor manifest, which is registered only when it changes. Heartbeats carry only the manifest digest, so their size is unchanged.
+- A tool on the contract reports the capability ids it implements (`scan.ports`) as its capabilities, beside its older capability words.
+- `ScanCommandPayload` gains `capability` (`scan.ports@1`), `params` (the standard params) and `max_tier`, and `ScanOptions` carries them.
+- A `core.CapabilityScanner` (`TakesCapabilityJobs`) receives these job fields. A `toolcompat` scanner whose manifest implements a capability is one, and it hands them to the tool runtime, which maps the params and checks the tier.
+
+### Added: tool network permission `resolver`
+
+- A target-scan tool may declare `permissions.network: resolver`: DNS questions about its targets only, answered through the sensor's resolvers, and no connection to any host, the targets included. It is the network of a DNS resolution tool that never contacts the target hosts (a passive, T0 step).
+- Under network confinement the task's forwarder answers DNS for the admitted targets as it does for `targets`, and refuses every connection (`egress.Scope.DNSOnly`). Targets are admitted against the local policy as for `targets`. The executor network class is `resolver`; `tool.Context.HTTP` reaches nothing.
+- The tool descriptor JSON schema accepts `resolver`.
+
+### Added: the `openctem tool` CLI and the conformance kit for the tool contract
+
+- New command `cmd/openctem` with six `tool` subcommands (reference in `docs/tools/cli.md`):
+  - `init --kind exec-sarif|exec-ctis|exec-json|go|python --capability <id@major>` scaffolds a tool from the capability. The scaffold passes `openctem tool test` as written.
+  - `validate` checks the descriptor; errors carry JSON pointers.
+  - `run` runs one task offline, through the sensor runtime.
+  - `test` runs the conformance kit.
+  - `diff` checks the version bump of a descriptor change.
+  - `describe --json` prints the canonical descriptor and its digest.
+- `openctem-conformance tool` is now an alias of `openctem tool test`, kept for one minor release.
+- New in `pkg/conformance`:
+  - `LintDescriptor`;
+  - `RunContractSuite`:
+    - every fixture is checked against the contract of each implemented capability;
+    - per-capability suites on loopback fixtures cover `scan.ports@1`, `probe.http@1`, `vuln.templates@1`, `secrets.code@1`, `sast.code@1` and `sca.deps@1`;
+    - the scope check;
+  - `FuzzOutput` fuzzes the parser of an exec tool's output format;
+  - `DiffManifests` gives the semantic version bump a descriptor change needs.
+- CI templates `ci/github/openctem-tool.yml` and `ci/gitlab/openctem-tool.yml`, with actions pinned by commit.
+
+### Added: the job HTTP policy carries headers
+
+- A scan job's `http_policy` can now carry `headers` (`core.OrgHTTPPolicy.Headers`). These are headers the platform requires on every request of the job's tools, for example a bug-bounty program's identification header (api RFC-065).
+- At most 10 headers. Names must be tokens and values printable ASCII of up to 200 bytes.
+- The tool host merges them after the manifest: each replaces a `tool.yaml` header of the same name, whatever its case.
+- Refused names:
+  - credentials: `Authorization`, `Cookie`, `Proxy-*`;
+  - headers the HTTP client and the forwarder own: `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, and similar.
+- A policy that breaks these rules fails the job.
+
+### Added: the organization's HTTP policy narrows its tools' requests (job `http_policy`)
+
+- A scan job can carry `http_policy: {user_agent, allow_insecure_tls}` (`core.OrgHTTPPolicy`, `ScanCommandPayload.HTTPPolicy`).
+- The tool host merges it after the sensor-local policy:
+  - its User-Agent applies unless the local policy forces one;
+  - `allow_insecure_tls: false` refuses, with `refused_by_policy`, a tool whose `tool.yaml` skips TLS verification;
+  - it never allows what the local policy forbids.
+- An invalid policy fails the job. The tool sees only the effective settings (`task.http`).
+
+### Added: openctem_tool.py, a Python helper for tools
+
+- `openctem tool init --kind python` writes `openctem_tool.py` next to the tool: one file, standard library only, that speaks adapter protocol v1. The tool writes only `run(ctx, task)`. The helper provides:
+  - the handshake, `describe` from `tool.yaml` and `validate`;
+  - `cancel`, honoured while `run` works (`ctx.check()`), and heartbeats against the idle timeout;
+  - records, per-target status, logs, progress and the result.
+- `ctx.connect(host, port)` opens a TCP connection through the task's forwarder when the sensor confines the network (api RFC-060), where a raw socket has no route; elsewhere it connects directly.
+- The python scaffold uses the helper. Before, every Python tool re-implemented about 60 lines of protocol and ignored `cancel` while it ran.
+
+### Added: the runtime maps a capability task onto the tool
+
+- `tool.Task` gains three fields:
+  - `Capability` (`scan.ports@1`);
+  - `Params`: the capability's standard params, as the workflow set them;
+  - `MaxTier`: the job's tier ceiling.
+- `Manifest.ApplyParams` maps the params onto the tool's config keys through `implements[].params`, and consumes them. The tool reads only its config.
+- `toolhost` applies the contract before a task starts:
+  - the job's tier ceiling;
+  - the param mapping;
+  - the rate cap.
+- After the task, `toolhost` checks the capability's required output with `capability.Check` and the tool's output shape.
+  - Violations are logged and counted in `Stats.ContractViolations`, and an ok task becomes `partial`.
+  - Records are still delivered, and the platform checks them again.
+- Provenance carries `capability` and `contract_violations`. The run message carries `capability` and `max_tier`; adapters may ignore them.
+- `toolhost.RatePolicy`: a policy with `CapRate` caps the tool's `safety.rate_param` key, and sets it when the task left it unset. The change is logged. The sensorkit policy caps it by the local policy's `rate.max_rps`.
+
+### Added: tools declare the capabilities they implement (tool.yaml `implements`)
+
+- A manifest names the capabilities of the OpenCTEM capability taxonomy (`github.com/openctemio/ctis/capability`) it implements, with the major: `implements: [{capability: scan.ports@1, params: {top_n: {key: top_ports}}, output_shape: open_port_assets}]`. `params` maps the capability's standard params to the tool's config keys and may narrow enum values or integer bounds. A standard param that is not mapped is one the tool does not take.
+- New optional keys:
+  - `input` (`batch: one|list`, `max_targets`);
+  - `presentation` (`display_name`, `category` and `icon` from closed sets, an https `docs_url`);
+  - `publisher` and `license` (SPDX);
+  - `engine` (`name`, `license`, `min_version`, a `version_probe` argv);
+  - `safety` (`rate_param`, `side_effects`, `expands_targets`);
+  - `features` (`retest`, `cancel`; `streaming` is reserved);
+  - `permissions.proxy` (`honors|ignores`);
+  - `sdk.min`;
+  - `deprecated`.
+
+  Manifests that use none of them keep their digest.
+- Builder: `Implements("vuln.templates@1")` maps standard params to parameters of the same name and a matching type. `ImplementsWith(tool.Implementation{...})` maps them explicitly. `BatchTargets(n)` sets list input.
+- `Manifest.ImplementedCapabilities`, `Implementation`, `MinimumTier`, `Batches` and `RetestFeature`.
+- `core.ToolContract` carries `implements` and `batch`.
+- The JSON Schema of tool.yaml describes the new keys.
+
+### Added: tool.Dial and a default User-Agent; ctx.HTTP() works on a confined sensor
+
+- `ctx.HTTP()` goes through the task's forwarder when the sensor confines the task's network (`OPENCTEM_EGRESS_PROXY`, api RFC-060); before, it dialed directly and had no route there. Its host check still refuses other hosts before anything is sent.
+- Its requests carry the User-Agent `openctem-<tool>/<version>` unless the tool sets its own per request (`req.Header.Set("User-Agent", ...)`). Before, they carried Go's default.
+- `tool.Dial(ctx, "tcp", addr)` is for tools that speak TCP themselves (port scanners, TLS and protocol probes). It connects through the task's forwarder with HTTP CONNECT on a confined sensor, where a destination that is not a target fails with `tool.ErrEgressRefused`, and directly elsewhere. `tool.EgressProxy()` returns the forwarder, or nil.
+
+### Added: tool.yaml http — the User-Agent, headers, timeout and TLS of a tool's requests
+
+- `http: {user_agent, headers, timeout, tls: {insecure_skip_verify, min_version}}` in `tool.yaml` (`tool.HTTPSpec`, in the JSON Schema).
+  - `ctx.HTTP()` applies it; a request's own values still win.
+  - Exec tools pass `{{http.user_agent}}`.
+  - The descriptor (and so the platform) carries it, and the task's start log line records it (header names only).
+- Refused by validation:
+  - `Authorization`, `Cookie` and `Proxy-*` headers (credentials come from the credential broker);
+  - framing headers;
+  - non-printable values;
+  - a timeout outside 1s to 10m;
+  - `tls.insecure_skip_verify` for a `vendor` network tool.
+
+  A vendor tool's TLS is always verified.
+
+### Added: the sensor's local policy decides last about the tools' requests (schema v3)
+
+- Local policy schema v3 (`openctem.io/sensor-policy/v3`: every v2 key plus `http`):
+  - `http.user_agent` replaces every tool's User-Agent;
+  - `http.allow_insecure_tls: false` refuses, with `refused_by_policy`, a tool whose `tool.yaml` skips TLS verification.
+
+  `core.LocalPolicy.HTTPPolicy()` reads it. v1 and v2 files are unchanged and still refuse the key.
+- The effective settings (the manifest's `http` with the policy applied) travel in the task (`tool.Task.HTTP`, `run.task.http` for adapters). The runtime sets them; a job's value is discarded. `ctx.HTTP()`, `{{http.user_agent}}` and the task's start log line use them.
+
+### Added: tools on a sensor's own tool host ship their logs
+
+- `Kit.ToolLogSink()` returns the command log sink for a `toolhost.Host` the sensor builds itself (`Host.LogSink`). Before this, only the kit's private host shipped tool lines, so a sensor that ran its scanners through its own host sent none.
+- The sink may be taken before `Run`, and sends nothing until the kit runs with a platform client.
+- Lines are redacted, bounded per command (2,000 lines / 1 MiB), batched and queued ahead of the command's result, as for the kit's own tools. They never block the tool: past the bounds they are dropped and counted.
+
+### Added: each tool run logs its start and its end
+
+- A tool host with a log sink logs, to the task's command log:
+  - "Tool <name> <version> started", with the targets and the capability;
+  - "Tool <name> finished: <status>", with the exit code, records, duration and error class.
+- A run that could not start logs an error line.
+
+### Added: sensor protocol v3 transport (gRPC over mTLS, Connect/HTTPS fallback)
+
+- A paired (key-bound) sensor negotiates protocol v3 when the platform's v2 hello lists `transport_v3` (openctem api RFC-059): gRPC over mutual TLS with a 7-day client certificate issued for the sensor's own key (renewed at two thirds of its lifetime, pinned to the platform's sensor CA), then the HTTPS binding (RFC 9421 signatures) when gRPC fails at the transport level (unreachable, handshake, HTTP/2 refused, reset, unimplemented), then protocol v2. An identity refusal never falls back. gRPC is probed again every 30 minutes; three consecutive transport failures renegotiate.
+- `SENSOR_TRANSPORT=auto|grpc|https|v2` (default auto). Bearer-key sensors stay on v2.
+- v3 sits under the v2 client as a round tripper: retries, the outbox and segmented, idempotent uploads are unchanged, so a lost connection mid-upload still stores the report once.
+- The control stream pushes the doorbell (work waiting, cancels, pause) to `core.Doorbell.Handle`: a job starts within a second instead of at the next heartbeat. The heartbeat reports the binding and the fallback reason.
+- New: `client.EnableTransportV3`, `StartTransport`, `TransportStatus`, `SetControlEventHandler`, `ParseTransportMode`; `sensorsig.Signer.TLSKey`; `protov2.Hello.TransportV3`; `pkg/sensorproto/v3` (generated, the platform's proto); `conformance.FakePlatform.EnableV3` (both bindings) for sensor tests.
+
+### Added: evidence builders and retest verdicts with evidence (CTIS 1.6)
+
+- The SDK speaks CTIS 1.6 (`pkg/ctis` re-exports `Endpoint`, `WebLocation`, `EvidenceItem` and the ctis evidence builders).
+- `tool.HTTPExchange(req, reqBody, resp, respBody, match...)` builds an `http_exchange` evidence item:
+  - it keeps the exchange raw and marks the sensitive values (authorization and cookie headers, credential parameters) in `sensitive[]`, without masking them;
+  - a body over 64 KiB keeps a window around the first match, and the match offsets follow the window;
+  - `content_sha256` covers the full capture.
+- Tools can emit CTIS 1.6 endpoints: `Emitter.Endpoint`, the `endpoint` record kind of the adapter protocol, and `endpoints[]` in exec-profile output (CTIS and every importer format). A tool declares `endpoint` in `produces`, and the runtime checks each endpoint as CTIS (an undeclared one is quarantined, an invalid one refused).
+- `tool.Evidence(kind, label, data)` builds an item of a kind CTIS does not know yet.
+- `RetestContext.Report(item, tool.VerdictReport{...})` reports a verdict with up to five evidence items and the `template_digest` of the check that ran. `tool.RetestVerdict` carries both. Exec and adapter tools send them on the `verdict` message.
+- The runtime checks verdict evidence again: too many items, an invalid item or an unreadable digest make the verdict `unverifiable`. Every item is marked again (`ctis.MarkSensitive`).
+- Conformance: every capability suite fails a tool whose finding evidence is not valid CTIS, or leaves a sensitive header value unmarked.
+
+### Changed
+
+- `ScanTargetPolicy` resolves host names with the local policy's resolver when it has a local policy and no `LookupIP` of its own.
+
+- The pinned ctis module locates Nessus host-level results on their host: `importtool` output for `.nessus` now carries `network` on port-0 results.
+
+### Fixed: the audit logger no longer loses events when it stops
+
+- `audit.Logger.Stop` waits for the flushes `Log` starts before its final flush and before closing the file. A flush that had taken events from the buffer could write them after the file closed, and they were lost (seen as 996 of 1000 events in `TestLogger_ConcurrentLogging`).
+
+### Fixed: openctem tool runs tools in the sensor's sandbox, and scaffolds pin the SDK they need
+
+- `openctem tool run` and `test` (and `openctem-conformance tool`) installed no executor backend, so tools ran as plain child processes while the docs said they ran in the sensor's sandbox. A tool that only worked outside the sandbox passed the kit and failed on a sensor. They now run in the process sandbox: `--sandbox off|auto|required`, default `$OPENCTEM_SANDBOX`, else `auto`.
+- `init --kind go` wrote `require github.com/openctemio/sdk-go v<sdk.Version>`, a release older than the descriptor keys the CLI writes (`implements`), so the scaffold panicked on its own `tool.yaml`. The scaffold now requires the SDK version the CLI was built from, and its CI workflow installs the CLI at that version instead of `@latest`.
+- `openctem tool run .` failed with `fork/exec bin/<tool>: no such file or directory`: the manifest path is now made absolute, as `test` already did.
+- `docs/adapter-protocol.md` no longer says an operator-installed tool runs only on a backend that enforces the network class. The process sandbox does not enforce it yet.
+
+### Fixed: the config report no longer asks a signed-jobs sensor for template keys
+
+- A sensor that requires signed jobs trusts custom templates through the verified job statement, so the `policy.template_keys` check now reports `not_needed` for it instead of warning `missing` (and blocking custom templates in the platform's view). A sensor that verifies signed jobs only when present still needs `SENSOR_TEMPLATE_SIGNING_KEYS` for unsigned jobs, and is still warned.
+
+### Fixed: sensorkit sensors apply the local policy's http section and pin confined tasks to admitted addresses
+
+- **The problem.** The kit's tool host reads optional policies by type assertion, and the kit's policy implemented neither of two of them:
+  - without `HTTPPolicy`, schema v3 `http.user_agent` and `http.allow_insecure_tls` were ignored for kit-hosted tools;
+  - without `HostResolver`, a confined task's forwarder resolved a target host again at start instead of dialing the addresses the policy admitted.
+- **The fix.** The kit's policy implements both now, and compile-time assertions keep every optional policy implemented.
+- The local policy report now shows the http section (`http_user_agent`, `allow_insecure_tls`).
+
+### Fixed: tool descriptors stay within the manifest size the platform accepts
+
+- The sensor manifest carries at most 128 KiB of tool descriptors in all (`core.MaxManifestDescriptorBytes`). Past it, the largest descriptors are left out, deterministically. Those tools keep their digest and contract fields, and the platform plans with them as before. Without the budget, a sensor with many large descriptors could exceed the platform manifest cap (256 KiB in OpenCTEM), and its manifest would be refused.
+
+### Fixed: settings docs links point at the settings reference
+
+- `settings.DocsBase` (and so each setting's default `DocsURL()`, and the
+  links in `docs/SETTINGS.md`) is `https://docs.openctem.io/sensors/settings/`
+  with an anchor per setting. The old `/sensor/settings` page did not exist.
+- CI checks every docs.openctem.io and GitHub file link in the repository
+  (`scripts/check_docs_links.py`, job "Docs links").
+
+### Fixed: a finding check may consume the assets findings are on
+
+- A tool implementing `verify.finding@1` (input: a finding) runs on the asset the finding is on, so its `consumes` may list any asset type. Before, the descriptor check refused every asset type, because the capability has no asset input port. Other capabilities still constrain `consumes` to their inputs.
+
+### Documentation
+
+- Added a root `SECURITY.md` (report vulnerabilities to security@openctem.io).
+- Removed `docs/GRPC.md` (the deprecated gRPC transport is served by no platform), `docs/ARCHITECTURE_BEST_PRACTICES.md` (described tool wrappers that moved to the sensor) and `examples/ci-cd` (CI scanning lives in openctemio/ci).
+- README, `docs/ARCHITECTURE.md`, `docs/SECURITY.md` and the integration-test example match the SDK at this release: protocol v2 only, a working quick start.
+
 ## v0.18.0 — 2026-10-06
 
 ### Security
