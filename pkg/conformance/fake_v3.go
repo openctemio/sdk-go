@@ -54,6 +54,7 @@ type fakeV3 struct {
 
 	https http.Handler
 	grpc  *httptest.Server
+	alpn  *alpnRouter
 
 	mu     sync.Mutex
 	wakes  []chan struct{}
@@ -137,10 +138,34 @@ func (f *FakePlatform) v3Hello() *protov2.TransportV3 {
 		return nil
 	}
 	t := &protov2.TransportV3{HTTPSPath: v3PathPrefix}
-	if f.v3.grpc != nil {
-		t.GRPCEndpoint = strings.TrimPrefix(f.v3.grpc.URL, "https://")
+	if f.v3.grpc == nil {
+		return t
+	}
+	// Behind ALPN routing only clients that offer the id reach it.
+	t.GRPCALPNEndpoint = f.v3.grpcEndpoint()
+	if !f.v3.routedByALPN() {
+		t.GRPCEndpoint = t.GRPCALPNEndpoint
 	}
 	return t
+}
+
+// routedByALPN reports whether the gRPC binding sits behind ALPN routing.
+func (v *fakeV3) routedByALPN() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.alpn != nil
+}
+
+// grpcEndpoint is the gRPC binding's advertised host:port: the ALPN router
+// when there is one, else the listener.
+func (v *fakeV3) grpcEndpoint() string {
+	v.mu.Lock()
+	r := v.alpn
+	v.mu.Unlock()
+	if r != nil {
+		return r.addr()
+	}
+	return strings.TrimPrefix(v.grpc.URL, "https://")
 }
 
 // v3Wake wakes the fake's control streams (a command was queued).
@@ -552,6 +577,6 @@ func (v *fakeV3) IssueCertificate(ctx context.Context, _ *connect.Request[sensor
 		NotBefore:           timestamppb.New(now.Add(-time.Minute)),
 		NotAfter:            timestamppb.New(now.Add(time.Hour)),
 		RenewAfter:          timestamppb.New(now.Add(40 * time.Minute)),
-		GrpcEndpoint:        strings.TrimPrefix(v.grpc.URL, "https://"),
+		GrpcEndpoint:        v.grpcEndpoint(),
 	}), nil
 }

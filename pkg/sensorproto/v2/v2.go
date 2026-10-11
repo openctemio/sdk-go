@@ -372,8 +372,16 @@ type TransportV3 struct {
 	// HTTPSPath is the HTTPS binding's path on the platform host.
 	HTTPSPath string `json:"https_path"`
 	// GRPCEndpoint is host:port of the gRPC (mTLS) binding; "" when only
-	// the HTTPS binding is served.
+	// the HTTPS binding is served, or when the binding is reached only by
+	// offering the sensor ALPN id (GRPCALPNEndpoint).
 	GRPCEndpoint string `json:"grpc_endpoint,omitempty"`
+	// GRPCALPNEndpoint is host:port of the gRPC binding for a client that
+	// offers the sensor ALPN id ("openctem-sensor/3") next to h2: the
+	// platform's gateway routes such a connection to the mTLS listener on
+	// the platform's own port (an IP address or one host name, no extra
+	// port). Set whenever the binding is advertised; preferred over
+	// GRPCEndpoint by clients that offer the id.
+	GRPCALPNEndpoint string `json:"grpc_alpn_endpoint,omitempty"`
 }
 
 // Supports reports whether the hello document lists feature (one of the
