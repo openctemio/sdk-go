@@ -24,6 +24,9 @@ const (
 	// platformRecheck is how soon a sensor asks again when the platform
 	// offers no gRPC (or no v3) yet.
 	platformRecheck = 10 * time.Minute
+	// platformRetry is how soon a sensor negotiates again after the
+	// platform did not answer (a restart takes seconds).
+	platformRetry = 30 * time.Second
 )
 
 // selection is the remembered outcome of the last gRPC attempt.
@@ -115,6 +118,9 @@ func (m *v3Manager) remember(b Binding, reason string, now time.Time) {
 // nextNegotiation is how long the loop waits before negotiating again for
 // the state st (auto mode).
 func (m *v3Manager) nextNegotiation(st *v3State) time.Duration {
+	if m.retrySoon.Swap(false) || (st != nil && st.reason == ReasonPlatformUnreachable) {
+		return platformRetry + jitterDuration(platformRetry/2)
+	}
 	half := m.opts.ReprobeInterval / 2
 	if st != nil && (st.reason == ReasonPlatformWithoutGRPC || st.reason == ReasonPlatformWithoutV3 ||
 		st.reason == ReasonCertificates || st.reason == ReasonHTTPSUnavailable) {

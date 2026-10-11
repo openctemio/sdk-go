@@ -418,3 +418,71 @@ func TestTransportV3_DisconnectMidUploadIsExactlyOnce(t *testing.T) {
 		t.Fatalf("%d reports stored, want 1", n)
 	}
 }
+
+// A platform that stops answering for a moment (a restart, a gateway 502)
+// trips the failure streak, but its failed negotiation says nothing about
+// v3: the sensor stays on its binding instead of dropping to v2, and keeps
+// using it once the platform answers again.
+func TestTransportV3_PlatformOutageKeepsTheBinding(t *testing.T) {
+	f, signer := v3Fake(t, false)
+	c := client.New(&client.Config{BaseURL: f.URL(), Signer: signer, MaxRetries: 1, RetryDelay: time.Millisecond})
+	t.Cleanup(func() { _ = c.Close() })
+	c.EnableTransportV3(client.TransportOptions{Mode: client.TransportAuto, CertDir: t.TempDir(), FailureThreshold: 2, Logf: t.Logf})
+	ctx := context.Background()
+	if err := c.StartTransport(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := c.TransportStatus(); st.Binding != client.BindingHTTPS {
+		t.Fatalf("status %+v", st)
+	}
+
+	var mu sync.Mutex
+	hellos := 0
+	f.SetFault(func(r *http.Request, _ int) *FaultAnswer {
+		if r.URL.Path == "/api/v2/sensor/hello" {
+			mu.Lock()
+			hellos++
+			mu.Unlock()
+		}
+		return &FaultAnswer{Status: http.StatusBadGateway}
+	})
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, _ = c.SendHeartbeatWithHints(ctx, status())
+		mu.Lock()
+		n := hellos
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the failure streak never triggered a negotiation")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond) // let the negotiation finish
+	if st := c.TransportStatus(); st.Binding != client.BindingHTTPS || st.FallbackReason != client.ReasonPlatformWithoutGRPC {
+		t.Fatalf("after the outage: %+v, want the HTTPS binding kept", st)
+	}
+
+	f.SetFault(nil)
+	if _, err := c.SendHeartbeatWithHints(ctx, status()); err != nil {
+		t.Fatal(err)
+	}
+	beats := f.RequestsTo(http.MethodPost, "/api/v2/sensor/heartbeat")
+	if last := beats[len(beats)-1]; last.Status != http.StatusOK || last.Header.Get(HeaderV3Binding) != "https" {
+		t.Fatalf("heartbeat after the outage: status %d over %q", last.Status, last.Header.Get(HeaderV3Binding))
+	}
+}
+
+// A sensor whose first negotiation gets no answer stays on v2 with its own
+// reason (not "platform without v3") and negotiates again soon.
+func TestTransportV3_UnreachablePlatformIsNotPlatformWithoutV3(t *testing.T) {
+	f, signer := v3Fake(t, true)
+	f.SetFault(func(*http.Request, int) *FaultAnswer { return &FaultAnswer{Status: http.StatusBadGateway} })
+	c := v3Client(t, f, signer, client.TransportAuto)
+	_ = c.StartTransport(context.Background())
+	if st := c.TransportStatus(); st.Binding != client.BindingV2 || st.FallbackReason != client.ReasonPlatformUnreachable {
+		t.Fatalf("status %+v", st)
+	}
+}

@@ -81,6 +81,11 @@ const (
 	// ReasonPlatformCertificate: the gRPC endpoint's certificate does not
 	// verify against the pinned platform CA bundle. Never a fallback.
 	ReasonPlatformCertificate = "platform_certificate_refused"
+	// ReasonPlatformUnreachable: the platform did not answer the
+	// negotiation (restarting, a gateway 502, the network). It says nothing
+	// about v3: a working binding is kept, and the negotiation is retried
+	// soon.
+	ReasonPlatformUnreachable = "platform_unreachable"
 )
 
 // ErrIdentityRefused is an identity error from the platform on v3: no
@@ -163,6 +168,9 @@ type v3Manager struct {
 	sel       selection
 	selLoaded bool
 	renegoNow chan struct{}
+	// retrySoon: the last negotiation kept the binding because the
+	// platform did not answer; the next one comes after platformRetry.
+	retrySoon atomic.Bool
 	onEvent   func(*core.HeartbeatHints)
 	streamGen chan struct{} // closed when the binding changes
 }
@@ -317,7 +325,8 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 	// The v2 hello says whether and where v3 is served. It runs on v2;
 	// a blocked sensor, or one that must use gRPC, lets only the hello
 	// through meanwhile.
-	if old := m.state.Load(); mode == TransportGRPC || (old != nil && old.blocked != nil) {
+	old := m.state.Load()
+	if mode == TransportGRPC || (old != nil && old.blocked != nil) {
 		blocked := errors.New("protocol v3: negotiating the transport")
 		if old != nil && old.blocked != nil {
 			blocked = old.blocked
@@ -327,7 +336,19 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 		m.state.Store(&v3State{binding: BindingV2, since: time.Now()})
 	}
 	hello, err := m.c.Hello(ctx)
-	if err != nil || hello.TransportV3 == nil || hello.TransportV3.HTTPSPath == "" {
+	if err != nil {
+		// No answer is not "no v3": a platform restart or a gateway 502
+		// must not move a sensor off its binding.
+		if m.keep(old, mode, err) {
+			return nil
+		}
+		if mode == TransportGRPC {
+			return m.grpcRequired(ReasonPlatformUnreachable)
+		}
+		m.set(nil, BindingV2, ReasonPlatformUnreachable)
+		return nil
+	}
+	if hello.TransportV3 == nil || hello.TransportV3.HTTPSPath == "" {
 		if mode == TransportGRPC {
 			return m.grpcRequired(ReasonPlatformWithoutV3)
 		}
@@ -379,9 +400,24 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 		err = fmt.Errorf("%w: %v", ErrIdentityRefused, err)
 		m.block(BindingV2, ReasonIdentityRefused, err)
 		return err
+	case connect.CodeOf(err) == connect.CodeUnavailable && m.keep(old, mode, err):
+		return nil
 	}
 	m.set(nil, BindingV2, ReasonHTTPSUnavailable)
 	return nil
+}
+
+// keep puts back the working v3 binding old when the platform did not
+// answer the negotiation, and asks for a retry soon. It reports whether it
+// did.
+func (m *v3Manager) keep(old *v3State, mode TransportMode, err error) bool {
+	if mode == TransportGRPC || old == nil || old.blocked != nil || old.svc == nil {
+		return false
+	}
+	m.state.Store(old)
+	m.retrySoon.Store(true)
+	m.logf("transport: the platform did not answer the negotiation (%s); staying on %s", strings.TrimSpace(err.Error()), old.binding)
+	return true
 }
 
 // skipsGRPC reports whether the remembered network failure's backoff is

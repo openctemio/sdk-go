@@ -54,3 +54,17 @@ func TestNextNegotiationIsSoonerForPlatformReasons(t *testing.T) {
 		t.Fatalf("network failure: %s, want at least half the reprobe interval", d)
 	}
 }
+
+func TestNextNegotiationRetriesSoonAfterNoAnswer(t *testing.T) {
+	m := &v3Manager{opts: TransportOptions{ReprobeInterval: time.Hour}}
+	m.retrySoon.Store(true)
+	if d := m.nextNegotiation(&v3State{reason: ReasonPlatformWithoutGRPC}); d > 2*platformRetry {
+		t.Fatalf("kept binding after no answer: %s, want about %s", d, platformRetry)
+	}
+	if d := m.nextNegotiation(&v3State{reason: ReasonPlatformWithoutGRPC}); d < platformRetry*2 {
+		t.Fatalf("the quick retry is used once: %s", d)
+	}
+	if d := m.nextNegotiation(&v3State{reason: ReasonPlatformUnreachable}); d > 2*platformRetry {
+		t.Fatalf("unreachable platform: %s", d)
+	}
+}
