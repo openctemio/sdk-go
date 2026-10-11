@@ -77,6 +77,14 @@ func (t *v3RoundTripper) withNext(next http.RoundTripper) *v3RoundTripper {
 	return &v3RoundTripper{next: next, state: t.state, prefix: t.prefix, failed: t.failed}
 }
 
+// identityHeartbeat lets the heartbeat through while the identity is
+// refused: it carries no job or result, and it is how a paused sensor
+// learns it is paused (the platform answers it while other calls are
+// refused). Nothing else is sent until the identity is accepted again.
+func identityHeartbeat(st *v3State, req *http.Request, prefix string) bool {
+	return st.reason == ReasonIdentityRefused && req.Method == http.MethodPost && req.URL.Path == prefix+protov2.HeartbeatPath
+}
+
 // Unwrap is the v2 transport underneath.
 func (t *v3RoundTripper) Unwrap() http.RoundTripper { return t.next }
 
@@ -84,7 +92,8 @@ func (t *v3RoundTripper) Unwrap() http.RoundTripper { return t.next }
 func (t *v3RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	st := t.state.Load()
 	if st != nil && st.blocked != nil && strings.HasPrefix(req.URL.Path, t.prefix+"/") &&
-		(req.Method != http.MethodGet || req.URL.Path != t.prefix+protov2.HelloPath) {
+		(req.Method != http.MethodGet || req.URL.Path != t.prefix+protov2.HelloPath) &&
+		!identityHeartbeat(st, req, t.prefix) {
 		return nil, st.blocked
 	}
 	if st != nil && st.svc == nil && req.Method == http.MethodPost && req.URL.Path == t.prefix+protov2.HeartbeatPath {

@@ -80,9 +80,15 @@ if credentials.SecureCompare(providedToken, expectedToken) {
 
 `pkg/transport/grpc` is deprecated: no OpenCTEM platform serves it and it is
 removed in a later minor release (see [STABILITY.md](STABILITY.md)). Use
-`pkg/client`, which speaks sensor protocol v2 over HTTPS. Sensor protocol v3
-(gRPC with mTLS and an HTTPS fallback) is planned and will be generated from
-its own protocol definitions.
+`pkg/client`, which speaks sensor protocol v2 over HTTPS and, for a
+key-bound sensor, sensor protocol v3 (`pkg/sensorproto/v3`, api RFC-059):
+gRPC with mutual TLS when the platform advertises it, else the HTTPS binding,
+else v2. A network failure of the gRPC binding is remembered in the
+certificate directory and retried after a backoff (from 30 minutes, doubling,
+at most 4 hours); a platform that offers no gRPC yet is asked again every few
+minutes. An identity refusal (the platform refused the key or certificate)
+never falls back: the client sends nothing but hello and the heartbeat until
+the identity is accepted again.
 
 ### 3. Platform Sensor Security
 
