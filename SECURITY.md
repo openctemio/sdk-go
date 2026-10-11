@@ -1,18 +1,30 @@
-# Security policy
+# Security Policy
+
+This policy covers the OpenCTEM Go SDK (`github.com/openctemio/sdk-go`) and is part of the OpenCTEM vulnerability disclosure policy.
 
 ## Reporting a vulnerability
 
-Report vulnerabilities in the OpenCTEM Go SDK privately by email to
-**security@openctem.io**. Do not open a public GitHub issue, pull request or
-discussion for a vulnerability.
+**Do not open a public GitHub issue, pull request or discussion for a
+vulnerability.** Report it privately through either channel:
+
+- email **security@openctem.io**;
+- GitHub private vulnerability reporting: **Security → Report a vulnerability**
+  on this repository (it becomes a draft security advisory visible only to you
+  and the maintainers).
 
 Please include:
 
 - the affected package and version (or commit);
-- a description of the issue and its impact;
-- steps to reproduce, a proof of concept or a failing test;
-- any known workaround or suggested fix;
+- a description of the issue and its impact, and the access an attacker needs
+  first;
+- step-by-step reproduction, a proof of concept or a failing test;
+- any known mitigation or suggested fix;
 - how you would like to be credited, if at all.
+
+Test only against systems you own or are authorized to test, with test data.
+On services we operate, use only your own accounts and organizations and never
+point scans at third-party systems; stop and report as soon as you reach data
+that is not yours. The full testing rules are in the disclosure policy below.
 
 ## What to expect
 
@@ -20,26 +32,30 @@ Please include:
 |---|---|
 | Acknowledgement of your report | within 3 business days |
 | Triage (confirmed or not, severity, next steps) | within 10 business days |
-| Fix released | typically within 90 days, sooner for critical issues |
+| Fix released, by severity (CVSS 3.1) | critical 7 days · high 30 days · medium 90 days · low best effort |
 
-We coordinate disclosure with you: we agree on a disclosure date, keep you
-informed while we work on a fix, and publish an advisory once a fixed release
-is available.
+We follow coordinated disclosure: we keep you informed while we work on the
+fix, agree a disclosure date with you, publish a GitHub security advisory with
+the fixed version, and credit you unless you prefer otherwise. Reports under
+this policy are not paid unless we agree to in writing.
 
 ## Supported versions
 
-Security fixes are released for the latest release of `github.com/openctemio/sdk-go`.
-Upgrade to the latest release to receive them.
+Security fixes are released for the latest release of `github.com/openctemio/sdk-go`. Upgrade to the latest release to receive them.
 
 ## Safe harbor
 
-We will not take legal action against, or ask law enforcement to investigate,
-anyone who researches and reports a vulnerability in good faith under this
-policy: who avoids privacy violations, data destruction and service
-disruption, tests only against systems they own or are authorized to test,
-and gives us reasonable time to fix the issue before any disclosure.
+We consider security research carried out in good faith under the disclosure
+policy to be authorized: we will not initiate or support legal action against
+you, or report you to law enforcement, for it, and we waive restrictions in our
+terms of service that would otherwise prohibit it. Good faith means testing
+only systems you own or are authorized to test, avoiding privacy violations,
+data destruction and service disruption, and giving us reasonable time to fix
+the issue before any public disclosure. If in doubt, ask security@openctem.io
+first.
 
 ## More information
 
-- Vulnerability disclosure policy: https://docs.openctem.io/security/vulnerability-disclosure/
+- Vulnerability disclosure policy (scope, testing rules, safe harbor):
+  <https://docs.openctem.io/security/vulnerability-disclosure/>
 - Security features of the SDK and how to use them: [docs/SECURITY.md](docs/SECURITY.md)
