@@ -429,12 +429,8 @@ func New(opts Options) (*Kit, error) {
 	proxies.report(k.out, k.errw, proxyOpts)
 
 	s.stateDir = ResolveStateDir(opts.StateDir)
-	if w := securePrivateDir(s.stateDir); w != "" {
-		_, _ = fmt.Fprintf(k.errw, "Warning: state directory: %s\n", w)
-	}
 	k.preflightNew(proxies, proxyOpts)
-	k.checkState()
-	k.checkOutbox()
+	k.checkStorage()
 
 	// The API key: a key renewed by an earlier run is in the state
 	// directory (the renewal retired the configured one), whether or not

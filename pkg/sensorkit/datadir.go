@@ -34,7 +34,7 @@ func securePrivateDir(dir string) string {
 			dir, uid, os.Getuid(), os.Getuid(), dir)
 	}
 	if fi.Mode().Perm()&0o077 != 0 {
-		if err := os.Chmod(dir, 0o700); err != nil {
+		if err := os.Chmod(dir, 0o700); err != nil { // #nosec G302 -- a directory: 0700 is owner-only
 			return fmt.Sprintf("%s has mode %04o (group or others have access) and cannot be narrowed to 0700: %v",
 				dir, fi.Mode().Perm(), err)
 		}

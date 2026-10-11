@@ -454,6 +454,16 @@ func (k *Kit) checkTrustFiles() {
 	}
 }
 
+// checkStorage prepares the state directory (created 0700, kept private)
+// and reports whether it and the outbox survive a recreate.
+func (k *Kit) checkStorage() {
+	if w := securePrivateDir(k.s.stateDir); w != "" {
+		_, _ = fmt.Fprintf(k.errw, "Warning: state directory: %s\n", w)
+	}
+	k.checkState()
+	k.checkOutbox()
+}
+
 // checkState reports whether the state directory survives a recreate.
 func (k *Kit) checkState() {
 	if k.opts.Standalone || k.s.stateDir == "" {
