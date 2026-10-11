@@ -228,6 +228,9 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 		settingsreg.Setting{Name: EnvTransport, Type: settingsreg.Enum, Enum: []string{"auto", "grpc", "https", "v2"}, Default: "auto",
 			Group: "platform", Description: "Transport of sensor protocol v3 for a paired (key-bound) sensor: auto tries gRPC over mutual TLS, " +
 				"then HTTPS on a network that blocks it, then protocol v2; grpc, https and v2 force one."},
+		settingsreg.Setting{Name: EnvKeyBind, Type: settingsreg.Enum, Enum: []string{"auto", "off"}, Default: "auto",
+			Group: "platform", Description: "A sensor started with an API key replaces it with a signing key it makes itself when the " +
+				"platform offers it (one way: the API key is retired); off keeps the API key."},
 		settingsreg.Setting{Name: EnvCACertFile, Type: settingsreg.Path, Group: "platform", Validate: readableFile,
 			Description: "PEM file with the platform's private CA (or a TLS-inspecting proxy's CA)."},
 		settingsreg.Setting{Name: EnvCAFingerprint, Type: settingsreg.String, Group: "platform", Validate: validCAFingerprint,

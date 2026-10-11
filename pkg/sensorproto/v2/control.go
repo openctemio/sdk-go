@@ -19,6 +19,9 @@ const (
 	FingerprintsCheckPath = "/fingerprints/check"
 	BaselineDiffPath      = "/fingerprints/baseline-diff"
 	KeysPath              = "/keys"
+	// IdentityBindPath: a bearer-key sensor binds its own signing key and
+	// becomes key-bound (api RFC-052 §4.8).
+	IdentityBindPath = "/identity/bind"
 	// ManifestPath registers the sensor manifest (api RFC-033).
 	ManifestPath = "/manifest"
 	// ConfigReportPath takes the sensor's config report: its preflight
@@ -117,7 +120,36 @@ const (
 	// (api RFC-040 §5.6), and hello lists the signer's keys in
 	// "signed_jobs". The platform hands out nothing its signer did not sign.
 	FeatureSignedJobs = "signed_jobs"
+	// FeatureKeyBind: a bearer-key sensor may bind its own Ed25519 key at
+	// IdentityBindPath (api RFC-052 §4.8).
+	FeatureKeyBind = "key_bind"
 )
+
+// KeyBindProofContext prefixes the message a sensor signs to prove it holds
+// the key it binds.
+const KeyBindProofContext = "openctem-sensor-key-bind/v1"
+
+// KeyBindProofMessage is the message signed by the key being bound: the
+// context, the key's RFC 7638 thumbprint and the RFC 3339 timestamp.
+func KeyBindProofMessage(thumbprint, issuedAt string) []byte {
+	return []byte(KeyBindProofContext + "\n" + thumbprint + "\n" + issuedAt)
+}
+
+// KeyBindRequest is POST IdentityBindPath (bytes base64url, no padding).
+type KeyBindRequest struct {
+	PublicKey string `json:"public_key"`
+	IssuedAt  string `json:"issued_at"`
+	Proof     string `json:"proof"`
+}
+
+// KeyBindResponse is the identity the sensor signs as from now on; every
+// API key of the sensor is retired.
+type KeyBindResponse struct {
+	SensorID string `json:"sensor_id"`
+	TenantID string `json:"tenant_id"`
+	Name     string `json:"name"`
+	KeyID    string `json:"key_id"`
+}
 
 // LogsAction is the command resource that takes log lines:
 // POST CommandActionPath(id, LogsAction).
@@ -234,6 +266,12 @@ const (
 	ProblemTransitionConflict ProblemType = "transition-conflict"
 	// ProblemRenewalRefused: the sensor may not renew its key.
 	ProblemRenewalRefused ProblemType = "renewal-refused"
+	// ProblemKeyBindRefused: the sensor cannot bind a signing key (not an
+	// active bearer-key sensor, key known, proof invalid).
+	ProblemKeyBindRefused ProblemType = "key-bind-refused"
+	// ProblemKeyBindApproval: the organization requires an administrator
+	// to re-pair the sensor instead of self-binding.
+	ProblemKeyBindApproval ProblemType = "key-bind-approval-required"
 	// ProblemTooManyItems: more items than the limit (Problem.Limit).
 	ProblemTooManyItems ProblemType = "too-many-items"
 	// ProblemManifestInvalid: the manifest is not a JSON object with a
