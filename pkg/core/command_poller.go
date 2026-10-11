@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1526,14 +1527,10 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// Targets the scan-target policy refused here (a name that no longer
 	// resolves, or now resolves to a denied address, since admission): the
 	// scanner never saw them; the command completes as partial.
-	for k, v := range RefusedTargetsMetadata(refusedTargets) {
-		result.Metadata[k] = v
-	}
+	maps.Copy(result.Metadata, RefusedTargetsMetadata(refusedTargets))
 	// Hosts the scan could not fully cover: the command completes, and the
 	// result says which hosts and why.
-	for k, v := range CoverageGapsMetadata(scanResult) {
-		result.Metadata[k] = v
-	}
+	maps.Copy(result.Metadata, CoverageGapsMetadata(scanResult))
 
 	// Parse and push results if pusher is configured. Empty (or whitespace-
 	// only) output is a scan that found nothing; anything else must be read by
