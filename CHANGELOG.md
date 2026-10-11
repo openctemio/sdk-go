@@ -8,6 +8,52 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.21.0 — 2026-10-11
+
+### Behaviour change: a confined task's rate toward each target host adapts
+
+- The task forwarder paces each destination host with an additive-increase,
+  multiplicative-decrease controller (`pkg/adapt.HostRate`): a host starts at
+  a quarter of the ceiling, doubles per clean 2-second window up to it, then
+  grows by a tenth of the ceiling per clean window; 429 and 503 halve it (at
+  most once per window) and `Retry-After` is honored per host (connections are
+  held up to 10 s, refused for longer waits); resets, timeouts, refused
+  connections on a port that answered before, failed TLS handshakes and a run
+  of 20 consecutive 403s after other answers count as failures or a block.
+- The ceiling is the lowest of every limit: the tool's rate param (the scan's
+  `rate_limit`, already lowered by scan windows, program rules and the local
+  policy), `RunOptions.TargetRate`, and the local policy's `rate.max_rps`,
+  which now also caps the connection rate of tools without a rate param. The
+  rate never goes above the ceiling and never below 1 request per second.
+- Five consecutive failures open a host's breaker for 15 s (doubling, ±20 %
+  jitter), then one probe is let through; after three trips the host is given
+  up for the task. Closed or filtered ports never count, so port scans are
+  not slowed.
+- Hosts the task could not fully cover (`breaker_open`, `rate_floor`,
+  `blocked`) do not fail the task: they are listed in `Outcome.TargetRate`,
+  `ScanResult.CoverageGaps` and the command result metadata
+  (`coverage_gaps`, `coverage_gaps_total`, `target_rate`), and the scan's
+  report declares partial coverage, so findings on those hosts are not
+  auto-resolved. Every rate change and its reason is logged to the task.
+- All bounds live in one table, `adapt.TargetRate`.
+
+### Added: protocol v3 gRPC binding on the platform's own port (ALPN routing)
+
+- The gRPC binding's client offers the ALPN id `openctem-sensor/3` next to `h2` (`client.SensorALPN`). A platform gateway with ALPN routing passes such a connection through to the API's mTLS listener on the platform's own port, so gRPC works with an IP address or a single host name and no extra port (openctem api RFC-059 §5). The listener still negotiates `h2`; the id routes, it does not authenticate (the client certificate and the pinned sensor CA are unchanged).
+- `protov2.TransportV3.GRPCALPNEndpoint` (`grpc_alpn_endpoint` on the v2 hello): the endpoint reached by offering the id. The client prefers it over `grpc_endpoint`. Platforms name the single-port endpoint only there, so older clients, which would meet the gateway's own certificate and stop (`platform_certificate_refused`), stay on the HTTPS binding.
+- `conformance.FakePlatform.RouteV3GRPCByALPN` and `V3OfferedALPN` emulate the gateway's routing in sensor tests.
+
+### Fixed: a platform restart no longer drops a sensor from protocol v3 to v2
+
+- A negotiation whose hello gets no answer (a platform restart, a gateway
+  502, a network error) used to be read as "the platform has no v3": the
+  sensor moved to v2 and stayed there until the next recheck. Now a working
+  v3 binding is kept, and the negotiation is retried after about 30 seconds.
+  An HTTPS-binding hello answered `unavailable` is treated the same way.
+- A sensor with no binding yet that gets no answer stays on v2 with the new
+  reason `platform_unreachable` (instead of `platform_without_v3`) and asks
+  again after about 30 seconds.
+
 ## v0.20.0 — 2026-10-11
 
 ### Security: bearer-key sensors move to a key-bound identity by themselves
