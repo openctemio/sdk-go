@@ -24,10 +24,17 @@
 // a cool-down. Mirrors cannot change content: blobs are hash-pinned and
 // small files are signed and checked by the caller.
 //
-// Every HTTP request goes through the caller's client, by default the
-// SSRF-guarded httpsec.SafeHTTPClient. File names are a single path element
+// Every HTTP request goes through the caller's client, which is required
+// when an origin is a URL: pass an SSRF-guarded client (for example
+// github.com/openctemio/sdk-go/pkg/httpsec.SafeHTTPClient). There is no
+// unguarded default. File names are a single path element
 // (no separators, no "..") so a name can never escape a local origin or the
 // cache. Logs carry names, origins, sizes and errors, never content.
+//
+// The package is its own Go module (github.com/openctemio/sdk-go/pkg/transfer,
+// tagged pkg/transfer/vX.Y.Z) so a feed publisher or consumer does not take
+// the whole SDK's dependency graph; it needs only the standard library and
+// the Prometheus client.
 //
 // Stability: Experimental (docs/STABILITY.md).
 package transfer

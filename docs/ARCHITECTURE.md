@@ -194,11 +194,17 @@ Large data moves in two directions, and each direction has one code path
   resumes after a restart, and the outbox is the encrypted, capped
   store-and-forward spool.
 - **Pull** (published feed to platform or sensor): `pkg/transfer` and
-  `pkg/transfer/bundle`.
+  `pkg/transfer/bundle`. They form their own Go module
+  (`github.com/openctemio/sdk-go/pkg/transfer`, tagged `pkg/transfer/vX.Y.Z`,
+  standard library plus the Prometheus client) so the platform and the feed
+  publishers take only this code, not the SDK's dependency graph. The DSSE
+  envelope is restated there, byte-identical to `pkg/jobsig` (a shared golden
+  vector in both test suites).
 
 `transfer.Fetcher` downloads from an ordered list of origins (release URL,
-mirrors, a local directory for air-gapped installs) through the SSRF-guarded
-client. Per origin: retries with exponential back-off and jitter, Retry-After
+mirrors, a local directory for air-gapped installs) through the caller's
+SSRF-guarded client (required for URL origins; there is no unguarded
+default). Per origin: retries with exponential back-off and jitter, Retry-After
 on 429/503 (capped; a longer wait moves to the next origin), a per-attempt
 timeout, a stall guard, and resume of a partial download with a Range
 request. A 404 or a hash mismatch moves to the next origin at once; an origin
