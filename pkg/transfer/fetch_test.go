@@ -465,6 +465,21 @@ func TestNamesAndConfig(t *testing.T) {
 	}
 }
 
+// A URL origin without a client is refused: there is no unguarded default
+// client, so the caller always chooses the SSRF policy. A local origin needs
+// no client.
+func TestClientRequiredForURLOrigins(t *testing.T) {
+	if _, err := New(Config{Origins: []Origin{{URL: "https://feed.example/v2"}}}); err == nil {
+		t.Error("URL origin without a client accepted")
+	}
+	if _, err := New(Config{Origins: []Origin{{Dir: t.TempDir()}, {URL: "https://feed.example/v2"}}}); err == nil {
+		t.Error("mixed origins without a client accepted")
+	}
+	if _, err := New(Config{Origins: []Origin{{Dir: t.TempDir()}}}); err != nil {
+		t.Errorf("local origin without a client: %v", err)
+	}
+}
+
 func TestOverallDeadline(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)

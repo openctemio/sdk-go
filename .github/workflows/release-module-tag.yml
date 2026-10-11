@@ -1,0 +1,58 @@
+name: Release Module Tag
+
+# Tags a nested Go module of this repository (a directory with its own go.mod)
+# as <dir>/vX.Y.Z, the form the Go module proxy resolves for
+# github.com/openctemio/sdk-go/<dir>. Run by hand from Actions; the checks are
+# in .github/scripts/release/tag-module.sh (version greater than the module's
+# last tag, commit on main, module path, no replace directive). Nested module
+# tags start no release workflow: release.yml runs on root vX.Y.Z tags only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: "Module directory"
+        required: true
+        type: choice
+        options:
+          - pkg/transfer
+      version:
+        description: "Version vX.Y.Z (tag <module>/vX.Y.Z)"
+        required: true
+        type: string
+      commit:
+        description: "Commit on main to tag (default: main)"
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - name: Tag ${{ inputs.module }}/${{ inputs.version }}
+        env:
+          MODULE: ${{ inputs.module }}
+          VERSION: ${{ inputs.version }}
+          COMMIT: ${{ inputs.commit }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: bash .github/scripts/release/tag-module.sh --module "$MODULE" --version "$VERSION" --commit "$COMMIT" --push

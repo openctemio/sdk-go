@@ -19,8 +19,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // Defaults of Policy.
@@ -125,8 +123,9 @@ func (p Policy) withDefaults() Policy {
 type Config struct {
 	// Origins in the order they are tried. At least one.
 	Origins []Origin
-	// Client sends every HTTP request. Nil: httpsec.SafeHTTPClient (SSRF
-	// guarded). Its own Timeout should be 0: Policy bounds each attempt.
+	// Client sends every HTTP request. Required when an origin is a URL;
+	// pass an SSRF-guarded client (pkg/httpsec.SafeHTTPClient). Its own
+	// Timeout should be 0: Policy bounds each attempt.
 	Client *http.Client
 	// CacheDir holds blobs, partial downloads and ETags (0700, files 0600).
 	// Required for Blob; optional for Small (no conditional GET without it).
@@ -178,7 +177,9 @@ func New(cfg Config) (*Fetcher, error) {
 	if len(cfg.Origins) == 0 {
 		return nil, errors.New("transfer: no origin")
 	}
+	hasURL := false
 	for i, o := range cfg.Origins {
+		hasURL = hasURL || o.URL != ""
 		switch {
 		case o.URL == "" && o.Dir == "":
 			return nil, fmt.Errorf("transfer: origin %d has neither URL nor Dir", i)
@@ -189,8 +190,8 @@ func New(cfg Config) (*Fetcher, error) {
 			}
 		}
 	}
-	if cfg.Client == nil {
-		cfg.Client = httpsec.SafeHTTPClient(0)
+	if hasURL && cfg.Client == nil {
+		return nil, errors.New("transfer: Client is required for URL origins (pass an SSRF-guarded client)")
 	}
 	if cfg.UserAgent == "" {
 		cfg.UserAgent = "openctem-transfer/1"
