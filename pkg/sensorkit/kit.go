@@ -161,8 +161,9 @@ type Options struct {
 	OutboxOverrides OutboxOverrides
 	// StateDir keeps the sensor's local state: the API key it renews and the
 	// tool cost history (SENSOR_STATE_DIR; default /var/lib/openctem/state
-	// when writable, else ~/.openctem; platform.ResolveStateDir). Mount a
-	// persistent volume there.
+	// when writable, else ~/.openctem; platform.ResolveStateDir). It is
+	// created 0700 when missing. Mount a persistent volume at
+	// DefaultDataDir (or on the state directory itself).
 	StateDir string
 
 	// Key auto-renewal (api RFC-032 Phase 0): the API key is renewed before
@@ -428,8 +429,12 @@ func New(opts Options) (*Kit, error) {
 	proxies.report(k.out, k.errw, proxyOpts)
 
 	s.stateDir = ResolveStateDir(opts.StateDir)
+	if w := securePrivateDir(s.stateDir); w != "" {
+		_, _ = fmt.Fprintf(k.errw, "Warning: state directory: %s\n", w)
+	}
 	k.preflightNew(proxies, proxyOpts)
 	k.checkState()
+	k.checkOutbox()
 
 	// The API key: a key renewed by an earlier run is in the state
 	// directory (the renewal retired the configured one), whether or not

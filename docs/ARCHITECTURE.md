@@ -348,8 +348,9 @@ languages.
 
 ## Best Practices
 
-1. **Keep the state directory.** Mount a persistent volume at
-   `/var/lib/openctem/state`: it holds the paired identity or the renewed key.
+1. **Keep the state directory.** Mount one persistent volume at
+   `/var/lib/openctem` (state, outbox and content under it): the state holds
+   the paired identity or the renewed key, the outbox undelivered results.
 
 2. **Use CTIS.** Convert every output to CTIS reports.
 

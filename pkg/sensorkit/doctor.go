@@ -33,6 +33,7 @@ import (
 const (
 	CheckToolsAvailable       = "tools.available"
 	CheckStatePersistent      = "identity.state_persistent"
+	CheckOutboxPersistent     = "storage.outbox_persistent"
 	CheckKeyRenewal           = "identity.key_renewal"
 	CheckScanProxyInherit     = "network.scan_proxy_inherit"
 	CheckCAPinHost            = "platform.ca_pin_host"
@@ -458,18 +459,37 @@ func (k *Kit) checkState() {
 	if k.opts.Standalone || k.s.stateDir == "" {
 		return
 	}
-	p := statePersistence(k.s.stateDir)
-	params := map[string]core.ConfigParam{"path": core.ParamPath(k.s.stateDir)}
+	k.persistenceCheck(CheckStatePersistent, EnvStateDir, k.s.stateDir,
+		"the sensor's identity and renewed key will be lost when the container is recreated")
+}
+
+// checkOutbox reports whether the outbox survives a recreate.
+func (k *Kit) checkOutbox() {
+	if k.opts.Standalone || !k.s.outbox.Enabled || k.s.outbox.Config.Dir == "" {
+		return
+	}
+	k.persistenceCheck(CheckOutboxPersistent, EnvOutboxDir, k.s.outbox.Config.Dir,
+		"results not yet delivered will be lost when the container is recreated")
+}
+
+// persistenceCheck reports check id for dir (persistent, not_persistent or
+// unknown) and says a lossy directory on the sensor's log too.
+func (k *Kit) persistenceCheck(id, env, dir, loss string) {
+	p := statePersistence(dir)
+	params := map[string]core.ConfigParam{"path": core.ParamPath(dir)}
 	switch {
 	case p.Persistent:
-		k.ReportCheck(core.ConfigCheck{ID: CheckStatePersistent, Status: core.CheckPass, Code: "persistent", Params: params})
+		k.ReportCheck(core.ConfigCheck{ID: id, Status: core.CheckPass, Code: "persistent", Params: params})
+		return
 	case strings.Contains(p.Reason, "unreadable"):
-		k.ReportCheck(core.ConfigCheck{ID: CheckStatePersistent, Status: core.CheckWarn, Code: "unknown", Params: params,
-			Keys: []string{EnvStateDir}, Summary: p.Reason})
+		k.ReportCheck(core.ConfigCheck{ID: id, Status: core.CheckWarn, Code: "unknown", Params: params,
+			Keys: []string{env}, Summary: p.Reason})
 	default:
-		k.ReportCheck(core.ConfigCheck{ID: CheckStatePersistent, Status: core.CheckWarn, Code: "not_persistent", Params: params,
-			Keys: []string{EnvStateDir}, Summary: p.Reason})
+		k.ReportCheck(core.ConfigCheck{ID: id, Status: core.CheckWarn, Code: "not_persistent", Params: params,
+			Keys: []string{env}, Summary: p.Reason})
 	}
+	_, _ = fmt.Fprintf(k.errw, "Warning: %s: %s. Mount a volume at %s (or set %s to a directory on one).\n",
+		p.Reason, loss, DefaultDataDir, env)
 }
 
 // keyRenewalCheck reports the key renewal decision (after it started or
