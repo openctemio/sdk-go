@@ -18,6 +18,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -417,4 +418,31 @@ func TestTransportV3_DisconnectMidUploadIsExactlyOnce(t *testing.T) {
 	if n := len(f.Reports()); n != 1 {
 		t.Fatalf("%d reports stored, want 1", n)
 	}
+}
+
+// A platform on one port (an IP address or a single host name): the gateway
+// routes the gRPC binding by the sensor ALPN id, and the hello names it as
+// grpc_alpn_endpoint only. The client offers the id next to h2, reaches the
+// mTLS listener through the router and runs its whole life on gRPC.
+func TestTransportV3_GRPCThroughALPNRoutingOnOnePort(t *testing.T) {
+	f, signer := v3Fake(t, true)
+	if err := f.RouteV3GRPCByALPN(); err != nil {
+		t.Fatal(err)
+	}
+	c := v3Client(t, f, signer, client.TransportAuto)
+	if err := c.StartTransport(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st := c.TransportStatus(); st.Binding != client.BindingGRPC || st.FallbackReason != "" {
+		t.Fatalf("status %+v", st)
+	}
+	offered := f.V3OfferedALPN()
+	if !slices.Contains(offered, client.SensorALPN) || !slices.Contains(offered, "h2") {
+		t.Fatalf("ClientHello offered %q, want h2 and %q", offered, client.SensorALPN)
+	}
+	if client.SensorALPN != SensorALPN {
+		t.Fatalf("client and fake disagree on the ALPN id: %q vs %q", client.SensorALPN, SensorALPN)
+	}
+	lifecycle(t, f, c)
+	carriedOn(t, f, "grpc")
 }
