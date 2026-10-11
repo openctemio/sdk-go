@@ -1,5 +1,0 @@
-### Added: protocol v3 gRPC binding on the platform's own port (ALPN routing)
-
-- The gRPC binding's client offers the ALPN id `openctem-sensor/3` next to `h2` (`client.SensorALPN`). A platform gateway with ALPN routing passes such a connection through to the API's mTLS listener on the platform's own port, so gRPC works with an IP address or a single host name and no extra port (openctem api RFC-059 §5). The listener still negotiates `h2`; the id routes, it does not authenticate (the client certificate and the pinned sensor CA are unchanged).
-- `protov2.TransportV3.GRPCALPNEndpoint` (`grpc_alpn_endpoint` on the v2 hello): the endpoint reached by offering the id. The client prefers it over `grpc_endpoint`. Platforms name the single-port endpoint only there, so older clients, which would meet the gateway's own certificate and stop (`platform_certificate_refused`), stay on the HTTPS binding.
-- `conformance.FakePlatform.RouteV3GRPCByALPN` and `V3OfferedALPN` emulate the gateway's routing in sensor tests.
