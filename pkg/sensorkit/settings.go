@@ -345,8 +345,9 @@ func CheckDaemonCredentials(apiURL string, help CredentialsHelp) error {
 
 // ResolveStateDir is where the sensor keeps local state (the API key it
 // renews, the tool cost history): explicit, else SENSOR_STATE_DIR, else
-// /var/lib/openctem/state when writable (the images create it; mount a
-// volume there), else ~/.openctem (platform.ResolveStateDir).
+// /var/lib/openctem/state when writable (the images create it; mount the
+// data volume at /var/lib/openctem), else ~/.openctem
+// (platform.ResolveStateDir).
 func ResolveStateDir(explicit string) string {
 	return platform.ResolveStateDir(explicit)
 }

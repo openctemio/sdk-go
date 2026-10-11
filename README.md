@@ -130,9 +130,12 @@ in-process tool.
 **Keep the state directory.** A key renewal retires the key the sensor was
 started with; the renewed key is saved in `sensor-credentials.json` in the
 state directory (0600) and used on the next start instead of `API_KEY`. In a
-container, mount a volume at `/var/lib/openctem/state` (`-v
-my-sensor-state:/var/lib/openctem/state`): without one the kit does not
-renew, because a recreated container would come back with the retired key.
+container, mount one data volume at `/var/lib/openctem` (`-v
+my-sensor-data:/var/lib/openctem`; it holds `state/`, `outbox/` and
+`content/`, which the kit creates 0700 when missing): without one the kit
+does not renew, because a recreated container would come back with the
+retired key. A volume on `/var/lib/openctem/state` itself works too: a
+directory counts as persistent when its nearest mount is a real volume.
 When an administrator regenerates the key and `API_KEY` is set to the new
 one, the new key wins. Every heartbeat also carries the process's
 `instance_id`, so the platform flags one key running in two places.
@@ -148,7 +151,7 @@ one, the new key wins. Every heartbeat also carries the process's
 | Scanner priority | `SENSOR_SCANNER_PRIORITY` = `low`, `normal` | `low`: scanners at nice +10, lowest best-effort I/O, `oom_score_adj` 500 (Linux) |
 | Sensor OOM protection | `SENSOR_PROTECT_FROM_OOM=true\|false`: the sensor sets its own `oom_score_adj` to -500 (Linux; needs `CAP_SYS_RESOURCE`, e.g. `docker run --cap-add SYS_RESOURCE`; without it, one warning and the sensor runs unprotected). Scanners never inherit it | off |
 | Outbox | `SENSOR_OUTBOX`, `SENSOR_OUTBOX_DIR`, `_MAX_BYTES`, `_MAX_AGE`, `_KEY_FILE` | on, `/var/lib/openctem/outbox` |
-| State (the renewed API key, tool cost history) | `SENSOR_STATE_DIR` | `/var/lib/openctem/state` when writable, else `~/.openctem`: **mount a persistent volume there** |
+| State (the renewed API key, tool cost history) | `SENSOR_STATE_DIR` | `/var/lib/openctem/state` when writable, else `~/.openctem`: **mount a persistent volume at `/var/lib/openctem`** |
 | Private CA | `SENSOR_CA_CERT_FILE` (PEM, added to the system roots; trusted for the platform and content downloads, so a TLS-inspecting proxy works) | system roots |
 | Template-signing keys | `SENSOR_TEMPLATE_SIGNING_KEYS` (base64 Ed25519 public keys, comma-separated, the tenant's keys from the platform's `GET /api/v1/scanner-templates/signing-key`): custom templates in a scan run only with a signature one of them verifies | none: commands carrying custom templates fail |
 | Proxy to the platform | `SENSOR_CONTROL_PROXY` (URL or `direct`), else `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | none |

@@ -207,6 +207,11 @@ const dockerMountInfo = `1001 1000 0:52 / / rw,relatime - overlay overlay rw,low
 1013 1001 253:1 /data /mnt/with\040space rw - ext4 /dev/vda1 rw
 `
 
+const dataVolumeMountInfo = `1001 1000 0:52 / / rw,relatime - overlay overlay rw,lowerdir=/x
+1002 1001 0:55 / /proc rw - proc proc rw
+1010 1001 253:1 /var/lib/docker/volumes/s-data/_data /var/lib/openctem rw,relatime - ext4 /dev/vda1 rw
+`
+
 func TestCheckStatePersistence(t *testing.T) {
 	withMountInfo(t, true, dockerMountInfo)
 	cases := []struct {
@@ -224,6 +229,26 @@ func TestCheckStatePersistence(t *testing.T) {
 	for _, c := range cases {
 		if got := CheckStatePersistence(c.dir); got.Persistent != c.want {
 			t.Errorf("%s: persistent=%v (%s), want %v", c.dir, got.Persistent, got.Reason, c.want)
+		}
+	}
+
+	// One data volume at /var/lib/openctem (state/, outbox/, content/):
+	// a directory under it counts by its nearest ancestor mount, created
+	// or not yet.
+	withMountInfo(t, true, dataVolumeMountInfo)
+	for _, c := range []struct {
+		dir  string
+		want bool
+	}{
+		{"/var/lib/openctem", true},
+		{"/var/lib/openctem/state", true},
+		{"/var/lib/openctem/outbox", true},
+		{"/var/lib/openctem/content/nuclei", true},
+		{"/var/lib/openctemfoo/state", false}, // a prefix is not a mount
+		{"/var/lib", false},                   // the container's own layer
+	} {
+		if got := CheckStatePersistence(c.dir); got.Persistent != c.want {
+			t.Errorf("data volume: %s: persistent=%v (%s), want %v", c.dir, got.Persistent, got.Reason, c.want)
 		}
 	}
 
