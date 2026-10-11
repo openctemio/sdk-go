@@ -37,6 +37,10 @@ Versioning follows the project rule (openctemio/openctem RFC-037): the version i
 2. **Actions › Release Prepare › Run.** Start with `dry_run` (the default) to see the proposed version and changelog preview. Run it again with `dry_run` off to open `release/vX.Y.Z → main`: the `changelog.d/` fragments are folded into `CHANGELOG.md` as `vX.Y.Z` and `pkg/sdk.Version` is set. Fill `version` to override the proposal.
 3. Merge the release PR. **Release Tag** tags the merge commit, and the tag runs the release workflows. It then opens `deps: sdk-go vX.Y.Z` in openctemio/sensor and bumps `sdk.latest` in openctemio/openctem's `versions.yaml`.
 
+### Nested modules
+
+`pkg/transfer` (with `pkg/transfer/bundle`) is its own Go module, `github.com/openctemio/sdk-go/pkg/transfer`, so the platform and the feed publishers do not take the whole SDK's dependency graph. It is released on its own: **Actions › Release Module Tag › Run** with the module and a `vX.Y.Z` version tags `pkg/transfer/vX.Y.Z` on main (`.github/scripts/release/tag-module.sh` checks the version is greater than the module's last tag, the commit is on main, and its `go.mod` has the right module path and no `replace`). Its changes still add a `changelog.d/` fragment. The root `./...` does not reach a nested module, so CI runs its tests, build, vet, lint and govulncheck in its directory; run them there locally too (`cd pkg/transfer; go test ./...`).
+
 Do not tag by hand. Without the `RELEASE_TOKEN` secret (a fine-grained PAT with Contents, Pull requests and Workflows read/write), you open the PR yourself from the link in the run summary, and the cross-repository PRs are skipped.
 
 ## License
