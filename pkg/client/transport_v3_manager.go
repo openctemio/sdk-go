@@ -159,9 +159,12 @@ type v3Manager struct {
 	// httpsPinned: the HTTPS requests enforce a platform TLS pin.
 	httpsPinned bool
 	failures    int
-	renegoNow   chan struct{}
-	onEvent     func(*core.HeartbeatHints)
-	streamGen   chan struct{} // closed when the binding changes
+	// sel is the remembered outcome of the last gRPC attempt (CertDir).
+	sel       selection
+	selLoaded bool
+	renegoNow chan struct{}
+	onEvent   func(*core.HeartbeatHints)
+	streamGen chan struct{} // closed when the binding changes
 }
 
 // EnableTransportV3 installs protocol v3 under the client (key-bound
@@ -224,8 +227,9 @@ func (c *Client) TransportStatus() TransportStatus {
 // StartTransport negotiates the transport now and keeps it current until
 // ctx ends: renews the certificate, re-probes gRPC, renegotiates after
 // repeated transport failures and runs the control stream. It returns the
-// first negotiation's error (an identity refusal); the client then stays
-// on v2 for its requests, which the platform will refuse the same way.
+// first negotiation's error (an identity refusal); the client then sends
+// nothing but hello and the heartbeat until the identity is accepted again
+// (no downgrade).
 func (c *Client) StartTransport(ctx context.Context) error {
 	m := c.v3
 	if m == nil {
@@ -341,6 +345,7 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 			return m.grpcRequired(ReasonPlatformWithoutGRPC)
 		}
 		reason = ReasonPlatformWithoutGRPC
+	case mode == TransportAuto && m.skipsGRPC(&reason):
 	default:
 		svc, r, err := m.tryGRPC(ctx, https, hello.TransportV3.GRPCEndpoint)
 		switch {
@@ -348,16 +353,18 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 			m.block(BindingGRPC, ReasonPlatformCertificate, err)
 			return err
 		case err != nil:
-			m.set(nil, BindingV2, ReasonIdentityRefused)
+			m.block(BindingV2, ReasonIdentityRefused, err)
 			return err
 		}
 		if svc != nil {
+			m.remember(BindingGRPC, "", time.Now())
 			m.set(svc, BindingGRPC, "")
 			return nil
 		}
 		if mode == TransportGRPC {
 			return m.grpcRequired(r)
 		}
+		m.remember(BindingHTTPS, r, time.Now())
 		reason = r
 	}
 
@@ -369,11 +376,23 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 		m.set(https, BindingHTTPS, reason)
 		return nil
 	case identityError(err):
-		m.set(nil, BindingV2, ReasonIdentityRefused)
-		return fmt.Errorf("%w: %v", ErrIdentityRefused, err)
+		err = fmt.Errorf("%w: %v", ErrIdentityRefused, err)
+		m.block(BindingV2, ReasonIdentityRefused, err)
+		return err
 	}
 	m.set(nil, BindingV2, ReasonHTTPSUnavailable)
 	return nil
+}
+
+// skipsGRPC reports whether the remembered network failure's backoff is
+// still running, and sets *reason to that failure.
+func (m *v3Manager) skipsGRPC(reason *string) bool {
+	r, skip := m.skipGRPC(time.Now())
+	if skip {
+		*reason = r
+		m.logf("transport: gRPC binding skipped until its backoff ends (last failure: %s)", r)
+	}
+	return skip
 }
 
 // grpcRequired blocks a sensor with SENSOR_TRANSPORT=grpc whose gRPC
@@ -636,8 +655,8 @@ func (m *v3Manager) persist(chain, ca, endpoint string) {
 // repeated failures until ctx ends.
 func (m *v3Manager) loop(ctx context.Context) {
 	for {
-		wait := m.opts.ReprobeInterval/2 + jitterDuration(m.opts.ReprobeInterval/2)
 		st := m.state.Load()
+		wait := m.nextNegotiation(st)
 		m.mu.Lock()
 		renewIn := time.Until(m.renewAt)
 		m.mu.Unlock()
