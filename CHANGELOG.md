@@ -8,6 +8,33 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.20.0 — 2026-10-11
+
+### Security: bearer-key sensors move to a key-bound identity by themselves
+
+- A daemon started with an API key, against a platform whose hello lists `key_bind`, makes its own Ed25519 key in `<state dir>/identity/` (0600 in 0700), binds it with one call authenticated by the API key (`Client.BindKey`, `POST /api/v2/sensor/identity/bind`, with a proof of possession) and signs every request from then on. The platform retires the API key in the same step (one way); the sensor keeps its id, tenant and grant.
+- An identity in the state directory now wins over a configured `API_KEY` (the sensor warns to remove it).
+- The key and a marker are written before the call; if the answer is lost, the next start binds the same key again or confirms it with a request signed by that key.
+- A refusal (the organization requires an administrator's approval, or the sensor cannot bind) removes the generated key; the sensor keeps its API key and says to re-pair it.
+- `SENSOR_KEY_BIND=off` keeps the API key. A bearer-key sensor now sends one extra hello at start.
+
+### Upgrade notes: `pkg/transfer` is its own Go module
+
+- `pkg/transfer` and `pkg/transfer/bundle` moved into a nested module, `github.com/openctemio/sdk-go/pkg/transfer`, released as `pkg/transfer/vX.Y.Z` (first: `pkg/transfer/v0.1.0`). Import paths are unchanged.
+- A consumer requires `github.com/openctemio/sdk-go/pkg/transfer` instead of `github.com/openctemio/sdk-go`. A build that requires both the new module and an `sdk-go` version that still contains `pkg/transfer` (v0.19.0 and earlier) fails with "ambiguous import": drop the `sdk-go` require, or require an `sdk-go` release made after this change.
+- `transfer.New` now refuses a URL origin without `Config.Client`; there is no unguarded default client. Pass an SSRF-guarded client such as `httpsec.SafeHTTPClient(0)`. A fetcher with local (directory) origins only needs no client.
+
+### Changed: the transfer module depends on the standard library and the Prometheus client only
+
+- The DSSE envelope, pre-authentication encoding and key id are restated in `pkg/transfer/bundle`, byte-identical to `pkg/jobsig`; one golden vector in both test suites keeps them together. Envelopes signed before and after this change verify the same way.
+- CI runs tests, build, vet, `go mod tidy -diff`, golangci-lint and govulncheck for the nested module; **Release Module Tag** (`.github/scripts/release/tag-module.sh`) tags it.
+
+### Changed: protocol v3 remembers a failing gRPC binding and never downgrades on an identity refusal
+
+- A gRPC network failure (unreachable, handshake, HTTP/2 refused, stream reset, unimplemented) is kept in the certificate directory (`transport-v3-state.json`, 0600): negotiations and restarts within the backoff go straight to the HTTPS binding with the same reason, and gRPC is tried again after 30 minutes, doubling per consecutive failure up to 4 hours (from `ReprobeInterval`). A success clears it.
+- A platform that does not offer gRPC (or v3) yet, a certificate or HTTPS-binding failure is asked again within 10 minutes instead of 30, so sensors move up soon after the platform's path is fixed.
+- An identity refusal no longer leaves the client on v2: it sends nothing but hello and the heartbeat (a paused sensor still learns it is paused) until a later negotiation is accepted.
+
 ## v0.19.0 — 2026-10-11
 
 ### Security
