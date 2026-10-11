@@ -69,6 +69,10 @@ type TargetRateBounds struct {
 	MaxGaps int
 	// MaxChanges bounds the rate changes one task logs.
 	MaxChanges int
+	// ToolHostErrors is the per-host error budget handed to a tool that
+	// keeps its own host breaker (nuclei -max-host-error): errors on one
+	// host, over all its requests, before the tool skips the host.
+	ToolHostErrors int
 }
 
 // TargetRate is the table of target-rate bounds. Why each value:
@@ -93,6 +97,10 @@ type TargetRateBounds struct {
 //     refused instead of hanging the tool.
 //   - FloorStrikes 3, BlockRun 20: enough repetitions that one refusal or
 //     a handful of forbidden paths do not count as a block.
+//   - ToolHostErrors 30: a tool's own breaker counts every failed request
+//     of every concurrent check (not consecutive failures), so it needs a
+//     larger budget than BreakerFailures × BreakerMaxTrips (15); 30 lets a
+//     few slow checks fail without dropping a live host.
 var TargetRate = TargetRateBounds{
 	Floor:            1,
 	DefaultCeiling:   100,
@@ -114,6 +122,7 @@ var TargetRate = TargetRateBounds{
 	MaxOpenPorts:     64,
 	MaxGaps:          100,
 	MaxChanges:       20,
+	ToolHostErrors:   30,
 }
 
 // Ceiling is the lowest of the positive limits (a scan's rate_limit, a scan
