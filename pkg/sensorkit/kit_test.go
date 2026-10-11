@@ -257,6 +257,11 @@ func TestRun_V2Lifecycle(t *testing.T) {
 	}
 
 	reqs := f.Requests()
+	// A bearer-key sensor first asks hello whether it can bind a signing
+	// key (api RFC-052 §4.8); this platform cannot, so nothing else follows.
+	if len(reqs) > 1 && reqs[0].Path == "/api/v2/sensor/hello" && reqs[1].Path == "/api/v2/sensor/hello" {
+		reqs = reqs[1:]
+	}
 	if reqs[0].Path != "/api/v2/sensor/hello" || reqs[1].Path != "/api/v2/sensor/heartbeat" {
 		t.Fatalf("start sequence %s %s, want hello then heartbeat (before any poll)", reqs[0].Path, reqs[1].Path)
 	}

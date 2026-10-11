@@ -364,3 +364,41 @@ func writeAtomic(path string, data []byte) error {
 	}
 	return os.Rename(name, path)
 }
+
+// BindPendingFile marks a key generated for a self-bind (api RFC-052 §4.8)
+// whose answer has not been seen yet: the next start binds the same key
+// again, or confirms it with a signed request.
+const BindPendingFile = "bind-pending"
+
+func (s *Store) bindPendingPath() string { return filepath.Join(s.dir, BindPendingFile) }
+
+// BindPending reports whether a self-bind of the key on disk is unconfirmed.
+func (s *Store) BindPending() bool {
+	_, err := os.Stat(s.bindPendingPath())
+	return err == nil
+}
+
+// MarkBindPending records that the key on disk is being bound (0600).
+func (s *Store) MarkBindPending() error {
+	if err := s.ensureDir(); err != nil {
+		return err
+	}
+	return writeAtomic(s.bindPendingPath(), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"))
+}
+
+// ClearBindPending removes the marker (the bind is confirmed).
+func (s *Store) ClearBindPending() {
+	_ = os.Remove(s.bindPendingPath())
+}
+
+// DiscardBind removes a key generated for a self-bind the platform refused,
+// with its marker. It never touches an identity: a paired sensor's key is
+// not removed.
+func (s *Store) DiscardBind() {
+	if _, err := os.Stat(s.identityPath()); err == nil {
+		s.ClearBindPending()
+		return
+	}
+	_ = os.Remove(s.keyPath())
+	s.ClearBindPending()
+}
