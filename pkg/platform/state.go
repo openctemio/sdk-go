@@ -35,7 +35,10 @@ import (
 const (
 	// DefaultStateDir is where a sensor keeps its state when nothing else is
 	// configured and the directory is usable. The images create it for the
-	// sensor user; the install snippets mount a volume on it.
+	// sensor user; the install snippets mount one data volume on its parent,
+	// /var/lib/openctem (state/, outbox/, content/), and a mount on the
+	// state directory itself still works. CheckStatePersistence judges a
+	// directory by its nearest mount, so either counts.
 	DefaultStateDir = "/var/lib/openctem/state"
 	// EnvStateDir overrides the state directory.
 	EnvStateDir = "SENSOR_STATE_DIR"
@@ -282,7 +285,8 @@ var (
 
 // CheckStatePersistence reports whether dir survives the sensor being
 // recreated. Outside a container the host filesystem persists. Inside one,
-// dir must be on a mounted volume (a Docker volume, a bind mount, a
+// dir must be on a mounted volume (the nearest mount at or above dir: a
+// volume at /var/lib/openctem covers /var/lib/openctem/state) (a Docker volume, a bind mount, a
 // Kubernetes volume) that is not a tmpfs: the container's writable layer is
 // lost when the container is recreated. A Kubernetes emptyDir looks like a
 // volume and is lost with the pod; the Helm chart therefore decides key

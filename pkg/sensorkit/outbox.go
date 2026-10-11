@@ -21,9 +21,15 @@ import (
 	"github.com/openctemio/sdk-go/pkg/outbox"
 )
 
-// DefaultOutboxDir is where a daemon keeps undelivered results. Sensor
-// images declare it as a VOLUME; mount a persistent volume there.
-const DefaultOutboxDir = "/var/lib/openctem/outbox"
+// DefaultDataDir is the sensor's data directory in the images: state/,
+// outbox/ and content/ under it. Mount one persistent volume here (the
+// images declare no VOLUME: an anonymous volume looks persistent to the
+// sensor and is lost with a new container).
+const DefaultDataDir = "/var/lib/openctem"
+
+// DefaultOutboxDir is where a daemon keeps undelivered results, on the data
+// volume (DefaultDataDir).
+const DefaultOutboxDir = DefaultDataDir + "/outbox"
 
 // OutboxSettings are the outbox settings of a configuration file (the
 // sensor's outbox: block). The environment overrides each of them.

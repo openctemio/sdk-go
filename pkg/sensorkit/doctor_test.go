@@ -85,6 +85,7 @@ func TestRun_ConfigReport_ChecksAndNoSecretOnTheWire(t *testing.T) {
 		"tool.kit-tool.binary":    "ok",
 		"tools.available":         "ok",
 		CheckStatePersistent:      "not_persistent",
+		CheckOutboxPersistent:     "not_persistent",
 		CheckPlatformTLS:          "ca_file_unreadable",
 		CheckAliasDeprecated:      "legacy_name",
 		CheckEnvUnknown:           "unknown",
@@ -121,6 +122,12 @@ func TestRun_ConfigReport_ChecksAndNoSecretOnTheWire(t *testing.T) {
 	}
 	if !sawKey || !sawTrivy {
 		t.Errorf("settings presence: %+v", r.Settings)
+	}
+	for _, want := range []string{"Results not yet delivered will be lost when the container is recreated",
+		"identity and renewed key will be lost when the container is recreated", "Mount a volume at " + DefaultDataDir} {
+		if !strings.Contains(errw.String(), want) {
+			t.Errorf("a state and outbox off any volume must be said at start (%q): %s", want, errw.String())
+		}
 	}
 	if !strings.Contains(errw.String(), "SSL_CERT_FILE=/nonexistent/ca.pem cannot be read") {
 		t.Errorf("the unreadable trust file must be said at start: %s", errw.String())
