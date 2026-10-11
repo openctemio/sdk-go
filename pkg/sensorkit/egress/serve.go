@@ -2,6 +2,7 @@ package egress
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -15,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/adapt"
 )
 
 // maxHeaderBytes bounds an HTTP proxy request's header.
@@ -140,21 +143,38 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 	req.Close = true
 	out := &countWriter{w: up}
 	if err := req.Write(out); err != nil {
+		f.observeErr(host, err)
 		_ = up.Close()
 		rec.BytesOut = out.n.Load()
 		f.record(*rec)
 		writeHTTPError(c, http.StatusBadGateway, "upstream write failed")
 		return
 	}
-	in, _ := io.Copy(c, up)
+	// The response's status (429, 503, Retry-After, 403) paces the host;
+	// the response itself goes to the client as it came.
+	// It is parsed from a copy: every byte read from the host is passed
+	// on unchanged, in order.
+	ur := &errReader{r: up}
+	var head bytes.Buffer
+	if resp, err := http.ReadResponse(bufio.NewReader(io.TeeReader(io.LimitReader(ur, maxHeaderBytes), &head)), req); err == nil {
+		f.observeResponse(host, resp)
+	} else {
+		f.observeErr(host, err)
+	}
+	n, _ := c.Write(head.Bytes())
+	rest, _ := io.Copy(c, ur)
+	in := int64(n) + rest
 	_ = up.Close()
 	rec.BytesOut, rec.BytesIn = out.n.Load(), in
 	f.record(*rec)
 }
 
 func statusOf(err error) int {
-	if errors.Is(err, ErrRefused) {
+	switch {
+	case errors.Is(err, ErrRefused):
 		return http.StatusForbidden
+	case errors.Is(err, adapt.ErrHostUnavailable):
+		return http.StatusServiceUnavailable
 	}
 	return http.StatusBadGateway
 }
@@ -285,10 +305,18 @@ func (f *Forwarder) pipe(c net.Conn, br *bufio.Reader, up net.Conn, rec *Record)
 		closeWrite(up)
 		close(done)
 	}()
-	in, _ = io.Copy(c, up)
+	ur := &errReader{r: up}
+	in, _ = io.Copy(c, ur)
 	closeWrite(c)
 	<-done
 	_ = up.Close()
+	// An opaque tunnel shows only how it ended: reset by the host, or
+	// closed after the host sent data.
+	if ur.err != nil {
+		f.observeErr(rec.Host, ur.err)
+	} else if in > 0 {
+		f.hostRate.Report(normName(rec.Host), adapt.Event{Signal: adapt.Answered})
+	}
 	rec.BytesOut, rec.BytesIn = out, in
 	f.record(*rec)
 }

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/webscope"
@@ -128,6 +129,16 @@ type ScanResult struct {
 
 	// Error (if scan failed)
 	Error string `json:"error,omitempty"`
+
+	// CoverageGaps are hosts the scan could not fully cover (the host's
+	// breaker opened, it pushed back at the lowest rate, or it blocked the
+	// scan; adapt.Gap), at most adapt.TargetRate.MaxGaps; CoverageGapsTotal
+	// counts all. The scan still completes, as partial coverage: what it
+	// did not report on those hosts is not read as "no findings".
+	CoverageGaps      []adapt.Gap `json:"coverage_gaps,omitempty"`
+	CoverageGapsTotal int         `json:"coverage_gaps_total,omitempty"`
+	// TargetRate is the per-host rate outcome (nil: no controller ran).
+	TargetRate *adapt.Summary `json:"target_rate,omitempty"`
 }
 
 // =============================================================================

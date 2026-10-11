@@ -56,6 +56,7 @@ import (
 	"github.com/openctemio/ctis/importer/mapping"
 	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/internal/toolwire"
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
@@ -137,6 +138,12 @@ type RunOptions struct {
 	// Mode is the sensor mode the task runs in (daemon or runner; "": not
 	// checked against the manifest's modes).
 	Mode tool.Mode
+	// TargetRate is the request rate the caller allows the task (requests
+	// per second; 0: not set), for a tool whose rate is not its config's
+	// safety.rate_param (a built-in scanner's own effective limit). The
+	// forwarder's per-host adaptive rate stays under the lowest of this,
+	// the tool's rate param and the local policy's rate.max_rps.
+	TargetRate float64
 }
 
 // TargetOutcome is one target's outcome.
@@ -200,6 +207,11 @@ type Outcome struct {
 	// network was not confined.
 	Egress        []egress.Record
 	EgressDropped int
+	// TargetRate is a confined task's per-host rate outcome: the ceiling,
+	// the rates reached, and the hosts it could not fully cover (Gaps: the
+	// task still completes; the hosts are reported, not read as "no
+	// findings"). Nil when the task's network was not confined.
+	TargetRate *adapt.Summary
 }
 
 // ReportJSON is the report as JSON (a scanner's raw output for the
@@ -312,6 +324,8 @@ type prepared struct {
 	refusedItems map[string]bool
 	// rateLine says the local policy changed the rate (nil: it did not).
 	rateLine *LogLine
+	// targetRate is RunOptions.TargetRate.
+	targetRate float64
 	// mapping turns an exec tool's json or jsonl output into CTIS.
 	mapping *mapping.Mapping
 	// notes are the runtime's own log lines for the outcome (parser
@@ -368,7 +382,8 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if err != nil {
 		return nil, tool.AsError(err), nil
 	}
-	p := &prepared{m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine, contentPaths: contentPaths}
+	p := &prepared{m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine, contentPaths: contentPaths,
+		targetRate: o.TargetRate}
 	if task.IsRetest() && len(adm.Refused) > 0 {
 		// A retest never reaches a target the policy refused: its items
 		// are not sent and end unverifiable.
@@ -627,11 +642,8 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 		res = <-waitDone
 	}
 	s.finish(res, stopReason, stopClass, stderr, start, execution)
-	if eg != nil {
-		s.out.Egress, s.out.EgressDropped = eg.stop()
-		for _, l := range egressLog(s.out.Egress) {
-			s.log(l.Level, l.Msg, l.Fields)
-		}
+	for _, l := range eg.finish(s.out) {
+		s.log(l.Level, l.Msg, l.Fields)
 	}
 	return s.out, nil
 }

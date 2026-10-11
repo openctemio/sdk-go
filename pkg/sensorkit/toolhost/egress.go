@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/openctemio/sdk-go/internal/toolrt"
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
@@ -41,6 +43,12 @@ type taskEgress struct {
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 	once       sync.Once
+
+	// changes are the first rate changes (adapt.TargetRate.MaxChanges);
+	// moreChanges counts the rest.
+	chMu        sync.Mutex
+	changes     []adapt.Change
+	moreChanges int
 }
 
 // startEgress starts the forwarder of a task whose backend confines the
@@ -55,9 +63,11 @@ func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared
 	if err != nil {
 		return nil, err
 	}
+	ceiling := h.rateCeiling(p)
 	e := &taskEgress{dir: dir, proxy: filepath.Join(dir, "proxy.sock"), dns: filepath.Join(dir, "dns.sock"),
-		fw: egress.New(scope, egress.Limits{Rate: egressRate(p.task.Config, p.m)})}
+		fw: egress.New(scope, egress.Limits{Rate: ceiling, PerHostRate: ceiling})}
 	e.fw.Upstream = egress.UpstreamDNS("")
+	e.fw.TargetRate().OnChange = e.change
 	pl, err := net.Listen("unix", e.proxy)
 	if err != nil {
 		_ = os.RemoveAll(dir)
@@ -109,6 +119,71 @@ func (e *taskEgress) stop() ([]egress.Record, int) {
 		recs = recs[:MaxEgressRecords]
 	}
 	return recs, dropped
+}
+
+// finish stops the forwarder (nil: no-op), puts what it recorded and the
+// task's target-rate outcome in out, and returns the log lines: refusals,
+// rate changes with their reason, and the rate summary with the coverage
+// gaps.
+func (e *taskEgress) finish(out *Outcome) []LogLine {
+	if e == nil {
+		return nil
+	}
+	out.Egress, out.EgressDropped = e.stop()
+	s := e.fw.TargetRate().Summary()
+	out.TargetRate = &s
+	lines := egressLog(out.Egress)
+	e.chMu.Lock()
+	for _, c := range e.changes {
+		lines = append(lines, LogLine{Level: "info", Msg: fmt.Sprintf("target rate %s: %.3g/s -> %.3g/s (%s)", c.Host, c.From, c.To, c.Reason),
+			Fields: map[string]any{"target_rate": c.To, "host": c.Host, "reason": c.Reason}})
+	}
+	if e.moreChanges > 0 {
+		lines = append(lines, LogLine{Level: "info", Msg: fmt.Sprintf("target rate changed %d more times", e.moreChanges)})
+	}
+	e.chMu.Unlock()
+	if s.Hosts > 0 {
+		lines = append(lines, LogLine{Level: "info",
+			Msg: fmt.Sprintf("target rate: ceiling %.3g/s, start %.3g/s, lowest %.3g/s, %d host(s), %d throttled, %d unreachable",
+				s.Ceiling, s.Start, s.Min, s.Hosts, s.Throttled, s.Unreachable),
+			Fields: map[string]any{"target_rate_ceiling": s.Ceiling, "target_rate_min": s.Min, "hosts": s.Hosts,
+				"hosts_throttled": s.Throttled, "hosts_unreachable": s.Unreachable, "coverage_gaps": s.GapsTotal}})
+	}
+	for i, g := range s.Gaps {
+		if i == maxEgressLogLines {
+			break
+		}
+		lines = append(lines, LogLine{Level: "warn", Msg: "coverage gap " + g.Host + " (" + g.Reason + "): " + g.Detail,
+			Fields: map[string]any{"coverage_gap": g.Reason, "host": g.Host}})
+	}
+	return lines
+}
+
+// change keeps a rate change for the task's log.
+func (e *taskEgress) change(c adapt.Change) {
+	e.chMu.Lock()
+	defer e.chMu.Unlock()
+	if len(e.changes) < adapt.TargetRate.MaxChanges {
+		e.changes = append(e.changes, c)
+		return
+	}
+	e.moreChanges++
+}
+
+// rateCeiling is the rate a confined task's forwarder never exceeds, for
+// the task and per host: the lowest of the tool's own rate (its rate param,
+// already capped by the local policy), the caller's (RunOptions.TargetRate)
+// and the local policy's rate.max_rps. The platform's values reach the
+// tool's rate param already lowered to the local maximum; nothing here can
+// raise a limit.
+func (h *Host) rateCeiling(p *prepared) float64 {
+	c := adapt.Ceiling(egressRate(p.task.Config, p.m), p.targetRate)
+	if rp, ok := h.Policy.(RatePolicy); ok {
+		if capped := rp.CapRate(int(math.Ceil(c))); capped > 0 {
+			c = math.Min(c, float64(capped))
+		}
+	}
+	return c
 }
 
 // taskScope is what a task may reach: its admitted targets (names at the
