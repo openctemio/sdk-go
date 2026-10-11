@@ -460,7 +460,7 @@ func (k *Kit) checkState() {
 		return
 	}
 	k.persistenceCheck(CheckStatePersistent, EnvStateDir, k.s.stateDir,
-		"the sensor's identity and renewed key will be lost when the container is recreated")
+		"The sensor's identity and renewed key will be lost when the container is recreated")
 }
 
 // checkOutbox reports whether the outbox survives a recreate.
@@ -469,7 +469,7 @@ func (k *Kit) checkOutbox() {
 		return
 	}
 	k.persistenceCheck(CheckOutboxPersistent, EnvOutboxDir, k.s.outbox.Config.Dir,
-		"results not yet delivered will be lost when the container is recreated")
+		"Results not yet delivered will be lost when the container is recreated")
 }
 
 // persistenceCheck reports check id for dir (persistent, not_persistent or
@@ -488,8 +488,8 @@ func (k *Kit) persistenceCheck(id, env, dir, loss string) {
 		k.ReportCheck(core.ConfigCheck{ID: id, Status: core.CheckWarn, Code: "not_persistent", Params: params,
 			Keys: []string{env}, Summary: p.Reason})
 	}
-	_, _ = fmt.Fprintf(k.errw, "Warning: %s: %s. Mount a volume at %s (or set %s to a directory on one).\n",
-		p.Reason, loss, DefaultDataDir, env)
+	_, _ = fmt.Fprintf(k.errw, "Warning: %s (%s). Mount a volume at %s (or set %s to a directory on one).\n",
+		loss, p.Reason, DefaultDataDir, env)
 }
 
 // keyRenewalCheck reports the key renewal decision (after it started or

@@ -123,7 +123,7 @@ func TestRun_ConfigReport_ChecksAndNoSecretOnTheWire(t *testing.T) {
 	if !sawKey || !sawTrivy {
 		t.Errorf("settings presence: %+v", r.Settings)
 	}
-	for _, want := range []string{"results not yet delivered will be lost when the container is recreated",
+	for _, want := range []string{"Results not yet delivered will be lost when the container is recreated",
 		"identity and renewed key will be lost when the container is recreated", "Mount a volume at " + DefaultDataDir} {
 		if !strings.Contains(errw.String(), want) {
 			t.Errorf("a state and outbox off any volume must be said at start (%q): %s", want, errw.String())
