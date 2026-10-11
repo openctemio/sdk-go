@@ -13,8 +13,8 @@ import (
 // sibling task's temporary file in /tmp) is skipped instead of failing the
 // task; existing paths still get their rule.
 func TestAddReadableSkipsVanishedPaths(t *testing.T) {
-	attr := unix.LandlockRulesetAttr{Access_fs: uint64(llReadFile | llReadDir)}
-	fd, _, e := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr), 0) //nolint:gosec // landlock ABI
+	attr := unix.LandlockRulesetAttr{Handled_access_fs: uint64(llReadFile | llReadDir)}
+	fd, _, e := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr.Handled_access_fs), 0) //nolint:gosec // landlock ABI
 	if e != 0 {
 		t.Skipf("landlock unavailable: %v", e)
 	}

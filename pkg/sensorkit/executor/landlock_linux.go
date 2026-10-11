@@ -62,8 +62,10 @@ func applyLandlock(deny, private, write, read []string) (int, error) {
 	if abi >= 3 {
 		handled |= llTruncate
 	}
-	attr := unix.LandlockRulesetAttr{Access_fs: handled}
-	fdRaw, _, e := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr), 0) //nolint:gosec // the landlock ABI takes a pointer to the attribute struct
+	// Only the first field (ABI v1) is set; passing its size keeps the call
+	// valid on every kernel whatever fields newer x/sys versions add.
+	attr := unix.LandlockRulesetAttr{Handled_access_fs: handled}
+	fdRaw, _, e := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr.Handled_access_fs), 0) //nolint:gosec // the landlock ABI takes a pointer to the attribute struct
 	if e != 0 {
 		if e == unix.ENOSYS || e == unix.EOPNOTSUPP {
 			return 0, errLandlockUnsupported
