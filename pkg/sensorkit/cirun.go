@@ -5,6 +5,12 @@ package sensorkit
 // exchanges it for a short-lived run token bound to one run on one
 // repository. No API key is stored in CI. The run token never leaves this
 // type: it is not printed, not logged and not part of any error.
+//
+// Deprecated for new code: the sensor no longer runs in CI (sensor v0.11.0).
+// CI scanning is the openctem-ci runner (repository openctemio/ci), which also
+// speaks aggregate runs and the Azure Pipelines, Bitbucket, CircleCI and
+// Jenkins identities this client does not. These identifiers are removed in a
+// later minor release.
 
 import (
 	"bytes"
@@ -60,6 +66,8 @@ const maxErrBody = 4 << 10
 
 // CIRunConfig configures runner mode. Zero fields are read from the
 // environment (CIRunConfigFromEnv).
+//
+// Deprecated: CI scanning is openctem-ci (openctemio/ci); see the note at the top of this file.
 type CIRunConfig struct {
 	// APIURL is the platform's URL (API_URL).
 	APIURL string
@@ -76,6 +84,8 @@ type CIRunConfig struct {
 }
 
 // CIRunConfigFromEnv fills a configuration from the environment.
+//
+// Deprecated: CI scanning is openctem-ci (openctemio/ci); see the note at the top of this file.
 func CIRunConfigFromEnv() CIRunConfig {
 	return CIRunConfig{APIURL: os.Getenv("API_URL"), TenantID: os.Getenv(EnvTenantID),
 		Audience: os.Getenv(EnvOIDCAudience), IDTokenVar: os.Getenv(EnvIDTokenVar)}
@@ -99,6 +109,8 @@ func (c *CIRunConfig) normalize() {
 }
 
 // DetectCIOIDC reports which CI provider can give this job an OIDC token.
+//
+// Deprecated: CI scanning is openctem-ci (openctemio/ci); see the note at the top of this file.
 func DetectCIOIDC(cfg CIRunConfig) (string, bool) {
 	cfg.normalize()
 	if cfg.TenantID == "" {
@@ -118,6 +130,8 @@ func DetectCIOIDC(cfg CIRunConfig) (string, bool) {
 // one-shot runner can push its reports through it. The token is obtained
 // at the first use (after the scans, so the 15-minute token covers the
 // uploads and the verdict).
+//
+// Deprecated: CI scanning is openctem-ci (openctemio/ci); see the note at the top of this file.
 type CIRun struct {
 	cfg      CIRunConfig
 	provider string
@@ -145,6 +159,8 @@ type CIRunInfo struct {
 
 // NewCIRun returns a run for this CI job, or ErrNoCIOIDC when the job has no
 // OIDC token to offer (the caller then falls back to an API key).
+//
+// Deprecated: CI scanning is openctem-ci (openctemio/ci); see the note at the top of this file.
 func NewCIRun(cfg CIRunConfig) (*CIRun, error) {
 	cfg.normalize()
 	provider, ok := DetectCIOIDC(cfg)
@@ -383,6 +399,8 @@ func (r *CIRun) BaselineDiff(ctx context.Context, fingerprints []string) ([]stri
 }
 
 // CIVerdict is the platform's gate verdict for the run.
+//
+// Deprecated: CI scanning is openctem-ci (openctemio/ci); see the note at the top of this file.
 type CIVerdict struct {
 	RunID     string `json:"run_id"`
 	Verdict   string `json:"verdict"`
@@ -432,6 +450,8 @@ func (r *CIRun) Evaluate(ctx context.Context, scanFailures int) (*CIVerdict, err
 }
 
 // WriteVerdict prints a verdict for a pipeline log.
+//
+// Deprecated: CI scanning is openctem-ci (openctemio/ci); see the note at the top of this file.
 func WriteVerdict(w io.Writer, v *CIVerdict) {
 	if v == nil {
 		return
