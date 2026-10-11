@@ -166,14 +166,11 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		out.Logs = append(out.Logs, *p.rateLine)
 	}
 	out.Logs = append(out.Logs, p.notes...)
-	if eg != nil {
-		out.Egress, out.EgressDropped = eg.stop()
-		lines := egressLog(out.Egress)
-		out.Logs = append(out.Logs, lines...)
-		if h.LogSink != nil {
-			for _, l := range lines {
-				h.LogSink(ctx, m.Name, l)
-			}
+	lines := eg.finish(out)
+	out.Logs = append(out.Logs, lines...)
+	if h.LogSink != nil {
+		for _, l := range lines {
+			h.LogSink(ctx, m.Name, l)
 		}
 	}
 	out.Duration = time.Since(start)

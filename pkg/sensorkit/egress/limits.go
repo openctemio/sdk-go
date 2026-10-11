@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 )
 
@@ -216,6 +217,13 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 		upTLS := tls.Client(up, &tls.Config{ServerName: serverName, InsecureSkipVerify: insecureSkipTargetVerify, //nolint:gosec // see insecureSkipTargetVerify
 			NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS12})
 		if err := upTLS.Handshake(); err != nil {
+			reason := adapt.FailureReason(err)
+			if reason == "" && ctx.Err() == nil {
+				reason = adapt.ReasonTLS
+			}
+			if reason != "" {
+				f.hostRate.Report(normName(rec.Host), adapt.Event{Signal: adapt.Failed, Reason: reason})
+			}
 			return
 		}
 		client, upstream = srv, upTLS
@@ -226,7 +234,8 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 	ubr := bufio.NewReader(upstream)
 	cw, uw := &countWriter{w: client}, &countWriter{w: upstream}
 	defer func() { out, in = uw.n.Load(), cw.n.Load() }()
-	for {
+	host := normName(rec.Host)
+	for n := 0; ; n++ {
 		lr.N = maxHeaderBytes
 		_ = c.SetReadDeadline(time.Now().Add(f.limits.HandshakeTimeout))
 		req, err := http.ReadRequest(cbr)
@@ -240,9 +249,18 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 			writeRefusal(cw, err)
 			return
 		}
+		// The connection's first request was paced when it was dialed;
+		// each further one on it waits for the host's rate too.
+		if n > 0 {
+			if err := f.hostRate.Acquire(ctx, host); err != nil {
+				writeHTTPStatus(cw, http.StatusServiceUnavailable, err)
+				return
+			}
+		}
 		req.Header.Del("Proxy-Authorization")
 		req.Header.Del("Proxy-Connection")
 		if err := req.Write(uw); err != nil {
+			f.observeErr(host, err)
 			return
 		}
 		resp, err := http.ReadResponse(ubr, req)
@@ -253,8 +271,10 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 			resp, err = http.ReadResponse(ubr, req)
 		}
 		if err != nil {
+			f.observeErr(host, err)
 			return
 		}
+		f.observeResponse(host, resp)
 		if resp.StatusCode == http.StatusSwitchingProtocols {
 			_ = resp.Body.Close()
 			return
@@ -268,7 +288,11 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 }
 
 // writeRefusal answers a refused request (the connection then closes).
-func writeRefusal(w io.Writer, err error) {
+func writeRefusal(w io.Writer, err error) { writeHTTPStatus(w, http.StatusForbidden, err) }
+
+// writeHTTPStatus answers a request the forwarder did not pass on (the
+// connection then closes).
+func writeHTTPStatus(w io.Writer, status int, err error) {
 	msg := strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
 			return ' '
@@ -276,8 +300,8 @@ func writeRefusal(w io.Writer, err error) {
 		return r
 	}, err.Error())
 	msg = clipString(msg, 256)
-	_, _ = fmt.Fprintf(w, "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nX-Openctem-Egress: refused\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s",
-		len(msg), msg)
+	_, _ = fmt.Fprintf(w, "HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\nX-Openctem-Egress: refused\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s",
+		status, http.StatusText(status), len(msg), msg)
 }
 
 // tlsAuthority is a forwarder's own certificate authority: created on the

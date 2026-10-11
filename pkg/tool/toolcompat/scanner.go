@@ -234,8 +234,11 @@ func (s *toolScanner) ScanTargets(ctx context.Context, targets []string, opts *c
 	if out.Report != nil && out.Report.Tool != nil && out.Report.Tool.Version != "" {
 		version = out.Report.Tool.Version
 	}
-	return &core.ScanResult{ScannerName: s.m.Name, ScannerVersion: version, DurationMs: out.Duration.Milliseconds(),
-		ExitCode: out.ExitCode, RawOutput: raw, Stderr: out.Stderr}, nil
+	res := &core.ScanResult{ScannerName: s.m.Name, ScannerVersion: version, DurationMs: out.Duration.Milliseconds(),
+		ExitCode: out.ExitCode, RawOutput: raw, Stderr: out.Stderr}
+	// Hosts the forwarder could not fully cover: the scan completes, partial.
+	res.WithTargetRate(out.TargetRate)
+	return res, nil
 }
 
 // allTargetsFailed is the error of a task none of whose targets was done
