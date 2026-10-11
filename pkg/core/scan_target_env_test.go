@@ -1,7 +1,6 @@
 package core
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
@@ -16,19 +15,19 @@ func unsetEnv(t *testing.T, k string) {
 	}
 }
 
-// The private-targets switch was renamed AGENT_ALLOW_PRIVATE_TARGETS ->
-// SENSOR_ALLOW_PRIVATE_TARGETS (RFC-023 §9.5). Both names must give the same
-// posture, and a contradiction must fail closed.
-func TestDefaultScanTargetPolicyRenamedEnv(t *testing.T) {
+// SENSOR_ALLOW_PRIVATE_TARGETS is the one switch for private scan targets.
+// The removed names (refused by the sensor kit at start-up) and the SDK's own
+// egress switch never widen what may be scanned.
+func TestDefaultScanTargetPolicyOneSwitch(t *testing.T) {
 	resetEnv := func(t *testing.T) {
 		t.Helper()
-		for _, k := range []string{EnvAllowPrivateTargets, EnvSensorAllowPrivateTargets, "AGENT_ALLOW_PRIVATE_TARGETS",
+		for _, k := range []string{EnvSensorAllowPrivateTargets, "OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS", "AGENT_ALLOW_PRIVATE_TARGETS",
 			"OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE", "OPENCTEM_HTTPSEC_ALLOW_PRIVATE"} {
 			unsetEnv(t, k)
 		}
 	}
 
-	t.Run("new name", func(t *testing.T) {
+	t.Run("the switch", func(t *testing.T) {
 		resetEnv(t)
 		t.Setenv(EnvSensorAllowPrivateTargets, "1")
 		if p := DefaultScanTargetPolicy(); !p.AllowPrivate {
@@ -36,32 +35,21 @@ func TestDefaultScanTargetPolicyRenamedEnv(t *testing.T) {
 		}
 	})
 
-	t.Run("old name is still honored", func(t *testing.T) {
-		resetEnv(t)
-		t.Setenv("AGENT_ALLOW_PRIVATE_TARGETS", "1")
-		p := DefaultScanTargetPolicy()
-		if !p.AllowPrivate {
-			t.Fatal("AGENT_ALLOW_PRIVATE_TARGETS=1 must still allow private targets")
-		}
-		if err := CheckEnv(); err != nil {
-			t.Fatalf("CheckEnv: %v", err)
-		}
-	})
+	for _, other := range []string{"OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS", "AGENT_ALLOW_PRIVATE_TARGETS", "OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE", "OPENCTEM_HTTPSEC_ALLOW_PRIVATE"} {
+		t.Run(other+" does not widen targets", func(t *testing.T) {
+			resetEnv(t)
+			t.Setenv(other, "1")
+			if p := DefaultScanTargetPolicy(); p.AllowPrivate {
+				t.Fatalf("%s=1 must not allow private scan targets", other)
+			}
+		})
+	}
 
-	t.Run("conflict refuses every target", func(t *testing.T) {
+	t.Run("an unrecognized value is reported", func(t *testing.T) {
 		resetEnv(t)
-		t.Setenv(EnvSensorAllowPrivateTargets, "1")
-		t.Setenv("AGENT_ALLOW_PRIVATE_TARGETS", "0")
-		p := DefaultScanTargetPolicy()
-		if p.AllowPrivate {
-			t.Fatal("a conflict must not allow private targets")
-		}
-		_, err := p.Validate(context.Background(), "example.com")
-		if err == nil || !strings.Contains(err.Error(), "AGENT_ALLOW_PRIVATE_TARGETS") || !strings.Contains(err.Error(), "SENSOR_ALLOW_PRIVATE_TARGETS") {
-			t.Fatalf("Validate = %v, want a refusal naming both variables", err)
-		}
-		if err := CheckEnv(); err == nil {
-			t.Fatal("CheckEnv must report the conflict")
+		t.Setenv(EnvSensorAllowPrivateTargets, "true")
+		if err := CheckEnv(); err == nil || !strings.Contains(err.Error(), EnvSensorAllowPrivateTargets) {
+			t.Fatalf("CheckEnv = %v, want an error naming the switch", err)
 		}
 	})
 }

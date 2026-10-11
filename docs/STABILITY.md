@@ -197,7 +197,7 @@ these to every scanner it runs:
 | Scan-target policy (roots, private ranges, metadata endpoints) | `core.ScanTargetPolicy` |
 | SSRF-safe HTTP, proxy-aware, checked per redirect and at dial | `httpsec.SafeHTTPClient`, `httpsec.ValidateURL` |
 | Durable results; no silent key replacement | `pkg/outbox` (`ErrKeyMissing`), `client.OutboxConfig` |
-| API key renewal that survives restarts | `platform.KeyRenewManager`, sensorkit `PLATFORM_KEY_AUTORENEW`, state dir |
+| API key renewal that survives restarts | `platform.KeyRenewManager`, sensorkit `SENSOR_KEY_AUTORENEW`, state dir |
 
 A wrapper that starts processes without these helpers must call
 `ConfigureScannerProcess`, `ScannerEnviron` and `ValidateExtraArgs` itself.

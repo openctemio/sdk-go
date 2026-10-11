@@ -486,7 +486,7 @@ func detectRegion(configRegion string) string {
 	// REGION is the recommended generic variable
 	// Cloud-specific variables are auto-detected for convenience
 	envVars := []string{
-		"REGION",
+		"SENSOR_REGION",
 		"AWS_REGION",
 		"AWS_DEFAULT_REGION",
 		"GOOGLE_CLOUD_REGION",

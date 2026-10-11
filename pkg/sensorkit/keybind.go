@@ -6,7 +6,7 @@ package sensorkit
 // <state dir>/identity, binds it with one call authenticated by the API key,
 // and signs every request from then on. The platform retires the API key in
 // the same step, so the move is one way; an identity in the state directory
-// wins over a configured API_KEY at every later start.
+// wins over a configured SENSOR_API_KEY at every later start.
 //
 // The key and a marker are on disk before the call. If the answer is lost,
 // the next start binds the same key again, or (the API key already retired)
@@ -49,7 +49,7 @@ func keyBindEnabled() (bool, error) {
 }
 
 // preferIdentity makes a sensor that has an identity sign with it even when
-// API_KEY is still configured (the API key was retired by a bind or a
+// SENSOR_API_KEY is still configured (the API key was retired by a bind or a
 // re-pair). Returns whether an identity is in use.
 func (k *Kit) preferIdentity() (bool, error) {
 	s := &k.s

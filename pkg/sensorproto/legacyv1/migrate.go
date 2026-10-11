@@ -6,9 +6,9 @@ import (
 	"fmt"
 )
 
-// SensorRenamedEnv lists the renamed environment variables of a sensor
-// binary (the SDK's own, RenamedEnv, included): the names every sensor built
-// on pkg/sensorkit reads. ApplyRenamedEnv migrates them at start-up.
+// SensorRenamedEnv lists the pre-rename environment variables of a sensor
+// binary. They are no longer read: sensorkit.MigrateLegacyEnv refuses them
+// at start-up, naming each replacement.
 var SensorRenamedEnv = []RenamedVar{
 	{Old: "AGENT_ID", New: "SENSOR_ID"},
 	{Old: "AGENT_NAME", New: "SENSOR_NAME"},

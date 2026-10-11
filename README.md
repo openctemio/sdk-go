@@ -65,7 +65,7 @@ import (
 func main() {
 	c := client.New(&client.Config{
 		BaseURL: "https://openctem.example.com", // the API base URL, not the web UI
-		APIKey:  os.Getenv("API_KEY"),           // a sensor key from Settings > Sensors
+		APIKey:  os.Getenv("SENSOR_API_KEY"),           // a sensor key from Settings > Sensors
 	})
 	defer c.Close()
 
@@ -121,28 +121,28 @@ func main() {
 }
 ```
 
-Run it with `API_URL`. Without `API_KEY` the sensor pairs on first start
-(an administrator approves it under Sensors > Pair a sensor); with `API_KEY`
+Run it with `SENSOR_API_URL`. Without `SENSOR_API_KEY` the sensor pairs on first start
+(an administrator approves it under Sensors > Pair a sensor); with `SENSOR_API_KEY`
 (a sensor key from Settings > Sensors) it uses that key.
 [examples/minimal-sensor](examples/minimal-sensor) is a complete one with an
 in-process tool.
 
 **Keep the state directory.** A key renewal retires the key the sensor was
 started with; the renewed key is saved in `sensor-credentials.json` in the
-state directory (0600) and used on the next start instead of `API_KEY`. In a
+state directory (0600) and used on the next start instead of `SENSOR_API_KEY`. In a
 container, mount one data volume at `/var/lib/openctem` (`-v
 my-sensor-data:/var/lib/openctem`; it holds `state/`, `outbox/` and
 `content/`, which the kit creates 0700 when missing): without one the kit
 does not renew, because a recreated container would come back with the
 retired key. A volume on `/var/lib/openctem/state` itself works too: a
 directory counts as persistent when its nearest mount is a real volume.
-When an administrator regenerates the key and `API_KEY` is set to the new
+When an administrator regenerates the key and `SENSOR_API_KEY` is set to the new
 one, the new key wins. Every heartbeat also carries the process's
 `instance_id`, so the platform flags one key running in two places.
 
 | Setting | Environment (an `Options` field wins) | Default |
 |---|---|---|
-| Platform | `API_URL`, `API_KEY`, `SENSOR_ID` | required to run commands (exit 2 with what is missing) |
+| Platform | `SENSOR_API_URL`, `SENSOR_API_KEY`, `SENSOR_ID` | required to run commands (exit 2 with what is missing) |
 | Name | `SENSOR_NAME` | `sensor-<hostname>` |
 | Protocol | `SENSOR_PROTOCOL` = `auto`, `v2` (same; `v1` is retired and refused) | `auto` |
 | Concurrency cap | `SENSOR_MAX_JOBS` (1-100) | none: slots follow CPU, memory and tool cost |
@@ -157,7 +157,7 @@ one, the new key wins. Every heartbeat also carries the process's
 | Proxy to the platform | `SENSOR_CONTROL_PROXY` (URL or `direct`), else `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | none |
 | Proxy for content and feeds | `SENSOR_CONTENT_PROXY` (URL or `direct`), else the platform setting | the platform setting |
 | Proxy variables for scanners | `SENSOR_SCAN_PROXY`: `inherit` (scanners get the sensor's `HTTP(S)_PROXY`; warned at start) or `direct` | `inherit` |
-| Key renewal | `PLATFORM_KEY_AUTORENEW=true\|false`, `Options.KeyAutoRenew` / `NoKeyAutoRenew`, `Options.CredentialsFile` | on when the state directory persists (outside a container; inside one, a mounted, non-tmpfs volume), else off |
+| Key renewal | `SENSOR_KEY_AUTORENEW=true\|false`, `Options.KeyAutoRenew` / `NoKeyAutoRenew`, `Options.CredentialsFile` | on when the state directory persists (outside a container; inside one, a mounted, non-tmpfs volume), else off |
 | Pre-rename names | `AGENT_ID`, `AGENT_NAME`, `AGENT_ALLOW_PRIVATE_TARGETS`, `-agent-id` | applied with a warning; both names set differently: exit 2 |
 
 Plug your own parts in: `kit.AddCollector`, `kit.AddParser` (your tool's

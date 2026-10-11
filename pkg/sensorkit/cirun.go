@@ -69,7 +69,7 @@ const maxErrBody = 4 << 10
 //
 // Deprecated: CI scanning is openctem-ci (openctemio/ci); see the note at the top of this file.
 type CIRunConfig struct {
-	// APIURL is the platform's URL (API_URL).
+	// APIURL is the platform's URL (SENSOR_API_URL).
 	APIURL string
 	// TenantID is the organization (OPENCTEM_TENANT_ID).
 	TenantID string
@@ -87,7 +87,7 @@ type CIRunConfig struct {
 //
 // Deprecated: CI scanning is openctem-ci (openctemio/ci); see the note at the top of this file.
 func CIRunConfigFromEnv() CIRunConfig {
-	return CIRunConfig{APIURL: os.Getenv("API_URL"), TenantID: os.Getenv(EnvTenantID),
+	return CIRunConfig{APIURL: os.Getenv(EnvAPIURL), TenantID: os.Getenv(EnvTenantID),
 		Audience: os.Getenv(EnvOIDCAudience), IDTokenVar: os.Getenv(EnvIDTokenVar)}
 }
 
@@ -168,10 +168,10 @@ func NewCIRun(cfg CIRunConfig) (*CIRun, error) {
 		return nil, ErrNoCIOIDC
 	}
 	if cfg.APIURL == "" {
-		return nil, errors.New("API_URL is required for runner mode")
+		return nil, errors.New("SENSOR_API_URL is required for runner mode")
 	}
 	if u, err := url.Parse(cfg.APIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return nil, errors.New("API_URL must be an http(s) URL")
+		return nil, errors.New("SENSOR_API_URL must be an http(s) URL")
 	}
 	return &CIRun{cfg: cfg, provider: provider}, nil
 }

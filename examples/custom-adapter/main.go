@@ -72,10 +72,10 @@ func main() {
 	}
 
 	// Push to OpenCTEM platform
-	if os.Getenv("API_URL") != "" {
+	if os.Getenv("SENSOR_API_URL") != "" {
 		apiClient := client.New(&client.Config{
-			BaseURL:  os.Getenv("API_URL"),
-			APIKey:   os.Getenv("API_KEY"),
+			BaseURL:  os.Getenv("SENSOR_API_URL"),
+			APIKey:   os.Getenv("SENSOR_API_KEY"),
 			SensorID: os.Getenv("SENSOR_ID"),
 		})
 
