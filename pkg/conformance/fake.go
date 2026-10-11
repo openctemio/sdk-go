@@ -296,6 +296,9 @@ func (f *FakePlatform) Close() {
 	if v != nil && v.grpc != nil {
 		v.grpc.Close()
 	}
+	if v != nil && v.alpn != nil {
+		v.alpn.close()
+	}
 }
 
 // SetFault installs a fault injector (nil removes it).

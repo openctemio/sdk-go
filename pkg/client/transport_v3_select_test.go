@@ -3,6 +3,8 @@ package client
 import (
 	"testing"
 	"time"
+
+	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
 func TestGRPCBackoffGrowsAndCaps(t *testing.T) {
@@ -52,6 +54,25 @@ func TestNextNegotiationIsSoonerForPlatformReasons(t *testing.T) {
 	}
 	if d := m.nextNegotiation(&v3State{reason: ReasonGRPCUnreachable}); d < 30*time.Minute {
 		t.Fatalf("network failure: %s, want at least half the reprobe interval", d)
+	}
+}
+
+func TestGRPCEndpointPrefersTheALPNRoutedOne(t *testing.T) {
+	cases := []struct {
+		hello protov2.TransportV3
+		want  string
+	}{
+		// A platform from before ALPN routing: the plain endpoint.
+		{protov2.TransportV3{GRPCEndpoint: "sensors.example.test:443"}, "sensors.example.test:443"},
+		// One port behind ALPN routing: only the ALPN-routed endpoint.
+		{protov2.TransportV3{GRPCALPNEndpoint: "192.0.2.10:443"}, "192.0.2.10:443"},
+		{protov2.TransportV3{GRPCEndpoint: "a.test:8444", GRPCALPNEndpoint: "a.test:8444"}, "a.test:8444"},
+		{protov2.TransportV3{}, ""},
+	}
+	for _, c := range cases {
+		if got := grpcEndpoint(&c.hello); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.hello, got, c.want)
+		}
 	}
 }
 

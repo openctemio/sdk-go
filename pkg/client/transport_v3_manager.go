@@ -88,6 +88,24 @@ const (
 	ReasonPlatformUnreachable = "platform_unreachable"
 )
 
+// SensorALPN is the ALPN protocol id the gRPC binding's client offers next to
+// h2. The platform's gateway routes a ClientHello that offers it to the mTLS
+// listener at layer 4, so the binding shares the platform's own port with
+// the web UI and the API (an IP address or one host name, no extra port).
+// The listener negotiates h2. The id only routes: the client certificate is
+// the identity, and the server certificate is verified against the pinned
+// sensor CA as on any other endpoint.
+const SensorALPN = "openctem-sensor/3"
+
+// grpcEndpoint is the gRPC endpoint to dial from a v2 hello: the one reached
+// by offering SensorALPN when the platform names it, else the plain one.
+func grpcEndpoint(t *protov2.TransportV3) string {
+	if t.GRPCALPNEndpoint != "" {
+		return t.GRPCALPNEndpoint
+	}
+	return t.GRPCEndpoint
+}
+
 // ErrIdentityRefused is an identity error from the platform on v3: no
 // weaker transport is tried.
 var ErrIdentityRefused = errors.New("protocol v3: the platform refused the sensor's identity")
@@ -361,14 +379,14 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 	switch {
 	case mode == TransportHTTPS:
 		reason = ReasonForcedByConfig
-	case hello.TransportV3.GRPCEndpoint == "":
+	case grpcEndpoint(hello.TransportV3) == "":
 		if mode == TransportGRPC {
 			return m.grpcRequired(ReasonPlatformWithoutGRPC)
 		}
 		reason = ReasonPlatformWithoutGRPC
 	case mode == TransportAuto && m.skipsGRPC(&reason):
 	default:
-		svc, r, err := m.tryGRPC(ctx, https, hello.TransportV3.GRPCEndpoint)
+		svc, r, err := m.tryGRPC(ctx, https, grpcEndpoint(hello.TransportV3))
 		switch {
 		case errors.Is(err, ErrPlatformCertificate):
 			m.block(BindingGRPC, ReasonPlatformCertificate, err)
@@ -506,6 +524,9 @@ func (m *v3Manager) grpcClient(endpoint string) sensorv3connect.SensorServiceCli
 		MinVersion: tls.VersionTLS13,
 		ServerName: host,
 		RootCAs:    pin,
+		// h2 is what the listener negotiates; SensorALPN lets the gateway
+		// route this connection to it on the platform's own port.
+		NextProtos: []string{"h2", SensorALPN},
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
 			if c := m.cert.Load(); c != nil {
 				return c, nil
