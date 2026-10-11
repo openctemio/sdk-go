@@ -76,7 +76,7 @@ func (k *Kit) preferIdentity() (bool, error) {
 func (k *Kit) autoBindKey(protocol string) {
 	s := &k.s
 	on, err := keyBindEnabled()
-	if err != nil || !on || s.apiKey == "" || s.signer != nil || s.apiURL == "" {
+	if err != nil || !on || !s.commands || s.apiKey == "" || s.signer != nil || s.apiURL == "" {
 		return
 	}
 	store := identity.NewStore(s.stateDir)

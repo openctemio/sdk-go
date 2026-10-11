@@ -455,12 +455,7 @@ func New(opts Options) (*Kit, error) {
 		s.apiKey, s.key = sk.key, sk
 		// A bearer-key daemon moves to a key-bound identity when the
 		// platform offers it (api RFC-052 §4.8).
-		if s.commands {
-			if _, err := keyBindEnabled(); err != nil {
-				return nil, err
-			}
-			k.autoBindKey(protocol)
-		}
+		k.autoBindKey(protocol)
 	}
 
 	if !opts.Standalone && s.apiURL != "" && (s.apiKey != "" || s.signer != nil) {
@@ -729,6 +724,9 @@ func ResolveRequireLocalPolicy(id *identity.Identity) (required bool, from strin
 // (applyRequireLocalPolicy), which depends on that identity.
 func (k *Kit) resolveIdentityAndPolicy() error {
 	s := &k.s
+	if _, err := keyBindEnabled(); err != nil {
+		return err
+	}
 	if !k.opts.Standalone && s.apiURL != "" && s.apiKey != "" {
 		// An identity (from a self-bind or a re-pair) wins over API_KEY.
 		if _, err := k.preferIdentity(); err != nil {
