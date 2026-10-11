@@ -14,8 +14,11 @@
 //     an address must be in an admitted prefix; metadata, link-local,
 //     multicast and unspecified addresses are refused whatever the scope
 //     says;
-//   - applies the rate limit (connections per second for the task, and per
-//     destination host);
+//   - applies the rate limit: connections per second for the task, and an
+//     adaptive rate per destination host (adapt.HostRate) that backs off
+//     on 429/503 (honoring Retry-After), resets, timeouts, failed TLS
+//     handshakes and blocks, and never goes above the task's ceiling;
+//     a host it cannot cover is a coverage gap (Forwarder.TargetRate);
 //   - records the destination, the verdict and the bytes (Record).
 //
 // The forwarder enforces nothing by itself: a tool reaches the network only
@@ -40,6 +43,7 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 )
 
@@ -103,7 +107,9 @@ var ErrRefused = errors.New("egress: destination refused")
 type Limits struct {
 	// Rate is connections per second for the task (0: 100).
 	Rate float64
-	// PerHostRate is connections per second to one host (0: Rate).
+	// PerHostRate is the ceiling of the adaptive rate to one host:
+	// connections, and requests on a connection the forwarder reads, per
+	// second (0: Rate). The rate starts below it and never exceeds it.
 	PerHostRate float64
 	// MaxConns is how many connections may be open at once (0: 256).
 	MaxConns int
@@ -160,12 +166,12 @@ type Forwarder struct {
 	addrLimits  map[netip.Addr][]string
 	authority   tlsAuthority
 
-	rate    *rate.Limiter
-	mu      sync.Mutex
-	perHost map[string]*rate.Limiter
-	records []Record
-	dropped int
-	conns   chan struct{}
+	rate     *rate.Limiter
+	hostRate *adapt.HostRate
+	mu       sync.Mutex
+	records  []Record
+	dropped  int
+	conns    chan struct{}
 }
 
 // New returns the forwarder of one task. Names are normalized (lower case,
@@ -173,8 +179,9 @@ type Forwarder struct {
 func New(scope Scope, limits Limits) *Forwarder {
 	limits = limits.withDefaults()
 	f := &Forwarder{scope: scope, limits: limits, names: map[string][]netip.Addr{},
-		rate: rate.NewLimiter(rate.Limit(limits.Rate), max(1, int(limits.Rate))), perHost: map[string]*rate.Limiter{},
-		conns: make(chan struct{}, limits.MaxConns)}
+		rate:     rate.NewLimiter(rate.Limit(limits.Rate), max(1, int(limits.Rate))),
+		hostRate: adapt.NewHostRate(limits.PerHostRate),
+		conns:    make(chan struct{}, limits.MaxConns)}
 	for n, addrs := range scope.Names {
 		key := normName(n)
 		f.names[key] = append(f.names[key], addrs...)
@@ -299,21 +306,18 @@ func (f *Forwarder) isVendor(h string) bool {
 	return false
 }
 
-// allowRate waits for the task's and the host's rate (bounded by ctx).
+// TargetRate is the task's per-host rate controller: its Summary has the
+// rates reached and the hosts whose coverage is incomplete (gaps). Set its
+// OnChange before Serve to log the rate changes.
+func (f *Forwarder) TargetRate() *adapt.HostRate { return f.hostRate }
+
+// allowRate waits for the task's rate and the host's adaptive rate (bounded
+// by ctx); a host whose breaker is open is refused (adapt.ErrHostUnavailable).
 func (f *Forwarder) allowRate(ctx context.Context, host string) error {
-	f.mu.Lock()
-	l, ok := f.perHost[host]
-	if !ok {
-		l = rate.NewLimiter(rate.Limit(f.limits.PerHostRate), max(1, int(f.limits.PerHostRate)))
-		if len(f.perHost) < 65536 {
-			f.perHost[host] = l
-		}
-	}
-	f.mu.Unlock()
 	if err := f.rate.Wait(ctx); err != nil {
 		return err
 	}
-	return l.Wait(ctx)
+	return f.hostRate.Acquire(ctx, host)
 }
 
 // dial checks, rate-limits and dials host:port; it records the attempt.
@@ -341,10 +345,14 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 		c, err := dial(dctx, "tcp", net.JoinHostPort(a.String(), strconv.Itoa(port)))
 		cancel()
 		if err == nil {
+			f.hostRate.ReportDial(normName(host), port, nil)
 			rec.Verdict, rec.Addr = Allowed, a.String()
 			return c, rec, nil
 		}
 		lastErr = err
+	}
+	if ctx.Err() == nil {
+		f.hostRate.ReportDial(normName(host), port, lastErr)
 	}
 	rec.Verdict, rec.Reason = Allowed, "dial failed: "+lastErr.Error()
 	f.record(*rec)

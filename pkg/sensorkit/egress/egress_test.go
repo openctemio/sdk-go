@@ -289,8 +289,10 @@ func TestDNS(t *testing.T) {
 func TestRateLimit(t *testing.T) {
 	f := New(Scope{Prefixes: []netip.Prefix{pfx("192.0.2.0/24")}}, Limits{Rate: 20})
 	start := time.Now()
-	for range 30 {
-		if err := f.allowRate(context.Background(), "192.0.2.1"); err != nil {
+	// Distinct hosts: each host's own adaptive rate starts below the
+	// ceiling (adapt.HostRate); the task's rate is what is measured.
+	for i := range 30 {
+		if err := f.allowRate(context.Background(), fmt.Sprintf("192.0.2.%d", i+1)); err != nil {
 			t.Fatal(err)
 		}
 	}

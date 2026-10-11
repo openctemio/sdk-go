@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1526,9 +1527,10 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// Targets the scan-target policy refused here (a name that no longer
 	// resolves, or now resolves to a denied address, since admission): the
 	// scanner never saw them; the command completes as partial.
-	for k, v := range RefusedTargetsMetadata(refusedTargets) {
-		result.Metadata[k] = v
-	}
+	maps.Copy(result.Metadata, RefusedTargetsMetadata(refusedTargets))
+	// Hosts the scan could not fully cover: the command completes, and the
+	// result says which hosts and why.
+	maps.Copy(result.Metadata, CoverageGapsMetadata(scanResult))
 
 	// Parse and push results if pusher is configured. Empty (or whitespace-
 	// only) output is a scan that found nothing; anything else must be read by
@@ -1885,8 +1887,9 @@ const (
 // (CTIS spec 4.5), and the platform auto-resolves findings a run no longer
 // reports only on full coverage.
 //
-//   - A run the scanner says stopped part-way (ScanResult.Error) or with
-//     targets it could not scan (properties.failed_targets) is partial, even
+//   - A run the scanner says stopped part-way (ScanResult.Error), with
+//     targets it could not scan (properties.failed_targets) or with hosts
+//     it could not fully cover (ScanResult.CoverageGaps) is partial, even
 //     when the parser declared full.
 //   - Otherwise a value the parser declared is kept.
 //   - A repository scan (metadata.branch set) is partial: it has its own,
@@ -1895,7 +1898,7 @@ const (
 //   - Anything else, a completed run over its targets, is full.
 func scanCoverageType(report *ctis.Report, r *ScanResult) string {
 	declared := report.Metadata.CoverageType
-	if (r != nil && r.Error != "") || hasFailedTargets(report) {
+	if (r != nil && (r.Error != "" || r.HasCoverageGaps())) || hasFailedTargets(report) {
 		if declared == coverageTypeIncremental {
 			return declared
 		}
