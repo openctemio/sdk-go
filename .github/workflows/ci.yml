@@ -93,6 +93,8 @@ jobs:
   sandbox-netns:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      NETNS_IMAGE: ghcr.io/openctemio/mirror/debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -107,6 +109,25 @@ jobs:
           CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/netns/executor.test" ./pkg/sensorkit/executor/
           CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/netns/toolhost.test" ./pkg/sensorkit/toolhost/
 
+      # Public CI image mirror (openctemio/openctem .github/ci-images.txt):
+      # same digest as the upstream image, without the anonymous
+      # public.ecr.aws / Docker Hub quotas shared by runner IPs. The login is
+      # non-fatal (fork pull requests pull the public package anonymously); the
+      # pull retries with backoff on registry errors.
+      - name: Pull the test container image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin >/dev/null 2>&1 \
+            || echo "::notice::GHCR login failed; pulling anonymously"
+          delay=10
+          for i in 1 2 3 4 5; do
+            docker pull -q "$NETNS_IMAGE" && exit 0
+            [ "$i" -lt 5 ] && { echo "::warning::pull attempt $i failed; retrying in ${delay}s"; sleep "$delay"; delay=$((delay * 2)); }
+          done
+          exit 1
+
       - name: Run them confined
         run: |
           chmod -R a+rX "$RUNNER_TEMP/netns" .
@@ -115,7 +136,7 @@ jobs:
             docker run --rm --user 23456:23456 --security-opt seccomp=unconfined \
               -e OPENCTEM_TEST_REQUIRE_NETNS=1 -v "$RUNNER_TEMP/netns:/t:ro" \
               -v "$PWD/pkg/sensorkit/$t:/src:ro" -w /src \
-              public.ecr.aws/docker/library/debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 \
+              "$NETNS_IMAGE" \
               "/t/$t.test" -test.v -test.count=1
           done
 
