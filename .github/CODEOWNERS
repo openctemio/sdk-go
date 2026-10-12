@@ -1,0 +1,48 @@
+# CODEOWNERS is read from the base branch of each pull request. No teams exist
+# in the openctemio organization yet, so owners are users.
+
+*  @0xmanhnv
+
+# BEGIN security-paths (generated from .github/security-paths.yml; do not edit)
+# identity
+/pkg/core/auth_gate.go @0xmanhnv
+/pkg/sensorkit/identity/** @0xmanhnv
+/pkg/sensorkit/keybind.go @0xmanhnv
+/pkg/sensorkit/keybound.go @0xmanhnv
+/pkg/sensorkit/keyrenew.go @0xmanhnv
+/pkg/client/keybind.go @0xmanhnv
+# signing
+/pkg/jobsig/** @0xmanhnv
+/pkg/sensorsig/** @0xmanhnv
+/pkg/core/job_signing.go @0xmanhnv
+/pkg/core/template_signing.go @0xmanhnv
+/pkg/sensorkit/jobsigning.go @0xmanhnv
+# sensor-protocol
+/pkg/sensorproto/** @0xmanhnv
+/pkg/transport/** @0xmanhnv
+/pkg/client/client.go @0xmanhnv
+/pkg/client/transport_v3*.go @0xmanhnv
+# local-policy
+/pkg/core/local_policy*.go @0xmanhnv
+/pkg/core/refused_targets.go @0xmanhnv
+/pkg/core/scan_target.go @0xmanhnv
+/pkg/core/org_http_policy.go @0xmanhnv
+/pkg/scopelimit/** @0xmanhnv
+/pkg/webscope/** @0xmanhnv
+# sandbox-credentials
+/pkg/sensorkit/sandbox.go @0xmanhnv
+/pkg/sensorkit/toolhost/** @0xmanhnv
+/pkg/sensorkit/egress/** @0xmanhnv
+/pkg/core/scanner_env*.go @0xmanhnv
+/pkg/credentials/** @0xmanhnv
+/internal/toolrt/** @0xmanhnv
+# outbound-ssrf
+/pkg/httpsec/** @0xmanhnv
+# ci-release
+/.github/workflows/** @0xmanhnv
+/.github/scripts/** @0xmanhnv
+/.github/security-paths.yml @0xmanhnv
+/.github/CODEOWNERS @0xmanhnv
+# deploy-defaults
+/**/Dockerfile* @0xmanhnv
+# END security-paths

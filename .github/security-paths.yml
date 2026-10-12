@@ -1,0 +1,81 @@
+# Security-sensitive paths: the one list the `security-gate` check and the
+# security block of .github/CODEOWNERS are built from.
+#
+# A pull request that changes a file matching any pattern below is labelled
+# `security-sensitive`, gets an automated security review comment, and passes
+# the required `security-gate` check only once a maintainer listed under
+# `ackers` adds the `security-ack` label and the review has no open HIGH
+# finding. The gate (.github/scripts/security_gate.py) is a copy of the one in
+# openctemio/openctem, where it is tested; how it works and how to override it
+# in an emergency: CONTRIBUTING.md#security-sensitive-changes.
+#
+# Format: a top-level `key:` line followed by `  - pattern` lines. Patterns are
+# repository-relative globs: `**` matches any number of directories, `*` and
+# `?` never match `/`. The gate reads this file from the BASE branch. After
+# editing it run `python3 .github/scripts/security_gate.py codeowners --write`.
+
+# GitHub users whose `security-ack` label counts.
+ackers:
+  - 0xmanhnv
+
+# Files that count only when a change removes lines from them.
+removal-only:
+  - '**/*_test.go'
+  - '**/testdata/**'
+
+# Sensor identity, key binding and renewal, and the API auth gate.
+identity:
+  - pkg/core/auth_gate.go
+  - pkg/sensorkit/identity/**
+  - pkg/sensorkit/keybind.go
+  - pkg/sensorkit/keybound.go
+  - pkg/sensorkit/keyrenew.go
+  - pkg/client/keybind.go
+
+# Job and template signatures.
+signing:
+  - pkg/jobsig/**
+  - pkg/sensorsig/**
+  - pkg/core/job_signing.go
+  - pkg/core/template_signing.go
+  - pkg/sensorkit/jobsigning.go
+
+# Sensor protocol: v2 messages, v3 gRPC transport with mTLS, binding selection.
+sensor-protocol:
+  - pkg/sensorproto/**
+  - pkg/transport/**
+  - pkg/client/client.go
+  - pkg/client/transport_v3*.go
+
+# Sensor-local policy: which targets a sensor refuses, scope limits.
+local-policy:
+  - pkg/core/local_policy*.go
+  - pkg/core/refused_targets.go
+  - pkg/core/scan_target.go
+  - pkg/core/org_http_policy.go
+  - pkg/scopelimit/**
+  - pkg/webscope/**
+
+# Tool sandboxing, egress and credential isolation.
+sandbox-credentials:
+  - pkg/sensorkit/sandbox.go
+  - pkg/sensorkit/toolhost/**
+  - pkg/sensorkit/egress/**
+  - pkg/core/scanner_env*.go
+  - pkg/credentials/**
+  - internal/toolrt/**
+
+# Outbound HTTP: the SSRF guard.
+outbound-ssrf:
+  - pkg/httpsec/**
+
+# CI, release tooling and this gate.
+ci-release:
+  - .github/workflows/**
+  - .github/scripts/**
+  - .github/security-paths.yml
+  - .github/CODEOWNERS
+
+# Images.
+deploy-defaults:
+  - '**/Dockerfile*'
