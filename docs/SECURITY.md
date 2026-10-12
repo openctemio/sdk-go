@@ -296,7 +296,7 @@ exec.SetScanTargetPolicy(&core.ScanTargetPolicy{
 | Variable | Effect |
 |----------|--------|
 | `OPENCTEM_SDK_SCAN_ROOTS` | Allowed roots (`:`-separated) for the default policy |
-| `OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS=1` | Allow RFC1918/ULA targets (`SENSOR_ALLOW_PRIVATE_TARGETS=1` — or its pre-rename name `AGENT_ALLOW_PRIVATE_TARGETS=1`, read with a deprecation warning — and `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1` are honored too; setting the sensor and agent names to different values refuses every target) |
+| `SENSOR_ALLOW_PRIVATE_TARGETS=1` | Allow RFC1918/ULA targets (`SENSOR_ALLOW_PRIVATE_TARGETS=1` — or its pre-rename name `AGENT_ALLOW_PRIVATE_TARGETS=1`, read with a deprecation warning — and `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1` are honored too; setting the sensor and agent names to different values refuses every target) |
 
 #### A sensor without a local policy: fail closed or legacy
 
@@ -577,7 +577,7 @@ probes (`core.VersionOutput`, `core.CheckBinaryInstalled`,
 `BaseScanner.IsInstalled`), content downloads (`core.ContentEnviron`) and
 the `git diff` of the sensor's CI-mode strategy (which also keeps the `GIT_DIR`,
 `GIT_WORK_TREE`, `GIT_CEILING_DIRECTORIES` and `GIT_CONFIG_*` variables
-that locate the repository). The sensor's key (`API_KEY`, `SENSOR_*`,
+that locate the repository). The sensor's key (`SENSOR_API_KEY`, `SENSOR_*`,
 `OPENCTEM_*`), the outbox key, tokens and passwords are not on the list.
 Two things on it can carry a secret by the operator's choice: the proxy
 variables, which may hold `user:password` (scanners stop getting them with
@@ -767,7 +767,7 @@ store := credentials.NewFileStore(path)  // Only for non-sensitive data
 
 ### 2. Transport Security
 
-- Point `API_URL` (`client.Config.BaseURL`) at an `https://` URL outside a
+- Point `SENSOR_API_URL` (`client.Config.BaseURL`) at an `https://` URL outside a
   private network; plain `http` to a non-loopback host logs a warning.
 - Never disable certificate verification. Trust a private CA with
   `SENSOR_CA_CERT_FILE`, and pin it with `SENSOR_CA_FINGERPRINT` (from the
@@ -799,7 +799,7 @@ leaseConfig := &platform.LeaseConfig{
 
 ```bash
 # DO: Use environment variables for secrets
-export API_KEY="<sensor key>"   # or pair the sensor and set no key at all
+export SENSOR_API_KEY="<sensor key>"   # or pair the sensor and set no key at all
 
 # DON'T: Commit secrets to version control
 # api_key: "<key>"  # Never do this!
@@ -816,7 +816,7 @@ export API_KEY="<sensor key>"   # or pair the sensor and set no key at all
 - [ ] Key validation enabled (automatic)
 
 ### Transport
-- [ ] `API_URL` uses `https://` in production
+- [ ] `SENSOR_API_URL` uses `https://` in production
 - [ ] A private CA is trusted with `SENSOR_CA_CERT_FILE`, never by skipping verification
 - [ ] The sensor reports `posture.platform_tls.pin: fingerprint` (paired by this SDK, or `SENSOR_CA_FINGERPRINT`)
 

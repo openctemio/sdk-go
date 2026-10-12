@@ -18,7 +18,7 @@ type SensorEndpoint struct {
 }
 
 // StartSensor starts the sensor under test against p (in process, or as a
-// child process with API_URL / API_KEY set) and returns a function that
+// child process with SENSOR_API_URL / SENSOR_API_KEY set) and returns a function that
 // stops it and waits until it has exited. The fake listens on 127.0.0.1: an
 // SDK-based sensor needs httpsec.AllowLoopback (or
 // OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK=1 for a child process) to reach it.

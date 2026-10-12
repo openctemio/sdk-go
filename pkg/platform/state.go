@@ -6,7 +6,7 @@ package platform
 // A sensor that renews its own key (KeyRenewManager) must find the renewed
 // key again after a restart: the server retires the key the sensor was
 // installed with shortly after the renewal, so a container recreated with
-// only its original API_KEY would come back with a dead key. The renewed key
+// only its original SENSOR_API_KEY would come back with a dead key. The renewed key
 // therefore lives in a credentials file in the state directory, which the
 // install snippets and the Helm chart mount on a persistent volume, and it is
 // preferred over the configured key on start (ChooseAPIKey).
@@ -190,7 +190,7 @@ type KeyChoice struct {
 }
 
 // ChooseAPIKey picks the key a sensor starts with, from its configured key
-// (API_KEY, a flag, a config file) and the credentials file. The renewed key
+// (SENSOR_API_KEY, a flag, a config file) and the credentials file. The renewed key
 // in the file wins, because a renewal retires the configured key, except:
 //
 //   - the file is missing, unreadable or empty, or belongs to another sensor

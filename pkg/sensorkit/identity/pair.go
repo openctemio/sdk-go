@@ -33,7 +33,7 @@ var (
 
 // PairOptions configures Pair.
 type PairOptions struct {
-	// BaseURL is the platform API URL (API_URL).
+	// BaseURL is the platform API URL (SENSOR_API_URL).
 	BaseURL string
 	// Store keeps the key and receives the identity.
 	Store *Store

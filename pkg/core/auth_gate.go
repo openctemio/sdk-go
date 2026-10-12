@@ -53,7 +53,7 @@ const keyNotReceivedMessage = "API key required"
 // in one actionable sentence: the HTTP status, the key's non-secret prefix
 // (keyHint, see APIKeyHint) and what to do. A 401 saying "API key required"
 // although the sensor sent its key means the key never reached the API:
-// API_URL points at the web UI, or at a proxy that strips the Authorization
+// SENSOR_API_URL points at the web UI, or at a proxy that strips the Authorization
 // header, rather than at the API.
 func AuthFailureAdvice(err error, keyHint string) string {
 	status := AuthFailureStatus(err)
@@ -64,13 +64,13 @@ func AuthFailureAdvice(err error, keyHint string) string {
 	}
 	if status == http.StatusUnauthorized && strings.Contains(err.Error(), keyNotReceivedMessage) {
 		return fmt.Sprintf("the platform answered HTTP 401 %q although the sensor sent its API key (%s): "+
-			"the key never reached the API. API_URL probably points at the OpenCTEM web UI or at a proxy "+
-			"that strips the Authorization header; set API_URL to the API host and restart the sensor",
+			"the key never reached the API. SENSOR_API_URL probably points at the OpenCTEM web UI or at a proxy "+
+			"that strips the Authorization header; set SENSOR_API_URL to the API host and restart the sensor",
 			keyNotReceivedMessage, keyHint)
 	}
 	return fmt.Sprintf("the platform rejected the API key (HTTP %d, key %s): the key is wrong, revoked or expired, "+
 		"or the sensor was disabled, deleted or given a new key. Create or regenerate a key under "+
-		"Settings → Sensors, set API_KEY to it and restart the sensor", status, keyHint)
+		"Settings → Sensors, set SENSOR_API_KEY to it and restart the sensor", status, keyHint)
 }
 
 // keyBoundHintPrefix starts the hint of a key-bound sensor (KeyBoundHint).

@@ -42,9 +42,9 @@ type Options struct {
 	// Region is the deployment region (REGION, AWS_REGION, ...).
 	Region string
 
-	// APIURL is the platform's URL (API_URL).
+	// APIURL is the platform's URL (SENSOR_API_URL).
 	APIURL string
-	// APIKey is the sensor's API key (API_KEY).
+	// APIKey is the sensor's API key (SENSOR_API_KEY).
 	APIKey string
 	// SensorID is the sensor's id, when the key is not bound to one
 	// (SENSOR_ID).
@@ -172,7 +172,7 @@ type Options struct {
 	// kept in ~/.openctem is moved there) and preferred over the configured
 	// key on the next start, unless the configured key changed since.
 	// KeyAutoRenew forces renewal on, NoKeyAutoRenew forces it off; with
-	// neither, PLATFORM_KEY_AUTORENEW=true|false decides, and unset it is on
+	// neither, SENSOR_KEY_AUTORENEW=true|false decides, and unset it is on
 	// only when StateDir survives the sensor being recreated (outside a
 	// container always; inside, on a mounted, non-tmpfs volume).
 	KeyAutoRenew    bool
@@ -729,7 +729,7 @@ func (k *Kit) resolveIdentityAndPolicy() error {
 		return err
 	}
 	if !k.opts.Standalone && s.apiURL != "" && s.apiKey != "" {
-		// An identity (from a self-bind or a re-pair) wins over API_KEY.
+		// An identity (from a self-bind or a re-pair) wins over SENSOR_API_KEY.
 		if _, err := k.preferIdentity(); err != nil {
 			return err
 		}

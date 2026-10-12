@@ -22,7 +22,7 @@ This example uses `pkg/client` against a running OpenCTEM API to:
 From the root of this repository:
 
 ```bash
-export API_KEY="<sensor API key>"
+export SENSOR_API_KEY="<sensor API key>"
 go run ./examples/integration-test/
 ```
 
@@ -31,7 +31,7 @@ Flags:
 | Flag | Default | Meaning |
 |---|---|---|
 | `-url` | `http://localhost:8080` | The API base URL (not the web console) |
-| `-api-key` | `API_KEY` | The sensor API key |
+| `-api-key` | `SENSOR_API_KEY` | The sensor API key |
 | `-sensor-id` | none | The sensor id, when the key is not bound to one |
 | `-verbose` | `true` | Log every request |
 
@@ -42,6 +42,6 @@ at the end. The client speaks sensor protocol v2 (`/api/v2/sensor/*`).
 
 | Message | Fix |
 |---|---|
-| `API key required` | Pass `-api-key` or set `API_KEY`. If it is set, `-url` points at the web console or at a proxy that strips the `Authorization` header: point it at the API. |
+| `API key required` | Pass `-api-key` or set `SENSOR_API_KEY`. If it is set, `-url` points at the web console or at a proxy that strips the `Authorization` header: point it at the API. |
 | `401` / invalid API key | The key is wrong, or the sensor was deleted or its key regenerated. Create or regenerate a key under Settings > Sensors. |
 | `connection refused` | The API is not running at `-url`. |

@@ -235,7 +235,7 @@ func (b *Bootstrapper) doRegister(ctx context.Context, req *RegistrationRequest)
 // detectRegion tries to detect the deployment region from environment variables.
 func detectRegion() string {
 	envVars := []string{
-		"REGION",
+		"SENSOR_REGION",
 		"AWS_REGION",
 		"AWS_DEFAULT_REGION",
 		"GOOGLE_CLOUD_REGION",

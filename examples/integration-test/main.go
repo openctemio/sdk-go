@@ -30,7 +30,7 @@ func main() {
 	// Check required flags
 	if *apiKey == "" {
 		// Try to get from environment
-		*apiKey = os.Getenv("API_KEY")
+		*apiKey = os.Getenv("SENSOR_API_KEY")
 		if *apiKey == "" {
 			log.Fatal("API key is required. Use -api-key flag or API_KEY environment variable")
 		}

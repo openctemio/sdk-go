@@ -132,13 +132,13 @@ func TestAutoBindKey_BindsAndPrefersTheIdentity(t *testing.T) {
 	if store.BindPending() {
 		t.Fatal("the marker must be gone once the bind is confirmed")
 	}
-	// Next start with API_KEY still configured: the identity wins, no new bind.
+	// Next start with SENSOR_API_KEY still configured: the identity wins, no new bind.
 	k2, errw2 := bindKit(t, srv.URL, dir)
 	if ok, err := k2.preferIdentity(); err != nil || !ok || k2.s.apiKey != "" || k2.s.signer == nil {
 		t.Fatalf("preferIdentity: %v %v", ok, err)
 	}
-	if !strings.Contains(errw2.String(), "API_KEY is ignored") {
-		t.Fatalf("operator not told to remove API_KEY: %s", errw2)
+	if !strings.Contains(errw2.String(), "SENSOR_API_KEY is ignored") {
+		t.Fatalf("operator not told to remove SENSOR_API_KEY: %s", errw2)
 	}
 	k2.autoBindKey(client.ProtocolAuto)
 	if f.binds != 1 {
