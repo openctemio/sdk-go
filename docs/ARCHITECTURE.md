@@ -36,13 +36,13 @@ the sensor connects out, over HTTPS, using sensor protocol v2
 
 Every request a sensor makes is attributed to the sensor by its credential:
 either a key-bound identity created by pairing (the sensor signs every request
-with its own Ed25519 key, RFC 9421) or a bearer API key (`API_KEY`). Protocol
+with its own Ed25519 key, RFC 9421) or a bearer API key (`SENSOR_API_KEY`). Protocol
 v2 identifies a sensor by its credential alone.
 
 ```go
 c := client.New(&client.Config{
     BaseURL: "https://openctem.example.com", // the API base URL
-    APIKey:  os.Getenv("API_KEY"),
+    APIKey:  os.Getenv("SENSOR_API_KEY"),
 })
 ```
 

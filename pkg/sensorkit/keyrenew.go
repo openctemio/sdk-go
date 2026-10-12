@@ -27,7 +27,7 @@ var statePersistence = platform.CheckStatePersistence
 // consulted, and the renewal decision.
 type startKey struct {
 	file          string // credentials file renewed keys are saved to
-	configuredKey string // the key from Options / API_KEY
+	configuredKey string // the key from Options / SENSOR_API_KEY
 	key           string // the key to start with
 	fromStateFile bool
 	expiresAt     *time.Time

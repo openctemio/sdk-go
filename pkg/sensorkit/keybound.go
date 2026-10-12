@@ -23,7 +23,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/sensorsig"
 )
 
-// checkCAPinHost warns when SENSOR_CA_FINGERPRINT is set but API_URL names
+// checkCAPinHost warns when SENSOR_CA_FINGERPRINT is set but SENSOR_API_URL names
 // the platform by an IP address: a pinned connection needs a host name to
 // check the certificate against (httpsec.ErrPinnedCANoServerName), so every
 // platform request would fail.
@@ -87,7 +87,7 @@ func (k *Kit) resolveIdentity() error {
 	}
 	if k.opts.NoAutoPair {
 		return usageError(fmt.Errorf("the sensor has no API key and is not paired: run `openctemio-sensor pair`, " +
-			"or set API_KEY"))
+			"or set SENSOR_API_KEY"))
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -86,7 +86,7 @@ func TestAuthGate_RejectedBacksOffAndRecovers(t *testing.T) {
 		t.Fatalf("want one log line per backoff step (%d), got %d:\n%s", len(want), len(logged), buf.String())
 	}
 	first := logged[0]
-	for _, part := range []string{"HTTP 401", "rda_ab12…", "Settings → Sensors", "API_KEY", "next check in 30s", "attempt 1"} {
+	for _, part := range []string{"HTTP 401", "rda_ab12…", "Settings → Sensors", "SENSOR_API_KEY", "next check in 30s", "attempt 1"} {
 		if !strings.Contains(first, part) {
 			t.Errorf("log line lacks %q: %s", part, first)
 		}
@@ -327,14 +327,14 @@ func TestBaseSensor_FirstHeartbeatIsNotRepeatedByStart(t *testing.T) {
 
 func TestAuthFailureAdvice(t *testing.T) {
 	rejected := AuthFailureAdvice(&statusErr{401}, "rda_ab12…")
-	for _, part := range []string{"rejected the API key", "HTTP 401", "rda_ab12…", "Settings → Sensors", "API_KEY"} {
+	for _, part := range []string{"rejected the API key", "HTTP 401", "rda_ab12…", "Settings → Sensors", "SENSOR_API_KEY"} {
 		if !strings.Contains(rejected, part) {
 			t.Errorf("advice lacks %q: %s", part, rejected)
 		}
 	}
 	// The key never reached the API (web UI origin, header-stripping proxy).
 	stripped := AuthFailureAdvice(fmt.Errorf("request failed: %w", &bodyStatusErr{401, `{"code":"UNAUTHORIZED","message":"API key required"}`}), "rda_ab12…")
-	for _, part := range []string{"never reached the API", "web UI", "Authorization header", "API_URL", "rda_ab12…"} {
+	for _, part := range []string{"never reached the API", "web UI", "Authorization header", "SENSOR_API_URL", "rda_ab12…"} {
 		if !strings.Contains(stripped, part) {
 			t.Errorf("stripped-key advice lacks %q: %s", part, stripped)
 		}

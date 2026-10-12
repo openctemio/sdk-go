@@ -27,6 +27,10 @@ func clearEnv(t *testing.T) {
 		t.Setenv(k, "")
 		_ = os.Unsetenv(k)
 	}
+	for _, r := range RemovedEnv {
+		t.Setenv(r.Old, "")
+		_ = os.Unsetenv(r.Old)
+	}
 }
 
 func TestResolveMaxJobs(t *testing.T) {
@@ -124,14 +128,14 @@ func TestCheckCredentials(t *testing.T) {
 	if !errors.Is(err, ErrNeedsPlatform) || ExitCode(err) != ExitUsage {
 		t.Fatalf("err = %v (exit %d)", err, ExitCode(err))
 	}
-	for _, want := range []string{"API_URL", "API_KEY", "Settings > Sensors"} {
+	for _, want := range []string{"SENSOR_API_URL", "SENSOR_API_KEY", "Settings > Sensors"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %s", err, want)
 		}
 	}
 	// A sensor's own wording, exactly.
 	err = CheckCredentials("https://api", "", CredentialsHelp{Subject: "a server-controlled daemon (-daemon -enable-commands)", Hint: "  hint"})
-	want := "a server-controlled daemon (-daemon -enable-commands) needs the platform URL and a sensor API key; missing: [API_KEY].\n  hint"
+	want := "a server-controlled daemon (-daemon -enable-commands) needs the platform URL and a sensor API key; missing: [SENSOR_API_KEY].\n  hint"
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %q\nwant  %q", err, want)
 	}
@@ -178,7 +182,7 @@ func resetMigration(t *testing.T) {
 	t.Cleanup(func() { migrateOnce, migrateErr = sync.Once{}, nil })
 }
 
-func TestMigrateSettings_LegacyEnvAndFlags(t *testing.T) {
+func TestMigrateSettings_FlagStillMigrated(t *testing.T) {
 	clearEnv(t)
 	resetMigration(t)
 	var warns []string
@@ -186,7 +190,6 @@ func TestMigrateSettings_LegacyEnvAndFlags(t *testing.T) {
 	legacyv1.Warn = func(old, replacement, kind string) { warns = append(warns, kind+":"+old+"->"+replacement) }
 	t.Cleanup(func() { legacyv1.Warn = prev })
 
-	t.Setenv("AGENT_NAME", "edge-1")
 	fs := flag.NewFlagSet("sensor", flag.ContinueOnError)
 	id := fs.String("sensor-id", "", "")
 	_ = fs.String("agent-id", "", "")
@@ -196,25 +199,32 @@ func TestMigrateSettings_LegacyEnvAndFlags(t *testing.T) {
 	if err := MigrateSettings(fs); err != nil {
 		t.Fatal(err)
 	}
-	if os.Getenv(EnvSensorName) != "edge-1" || *id != "s-1" {
-		t.Fatalf("SENSOR_NAME %q, -sensor-id %q", os.Getenv(EnvSensorName), *id)
-	}
-	if len(warns) != 2 {
-		t.Fatalf("warnings %v, want one per deprecated name", warns)
+	if *id != "s-1" || len(warns) != 1 {
+		t.Fatalf("-sensor-id %q, warnings %v", *id, warns)
 	}
 }
 
-func TestMigrateLegacyEnv_ConflictIsUsageError(t *testing.T) {
+// Every removed name is refused at start-up, naming its replacement and
+// never the value (exit code ExitUsage), and New refuses to start with it.
+func TestMigrateLegacyEnv_RefusesRemovedNames(t *testing.T) {
+	for _, r := range RemovedEnv {
+		t.Run(r.Old, func(t *testing.T) {
+			clearEnv(t)
+			resetMigration(t)
+			t.Setenv(r.Old, "secret-value-1")
+			err := MigrateLegacyEnv()
+			if err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), r.Old) || !strings.Contains(err.Error(), r.New) {
+				t.Fatalf("err = %v (exit %d)", err, ExitCode(err))
+			}
+			if strings.Contains(err.Error(), "secret-value-1") {
+				t.Fatal("the error leaks a value")
+			}
+		})
+	}
 	clearEnv(t)
 	resetMigration(t)
-	t.Setenv("AGENT_ID", "a")
-	t.Setenv(EnvSensorID, "b")
-	err := MigrateLegacyEnv()
-	if err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), "AGENT_ID") || !strings.Contains(err.Error(), "SENSOR_ID") {
-		t.Fatalf("err = %v (exit %d)", err, ExitCode(err))
-	}
-	// New refuses to start with it.
+	t.Setenv("API_KEY", "k")
 	if _, err := New(Options{DisableCommands: true, Standalone: true}); ExitCode(err) != ExitUsage {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("New with API_KEY set: %v", err)
 	}
 }

@@ -32,7 +32,7 @@ func TestAuthFailureVisibleToCore(t *testing.T) {
 }
 
 // Through the web UI origin (or a proxy that strips Authorization) the API
-// answers 401 "API key required": the advice must point at API_URL, not at
+// answers 401 "API key required": the advice must point at SENSOR_API_URL, not at
 // the key.
 func TestAuthFailureAdvice_KeyNeverReachedAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -44,7 +44,7 @@ func TestAuthFailureAdvice_KeyNeverReachedAPI(t *testing.T) {
 	c := New(&Config{BaseURL: srv.URL, APIKey: "rda_5d221b75e7c2c415", MaxRetries: 1})
 	err := c.SendHeartbeat(context.Background(), &core.SensorStatus{Name: "t"})
 	advice := core.AuthFailureAdvice(err, c.APIKeyHint())
-	if !strings.Contains(advice, "never reached the API") || !strings.Contains(advice, "API_URL") {
+	if !strings.Contains(advice, "never reached the API") || !strings.Contains(advice, "SENSOR_API_URL") {
 		t.Fatalf("advice %q", advice)
 	}
 }

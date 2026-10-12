@@ -11,7 +11,6 @@ import (
 	"unicode"
 
 	"github.com/openctemio/sdk-go/pkg/httpsec"
-	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
 // Scan target validation for server-dispatched commands.
@@ -30,14 +29,14 @@ const (
 	// EnvScanRoots is a filepath.ListSeparator-separated list (':' on Unix)
 	// of directories filesystem scan targets must live under.
 	EnvScanRoots = "OPENCTEM_SDK_SCAN_ROOTS"
-	// EnvAllowPrivateTargets=1 permits RFC1918 / IPv6 ULA network targets.
-	EnvAllowPrivateTargets = "OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS"
-	// EnvSensorAllowPrivateTargets is the OpenCTEM sensor's switch for the
-	// same posture; honored so an on-prem sensor keeps one knob. Its
-	// pre-rename name AGENT_ALLOW_PRIVATE_TARGETS still works (with a
-	// deprecation warning); setting both to different values refuses every
-	// target (see DefaultScanTargetPolicy).
+	// EnvSensorAllowPrivateTargets=1 permits RFC1918 / IPv6 ULA network
+	// targets. It is the one switch for scan targets.
 	EnvSensorAllowPrivateTargets = "SENSOR_ALLOW_PRIVATE_TARGETS"
+	// EnvAllowPrivateTargets is EnvSensorAllowPrivateTargets.
+	//
+	// Deprecated: use EnvSensorAllowPrivateTargets. The separate
+	// OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS switch is gone.
+	EnvAllowPrivateTargets = EnvSensorAllowPrivateTargets
 )
 
 // sensitiveScanRoots are refused as filesystem targets when no AllowedRoots
@@ -92,10 +91,6 @@ type ScanTargetPolicy struct {
 	// targets themselves before the executor sees the command.
 	Disabled bool
 
-	// configErr, when set, is a configuration error found while building the
-	// default policy; Validate refuses every target with it.
-	configErr error
-
 	// LookupIP resolves a hostname; nil uses net.DefaultResolver. Exposed
 	// for tests.
 	LookupIP func(ctx context.Context, host string) ([]net.IP, error)
@@ -112,15 +107,10 @@ type ScanTargetPolicy struct {
 //
 //   - AllowedRoots from OPENCTEM_SDK_SCAN_ROOTS (unset = sensitive-path
 //     denylist only);
-//   - AllowPrivate when OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS=1, the sensor's
-//     SENSOR_ALLOW_PRIVATE_TARGETS=1 (or its pre-rename name
-//     AGENT_ALLOW_PRIVATE_TARGETS=1), or httpsec's allow-private switch
-//     (OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1) is set;
+//   - AllowPrivate when SENSOR_ALLOW_PRIVATE_TARGETS=1, the one switch for
+//     scan targets (the SDK's own egress has its own switch,
+//     OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE, which does not widen targets);
 //   - AllowLoopback follows httpsec.AllowLoopback (test harnesses only).
-//
-// When SENSOR_ALLOW_PRIVATE_TARGETS and AGENT_ALLOW_PRIVATE_TARGETS are both
-// set to different values the intended posture is unknown, so the policy
-// fails closed: Validate refuses every target with an error naming both.
 func DefaultScanTargetPolicy() *ScanTargetPolicy {
 	var roots []string
 	for _, r := range filepath.SplitList(os.Getenv(EnvScanRoots)) {
@@ -128,42 +118,28 @@ func DefaultScanTargetPolicy() *ScanTargetPolicy {
 			roots = append(roots, r)
 		}
 	}
-	sensorPrivate, _, err := legacyv1.LookupEnv(EnvSensorAllowPrivateTargets, legacyv1.OldEnvName(EnvSensorAllowPrivateTargets))
 	return &ScanTargetPolicy{
-		AllowedRoots: roots,
-		AllowPrivate: err == nil && (os.Getenv(EnvAllowPrivateTargets) == "1" ||
-			sensorPrivate == "1" ||
-			httpsec.AllowPrivate()),
+		AllowedRoots:  roots,
+		AllowPrivate:  os.Getenv(EnvSensorAllowPrivateTargets) == "1",
 		AllowLoopback: httpsec.AllowLoopback,
-		configErr:     err,
 	}
 }
 
 // CheckEnv reports a configuration error in the environment variables the
-// default scan target policy reads: SENSOR_ALLOW_PRIVATE_TARGETS and its
-// pre-rename name set to different values, or an allow-private switch set
-// to anything but "1" (allow) or "0"/empty (refuse). Only "1" enables the
-// switch, so "true" or "yes" would otherwise be silently ignored and every
-// private target refused. It also reports an unrecognized
-// OPENCTEM_SDK_SCANNER_PROXY (EnvScannerProxy). A sensor calls it at startup
-// to refuse to start instead of failing jobs later.
+// default scan target policy reads: an allow-private switch set to anything
+// but "1" (allow) or "0"/empty (refuse). Only "1" enables the switch, so
+// "true" or "yes" would otherwise be silently ignored and every private
+// target refused. It also reports an unrecognized OPENCTEM_SDK_SCANNER_PROXY
+// (EnvScannerProxy). A sensor calls it at startup to refuse to start instead
+// of failing jobs later.
 func CheckEnv() error {
-	if err := DefaultScanTargetPolicy().configErr; err != nil {
-		return err
-	}
 	if scannerProxyErr != nil {
 		return scannerProxyErr
 	}
 	for _, name := range []string{
-		EnvAllowPrivateTargets,
 		EnvSensorAllowPrivateTargets,
-		legacyv1.OldEnvName(EnvSensorAllowPrivateTargets),
 		"OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE",
-		"OPENCTEM_HTTPSEC_ALLOW_PRIVATE",
 	} {
-		if name == "" {
-			continue
-		}
 		switch v := strings.TrimSpace(os.Getenv(name)); v {
 		case "", "0", "1":
 		default:
@@ -182,9 +158,6 @@ func (p *ScanTargetPolicy) Validate(ctx context.Context, target string) (string,
 	}
 	if p.Disabled {
 		return target, nil
-	}
-	if p.configErr != nil {
-		return "", p.configErr
 	}
 
 	if strings.TrimSpace(target) == "" {

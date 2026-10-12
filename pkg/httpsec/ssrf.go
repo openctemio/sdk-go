@@ -86,8 +86,7 @@ var hardBlockedIPRanges = []string{
 }
 
 // privateIPRanges — blocked by default, opened by setting
-// OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1 (SDK) or
-// OPENCTEM_HTTPSEC_ALLOW_PRIVATE=1 (inherited). An on-prem
+// OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1. An on-prem
 // deployment scanning its own 10.x / 192.168.x services needs this
 // on.
 var privateIPRanges = []string{
@@ -99,10 +98,9 @@ var privateIPRanges = []string{
 
 // allowPrivate is the runtime toggle. The SDK check is an
 // independent switch from the API side so an SDK caller inside a
-// cloud VM doesn't inherit the API's opt-in. Accept either env var
-// name so ops can set them symmetrically across services.
-var allowPrivate = os.Getenv("OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE") == "1" ||
-	os.Getenv("OPENCTEM_HTTPSEC_ALLOW_PRIVATE") == "1"
+// cloud VM doesn't inherit the API's opt-in (OPENCTEM_HTTPSEC_ALLOW_PRIVATE,
+// which a sensor refuses at startup).
+var allowPrivate = os.Getenv("OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE") == "1"
 
 // AllowPrivate reports the current runtime posture for
 // startup-logging; do not consult it per-call (that happens inside

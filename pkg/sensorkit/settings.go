@@ -23,10 +23,12 @@ import (
 )
 
 // Environment variables the kit reads (besides the SDK's own, such as
-// SENSOR_ALLOW_PRIVATE_TARGETS, SENSOR_SCAN_ROOTS and REGION).
+// SENSOR_ALLOW_PRIVATE_TARGETS, SENSOR_SCAN_ROOTS and SENSOR_REGION). Every
+// one is SENSOR_-prefixed; RemovedEnv lists the names they replaced.
 const (
-	EnvAPIURL     = "API_URL"
-	EnvAPIKey     = "API_KEY"
+	EnvAPIURL     = "SENSOR_API_URL"
+	EnvAPIKey     = "SENSOR_API_KEY"
+	EnvRegion     = "SENSOR_REGION"
 	EnvSensorID   = "SENSOR_ID"
 	EnvSensorName = "SENSOR_NAME"
 	EnvProtocol   = "SENSOR_PROTOCOL" // auto (default) | v1 | v2
@@ -43,7 +45,7 @@ const (
 	EnvCAFingerprint = "SENSOR_CA_FINGERPRINT"
 	// EnvPlatformKey pins the platform's pairing key (its thumbprint).
 	EnvPlatformKey  = "SENSOR_PLATFORM_KEY"
-	EnvKeyAutoRenew = "PLATFORM_KEY_AUTORENEW" // true | false; unset: on when the state directory persists
+	EnvKeyAutoRenew = "SENSOR_KEY_AUTORENEW" // true | false; unset: on when the state directory persists
 	// EnvScannerPriority is the priority of scanner processes: low (the
 	// default: nice +10, lowest best-effort I/O, OOM-killed before the
 	// sensor) or normal (the sensor's own).
@@ -128,14 +130,40 @@ var (
 	migrateErr  error
 )
 
-// MigrateLegacyEnv applies the pre-rename environment variables (AGENT_ID,
-// AGENT_NAME, AGENT_ALLOW_PRIVATE_TARGETS) to their new names with a
-// deprecation warning, so everything after reads only new names. Both names
-// set to different values is an error naming both (exit code ExitUsage).
+// RemovedEnv lists environment variables a sensor no longer reads, with the
+// name that replaced each. A sensor refuses to start while one is set
+// (MigrateLegacyEnv): silently ignoring, say, AGENT_ALLOW_PRIVATE_TARGETS
+// would change what the sensor may scan without the operator noticing.
+var RemovedEnv = append(append([]legacyv1.RenamedVar{}, legacyv1.SensorRenamedEnv...),
+	legacyv1.RenamedVar{Old: "OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS", New: "SENSOR_ALLOW_PRIVATE_TARGETS"},
+	legacyv1.RenamedVar{Old: "OPENCTEM_HTTPSEC_ALLOW_PRIVATE", New: "OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE"},
+	legacyv1.RenamedVar{Old: "API_URL", New: EnvAPIURL},
+	legacyv1.RenamedVar{Old: "API_KEY", New: EnvAPIKey},
+	legacyv1.RenamedVar{Old: "REGION", New: EnvRegion},
+	legacyv1.RenamedVar{Old: "PLATFORM_KEY_AUTORENEW", New: EnvKeyAutoRenew},
+)
+
+// CheckRemovedEnv returns an error naming every RemovedEnv variable set in
+// the environment and its replacement (never a value).
+func CheckRemovedEnv(lookup func(string) (string, bool)) error {
+	var bad []string
+	for _, r := range RemovedEnv {
+		if _, ok := lookup(r.Old); ok {
+			bad = append(bad, fmt.Sprintf("%s (rename it to %s)", r.Old, r.New))
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("environment variables a sensor no longer reads are set: %s", strings.Join(bad, ", "))
+}
+
+// MigrateLegacyEnv refuses the removed environment variable names
+// (RemovedEnv) with an error naming each replacement (exit code ExitUsage).
 // It runs once per process; New calls it too.
 func MigrateLegacyEnv() error {
 	migrateOnce.Do(func() {
-		if err := legacyv1.ApplyRenamedEnv(legacyv1.SensorRenamedEnv, os.LookupEnv, os.Setenv); err != nil {
+		if err := CheckRemovedEnv(os.LookupEnv); err != nil {
 			migrateErr = usageError(err)
 		}
 	})
@@ -294,7 +322,7 @@ type CredentialsHelp struct {
 
 const (
 	defaultCredentialsSubject = "a sensor that runs the platform's commands"
-	defaultCredentialsHint    = "  Set them as environment variables (docker run -e API_URL=https://<platform>/ -e API_KEY=<key> ...).\n" +
+	defaultCredentialsHint    = "  Set them as environment variables (docker run -e SENSOR_API_URL=https://<platform>/ -e SENSOR_API_KEY=<key> ...).\n" +
 		"  Create the key in the platform: Settings > Sensors (it is shown once)."
 )
 
