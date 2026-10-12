@@ -29,6 +29,27 @@ not in the SDK; see [docs/STABILITY.md](docs/STABILITY.md). Implement
 to the SDK only what every sensor needs (an interface, a runtime or safety
 helper), with tests.
 
+## Security-sensitive changes
+
+A pull request that changes a path listed in
+[`.github/security-paths.yml`](.github/security-paths.yml) (sensor identity and keys, job and template signatures, the sensor protocol and transports, the sensor-local policy, tool sandboxing and credentials, the SSRF guard, CI and images) is
+labelled `security-sensitive` and gets an automated security review comment.
+The `security-gate` check passes once a maintainer has reviewed it and added
+the `security-ack` label, and no HIGH finding is open. Every other pull request,
+including the release pull requests, passes the check at once.
+
+- Contributors and automation never add `security-ack` themselves.
+- New commits that change a sensitive file remove the ack; the maintainer acks
+  again after reviewing them.
+- A reviewed false positive of a diff rule is waived on its line with
+  `security-review: allow <RULE-ID> <reason>`.
+- Emergency override: an administrator may bypass the check; the bypass is in
+  the organization audit log and is followed by a written reason on the pull
+  request.
+
+The gate is shared with `openctemio/openctem`; details in its
+[CI guide](https://github.com/openctemio/openctem/blob/develop/api/docs/development/ci-cd.md#security-gate).
+
 ## Releasing
 
 Versioning follows the project rule (openctemio/openctem RFC-037): the version is the `vX.Y.Z` tag on `main`, proposed from the conventional commits since the last tag. Before 1.0.0, a breaking change (`type!:` or `BREAKING CHANGE:`) or a `feat` bumps the minor; anything else bumps the patch.
