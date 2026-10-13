@@ -296,6 +296,13 @@ type CommandPoller struct {
 	ownGate *AuthGate
 	ownNext time.Time
 
+	// claims backs polls off after a poll that only handed commands back,
+	// and after a Retry-After from the platform (claim_backoff.go).
+	// pollDeferred records that a poll was skipped for it, so the loop
+	// polls once the wait is over instead of dropping the wake-up.
+	claims       *claimBackoff
+	pollDeferred bool
+
 	// resources, when set, sizes the slots from the sensor's CPU, memory
 	// and learned tool costs (SetResourceManager); without it the slots
 	// are MaxConcurrent.
@@ -443,6 +450,7 @@ func NewCommandPoller(client CommandClient, executor CommandExecutor, cfg *Comma
 		queue:         newLocalQueue(),
 		cmdBase:       context.Background(),
 		drainGrace:    cfg.DrainGrace,
+		claims:        newClaimBackoff(),
 	}
 	if p.drainGrace <= 0 {
 		p.drainGrace = DefaultDrainGrace
@@ -497,6 +505,22 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 		killTick = kt.C
 	}
 
+	// deferred fires when a poll skipped for the claim backoff may run.
+	deferred := time.NewTimer(time.Hour)
+	deferred.Stop()
+	defer deferred.Stop()
+	armDeferred := func() {
+		if !p.pollDeferred {
+			return
+		}
+		p.pollDeferred = false
+		if w := p.claims.wait(); w > 0 {
+			deferred.Reset(w)
+		} else {
+			deferred.Reset(0)
+		}
+	}
+
 	// Poll immediately on start
 	p.pollAndExecute(ctx)
 	lastPoll := time.Now()
@@ -517,13 +541,21 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 			return nil
 		case <-wake:
 			// The platform reported claimable work: poll now (a no-op
-			// without a free slot; the next slot that frees polls).
+			// without a free slot; the next slot that frees polls), or
+			// once the claim backoff is over.
 			p.pollAndExecute(ctx)
 			lastPoll = time.Now()
+			armDeferred()
 		case <-p.slotFreed:
 			// A command ended and the last poll suggested more work.
 			p.pollAndExecute(ctx)
 			lastPoll = time.Now()
+			armDeferred()
+		case <-deferred.C:
+			// A poll skipped during the claim backoff.
+			p.pollAndExecute(ctx)
+			lastPoll = time.Now()
+			armDeferred()
 		case <-ticker.C:
 			// With the doorbell active the fixed poll is replaced by the
 			// doorbell plus a long safety poll; without hints (an older
@@ -533,6 +565,7 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 			}
 			p.pollAndExecute(ctx)
 			lastPoll = time.Now()
+			armDeferred()
 		}
 	}
 }
@@ -800,6 +833,9 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		}
 		return
 	}
+	if !p.claimWaitOver() {
+		return
+	}
 	if p.verbose.Load() && p.doorbell != nil {
 		fmt.Printf("[command-poller] %s Polling for commands (%d free slots)\n", time.Now().Format("15:04:05.000"), free)
 	}
@@ -812,6 +848,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		p.ownNext = time.Time{}
 	}
 	if err != nil {
+		p.claims.retryAfter(retryAfterOf(err))
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Failed to poll commands: %v\n", err)
 		}
@@ -834,6 +871,11 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 	orderCommands(resp.Commands)
 	limit := p.slotLimit()
 
+	// started and declined decide the claim backoff: a poll that started
+	// nothing and handed commands back (declined) only churns.
+	started, declined := 0, 0
+	defer func() { p.settleClaims(started, declined) }()
+
 	for i, cmd := range resp.Commands {
 		// Paused while this batch was being claimed: leave the rest pending
 		// (unacknowledged) for later or for another sensor; hand back the
@@ -850,6 +892,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 				fmt.Printf("[command-poller] Skipping disallowed command type: %s\n", cmd.Type)
 			}
 			p.dropClaimed(cmd, "command type not allowed on this sensor")
+			declined++
 			continue
 		}
 
@@ -859,6 +902,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 				fmt.Printf("[command-poller] Skipping expired command: %s\n", cmd.ID)
 			}
 			p.dropClaimed(cmd, "command expired")
+			declined++
 			continue
 		}
 
@@ -871,6 +915,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		if len(p.sem) >= limit {
 			p.backlog.Store(true)
 			p.dropClaimed(cmd, "no free slot")
+			declined++
 			continue
 		}
 		select {
@@ -881,6 +926,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 				fmt.Printf("[command-poller] No free slot: leaving command %s pending\n", cmd.ID)
 			}
 			p.dropClaimed(cmd, "no free slot")
+			declined++
 			continue
 		}
 
@@ -899,6 +945,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 				fmt.Printf("[command-poller] Leaving command %s pending: its hosts are busy here\n", cmd.ID)
 			}
 			p.dropClaimed(cmd, "its hosts are busy on this sensor")
+			declined++
 			continue
 		}
 
@@ -920,7 +967,37 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		cmdCtx, cancel := context.WithCancelCause(p.cmdBase)
 		p.queue.setCancel(cmd.ID, cancel)
 		p.activeCmds.Add(1)
+		started++
 		go p.executeCommand(cmdCtx, cmd, jobErr)
+	}
+}
+
+// claimWaitOver reports whether the poller may poll: not while the last
+// poll only handed commands back or the platform asked to wait
+// (Retry-After). A skipped poll is remembered and runs once the wait is over.
+func (p *CommandPoller) claimWaitOver() bool {
+	w := p.claims.wait()
+	if w <= 0 {
+		return true
+	}
+	p.pollDeferred = true
+	if p.verbose.Load() {
+		fmt.Printf("[command-poller] Not polling for %s: claim backoff\n", w.Round(time.Millisecond))
+	}
+	return false
+}
+
+// settleClaims updates the claim backoff after a poll that started
+// started commands and handed declined back.
+func (p *CommandPoller) settleClaims(started, declined int) {
+	switch {
+	case started > 0:
+		p.claims.progressed()
+	case declined > 0:
+		d := p.claims.fruitless()
+		if p.verbose.Load() {
+			fmt.Printf("[command-poller] Handed back %d commands and started none: next poll in %s at the earliest\n", declined, d.Round(time.Millisecond))
+		}
 	}
 }
 
@@ -956,6 +1033,9 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		p.queue.cancel(cmd.ID, context.Canceled) // free the context
 		p.queue.forget(cmd.ID)
 		<-p.sem
+		// A command ended: the host it held is free, so a command handed
+		// back for it may run now.
+		p.claims.progressed()
 		if p.backlog.Load() {
 			select {
 			case p.slotFreed <- struct{}{}:
