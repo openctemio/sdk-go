@@ -140,27 +140,30 @@ func TestClassifyRealDial(t *testing.T) {
 }
 
 func TestClassifyText(t *testing.T) {
-	cases := map[string]Class{
-		"":                            Unknown,
-		"connect: connection refused": PortClosed,
-		"No connection could be made because the target machine actively refused it.": PortClosed,
-		"connect: network is unreachable":                                             NoRoute,
-		"dial tcp [2001:db8::1]:443: connect: no route to host":                       NoRoute,
-		"host is unreachable":                                                         NoRoute,
-		"Destination Host Unreachable":                                                NoRoute,
-		"ICMP communication administratively prohibited":                              FirewallRefused,
-		"connect: operation not permitted":                                            FirewallRefused,
-		"dial tcp 192.0.2.1:80: i/o timeout":                                          Timeout,
-		"context deadline exceeded":                                                   Timeout,
-		"lookup app.example.com: no such host":                                        DNSFailure,
-		"lookup x on 10.0.0.53:53: server misbehaving":                                DNSFailure,
-		"read: connection reset by peer":                                              Reached,
-		"tls: handshake failure":                                                      Reached,
-		"template parse error":                                                        Unknown,
+	cases := []struct {
+		msg  string
+		want Class
+	}{
+		{"", Unknown},
+		{"connect: connection refused", PortClosed},
+		{"No connection could be made because the target machine actively refused it.", PortClosed},
+		{"connect: network is unreachable", NoRoute},
+		{"dial tcp [2001:db8::1]:443: connect: no route to host", NoRoute},
+		{"host is unreachable", NoRoute},
+		{"Destination Host Unreachable", NoRoute},
+		{"ICMP communication administratively prohibited", FirewallRefused},
+		{"connect: operation not permitted", FirewallRefused},
+		{"dial tcp 192.0.2.1:80: i/o timeout", Timeout},
+		{"context deadline exceeded", Timeout},
+		{"lookup app.example.com: no such host", DNSFailure},
+		{"lookup x on 10.0.0.53:53: server misbehaving", DNSFailure},
+		{"read: connection reset by peer", Reached},
+		{"tls: handshake failure", Reached},
+		{"template parse error", Unknown},
 	}
-	for msg, want := range cases {
-		if got := ClassifyText(msg); got != want {
-			t.Errorf("ClassifyText(%q) = %q, want %q", msg, got, want)
+	for _, tc := range cases {
+		if got := ClassifyText(tc.msg); got != tc.want {
+			t.Errorf("ClassifyText(%q) = %q, want %q", tc.msg, got, tc.want)
 		}
 	}
 }

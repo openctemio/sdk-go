@@ -8,6 +8,8 @@
 // context, the guarded dialer and the task forwarder feed it, a tool's
 // output parser adds its own) and Recorder.Metadata is the bounded summary
 // the job result carries.
+//
+// Stability: Beta (docs/STABILITY.md).
 package reach
 
 import (
