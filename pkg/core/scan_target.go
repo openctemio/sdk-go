@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/internal/absname"
 )
 
 // Scan target validation for server-dispatched commands.
@@ -377,7 +378,7 @@ func (p *ScanTargetPolicy) checkHost(ctx context.Context, host string, failClose
 	}
 	if lookup == nil {
 		lookup = func(ctx context.Context, host string) ([]net.IP, error) {
-			return net.DefaultResolver.LookupIP(ctx, "ip", host)
+			return net.DefaultResolver.LookupIP(ctx, "ip", absname.Of(host))
 		}
 	}
 	ips, err := lookup(ctx, host)

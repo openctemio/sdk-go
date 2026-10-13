@@ -44,6 +44,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/openctemio/sdk-go/pkg/adapt"
+	"github.com/openctemio/sdk-go/pkg/internal/absname"
 	"github.com/openctemio/sdk-go/pkg/reach"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/webscope"
@@ -167,6 +168,11 @@ type Forwarder struct {
 	LookupVendor func(ctx context.Context, host string) ([]netip.Addr, error)
 	// OnRecord, when set, receives every record as it happens.
 	OnRecord func(Record)
+	// SearchDomains are the host resolver's search domains (SearchDomains):
+	// a query for a name that is not a target and ends in one of them is a
+	// tool's resolver appending it to a target that did not resolve. It is
+	// answered NXDOMAIN, never resolved, and not recorded as a refusal.
+	SearchDomains []string
 	// Upstream answers a DNS query of another type than A or AAAA for an
 	// admitted name (UpstreamDNS; nil: such queries get an empty answer).
 	Upstream func(ctx context.Context, query []byte) ([]byte, error)
@@ -289,7 +295,7 @@ func (f *Forwarder) resolveHost(ctx context.Context, host string) ([]netip.Addr,
 		lookup := f.LookupVendor
 		if lookup == nil {
 			lookup = func(ctx context.Context, host string) ([]netip.Addr, error) {
-				return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+				return net.DefaultResolver.LookupNetIP(ctx, "ip", absname.Of(host))
 			}
 		}
 		addrs, err := lookup(ctx, h)

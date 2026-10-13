@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/internal/absname"
 	"github.com/openctemio/sdk-go/pkg/reach"
 )
 
@@ -597,7 +598,7 @@ func (lp *LocalPolicy) AdmittedAddrs(ctx context.Context, host string) ([]netip.
 		return nil, noLocalPolicyTarget(host)
 	}
 	if !lp.Present() {
-		addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", strings.Trim(host, "[]"))
+		addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", absname.Of(strings.Trim(host, "[]")))
 		if err != nil {
 			return nil, err
 		}
@@ -712,7 +713,7 @@ func (lp *LocalPolicy) resolve(ctx context.Context, host string) ([]net.IP, erro
 	if lp != nil && lp.lookupIP != nil {
 		return lp.lookupIP(ctx, host)
 	}
-	return net.DefaultResolver.LookupIP(ctx, "ip", host)
+	return net.DefaultResolver.LookupIP(ctx, "ip", absname.Of(host))
 }
 
 // CheckDial is the egress hook (api RFC-034's in-sensor forwarder, and any
