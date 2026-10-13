@@ -12,8 +12,10 @@
 - Without an explicit `timeout_seconds`, a job's context ends at twice its
   task budget, so a slow but progressing task is not cut at its estimate.
 - Every scan job has a `core.Progress` (`core.TargetDone(ctx, target)`); the
-  heartbeat reports each held command's finished targets as `progress` to a
-  platform that lists the `command_progress` feature, so it can tell a slow
-  task from a stuck one.
+  heartbeat reports each held command's progress (`done`, `total`, and the
+  finished targets as `finished` index ranges into the command's target list,
+  up to 256 ranges) to a platform that lists the `command_progress` feature,
+  so it can tell a slow task from a stuck one and settle finished targets one
+  by one.
 - A tool run through the tool host counts each target it settles toward the
   job's progress, so out-of-process and sandboxed tools report progress too.

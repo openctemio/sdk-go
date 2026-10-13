@@ -1551,7 +1551,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// The per-target budget: the wrapper passes it as the tool's own
 	// per-request timeout, RunPerTarget enforces it per target.
 	opts.TargetTimeout = payload.Budget.Target()
-	ProgressFrom(ctx).SetTotal(len(targets))
+	ProgressFrom(ctx).SetTargets(targets)
 
 	// Handle custom templates if provided
 	var templateDir string

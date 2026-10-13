@@ -900,7 +900,7 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 		// A target the tool settled counts as finished for the job's
 		// progress (the heartbeat's done count; core.Progress).
 		if s.ctx != nil {
-			core.TargetDone(s.ctx, ts.Target)
+			core.TargetDone(s.ctx, s.p.targetValue(ts.Target))
 		}
 	case toolwire.TypeLog:
 		var l toolwire.Log
@@ -1171,4 +1171,15 @@ func (c *cappedBuffer) Bytes() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.buf.Bytes())
+}
+
+// targetValue is the value of the task target with ref (the ref itself when
+// no target has it): progress names targets by the job's own values.
+func (p *prepared) targetValue(ref string) string {
+	for _, t := range p.task.Targets {
+		if t.Ref == ref {
+			return t.Value
+		}
+	}
+	return ref
 }
