@@ -49,3 +49,5 @@ func (c *Client) ClaimCommand(ctx context.Context, id string) (*core.Command, er
 }
 
 var _ core.CommandClaimer = (*Client)(nil)
+
+var _ core.RetryAfterHinter = (*V2Error)(nil)

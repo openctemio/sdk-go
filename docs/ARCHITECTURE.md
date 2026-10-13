@@ -110,6 +110,18 @@ poller.SetDoorbell(bell) // polls when the doorbell rings
 The hints only say *that* work is waiting; jobs are still fetched and claimed
 through `GET /api/v2/sensor/commands`. There is no free-text or shell action.
 
+**Claim backoff.** A poll that starts nothing and only hands commands back
+(their hosts are busy on this sensor, no slot is free, the type is not
+served) would otherwise repeat at the speed of the round trip: the release
+makes the command claimable, the platform rings the doorbell and the same
+command comes back. After such a poll the poller waits 1 s, doubling to at
+most 1 min (plus up to half a step of jitter) while polls stay fruitless;
+a doorbell ring during the wait polls once the wait is over. Meanwhile the
+platform can give the command to another sensor. A command that ends here
+(its host may be free now) or a poll that starts a command ends the wait. A
+poll the platform refuses with `Retry-After` (429/503) is not repeated
+before it (capped at 5 min); only time lifts that wait.
+
 **Order of the checks on a claimed command.** A command passes, in order:
 the command types the sensor serves and its expiry (before the claim); the
 claim itself; its **job signature** (`CommandPoller.SetJobGuard`,
