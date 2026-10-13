@@ -897,6 +897,11 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 		if err := asm.Target(ts.Target, ts.Status, e); err != nil {
 			return refuse(err.Error())
 		}
+		// A target the tool settled counts as finished for the job's
+		// progress (the heartbeat's done count; core.Progress).
+		if s.ctx != nil {
+			core.TargetDone(s.ctx, ts.Target)
+		}
 	case toolwire.TypeLog:
 		var l toolwire.Log
 		if toolwire.Decode(line, &l) != nil {

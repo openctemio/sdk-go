@@ -15,3 +15,5 @@
   heartbeat reports each held command's finished targets as `progress` to a
   platform that lists the `command_progress` feature, so it can tell a slow
   task from a stuck one.
+- A tool run through the tool host counts each target it settles toward the
+  job's progress, so out-of-process and sandboxed tools report progress too.
