@@ -162,7 +162,8 @@ func TestPathGuardAbsoluteForm(t *testing.T) {
 }
 
 // Requests inside a CONNECT tunnel are checked one by one on a kept-alive
-// connection, with the Host header, and the tunnel closes on a refusal.
+// connection, with the Host header. A refused path answers 403 and the
+// connection stays open for the next request; another destination closes it.
 func TestPathGuardTunnel(t *testing.T) {
 	s := &site{}
 	srv := httptest.NewServer(s.handler())
@@ -197,11 +198,13 @@ func TestPathGuardTunnel(t *testing.T) {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
 			status = append(status, strconv.Itoa(resp.StatusCode))
+			// A kept-alive tunnel stays open: stop once the answers stop.
+			_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		}
 	}
 	h := "app.test:" + strconv.Itoa(port)
 	got := tunnel(t, "GET /api/a HTTP/1.1\r\nHost: "+h+"\r\n\r\nGET /api/b HTTP/1.1\r\nHost: "+h+"\r\n\r\nGET /admin HTTP/1.1\r\nHost: "+h+"\r\n\r\nGET /api/a HTTP/1.1\r\nHost: "+h+"\r\n\r\n")
-	if strings.Join(got, ",") != "200,200,403" {
+	if strings.Join(got, ",") != "200,200,403,200" {
 		t.Errorf("keep-alive tunnel: %v", got)
 	}
 	for name, req := range map[string]string{
