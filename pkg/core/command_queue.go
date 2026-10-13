@@ -76,6 +76,7 @@ type heldCommand struct {
 	started   bool
 	hosts     []string
 	cancel    context.CancelCauseFunc
+	progress  *Progress
 }
 
 // localQueue tracks held commands and per-host politeness. Safe for
@@ -134,6 +135,36 @@ func (q *localQueue) setCancel(id string, cancel context.CancelCauseFunc) {
 	if hc := q.held[id]; hc != nil {
 		hc.cancel = cancel
 	}
+}
+
+func (q *localQueue) setProgress(id string, p *Progress) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if hc := q.held[id]; hc != nil {
+		hc.progress = p
+	}
+}
+
+// progress is the progress of every held command that reports one; nil
+// when none does.
+func (q *localQueue) progress() map[string]CommandProgress {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var out map[string]CommandProgress
+	for id, hc := range q.held {
+		if hc.progress == nil {
+			continue
+		}
+		snap := hc.progress.Snapshot()
+		if snap.Total == 0 && snap.Done == 0 {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]CommandProgress, len(q.held))
+		}
+		out[id] = snap
+	}
+	return out
 }
 
 func (q *localQueue) markStarted(id string) {

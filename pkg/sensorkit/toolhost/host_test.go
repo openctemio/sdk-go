@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/core"
+
 	"github.com/openctemio/sdk-go/internal/toolwire"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
@@ -574,5 +576,21 @@ func TestAdapterSchemaMatchesWire(t *testing.T) {
 		toolwire.TypeReportInfo, toolwire.TypeTargetStatus, toolwire.TypeArtifact, toolwire.TypeHeartbeat, toolwire.TypeVerdict, toolwire.TypeResult}
 	if strings.Join(sch.Properties.Type.Enum, ",") != strings.Join(want, ",") {
 		t.Fatalf("schema types %v, wire types %v", sch.Properties.Type.Enum, want)
+	}
+}
+
+// Each target the tool settles counts toward the job's progress (the
+// heartbeat's done count), once per target.
+func TestSettledTargetsCountAsProgress(t *testing.T) {
+	task := tool.Task{ID: "task-p", Targets: []tool.Target{{Ref: "t1", Type: "domain", Value: "a.example"}, {Ref: "t2", Type: "domain", Value: "b.example"}}}
+	prog := core.NewProgress(2)
+	ctx := core.WithProgress(context.Background(), prog)
+	out, err := testHost(t).RunBuiltin(ctx, echoTool, task, RunOptions{
+		Credentials: map[string]string{"api_key": "k", "db_password": "p"}})
+	if err != nil || out.Status != tool.StatusOK {
+		t.Fatalf("run: %v %+v", err, out)
+	}
+	if got := prog.Snapshot(); got.Done != len(out.Targets) || got.Done == 0 {
+		t.Fatalf("progress %+v, %d targets settled", got, len(out.Targets))
 	}
 }
