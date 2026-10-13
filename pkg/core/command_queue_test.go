@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openctemio/sdk-go/pkg/politeness"
+	"github.com/openctemio/ctis/politeness"
 	"github.com/openctemio/sdk-go/pkg/resource"
 )
 
