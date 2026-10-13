@@ -668,9 +668,25 @@ SDK enforces it:
   fails such a job (`core`).
 - An exec-profile tool reads the scope from `{{task.web_scope_file}}` (JSON;
   `null` without one). A sensor wrapper maps it onto its tool's flags.
+- On a sandbox that confines the network, the task's forwarder enforces the
+  scope too, whatever the tool does (`egress.Scope.Web`). Every connection of
+  such a task is read as HTTP: TLS is terminated with the forwarder's own
+  per-task certificate authority (created in memory, valid for a day, never
+  written to disk) and opened again to the target, each request is checked
+  with `Allows` before it goes upstream, and a refused request gets a 403
+  marked `X-Openctem-Egress: refused`, closes the connection and is recorded.
+  A redirect is a new request and is checked again. Anything that is not
+  HTTP/1.x (raw TCP, an HTTP/2 preface, a protocol upgrade) is refused. A tool
+  that keeps to no scope of its own, such as a template scanner whose
+  templates request arbitrary paths, can declare `features.web_scope` only
+  when it runs confined: the forwarder is then its only way out, and a
+  forwarder that is down leaves it no route at all.
 - The conformance kit's `crawl.web` and `dast.web` suites point the tool at a
   site that links to denied paths (links, a redirect, a form, a script, dot
-  segments, upper case). They fail a tool that requests any of them.
+  segments, upper case). They fail a tool that requests any of them. The
+  `vuln.templates` suite of a tool that declares `features.web_scope` runs it
+  again with `/.env` denied: it fails a tool that requests it (directly or
+  behind a redirect) and one that no longer finds the exposed `/.git/config`.
 
 ### 9. API Client Transport
 

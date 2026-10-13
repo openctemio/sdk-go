@@ -250,6 +250,32 @@ func hostile(mode string) int {
 		res = append(res, "port="+other)
 		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
 		return 0
+	case "webscope-probe":
+		// HTTP requests to its web-scoped target through the proxy it was
+		// given (an allowed path, a denied one, encoded, with dot segments,
+		// a redirect to a denied path, which the client follows) and a
+		// direct dial to the target; the results go in the finding title.
+		pu, _ := url.Parse(os.Getenv("HTTPS_PROXY"))
+		c := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(pu), DisableKeepAlives: true}}
+		status := func(u string) string {
+			resp, err := c.Get(u)
+			if err != nil {
+				return "err"
+			}
+			_ = resp.Body.Close()
+			return strconv.Itoa(resp.StatusCode)
+		}
+		base := os.Getenv("TOOLHOST_TARGET") // http://localhost:PORT
+		res := []string{"public=" + status(base+"/public/x"), "admin=" + status(base+"/admin"), "enc=" + status(base+"/%61dmin"),
+			"dots=" + status(base+"/public/../ADMIN"), "redirect=" + status(base+"/go")}
+		direct := "blocked"
+		if conn, err := net.DialTimeout("tcp", strings.TrimPrefix(base, "http://"), 2*time.Second); err == nil {
+			_ = conn.Close()
+			direct = "reached"
+		}
+		res = append(res, "direct="+direct)
+		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
+		return 0
 	case "argv-cli":
 		// Reports its arguments, as a finding title.
 		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(os.Args[1:], "|"))

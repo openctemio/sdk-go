@@ -40,6 +40,16 @@ func TestAllows(t *testing.T) {
 		{"GET", "https://example.com/app%2fadmin", false},   // encoded slash refused
 		{"GET", "https://example.com/app/x%00", false},
 		{"GET", "https://example.com/app/..%5cadmin", false},
+		// SECURITY: path parameters a server drops, dot segments with
+		// parameters, control characters.
+		{"GET", "https://example.com/app/;/admin", false},
+		{"GET", "https://example.com/app;x/admin", false},
+		{"GET", "https://example.com/app/x/..;/admin", false},
+		{"GET", "https://example.com/app/admin;jsessionid=1", false},
+		{"GET", "https://example.com/app/%0d%0aadmin", false},
+		{"GET", "https://example.com/app/page;jsessionid=1", true},
+		{"GET", "https://example.com/;/app/page", false},    // one reading is outside the prefix
+		{"GET", "https://example.com/x;/../app/page", true}, // "/app/page" either way
 		// SECURITY: methods default to the safe ones.
 		{"POST", "https://example.com/app/form", false},
 		{"DELETE", "https://example.com/app/x", false},

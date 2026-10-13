@@ -196,6 +196,9 @@ func (r *contractRun) vulnTemplates(name string, c capability.Capability) {
 	if out != nil && len(out.Report.Findings) == 0 {
 		r.t.Errorf("%s: found nothing on a fixture app with an exposed /.git/config and /.env", name)
 	}
+	if r.m.Features != nil && r.m.Features.WebScope {
+		r.vulnTemplatesWebScope(name+"/web_scope", c)
+	}
 }
 
 // codeRepo runs a code capability on a fixture repository.

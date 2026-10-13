@@ -45,6 +45,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
+	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
 // Scope is what a task may reach.
@@ -79,6 +80,13 @@ type Scope struct {
 	// (TLS is terminated with the forwarder's own authority) and one
 	// outside the prefixes is refused and recorded.
 	Limits []scopelimit.Limit
+	// Web is the job's web scope: when set, every connection is guarded
+	// (TLS terminated as for a path limit), each HTTP request outside the
+	// scope is refused and recorded, and anything that is not HTTP/1.x is
+	// refused. WebTargets are the job's target hosts, the hosts of a web
+	// scope that names none.
+	Web        *webscope.Scope
+	WebTargets []string
 }
 
 // Verdicts of a Record.
