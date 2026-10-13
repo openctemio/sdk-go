@@ -75,14 +75,10 @@ jobs:
           OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK: "1"
         run: go test -v -race -coverprofile=coverage.out ./...
 
-      # pkg/transfer and pkg/politeness are their own modules (tagged
-      # <dir>/vX.Y.Z): the root ./... does not reach them.
+      # pkg/transfer is its own module (tagged pkg/transfer/vX.Y.Z): the root
+      # ./... does not reach it.
       - name: Run tests (pkg/transfer module)
         working-directory: pkg/transfer
-        run: go test -v -race ./...
-
-      - name: Run tests (pkg/politeness module)
-        working-directory: pkg/politeness
         run: go test -v -race ./...
 
       - name: Upload coverage
@@ -170,12 +166,6 @@ jobs:
           version: v2.13.1
           working-directory: pkg/transfer
 
-      - name: Run golangci-lint (pkg/politeness module)
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.13.1
-          working-directory: pkg/politeness
-
   # pkg/ctis re-exports github.com/openctemio/ctis (generated aliases). Fails
   # when the generated file is stale for the ctis version in go.mod, or when
   # pkg/ctis starts copying model types again — see scripts/check-ctis-parity.sh.
@@ -234,12 +224,6 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
 
-      - name: Build and vet (pkg/politeness module)
-        working-directory: pkg/politeness
-        run: go build -v ./... && go vet ./... && go mod tidy -diff
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
 
   # Exported-API compatibility (api RFC-029 §8.6), weighed by stability tier
   # (docs/STABILITY.md; every package comment states its tier): an

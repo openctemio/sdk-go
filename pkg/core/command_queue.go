@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openctemio/sdk-go/pkg/politeness"
+	"github.com/openctemio/ctis/politeness"
 	"github.com/openctemio/sdk-go/pkg/resource"
 )
 
@@ -248,7 +248,7 @@ type commandMeta struct {
 	Target        string   `json:"target"`
 	Targets       []string `json:"targets"`
 	// HostKeys are the politeness keys the platform admitted the command
-	// under and holds while it runs (pkg/politeness); absent from an older
+	// under and holds while it runs (ctis/politeness); absent from an older
 	// platform. An empty list is a command that touches no target host
 	// (a passive stage).
 	HostKeys *[]string `json:"host_keys"`
@@ -326,7 +326,7 @@ const DefaultPerHostConcurrency = 1
 // service or an address, "host/owner" of a repository, the path of a local
 // directory (politeness.HostOf).
 //
-// Deprecated: use github.com/openctemio/sdk-go/pkg/politeness, the one
+// Deprecated: use github.com/openctemio/ctis/politeness, the one
 // definition the platform uses too (HostOf, Keys).
 func HostKey(target string) string {
 	return politeness.HostOf(target)
@@ -339,7 +339,7 @@ const maxHostKeyLen = 512
 // the platform sent with it (it admitted the command under those and holds
 // them while it runs, so the sensor never refuses what the platform has
 // just offered for a host the two disagree on), else the keys of its
-// targets by the same function (pkg/politeness). Sent keys are bounded: at
+// targets by the same function (ctis/politeness). Sent keys are bounded: at
 // most politeness.MaxKeys, each at most 512 bytes, empty ones dropped.
 func commandHosts(m commandMeta) []string {
 	if m.HostKeys != nil {

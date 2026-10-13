@@ -16,7 +16,6 @@ on:
         type: choice
         options:
           - pkg/transfer
-          - pkg/politeness
       version:
         description: "Version vX.Y.Z (tag <module>/vX.Y.Z)"
         required: true
