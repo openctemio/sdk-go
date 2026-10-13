@@ -102,6 +102,10 @@ ignored, except during the handshake. A newer runtime may send more.
   `retest: true`): answer one `verdict` per item (`still_present`, `fixed` or
   `unverifiable`) and emit no records. `fixed` counts only for a target you
   reported `done`.
+  A retest task carries the job's `web_scope` like a scan task. A networked
+  tool that retests web findings declares `features.web_scope` and keeps
+  every request inside it; without the feature, a web-scoped retest is
+  refused (`refused_by_policy`) and never runs.
 
 ## Time and cancel
 

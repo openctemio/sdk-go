@@ -45,6 +45,10 @@ func fakeTool(mode string, args []string) int {
 		}
 		return ""
 	}
+	if mode == "retest-web" {
+		retestWebTool()
+		return 0
+	}
 	switch mode {
 	case "ports", "dial-b", "ports-bad", "fetch-out":
 		if mode == "fetch-out" {
