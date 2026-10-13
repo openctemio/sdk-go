@@ -34,14 +34,14 @@ func sandboxModes(sandbox string) (mode, netMode executor.Mode, err error) {
 	return mode, netMode, nil
 }
 
-// CheckSandboxNetwork fails when SENSOR_SANDBOX_NETWORK=required and this
+// ValidateSandboxNetwork fails when SENSOR_SANDBOX_NETWORK=required and this
 // host cannot confine a tool's network (no unprivileged user namespaces, a
 // container profile that blocks them, or the tool sandbox off). sandbox is
 // the tool sandbox mode, "" for SENSOR_SANDBOX. It only probes: nothing is
 // installed. New calls it before pairing, and a pair command should too: a
 // host that can never run confined is refused before the platform admits
 // it and gives it an identity.
-func CheckSandboxNetwork(sandbox string) error {
+func ValidateSandboxNetwork(sandbox string) error {
 	mode, netMode, err := sandboxModes(sandbox)
 	if err != nil || netMode != executor.ModeRequired {
 		return err
