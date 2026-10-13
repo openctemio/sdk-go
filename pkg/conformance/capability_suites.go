@@ -33,6 +33,8 @@ func (r *contractRun) capabilitySuite(c capability.Capability) {
 	switch c.ID {
 	case "scan.ports":
 		r.scanPorts(name, c)
+	case "discover.hosts":
+		r.discoverHosts(name, c)
 	case "probe.http":
 		r.probeHTTP(name, c)
 	case "vuln.templates":
@@ -121,6 +123,52 @@ func (r *contractRun) scanPorts(name string, c capability.Capability) {
 	if got := openPorts(out.Report); !slices.Equal(got, want) {
 		r.t.Errorf("%s: reported open ports %v, want exactly %v (port %d is closed)", name, got, want, closed)
 	}
+}
+
+// discoverHosts: a loopback address with one listening port, probed on
+// that port, is reported live (with the probe that answered, which the
+// output contract requires), and nothing the tool was not given is
+// reported.
+func (r *contractRun) discoverHosts(name string, c capability.Capability) {
+	if !r.takes(c, "ports") {
+		r.t.Errorf("%s: the tool does not take the standard param ports, so it cannot be told which ports to probe", name)
+		return
+	}
+	a, err := listen("127.0.0.1:0")
+	if err != nil {
+		r.t.Errorf("%s: %v", name, err)
+		return
+	}
+	defer a.close()
+	target, ok := r.target([][2]string{{"ip_address", "127.0.0.1"}, {"host", "127.0.0.1"}})
+	if !ok {
+		r.t.Errorf("%s: the tool consumes neither ip_address nor host", name)
+		return
+	}
+	out := r.runSuite(name, c, tool.Task{Targets: []tool.Target{target},
+		Params: map[string]json.RawMessage{"ports": strParam(strconv.Itoa(a.port()))}})
+	if out == nil {
+		return
+	}
+	live := liveAddresses(out.Report)
+	if !slices.Equal(live, []string{"127.0.0.1"}) {
+		r.t.Errorf("%s: reported live addresses %v, want exactly [127.0.0.1] (it answers on port %d)", name, live, a.port())
+	}
+}
+
+// liveAddresses are the ip_address values a report names, sorted.
+func liveAddresses(rep *ctis.Report) []string {
+	var out []string
+	if rep == nil {
+		return nil
+	}
+	for _, a := range rep.Assets {
+		if a.Type == ctis.AssetTypeIPAddress && !slices.Contains(out, a.Value) {
+			out = append(out, a.Value)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // fixtureApp is an HTTP app with known issues: an exposed git config and
