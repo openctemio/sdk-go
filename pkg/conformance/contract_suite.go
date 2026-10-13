@@ -66,6 +66,9 @@ func LintDescriptor(m tool.Manifest) []LintIssue {
 	if m.Retest {
 		warn("/retest", "deprecated spelling: use features.retest")
 	}
+	if retests(m) && m.Normalized().Permissions.Network != tool.NetNone && (m.Features == nil || !m.Features.WebScope) {
+		warn("/features/web_scope", "a networked tool that retests without features.web_scope: the platform refuses retests on hosts with a path exclusion")
+	}
 	if len(m.Selftest) == 0 {
 		warn("/selftest", "no self-test fixture: add one, it is how the sensor and the platform prove the tool works")
 	}
@@ -157,6 +160,9 @@ func RunContractSuite(t T, manifestPath string, opts ContractOptions) {
 		return
 	}
 	r.fixtureContract()
+	if retests(m) && m.Features != nil && m.Features.WebScope {
+		r.retestWebScope("Retest/web_scope")
+	}
 	if opts.Capability {
 		for _, c := range m.ImplementedCapabilities() {
 			r.capabilitySuite(c)
