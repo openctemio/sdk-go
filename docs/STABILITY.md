@@ -44,6 +44,7 @@ without a tier fails the job.
 | `pkg/sensorkit/identity` | A key-bound sensor's identity on disk (permission-checked) and the interactive pairing client (api RFC-052) | Beta |
 | `pkg/sensorkit/egress` | A task's forwarder (HTTP CONNECT, absolute-form HTTP, SOCKS5, DNS): every destination checked against the task's scope, pinned, rate-limited (adaptive per host) and recorded (api RFC-060) | Experimental |
 | `pkg/adapt` | Adaptive controllers and the one table of their bounds: the per-host target rate (AIMD with a breaker per host, coverage gaps) (api RFC-074) | Experimental |
+| `pkg/netctx` | The sensor's network self-description: declared and detected facts (interfaces, routes, resolvers, egress echo), fingerprint, a bounded report never wider than the local policy, sent in the manifest (api RFC-089) | Experimental |
 | `pkg/sensorkit/contentcache` | The sensor cache of content packs: digest, pinned-key statement and canonical archive verified before storing; read-only packs per task; desired-set sync, revocation and budget (api RFC-061) | Experimental |
 | `pkg/transfer`, `pkg/transfer/bundle` | Feed transfer: resumable, retrying, mirror-aware fetcher with a content-addressed cache; chunked signed bundle format (v2), its writer and the checkpointed consumer (api RFC-070). Its own Go module, `github.com/openctemio/sdk-go/pkg/transfer`, tagged `pkg/transfer/vX.Y.Z` | Experimental |
 | `pkg/sensorkit/executor` | Per-task tool sandbox behind a small backend interface (`Backend`, `TaskSpec`, `Status`) | Beta |

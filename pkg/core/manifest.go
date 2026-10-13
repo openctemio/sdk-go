@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/openctemio/sdk-go/pkg/netctx"
 	"github.com/openctemio/sdk-go/pkg/resource"
 )
 
@@ -67,6 +68,11 @@ type Manifest struct {
 	// (SensorPosture; BaseSensor.SetPosture). The API client sends it only
 	// to a platform that lists the "posture" feature.
 	Posture *SensorPosture `json:"posture,omitempty"`
+	// Network is the sensor's network self-description (netctx.Report:
+	// declared and detected facts, fingerprint, internet mode;
+	// BaseSensor.SetNetworkReporter). The API client sends it only to a
+	// platform that lists the "network" feature.
+	Network *netctx.Report `json:"network,omitempty"`
 }
 
 // ManifestPlatform is the operating system and architecture.

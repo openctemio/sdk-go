@@ -17,6 +17,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/netctx"
 	"github.com/openctemio/sdk-go/pkg/platform"
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
@@ -357,6 +358,13 @@ type Kit struct {
 	// poller sends a command's last lines before its result.
 	logs atomic.Pointer[logShipper]
 
+	// network is the host owner's network declaration; controlViaProxy:
+	// platform requests go through a proxy. netWatch keeps the network
+	// report (set by Run).
+	network         netctx.Declared
+	controlViaProxy bool
+	netWatch        atomic.Pointer[netctx.Watcher]
+
 	kitTools
 }
 
@@ -425,8 +433,9 @@ func New(opts Options) (*Kit, error) {
 	if err != nil {
 		return nil, err
 	}
-	proxies.Apply()
-	proxies.report(k.out, k.errw, proxyOpts)
+	if err := k.applyNetwork(proxies, proxyOpts); err != nil {
+		return nil, err
+	}
 
 	s.stateDir = ResolveStateDir(opts.StateDir)
 	k.preflightNew(proxies, proxyOpts)
@@ -609,6 +618,7 @@ func (k *Kit) SetLocalPolicy(lp *core.LocalPolicy) {
 	k.localMu.Lock()
 	k.s.local = lp
 	k.localMu.Unlock()
+	k.rescopeNetwork()
 	if k.doc != nil {
 		k.reportLocalPolicyChecks(lp)
 	}
@@ -995,6 +1005,9 @@ func (k *Kit) Run(ctx context.Context) error {
 		poller = k.newPoller(scanners, doorbell)
 		k.ReportCheck(core.ConfigCheck{ID: CheckCommandPoller, Status: core.CheckPass, Code: "running"})
 	}
+	// The network self-description, detected before the first heartbeat
+	// so the first manifest can carry it.
+	k.startNetwork(ctx)
 	k.printPreflight()
 
 	// Connection check: the first heartbeat, sent after the poller is set

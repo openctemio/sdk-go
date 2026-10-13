@@ -24,6 +24,7 @@ import (
 	"sync"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/netctx"
 	"github.com/openctemio/sdk-go/pkg/platform"
 	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
@@ -302,6 +303,16 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "Lets SDK HTTP clients reach private addresses (not scan targets: SENSOR_ALLOW_PRIVATE_TARGETS)."},
 		settingsreg.Setting{Name: "OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK", Type: settingsreg.Bool, Group: "network",
 			Description: "Lets SDK HTTP clients reach loopback addresses."},
+		settingsreg.Setting{Name: netctx.EnvSite, Type: settingsreg.String, Group: "network",
+			Description: "Site label of this host (1 to 64 of A-Z a-z 0-9 . _ -), sent in the network report; the platform only suggests a network from it."},
+		settingsreg.Setting{Name: netctx.EnvReach, Type: settingsreg.List, Group: "network",
+			Description: "CIDRs this host routes to beyond its own links (VPN, peering), sent in the network report as a hint; never wider than the local policy."},
+		settingsreg.Setting{Name: netctx.EnvDNSSuffixes, Type: settingsreg.List, Group: "network",
+			Description: "DNS suffixes this host resolves with its internal view (split-horizon names)."},
+		settingsreg.Setting{Name: netctx.EnvInternet, Type: settingsreg.Enum, Enum: []string{"auto", "direct", "proxy", "none"}, Default: "auto", Group: "network",
+			Description: "How this host reaches the internet: auto (detected), direct, proxy, or none (internet targets go to other sensors)."},
+		settingsreg.Setting{Name: netctx.EnvReport, Type: settingsreg.Enum, Enum: []string{"summary", "full", "off"}, Default: "summary", Group: "network",
+			Description: "How much the network report says: summary (private prefixes listed, public ones counted), full, or off (only a fingerprint and the internet mode)."},
 		settingsreg.Setting{Name: EnvSandbox, Type: settingsreg.Enum, Enum: []string{"off", "auto", "required"}, Default: "auto", Group: "runtime",
 			Description: "How every tool run is confined: auto (what the host supports), required (refuse to start without every control), off."},
 		settingsreg.Setting{Name: EnvSandboxNetwork, Type: settingsreg.Enum, Enum: []string{"off", "auto", "required"}, Default: "auto", Group: "runtime",

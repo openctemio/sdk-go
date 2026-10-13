@@ -14,12 +14,15 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/netctx"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
@@ -152,6 +155,11 @@ func (c *Client) PutManifest(ctx context.Context, m *core.Manifest) (*core.Manif
 		cp.Posture = nil
 		m = &cp
 	}
+	if m != nil && m.Network != nil && !c.PlatformSupports(ctx, protov2.FeatureNetwork) {
+		cp := *m
+		cp.Network = nil
+		m = &cp
+	}
 	var resp protov2.ManifestResponse
 	if _, err := c.v2JSON(ctx, http.MethodPut, protov2.PathPrefix+protov2.ManifestPath, m, &resp, nil, c.maxRetries); err != nil {
 		if isRouteMissing(err) {
@@ -175,6 +183,29 @@ func (c *Client) PutManifest(ctx context.Context, m *core.Manifest) (*core.Manif
 }
 
 var _ core.ManifestPusher = (*Client)(nil)
+
+// EgressEcho asks the platform which address it sees this sensor's
+// requests come from (GET /egress-echo, api RFC-089), for the network
+// self-description (netctx.Echo). netctx.ErrEchoUnsupported when the
+// platform does not list "network" on hello or does not serve the route.
+// The answer is only an address; anything else is an error.
+func (c *Client) EgressEcho(ctx context.Context) (netip.Addr, error) {
+	if !c.PlatformSupports(ctx, protov2.FeatureNetwork) {
+		return netip.Addr{}, netctx.ErrEchoUnsupported
+	}
+	var resp protov2.EgressEchoResponse
+	if _, err := c.v2JSON(ctx, http.MethodGet, protov2.PathPrefix+protov2.EgressEchoPath, nil, &resp, nil, 0); err != nil {
+		if isRouteMissing(err) {
+			return netip.Addr{}, netctx.ErrEchoUnsupported
+		}
+		return netip.Addr{}, err
+	}
+	a, err := netip.ParseAddr(strings.TrimSpace(resp.Address))
+	if err != nil || a.Zone() != "" {
+		return netip.Addr{}, errors.New("the egress echo answered no address")
+	}
+	return a.Unmap(), nil
+}
 
 // PutConfigReport sends the sensor's config report (api RFC-033, config
 // report) when the platform lists "config_report" on hello;
