@@ -27,7 +27,16 @@ const (
 	// ConfigReportPath takes the sensor's config report: its preflight
 	// checks and the presence of its settings (api RFC-033, config report).
 	ConfigReportPath = "/config-report"
+	// EgressEchoPath answers the address the platform saw the sensor's
+	// request come from (EgressEchoResponse; api RFC-089).
+	EgressEchoPath = "/egress-echo"
 )
+
+// EgressEchoResponse is the answer of GET /egress-echo: the peer address
+// the platform saw, nothing else.
+type EgressEchoResponse struct {
+	Address string `json:"address"`
+}
 
 // MaxConfigReportBytes is the most a config report may weigh; the platform
 // answers 413 content-too-large above it.
@@ -97,6 +106,11 @@ const (
 	// (platform TLS pin, tool sandbox; api RFC-040). Without it a sensor
 	// sends none.
 	FeaturePosture = "posture"
+	// FeatureNetwork: the platform reads the manifest member "network"
+	// (the sensor's network self-description, sdk-go pkg/netctx; api
+	// RFC-089) and serves GET /egress-echo. Without it a sensor sends
+	// neither.
+	FeatureNetwork = "network"
 	// FeatureConfigReport: PUT /config-report and the heartbeat's
 	// config_report summary (api RFC-033, config report). Without it a
 	// sensor sends neither.

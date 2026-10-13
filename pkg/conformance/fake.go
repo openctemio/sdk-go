@@ -126,6 +126,9 @@ type FakePlatform struct {
 	localPolicy bool
 	// posture: hello lists "posture" (SetPosture).
 	posture bool
+	// network: hello lists "network" and GET /egress-echo answers the
+	// peer address (SetNetwork).
+	network bool
 	// configReport: hello lists "config_report" and PUT /config-report is
 	// served (SetConfigReport); configReports are the reports received.
 	configReport  bool
@@ -183,6 +186,15 @@ func (f *FakePlatform) SetPosture(on bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.posture = on
+}
+
+// SetNetwork lists or stops listing the "network" feature on hello and
+// serves GET /egress-echo (api RFC-089): with it, manifests carry the
+// sensor's network report.
+func (f *FakePlatform) SetNetwork(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.network = on
 }
 
 // SetConfigReport lists or stops listing the "config_report" feature on
@@ -665,6 +677,9 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 			}
 			if f.posture {
 				features = append(features, protov2.FeaturePosture)
+			}
+			if f.network {
+				features = append(features, protov2.FeatureNetwork)
 			}
 			if f.logs {
 				features = append(features, protov2.FeatureLogs)

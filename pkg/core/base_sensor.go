@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/netctx"
 )
 
 // =============================================================================
@@ -93,6 +94,9 @@ type BaseSensor struct {
 	// posture is what the manifest reports as the sensor's posture
 	// (SetPosture); nil reports nothing.
 	posture atomic.Pointer[SensorPosture]
+	// network supplies the manifest's network report
+	// (SetNetworkReporter); nil reports none.
+	network atomic.Pointer[networkReporterBox]
 
 	// configReport is the delivery state of the config report
 	// (config_report_sync.go).
@@ -123,6 +127,27 @@ func (a *BaseSensor) SetPosture(p *SensorPosture) {
 
 // Posture is what SetPosture set (nil: none).
 func (a *BaseSensor) Posture() *SensorPosture { return a.posture.Load() }
+
+// NetworkReporter supplies the sensor's network self-description
+// (netctx.Watcher implements it). Report returns nil until the first
+// detection, and never modifies a report it returned.
+type NetworkReporter interface {
+	Report() *netctx.Report
+}
+
+type networkReporterBox struct{ r NetworkReporter }
+
+// SetNetworkReporter makes every manifest carry r's latest report, to a
+// platform that lists the "network" feature. A changed report changes the
+// manifest digest, so the next heartbeat registers the manifest again. nil
+// reports none.
+func (a *BaseSensor) SetNetworkReporter(r NetworkReporter) {
+	if r == nil {
+		a.network.Store(nil)
+		return
+	}
+	a.network.Store(&networkReporterBox{r: r})
+}
 
 // withLocalPolicy puts the local policy report on a heartbeat.
 func (a *BaseSensor) withLocalPolicy(status *SensorStatus) {
@@ -183,6 +208,9 @@ func (a *BaseSensor) syncManifest(ctx context.Context, status *SensorStatus) {
 	m := BuildManifest(status, status.Resources, model)
 	if p := a.posture.Load(); p != nil {
 		m.Posture = p
+	}
+	if nb := a.network.Load(); nb != nil {
+		m.Network = nb.r.Report()
 	}
 	local, err := m.Digest()
 	if err != nil {
