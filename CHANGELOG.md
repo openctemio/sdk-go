@@ -8,6 +8,64 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.26.0 — 2026-10-13
+
+### Security: scan jobs carry their exclusions; ranges are cut address by address
+
+- A scan job's payload may carry `exclusions` (addresses, CIDR prefixes, `first-last` ranges): the platform's scope exclusions that touch the job's targets, covered by the job signature (api RFC-088).
+- Before any other check, `LocalPolicy.AdmitCommandTargets` walks each range target (at most 2^16 addresses) and leaves out every address that the job's exclusions, `targets.deny` or the built-in deny list covers; the range is replaced by the smallest prefix set of the addresses kept. This also runs on a sensor without a policy file.
+- An address target the job excludes is removed (rule `job_exclusions`); a job with nothing left, or a single-target job whose target would be cut, fails; an unreadable exclusion refuses the job.
+- New `ScanOptions.ExcludeHosts` hands the exclusions to tools that can skip hosts themselves.
+
+### Behaviour change: a range that overlaps `targets.deny` or the built-in deny list is cut, not refused whole
+
+- Up to 2^16 addresses, such a range now runs on the addresses outside the deny entries. Wider ranges are still refused whole.
+
+### Behaviour change: the sensor admits a command under the platform's politeness keys
+
+- The command poller's per-host politeness uses the keys the platform sent with the command (`host_keys`, the keys it admitted the command under and holds while it runs). A command sent with an empty list (a passive stage, which sends no traffic to the target) is never held back for a busy host. A command from an older platform without `host_keys` is keyed by `pkg/politeness`, the function the platform uses.
+- Keys conflict as on the platform: the same host, or an address and a range scan of its /24 (IPv6 /120) bucket; two addresses of one bucket no longer hold each other back, and an address and a range covering it now do.
+- Sent keys are bounded (at most 500, each at most 512 bytes). `network_id` in the payload scopes the computed keys of private addresses and names (api RFC-089).
+- This ends the claim/hand-back loop seen on live sensors ("its hosts are busy on this sensor"): the sensor no longer refuses work the platform has just offered for a host the two keyed differently.
+
+### Deprecated: `core.HostKey`
+
+- Use `github.com/openctemio/sdk-go/pkg/politeness` (`HostOf`, `Keys`). `HostKey` now returns `politeness.HostOf`: the host of any URL other than a `.git` clone URL is the host alone (was `host/first-path-segment` for paths of two or more segments), and a scheme-less `host/path` is the host.
+
+### Added: discover.hosts@1 in the capability taxonomy and its conformance suite
+
+- ctis is bumped to the taxonomy with `discover.hosts@1` (host discovery: light liveness probes on addresses and ranges, T1; out `ip` with `properties.live_by`), so tools can implement it.
+- The tool conformance suite gains an active `discover.hosts@1` suite: a loopback address answering on one port, probed on that port, must be reported live with the probe that answered, and nothing the tool was not given may be reported.
+- New `core.LiveHostsReport`: the host discovery mechanism a tool wrapper calls. It turns a port probe's report into the capability's report (each answering address of the job's targets as a live `ip_address` with `properties.live_by` = `tcp:<port>`, nothing else). `core.ErrNoProbePorts` is what a wrapper answers for a job without probe ports: the platform names them in every host discovery job, a sensor never picks its own.
+
+### Added: one definition of the per-host politeness keys (`pkg/politeness`)
+
+- New nested module `github.com/openctemio/sdk-go/pkg/politeness` (standard library only, tagged `pkg/politeness/vX.Y.Z`): which hosts a scan job touches and when two jobs touch the same host. A name, the host of a URL or a service, an address with the marker of its /24 (IPv6 /120) bucket, and a range with one key per bucket each have a key; an address and a range scan of its bucket conflict, two addresses of one bucket do not.
+- Network context (api RFC-089): with a network id, the keys of private, shared, loopback and link-local addresses and of names end in `#<network>`, so overlapping private ranges at two sites are two sets of hosts; public addresses are never scoped to a network. A network id that cannot be read leaves the keys global.
+- The platform imports this module so it computes the same keys it holds and sends with a job (api RFC-090). The sensor runtime moves onto it in a follow-up change.
+
+### Added: per-target and per-task budgets, and per-command progress on the heartbeat
+
+- `ScanCommandPayload.Budget` (`TaskBudget`: `target_seconds`, `task_seconds`,
+  `stall_seconds`) carries the platform's layered budget. Every value is
+  clamped (a target budget to 1 s – 1 h, a task to 1 min – 24 h).
+- `ScanOptions.TargetTimeout` is the per-target budget: a tool wrapper passes
+  it as the tool's own per-request or per-host timeout flag.
+- `core.RunPerTarget` runs one function per target with that budget, bounded
+  concurrency, a reach `timeout` outcome for a target that exceeds it, and the
+  finished targets kept when the job's context ends. One unresponsive host
+  costs one target budget instead of holding up the whole task.
+- Without an explicit `timeout_seconds`, a job's context ends at twice its
+  task budget, so a slow but progressing task is not cut at its estimate.
+- Every scan job has a `core.Progress` (`core.TargetDone(ctx, target)`); the
+  heartbeat reports each held command's progress (`done`, `total`, and the
+  finished targets as `finished` index ranges into the command's target list,
+  up to 256 ranges) to a platform that lists the `command_progress` feature,
+  so it can tell a slow task from a stuck one and settle finished targets one
+  by one.
+- A tool run through the tool host counts each target it settles toward the
+  job's progress, so out-of-process and sandboxed tools report progress too.
+
 ## v0.25.0 — 2026-10-13
 
 ### Added: `net.confined@1` capability and a network-confinement setup check
