@@ -261,6 +261,19 @@ implements `Checkpoint` on a table. `Fetcher.Register` and
 fall-backs, failures; chunks applied and failed, resumes, refusals). Logs
 carry names, origins, sizes and errors, never record content.
 
+### Per-host politeness keys
+
+`pkg/politeness` is the one definition of which hosts a job touches and when
+two jobs touch the same host (api `docs/rfcs/RFC-090-work-pool.md`). A name,
+the host of a URL or a service, an address (with the marker of its /24 or
+/120 bucket) and a range (one key per bucket) each have a key; an address
+and a range scan of its bucket conflict, two addresses of one bucket do not.
+With a network context (api RFC-089) the keys of private addresses and of
+names carry the network, so overlapping private ranges at two sites stay two
+hosts; public addresses never do. It is its own Go module (standard library
+only, tagged `pkg/politeness/vX.Y.Z`) so the platform computes and holds the
+same keys it sends with a job, and the sensor admits the job under them.
+
 ### 3. Components
 
 Components are the building blocks that perform actual work:
