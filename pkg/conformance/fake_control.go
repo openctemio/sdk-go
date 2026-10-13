@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -44,6 +45,18 @@ func (f *FakePlatform) control(w http.ResponseWriter, r *http.Request, rest stri
 		default:
 			return false
 		}
+	case rest == protov2.EgressEchoPath && r.Method == http.MethodGet:
+		f.mu.Lock()
+		on := f.network
+		f.mu.Unlock()
+		if !on {
+			return false
+		}
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		writeJSON(w, http.StatusOK, protov2.EgressEchoResponse{Address: host})
 	case rest == protov2.SuppressionsPath && r.Method == http.MethodGet:
 		w.Header().Set("ETag", fakeSuppressionsETag)
 		w.Header().Set(protov2.HeaderProtocol, "2")
