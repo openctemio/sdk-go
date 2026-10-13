@@ -56,7 +56,7 @@ without a tier fails the job.
 | `pkg/sensorsig` | RFC 9421 request signatures of a key-bound sensor (api RFC-052 §4.3): signer, verifier, signing transport | Beta |
 | `pkg/ctis` | CTIS types: re-exports `github.com/openctemio/ctis` (generated aliases; the `ctis-parity` CI job fails when they are stale) | Stable, follows CTIS |
 | `pkg/httpsec` | SSRF-safe HTTP clients and URL validation | Stable |
-| `pkg/reach` | Per-target reach outcomes (`Classify`, `Recorder`, the job result's reach summary) | Beta |
+| `pkg/reach` | Per-target reach outcomes (`Classify`, `Recorder`, the job result's reach summary) and the polite reach probe (`Probe`) | Beta |
 | `pkg/conformance` | Fake platform, the sensor conformance suite and the tool (adapter protocol) suite | Stable |
 | `pkg/useragent`, `pkg/sdk` | Build identity on the wire | Stable |
 | `pkg/outbox`, `pkg/resource`, `pkg/chunk`, `pkg/compress`, `pkg/retry`, `pkg/shared/*` | Runtime internals used by `client`, `core` and `sensorkit` | Internal-bound |
@@ -205,7 +205,7 @@ A wrapper that starts processes without these helpers must call
 
 ## 6. Conformance
 
-`pkg/conformance` has three parts:
+`pkg/conformance` has these parts:
 
 - `FakePlatform`, an in-process platform that implements protocol v2
   strictly, records every request and injects faults.
@@ -221,6 +221,11 @@ A wrapper that starts processes without these helpers must call
   protocol-only stdout, exit on end of input, cancel, and its self-test
   fixtures through the runtime's own host. `cmd/openctem-conformance tool
   <tool.yaml>` runs it without Go code (docs/adapter-protocol.md).
+- `RunReachSuite(t, prober)`, the contract of a sensor's reach probe
+  (`reach.Probe`, or a sensor's own): with a recording dialer it never dials
+  an address its guard did not admit (literals, ranges, names, IPv6), keeps
+  to 10 connects per second, 256 addresses and one connect per address at a
+  time, and reports an unroutable target as unreached.
 
 The live suite (`live_test.go`, `OPENCTEM_CONFORMANCE_URL` /
 `OPENCTEM_CONFORMANCE_KEY`) runs the results contract against a real
