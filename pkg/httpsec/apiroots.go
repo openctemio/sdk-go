@@ -64,7 +64,7 @@ var errNoCertificate = errors.New("no PEM certificate in the file")
 // to fall back on.
 func apiTLSConfig() *tls.Config {
 	if pin := APIPinnedCA(); len(pin) > 0 {
-		return pinnedTLSConfig(pin)
+		return pinnedTLSConfig(pin, APIRootCAs())
 	}
 	pool, spki := APIRootCAs(), APIPinnedSPKI()
 	if pool == nil && len(spki) == 0 {
