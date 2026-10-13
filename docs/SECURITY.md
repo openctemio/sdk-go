@@ -673,8 +673,13 @@ SDK enforces it:
   such a task is read as HTTP: TLS is terminated with the forwarder's own
   per-task certificate authority (created in memory, valid for a day, never
   written to disk) and opened again to the target, each request is checked
-  with `Allows` before it goes upstream, and a refused request gets a 403
-  marked `X-Openctem-Egress: refused`, closes the connection and is recorded.
+  with `Allows` before it goes upstream, and a refused request gets a
+  complete 403 marked `X-Openctem-Egress: refused` and is recorded. Its body
+  is discarded, never sent, and the connection stays open for the next
+  request, which is checked the same way: a tool must not read a refusal as
+  a broken host and give up on the allowed paths. A request for another
+  destination (CONNECT, an upgrade, another `Host`), a body over 1 MiB or
+  `Expect: 100-continue` closes the connection.
   A redirect is a new request and is checked again. Anything that is not
   HTTP/1.x (raw TCP, an HTTP/2 preface, a protocol upgrade) is refused. A tool
   that keeps to no scope of its own, such as a template scanner whose
