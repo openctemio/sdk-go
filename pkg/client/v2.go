@@ -99,6 +99,9 @@ func (e *V2Error) Error() string {
 // HTTPStatusCode lets core.AuthFailureStatus classify the error.
 func (e *V2Error) HTTPStatusCode() int { return e.Status }
 
+// RetryAfterHint is the server's Retry-After (core.RetryAfterHinter).
+func (e *V2Error) RetryAfterHint() time.Duration { return e.RetryAfter }
+
 // ProblemName is the problem type's short name, or "".
 func (e *V2Error) ProblemName() protov2.ProblemType { return e.Problem.Name() }
 
