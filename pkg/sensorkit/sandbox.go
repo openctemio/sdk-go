@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/outbox"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
@@ -46,6 +47,7 @@ func (k *Kit) setupSandbox() error {
 	for _, m := range st.Missing {
 		_, _ = fmt.Fprintf(k.errw, "Warning: tool sandbox: %s\n", m)
 	}
+	k.sandboxNetworkCheck(mode, netMode, st)
 	switch {
 	case st.NetworkEnforced:
 		_, _ = fmt.Fprintf(k.out, "  Tool network: confined (each task reaches only its targets, through its forwarder)\n")
@@ -86,4 +88,32 @@ func (k *Kit) protectedPaths() []string {
 		add(p)
 	}
 	return out
+}
+
+// sandboxNetworkCheck reports whether tool runs are network-confined, and
+// when they are not, the detected cause, so the platform's setup checklist
+// shows the exact fix: the seccomp profile when the runtime refuses user
+// namespaces, the default AppArmor profile when the host restricts them.
+func (k *Kit) sandboxNetworkCheck(mode, netMode executor.Mode, st executor.Status) {
+	c := core.ConfigCheck{ID: CheckSandboxNetwork, Status: core.CheckWarn, Keys: []string{EnvSandboxNetwork}}
+	missing := strings.ToLower(st.NetworkMissing)
+	switch {
+	case st.NetworkEnforced:
+		c.Status, c.Code, c.Keys = core.CheckPass, "confined", nil
+	case mode == executor.ModeOff:
+		c.Code, c.Keys = "sandbox_off", []string{EnvSandbox}
+	case netMode == executor.ModeOff:
+		c.Code = "off"
+	case strings.Contains(missing, "operation not permitted"):
+		c.Code = "userns_blocked"
+	case strings.Contains(missing, "permission denied"):
+		c.Code = "userns_restricted"
+	default:
+		c.Code = "unavailable"
+	}
+	if !st.NetworkEnforced {
+		c.Summary = "tool runs are not network-confined"
+		c.Excerpt = truncateBytes(st.NetworkMissing, maxUnavailableExcerptSize)
+	}
+	k.ReportCheck(c)
 }
