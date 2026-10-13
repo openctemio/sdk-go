@@ -76,3 +76,43 @@ func (r *contractRun) webScope(name string, c capability.Capability) {
 		r.t.Errorf("%s: the tool requested nothing from the fixture %s", name, srv.URL)
 	}
 }
+
+// vulnTemplatesWebScope: a template scanner that declares
+// features.web_scope, given a web scope that denies /.env, never requests
+// it (in any form, nor behind a redirect) and still finds the exposed
+// /.git/config. The platform gives a vuln.templates job a web scope when
+// the tenant excludes a path on the host.
+func (r *contractRun) vulnTemplatesWebScope(name string, c capability.Capability) {
+	var mu sync.Mutex
+	var seen []string
+	app := fixtureApp()
+	app.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		mu.Lock()
+		seen = append(seen, req.URL.Path)
+		mu.Unlock()
+		if strings.EqualFold(req.URL.Path, "/env") {
+			http.Redirect(w, req, "/.env", http.StatusFound)
+			return
+		}
+		app.Config.Handler.ServeHTTP(w, req)
+	}))
+	defer srv.Close()
+	target, ok := r.target(urlTargets(srv.URL))
+	if !ok {
+		r.t.Errorf("%s: the tool takes no URL target", name)
+		return
+	}
+	out := r.runSuite(name, c, tool.Task{Targets: []tool.Target{target}, WebScope: &webscope.Scope{DenyPaths: []string{"/.env"}}})
+	mu.Lock()
+	paths := append([]string(nil), seen...)
+	mu.Unlock()
+	for _, p := range paths {
+		if strings.HasPrefix(strings.ToLower(p), "/.env") {
+			r.t.Errorf("%s: the tool requested %s, which the web scope denies (/.env)", name, p)
+		}
+	}
+	if out != nil && len(out.Report.Findings) == 0 {
+		r.t.Errorf("%s: found nothing with a web scope that still allows /.git/config", name)
+	}
+}
