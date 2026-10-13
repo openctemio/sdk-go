@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/politeness"
 	"github.com/openctemio/sdk-go/pkg/resource"
 )
 
@@ -277,16 +280,143 @@ func TestHostKey(t *testing.T) {
 		"10.0.0.5:22":                            "10.0.0.5",
 		"10.0.0.0/24":                            "10.0.0.0/24",
 		"https://github.com/Acme/api.git":        "github.com/acme",
-		"github.com/acme/web":                    "github.com/acme",
 		"git@gitlab.com:team/repo.git":           "gitlab.com/team",
 		"/srv/checkouts/repo":                    "/srv/checkouts/repo",
 		"":                                       "",
 		"https://github.com/acme":                "github.com",
-		"https://scanme.example.org/path/to/one": "scanme.example.org/path",
+		"https://scanme.example.org/path/to/one": "scanme.example.org",
+		"github.com/acme/web":                    "github.com",
 	} {
 		if got := HostKey(in); got != want {
 			t.Errorf("HostKey(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The live hand-back loop (api RFC-090): the platform offered commands it
+// held no conflicting keys for, and the sensor handed them back because it
+// keyed them its own way ("its hosts are busy on this sensor"). With the
+// platform's keys on the command, everything the platform offers runs: a
+// passive command sent with no keys, and two addresses of one bucket (which
+// share the bucket marker but do not conflict).
+func TestQueue_PlatformKeys_NoHandBack(t *testing.T) {
+	c := newQueueClient(
+		scanCmd("p1", "normal", map[string]any{"targets": []string{"a.example.com", "b.example.com"}, "host_keys": []string{}}),
+		scanCmd("p2", "normal", map[string]any{"targets": []string{"a.example.com"}, "host_keys": []string{}}),
+		scanCmd("n1", "normal", map[string]any{"targets": []string{"10.0.0.5"}, "host_keys": politeness.Keys([]string{"10.0.0.5"}, "")}),
+		scanCmd("n2", "normal", map[string]any{"targets": []string{"10.0.0.6"}, "host_keys": politeness.Keys([]string{"10.0.0.6"}, "")}),
+	)
+	e := newCtxExecutor()
+	p := NewCommandPoller(c, e, &CommandPollerConfig{MaxConcurrent: 10})
+	p.pollAndExecute(context.Background())
+	for range 4 {
+		select {
+		case <-e.started:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	_, st, _ := c.snapshot()
+	for _, id := range []string{"p1", "p2", "n1", "n2"} {
+		if st[id] != "running" {
+			t.Errorf("%s is %q, want running (states %v, released %v)", id, st[id], st, c.released)
+		}
+	}
+	if len(c.released) != 0 {
+		t.Errorf("handed back %v", c.released)
+	}
+	close(e.release)
+	p.activeCmds.Wait()
+}
+
+// The sensor still holds back what conflicts under the platform's keys: a
+// range scan of a bucket while an address in it runs.
+func TestQueue_PlatformKeys_ConflictStillHeld(t *testing.T) {
+	c := newQueueClient(
+		scanCmd("a", "normal", map[string]any{"targets": []string{"10.0.0.5"}, "host_keys": politeness.Keys([]string{"10.0.0.5"}, "")}),
+		scanCmd("r", "normal", map[string]any{"targets": []string{"10.0.0.0/24"}, "host_keys": politeness.Keys([]string{"10.0.0.0/24"}, "")}),
+	)
+	e := newCtxExecutor()
+	p := NewCommandPoller(c, e, &CommandPollerConfig{MaxConcurrent: 10})
+	p.pollAndExecute(context.Background())
+	if id := <-e.started; id != "a" {
+		t.Fatalf("first run %s, want a", id)
+	}
+	_, st, _ := c.snapshot()
+	if st["r"] != "pending" {
+		t.Fatalf("range scan of a busy bucket is %q, want pending", st["r"])
+	}
+	close(e.release)
+	p.activeCmds.Wait()
+}
+
+// The sensor and the platform agree: for every pair of jobs, the sensor
+// admits the second while the first runs exactly when the platform's
+// predicate (no key of one in the other's politeness.Conflicts) offers it,
+// whether the keys come with the command or the sensor computes them.
+func TestQueue_KeysAgreeWithPlatform(t *testing.T) {
+	jobs := [][]string{
+		{"10.0.0.5"}, {"10.0.0.6"}, {"http://10.0.0.5:8080/"}, {"10.0.0.0/24"}, {"10.0.0.128/25"},
+		{"10.0.1.0/24"}, {"10.0.0.0/22"}, {"::ffff:10.0.0.5"}, {"10.0.0.5/32"},
+		{"www.example.com"}, {"https://WWW.example.com./x"}, {"www.example.com:443:tcp"}, {"api.example.com"},
+		{"2001:db8::1"}, {"2001:db8::/120"}, {"[2001:db8::2]:443"},
+		{"https://github.com/acme/api.git"}, {"git@github.com:acme/web.git"}, {"a.example.com", "10.0.0.7"},
+	}
+	platformFree := func(held, offered []string) bool {
+		h := map[string]bool{}
+		for _, k := range held {
+			h[k] = true
+		}
+		for _, k := range politeness.Conflicts(offered) {
+			if h[k] {
+				return false
+			}
+		}
+		return true
+	}
+	for _, network := range []string{"", "0b0f3d2e-1c4a-4e8f-9a51-2f6b7c8d9e01"} {
+		for _, a := range jobs {
+			for _, b := range jobs {
+				ka, kb := politeness.Keys(a, network), politeness.Keys(b, network)
+				want := platformFree(ka, kb)
+				for _, sent := range []bool{true, false} {
+					ma := commandMeta{Targets: a, NetworkID: network}
+					mb := commandMeta{Targets: b, NetworkID: network}
+					if sent {
+						ma.HostKeys, mb.HostKeys = &ka, &kb
+					}
+					q := newLocalQueue()
+					if !q.admit("a", commandHosts(ma), 1, time.Now()) {
+						t.Fatalf("%v not admitted on an empty queue", a)
+					}
+					if got := q.admit("b", commandHosts(mb), 1, time.Now()); got != want {
+						t.Errorf("network %q, sent=%v: %v while %v runs: sensor admits=%v, platform offers=%v", network, sent, b, a, got, want)
+					}
+				}
+			}
+		}
+	}
+}
+
+// Keys sent with a command are bounded: at most politeness.MaxKeys, none
+// empty or longer than 512 bytes.
+func TestCommandHosts_BoundsSentKeys(t *testing.T) {
+	sent := make([]string, 0, 3*politeness.MaxKeys)
+	for i := range 3 * politeness.MaxKeys {
+		sent = append(sent, fmt.Sprintf("h%05d.example.com", i))
+	}
+	sent = append([]string{"", strings.Repeat("x", 513)}, sent...)
+	got := commandHosts(commandMeta{HostKeys: &sent})
+	if len(got) != politeness.MaxKeys {
+		t.Fatalf("%d keys, want %d", len(got), politeness.MaxKeys)
+	}
+	for _, k := range got {
+		if k == "" || len(k) > 512 {
+			t.Fatalf("unbounded key %q", k)
+		}
+	}
+	// No keys sent: the sensor keys the targets the platform's way.
+	if got := commandHosts(commandMeta{Target: "https://a.example.com/x", Targets: []string{"10.0.0.5"}}); !slices.Equal(got, []string{"10.0.0.5", "a.example.com", "in:10.0.0.0/24"}) {
+		t.Fatalf("computed keys %q", got)
 	}
 }
 
