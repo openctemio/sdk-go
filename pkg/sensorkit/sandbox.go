@@ -20,16 +20,44 @@ const EnvSandbox = "SENSOR_SANDBOX"
 // start without it; for shared sensors) or off.
 const EnvSandboxNetwork = "SENSOR_SANDBOX_NETWORK"
 
+// sandboxModes reads the tool sandbox mode (sandbox, else SENSOR_SANDBOX)
+// and SENSOR_SANDBOX_NETWORK.
+func sandboxModes(sandbox string) (mode, netMode executor.Mode, err error) {
+	mode, ok := executor.ParseMode(strings.TrimSpace(envOr(sandbox, EnvSandbox)))
+	if !ok {
+		return "", "", usageError(fmt.Errorf("%s must be off, auto or required", EnvSandbox))
+	}
+	netMode, ok = executor.ParseMode(strings.TrimSpace(os.Getenv(EnvSandboxNetwork)))
+	if !ok {
+		return "", "", usageError(fmt.Errorf("%s must be off, auto or required", EnvSandboxNetwork))
+	}
+	return mode, netMode, nil
+}
+
+// CheckSandboxNetwork fails when SENSOR_SANDBOX_NETWORK=required and this
+// host cannot confine a tool's network (no unprivileged user namespaces, a
+// container profile that blocks them, or the tool sandbox off). sandbox is
+// the tool sandbox mode, "" for SENSOR_SANDBOX. It only probes: nothing is
+// installed. New calls it before pairing, and a pair command should too: a
+// host that can never run confined is refused before the platform admits
+// it and gives it an identity.
+func CheckSandboxNetwork(sandbox string) error {
+	mode, netMode, err := sandboxModes(sandbox)
+	if err != nil || netMode != executor.ModeRequired {
+		return err
+	}
+	if _, err := executor.NewProcessBackend(executor.Config{Mode: mode, ConfineNetwork: true, RequireNetwork: true}); err != nil {
+		return usageError(fmt.Errorf("%s=required: %w", EnvSandboxNetwork, err))
+	}
+	return nil
+}
+
 // setupSandbox installs the executor backend every tool run uses, with the
 // kit's protected paths, and logs what it enforces.
 func (k *Kit) setupSandbox() error {
-	mode, ok := executor.ParseMode(strings.TrimSpace(envOr(k.opts.Sandbox, EnvSandbox)))
-	if !ok {
-		return usageError(fmt.Errorf("%s must be off, auto or required", EnvSandbox))
-	}
-	netMode, ok := executor.ParseMode(strings.TrimSpace(os.Getenv(EnvSandboxNetwork)))
-	if !ok {
-		return usageError(fmt.Errorf("%s must be off, auto or required", EnvSandboxNetwork))
+	mode, netMode, err := sandboxModes(k.opts.Sandbox)
+	if err != nil {
+		return err
 	}
 	b, err := executor.NewProcessBackend(executor.Config{Mode: mode, ReadDeny: k.protectedPaths(),
 		ConfineNetwork: netMode != executor.ModeOff, RequireNetwork: netMode == executor.ModeRequired})

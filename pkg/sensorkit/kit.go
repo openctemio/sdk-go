@@ -725,6 +725,12 @@ func ResolveRequireLocalPolicy(id *identity.Identity) (required bool, from strin
 // (applyRequireLocalPolicy), which depends on that identity.
 func (k *Kit) resolveIdentityAndPolicy() error {
 	s := &k.s
+	// A required tool network confinement this host cannot give fails
+	// here, before a sensor without an identity pairs (resolveIdentity):
+	// otherwise the platform admits a sensor that then refuses to start.
+	if err := CheckSandboxNetwork(k.opts.Sandbox); err != nil {
+		return err
+	}
 	if _, err := keyBindEnabled(); err != nil {
 		return err
 	}
