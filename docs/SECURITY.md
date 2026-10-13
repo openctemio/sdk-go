@@ -372,6 +372,29 @@ are compared lower-case, without one trailing dot, in their IDNA ASCII form;
 (`notx`, `x.evil.net`). A wildcard of a single label (`*.com`) is refused
 when the policy loads.
 
+#### Ranges are cut address by address
+
+A scan job may carry `exclusions` in its payload: the platform's scope
+exclusions that touch the job's targets (addresses, CIDR prefixes and
+`first-last` ranges), covered by the job signature with the rest of the
+payload. Before any other check, the sensor walks each range target (at
+most 2^16 addresses) and leaves out every address that the job's
+exclusions, `targets.deny` or the built-in deny list (private space
+without the switch included) covers. The range is replaced by the
+smallest set of prefixes holding exactly the addresses kept; the rest of
+the policy (for example `targets.allow`) then checks each prefix. This
+also happens on a sensor without a policy file.
+
+- An address target the job excludes is removed (rule `job_exclusions`).
+- A range with nothing left is removed; a job with nothing left fails.
+- A wider range that something blocks is refused whole, as before.
+- A single-target job (payload `target`) whose target would be cut fails:
+  it cannot run on part of its target.
+- An exclusion the sensor cannot read refuses the job (rule `payload`):
+  an exclusion is never dropped silently.
+- The exclusions also reach the tool (`ScanOptions.ExcludeHosts`), so a
+  tool that can skip hosts itself (naabu `-exclude-hosts`) skips them too.
+
 #### Refused targets: per target, never the whole job
 
 A scan job's target that a policy refuses, or that cannot be checked, is
