@@ -1115,7 +1115,12 @@ func (k *Kit) addScheduledScanners(ctx context.Context, scanners []scannerEntry)
 		}
 		_, _ = fmt.Fprintf(out, "  Added scanner: %s\n", e.s.Name())
 	}
-	if len(k.scanners) > 0 || len(k.collectors) == 0 {
+	// Whether any scanner is available matters only to a sensor meant to
+	// scan: one that added scanners, or one that takes platform commands
+	// without collectors. A collector (collectors only, or no commands and
+	// no scanners: its collectors run on their own schedule) is not
+	// flagged for having no scanner.
+	if len(k.scanners) > 0 || (len(k.collectors) == 0 && k.s.commands) {
 		if available > 0 {
 			k.ReportCheck(core.ConfigCheck{ID: CheckToolsAvailable, Status: core.CheckPass, Code: "ok",
 				Params: map[string]core.ConfigParam{"count": core.ParamInt(int64(available))}})
