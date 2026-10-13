@@ -8,6 +8,79 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.25.0 — 2026-10-13
+
+### Added: `net.confined@1` capability and a network-confinement setup check
+
+- `executor.CapabilityNetConfined` (`net.confined@1`) names the capability a sensor advertises when every tool it runs for a job is network-confined to the task's forwarder. The platform sends jobs that need confinement (a web scope, scope limits) only to a sensor that advertises it. A sensor advertises it from its runtime's status (`Status().NetworkEnforced` with tools out of process), never from a setting.
+- The config report has a new check, `runtime.sandbox_network`: `confined` (pass), or a warning with the detected cause: `userns_blocked` (the container runtime's seccomp profile refuses user namespaces: run with the sensor's seccomp profile), `userns_restricted` (the host restricts unprivileged user namespaces: keep the default AppArmor profile), `off` (`SENSOR_SANDBOX_NETWORK=off`), `sandbox_off` (`SENSOR_SANDBOX=off`) or `unavailable`. The platform's setup checklist explains each code and its fix.
+
+### Added: the sensor describes its network in the manifest
+
+- New package `pkg/netctx`: what the host owner declares (`SENSOR_NETWORK_SITE`, `SENSOR_NETWORK_REACH`, `SENSOR_NETWORK_DNS_SUFFIXES`, `SENSOR_INTERNET` = auto|direct|proxy|none) and what the SDK detects (on-link prefixes without container bridges, routing table, resolvers and search domains, the address the platform's egress echo saw), with a fingerprint that changes when the sensor moves. A sensor built on `sensorkit` gets it without code.
+- The manifest carries it as member `network`, only to a platform that lists the `network` hello feature (`protov2.FeatureNetwork`); the kit detects again every 5 minutes and a changed report registers the manifest again. `client.EgressEcho` calls `GET /api/v2/sensor/egress-echo`; the conformance fake serves it (`FakePlatform.SetNetwork`).
+- The report is never wider than the local policy: with `targets.allow` only prefixes inside it are named (narrowed or dropped, counted in `trimmed`); `targets.deny` ranges, and private ranges when private targets are refused, are not named. `SENSOR_NETWORK_REPORT` = summary (default: private prefixes listed, public counted) | full | off (fingerprint and internet mode only). Detection makes no network call besides the echo: no cloud metadata, no LAN scanning.
+- An egress check that fails is reported as `unknown`, never `none`; `none` comes from the declaration or from a routing table without a default route.
+- New preflight checks `network.egress`, `network.dns_view` and `network.declared_vs_detected`. `core.LocalPolicy.NetworkScope` and `core.BaseSensor.SetNetworkReporter` are new.
+- A value of the new settings the SDK cannot use stops the sensor (exit code 2), naming the setting.
+
+### Added: `core.RetryAfterHinter`
+
+- An error that carries the platform's advised wait. `client.V2Error` (the error of every protocol v2 call, the command poll included) implements it (`RetryAfterHint`).
+
+### Added: every job result says which targets the sensor could not reach
+
+- New package `pkg/reach`: `Classify(err)` maps an error toward a target to `reached`, `port_closed` (the path works, the port is closed), `no_route`, `firewall_refused`, `timeout` or `dns_failure` (Linux, macOS and Windows socket errors, IPv4 and IPv6, DNS errors); `ClassifyText` does the same for a tool's per-target failure text. `Recorder` collects a job's outcomes; a target that answered once is reached.
+- The command poller gives every job a recorder (`reach.FromContext`); the guarded dialer (`LocalPolicy.DialContext`) and a confined task's forwarder record every dial toward a target (never a vendor host or a destination the policy refused), and a scanner or output parser can record its own. The result metadata carries `reach` (counts per class and per /24 or /64 block and port class, at most 512 rows), `unreached_targets` (at most 100) and `unreached_targets_total`. An executor that sets `reach` itself keeps it.
+- A scan with an unreached target reports `partial` coverage, so what it did not report on that target is not read as "no findings". `toolhost.Outcome.Reach` holds a confined task's summary.
+
+### Added: polite reach probe and its conformance suite
+
+- `reach.Probe(ctx, guard, targets, opts)` tests whether this sensor reaches a job's targets: one TCP connect per (address, port) from 443, 80, 22 until one answers, no payload, no ICMP, 2 s per connect. It dials only through the sensor's guard (`core.LocalPolicy` satisfies `reach.Guard`): every target is checked again, a range address by address, and only the address literals the guard returns are dialed. Bounds that options cannot raise: 10 connects per second, 256 addresses, 8 ports, one connect per address at a time; a large range the guard refuses is not walked to its end. Without a guard it refuses to run.
+- `conformance.RunReachSuite(t, prober)` checks a sensor's probe with a recording dialer: never an address outside the admitted set (literals, ranges with a denied address inside, names resolving outside, IPv6, link-local, metadata), the rate, size and per-address bounds, classes, an unroutable target reported unreached, and cancellation. `conformance.SDKReachProber` runs it on `reach.Probe`.
+
+### Added: retest commands carry the job's web scope
+
+- A `retest` command's `web_scope` (as on a scan command) now reaches the tool's retest task (`tool.Task.WebScope`). The tool host enforces it: on a sandbox that confines the network, the task forwarder checks every request, and a tool that does not declare `features.web_scope` is refused. An invalid scope fails the command before anything runs. Before, the field was dropped, so the platform had to refuse retests of findings on hosts with a path exclusion.
+- Conformance: `RunContractSuite` runs a web-scoped retest (`Retest/web_scope`) for a tool that declares `features.retest` and `features.web_scope`, and fails when the tool requests a denied path. `LintDescriptor` warns about a networked retesting tool without `features.web_scope`.
+
+### Fixed: `SENSOR_CA_FINGERPRINT` can pin a root the platform does not send
+
+- A pinned CA fingerprint was accepted only when the server sent that certificate in its TLS chain. The built-in gateway (internal TLS) sends the server certificate and the intermediate, not the root whose fingerprint the console shows, so pinning that root refused every connection.
+- When the pinned certificate is not sent, the chain is now verified against the API trust (`SENSOR_CA_CERT_FILE`, else the system trust store) and accepted only when a verified chain contains the pinned certificate. Name, validity and usage are still checked; a trusted CA other than the pinned one (an interception proxy, a second CA in the file) is still refused.
+- Operators pinning the gateway root: put the root in `SENSOR_CA_CERT_FILE` as well as its fingerprint in `SENSOR_CA_FINGERPRINT`.
+
+### Fixed: a collector no longer reports "No scanner is available"
+
+- A sensor that adds no scanner and runs its collectors on its own schedule (platform commands off), or one with collectors only, no longer reports the failing `tools.available` check (`none`, blocks scans). A collector needs no scanner. A sensor that takes platform commands with no collector, or that added scanners, still reports it.
+
+### Fixed: target names are never looked up with a search domain appended
+
+- A host resolver with search domains (`search lan` from DHCP, copied into containers) made a tool's resolver also ask `<target>.lan` when a target did not resolve. The forwarder logged these lookups as refusals (`egress refused app.example.com.lan (dns)`), and under a public-internet scope they could be resolved upstream.
+- A confined task's `/etc/resolv.conf` names only the relay and has no search list (unchanged, now tested). The SDK's own target lookups (the forwarder, the tool host, the local policy and scan-target checks) use absolute names, with a trailing dot.
+- The forwarder answers a search-domain variant of a name that is not a target NXDOMAIN, never resolves it, and does not record it as a refusal (`egress.Forwarder.SearchDomains`, `egress.SearchDomains`).
+- The doctor reports `network.dns_search` (information only) when the host resolver has search domains.
+
+### Fixed: a request the web scope refuses no longer breaks the connection
+
+- The task forwarder answered a refused request with a 403 and closed the connection. HTTP tools then saw EOF or a reset on kept-alive and pipelined requests and counted them toward their per-host error budget. A few refused templates could make nuclei skip the whole host, allowed paths included.
+- A refused request now gets a complete 403 (`X-Openctem-Egress: refused`, `Content-Length`), its body is read and discarded (never sent upstream, at most 1 MiB), and the connection stays open for the next request, which is checked the same way. This applies in clear and on the TLS-terminated path.
+- The connection still closes after a refusal that is not a request to this destination (CONNECT, an upgrade, another `Host` or port), a body over 1 MiB, `Expect: 100-continue`, the client's `Connection: close`, and protocol errors and non-HTTP traffic. The absolute-form proxy path keeps one request per connection.
+
+### Fixed: versioned sensor-wide capabilities are reported
+
+- The tool registry dropped any capability with `@` in its name, so `scope.limits@1` and `net.confined@1` never reached the platform: a confined sensor was never given the jobs that need confinement or scope limits. Capability names may now contain `@`.
+
+### Fixed: a command handed back is no longer claimed again in a tight loop
+
+- A command the sensor handed back (its hosts busy here, no free slot, a type it does not serve) became claimable again, the platform rang the doorbell and the same command was claimed and released about twice a second. After a poll that only hands commands back, `CommandPoller` now waits 1 s, doubling to at most 1 min (`core.MinClaimBackoff`, `core.MaxClaimBackoff`) with jitter, before polling again; doorbell rings in that time poll once it is over. A command that ends on the sensor, or a poll that starts one, ends the wait, so a command waiting for a busy host still runs as soon as the host is free.
+- A poll the platform refuses with `Retry-After` (429/503) is not repeated before it, whatever wakes the poller, capped at 5 min (`core.MaxPollRetryAfter`).
+
+### Fixed: `SENSOR_SANDBOX_NETWORK=required` is checked before pairing
+
+- A sensor without an identity paired first and only then refused to start because this host cannot confine a tool's network. `sensorkit.New` now checks the requirement before pairing, so the platform does not admit a sensor that cannot run.
+- Added `sensorkit.CheckSandboxNetwork`: the same check for a program's own pair command.
+
 ## v0.24.0 — 2026-10-13
 
 ### Security: the task forwarder enforces the job's web scope

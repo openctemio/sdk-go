@@ -1,8 +1,0 @@
-### Added: the sensor describes its network in the manifest
-
-- New package `pkg/netctx`: what the host owner declares (`SENSOR_NETWORK_SITE`, `SENSOR_NETWORK_REACH`, `SENSOR_NETWORK_DNS_SUFFIXES`, `SENSOR_INTERNET` = auto|direct|proxy|none) and what the SDK detects (on-link prefixes without container bridges, routing table, resolvers and search domains, the address the platform's egress echo saw), with a fingerprint that changes when the sensor moves. A sensor built on `sensorkit` gets it without code.
-- The manifest carries it as member `network`, only to a platform that lists the `network` hello feature (`protov2.FeatureNetwork`); the kit detects again every 5 minutes and a changed report registers the manifest again. `client.EgressEcho` calls `GET /api/v2/sensor/egress-echo`; the conformance fake serves it (`FakePlatform.SetNetwork`).
-- The report is never wider than the local policy: with `targets.allow` only prefixes inside it are named (narrowed or dropped, counted in `trimmed`); `targets.deny` ranges, and private ranges when private targets are refused, are not named. `SENSOR_NETWORK_REPORT` = summary (default: private prefixes listed, public counted) | full | off (fingerprint and internet mode only). Detection makes no network call besides the echo: no cloud metadata, no LAN scanning.
-- An egress check that fails is reported as `unknown`, never `none`; `none` comes from the declaration or from a routing table without a default route.
-- New preflight checks `network.egress`, `network.dns_view` and `network.declared_vs_detected`. `core.LocalPolicy.NetworkScope` and `core.BaseSensor.SetNetworkReporter` are new.
-- A value of the new settings the SDK cannot use stops the sensor (exit code 2), naming the setting.
