@@ -21,6 +21,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
+	"github.com/openctemio/sdk-go/pkg/reach"
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/webscope"
@@ -970,6 +971,11 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	// were accepted.
 	ctx = WithCommandID(ctx, cmd.ID)
 	ctx, usage := withUsageRecorder(ctx)
+	// Every target the job dials through the guarded dialer or a task
+	// forwarder, and every outcome a scanner records, lands here; the
+	// result carries the summary (reach.Recorder.Metadata).
+	reached := reach.NewRecorder()
+	ctx = reach.WithRecorder(ctx, reached)
 
 	// Stopping (or canceled) before it started: hand it back unstarted.
 	if p.draining.Load() || ctx.Err() != nil {
@@ -1118,6 +1124,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 			reportResult.Metadata[k] = v
 		}
 	}
+	addReachMetadata(reportResult, reached)
 	p.logOutcome(ctx, cmd, reportResult, err, time.Since(startTime))
 	p.finishLog(ctx, cmd.ID)
 
@@ -1562,7 +1569,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		}
 
 		result.FindingsCount = len(report.Findings)
-		report.Metadata.CoverageType = scanCoverageType(report, scanResult)
+		report.Metadata.CoverageType = reachCoverageType(ctx, scanCoverageType(report, scanResult))
 
 		// Push findings
 		_, err = e.pusher.PushFindings(ctx, report)
@@ -1881,6 +1888,35 @@ const (
 	coverageTypePartial     = "partial"
 	coverageTypeIncremental = "incremental"
 )
+
+// addReachMetadata puts what rec recorded in the result's metadata, unless
+// the executor already reported its own reach summary.
+func addReachMetadata(res *CommandResult, rec *reach.Recorder) {
+	meta := rec.Metadata()
+	if meta == nil {
+		return
+	}
+	if _, ok := res.Metadata[reach.MetaReach]; ok {
+		return
+	}
+	if res.Metadata == nil {
+		res.Metadata = map[string]any{}
+	}
+	maps.Copy(res.Metadata, meta)
+}
+
+// reachCoverageType makes a full coverage partial when the job's recorder
+// saw targets it could not reach: what the scan did not report on them is
+// not "no findings".
+func reachCoverageType(ctx context.Context, coverage string) string {
+	if coverage != coverageTypeFull {
+		return coverage
+	}
+	if rec := reach.FromContext(ctx); rec != nil && rec.Report().Unreached > 0 {
+		return coverageTypePartial
+	}
+	return coverage
+}
 
 // scanCoverageType is the coverage_type a scan command's report declares.
 // Every report states one: a receiver must not read an absent value as full
