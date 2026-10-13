@@ -59,6 +59,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/reach"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -212,6 +213,11 @@ type Outcome struct {
 	// task still completes; the hosts are reported, not read as "no
 	// findings"). Nil when the task's network was not confined.
 	TargetRate *adapt.Summary
+	// Reach is what a confined task's connections toward its targets
+	// showed (reached, port closed, no route, timeout, no such name); the
+	// job result carries it (reach.Recorder.Metadata). Nil when the task's
+	// network was not confined or it dialed nothing.
+	Reach *reach.Report
 }
 
 // ReportJSON is the report as JSON (a scanner's raw output for the

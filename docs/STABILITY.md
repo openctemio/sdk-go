@@ -56,6 +56,7 @@ without a tier fails the job.
 | `pkg/sensorsig` | RFC 9421 request signatures of a key-bound sensor (api RFC-052 §4.3): signer, verifier, signing transport | Beta |
 | `pkg/ctis` | CTIS types: re-exports `github.com/openctemio/ctis` (generated aliases; the `ctis-parity` CI job fails when they are stale) | Stable, follows CTIS |
 | `pkg/httpsec` | SSRF-safe HTTP clients and URL validation | Stable |
+| `pkg/reach` | Per-target reach outcomes (`Classify`, `Recorder`, the job result's reach summary) | Beta |
 | `pkg/conformance` | Fake platform, the sensor conformance suite and the tool (adapter protocol) suite | Stable |
 | `pkg/useragent`, `pkg/sdk` | Build identity on the wire | Stable |
 | `pkg/outbox`, `pkg/resource`, `pkg/chunk`, `pkg/compress`, `pkg/retry`, `pkg/shared/*` | Runtime internals used by `client`, `core` and `sensorkit` | Internal-bound |
