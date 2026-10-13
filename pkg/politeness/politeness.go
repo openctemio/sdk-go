@@ -15,7 +15,8 @@
 //     IPv4-mapped IPv6 address is the IPv4 address) and the marker of its
 //     bucket ("in:203.0.113.0/24");
 //   - a range: the range key of every bucket it covers ("net:203.0.113.0/24");
-//   - a repository in scp form ("git@host:owner/repo"): "host/owner";
+//   - a repository clone URL ("https://host/owner/repo.git") or one in scp
+//     form ("git@host:owner/repo"): "host/owner";
 //   - a local path: the path itself.
 //
 // Buckets are one IPv4 /24 or one IPv6 /120. Two jobs conflict when one's
@@ -133,7 +134,8 @@ func TargetKeys(target, network string) []string {
 
 // HostOf is the host a target names: the lower-case host of a URL or a
 // service, a host:port without its port, an address in canonical form, a
-// name without its trailing dot, "host/owner" of a repository in scp form,
+// name without its trailing dot, "host/owner" of a repository clone URL
+// (ending in ".git") or of one in scp form,
 // a local path as given, a CIDR as its masked prefix. Empty when nothing
 // can be read.
 func HostOf(target string) string {
@@ -159,7 +161,13 @@ func HostOf(target string) string {
 		if err != nil {
 			return ""
 		}
-		return canonicalHost(u.Hostname())
+		host := canonicalHost(u.Hostname())
+		if host != "" && strings.HasSuffix(u.Path, ".git") {
+			if owner := firstSegment(u.Path); owner != "" && strings.Count(strings.Trim(u.Path, "/"), "/") >= 1 {
+				return host + "/" + owner // a clone URL: one key per owner
+			}
+		}
+		return host
 	}
 	if h, ok := serviceHost(t); ok {
 		return canonicalHost(h)

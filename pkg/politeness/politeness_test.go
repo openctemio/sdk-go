@@ -40,6 +40,10 @@ func TestTargetKeys(t *testing.T) {
 		{"10.0.0.0/8", []string{"net:10.0.0.0/8"}},
 		// Repositories in scp form, local paths.
 		{"git@GitHub.com:Owner/repo.git", []string{"github.com/owner"}},
+		{"https://github.com/Acme/api.git", []string{"github.com/acme"}},
+		{"ssh://git@github.com/acme/api.git", []string{"github.com/acme"}},
+		{"https://github.com/acme/api", []string{"github.com"}},
+		{"https://example.com/app.git", []string{"example.com"}},
 		{"/src/App", []string{"/src/App"}},
 		{"./src", []string{"./src"}},
 		{`C:\src`, []string{`C:\src`}},
