@@ -17,6 +17,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -132,20 +133,20 @@ func (g *guard) allowsName(name string) bool {
 // request must be inside the task's web scope.
 func (g *guard) check(req *http.Request) error {
 	if req.URL == nil || req.URL.Opaque != "" || req.Method == http.MethodConnect {
-		return fmt.Errorf("%w: not an origin-form request", scopelimit.ErrOutside)
+		return closesConn(fmt.Errorf("%w: not an origin-form request", scopelimit.ErrOutside))
 	}
 	if req.Header.Get("Upgrade") != "" {
-		return fmt.Errorf("%w: protocol upgrade", scopelimit.ErrOutside)
+		return closesConn(fmt.Errorf("%w: protocol upgrade", scopelimit.ErrOutside))
 	}
 	host := req.Host
 	if h, p, err := net.SplitHostPort(host); err == nil {
 		if n, err := strconv.Atoi(p); err != nil || n != g.port {
-			return fmt.Errorf("%w: Host names port %s, the connection is to %d", scopelimit.ErrOutside, p, g.port)
+			return closesConn(fmt.Errorf("%w: Host names port %s, the connection is to %d", scopelimit.ErrOutside, p, g.port))
 		}
 		host = h
 	}
 	if !g.allowsName(host) {
-		return fmt.Errorf("%w: Host %q is not the destination", scopelimit.ErrOutside, clipString(host, 128))
+		return closesConn(fmt.Errorf("%w: Host %q is not the destination", scopelimit.ErrOutside, clipString(host, 128)))
 	}
 	name := normName(strings.Trim(host, "[]"))
 	if len(g.hosts) > 0 {
@@ -267,8 +268,16 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 		lr.N = math.MaxInt64
 		if err := g.check(req); err != nil {
 			g.refuse(req.Host, err)
-			writeRefusal(cw, err)
-			return
+			// A request outside the scope gets a complete 403 and the
+			// connection stays open for the next request (checked the
+			// same way): a tool must not read a refusal as a broken
+			// host and give up on its allowed paths too.
+			keep := refusalKeepsConn(req, err) && drainRefused(c, req, f.limits.HandshakeTimeout)
+			writeRefusal(cw, err, keep)
+			if !keep {
+				return
+			}
+			continue
 		}
 		// The connection's first request was paced when it was dialed;
 		// each further one on it waits for the host's rate too.
@@ -308,12 +317,55 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 	}
 }
 
-// writeRefusal answers a refused request (the connection then closes).
-func writeRefusal(w io.Writer, err error) { writeHTTPStatus(w, http.StatusForbidden, err) }
+// closesConnError marks a refusal after which the connection closes: the
+// request is not an origin-form request to this destination (CONNECT, an
+// upgrade, another Host), so what follows on it may not be HTTP to it. Its
+// text is the refusal's.
+type closesConnError struct{ error }
+
+func (e closesConnError) Unwrap() error { return e.error }
+
+func closesConn(err error) error { return closesConnError{err} }
+
+// maxRefusedBody is the most of a refused request's body the forwarder
+// reads and discards to keep the connection; a larger body closes it.
+const maxRefusedBody = 1 << 20
+
+// refusalKeepsConn reports whether the connection may stay open after a
+// refused request: a well-formed request for this destination that the
+// client did not ask to close and whose body it is not waiting to send
+// (Expect: 100-continue).
+func refusalKeepsConn(req *http.Request, err error) bool {
+	var cc closesConnError
+	return !errors.As(err, &cc) && !req.Close && req.Header.Get("Expect") == ""
+}
+
+// drainRefused reads and discards a refused request's body, never sent
+// upstream, so the next request on the connection starts where it should.
+// It reports false when the body is larger than maxRefusedBody, malformed
+// or too slow: the connection then closes.
+func drainRefused(c net.Conn, req *http.Request, timeout time.Duration) bool {
+	if req.Body == nil || req.Body == http.NoBody {
+		return true
+	}
+	_ = c.SetReadDeadline(time.Now().Add(timeout))
+	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
+	_, err := io.CopyN(io.Discard, req.Body, maxRefusedBody+1)
+	_ = req.Body.Close()
+	return errors.Is(err, io.EOF)
+}
+
+// writeRefusal answers a refused request with a complete 403; keep says
+// whether the connection stays open.
+func writeRefusal(w io.Writer, err error, keep bool) {
+	writeHTTPResponse(w, http.StatusForbidden, err, keep)
+}
 
 // writeHTTPStatus answers a request the forwarder did not pass on (the
 // connection then closes).
-func writeHTTPStatus(w io.Writer, status int, err error) {
+func writeHTTPStatus(w io.Writer, status int, err error) { writeHTTPResponse(w, status, err, false) }
+
+func writeHTTPResponse(w io.Writer, status int, err error, keep bool) {
 	msg := strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
 			return ' '
@@ -321,8 +373,12 @@ func writeHTTPStatus(w io.Writer, status int, err error) {
 		return r
 	}, err.Error())
 	msg = clipString(msg, 256)
-	_, _ = fmt.Fprintf(w, "HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\nX-Openctem-Egress: refused\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s",
-		status, http.StatusText(status), len(msg), msg)
+	conn := "close"
+	if keep {
+		conn = "keep-alive"
+	}
+	_, _ = fmt.Fprintf(w, "HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\nX-Openctem-Egress: refused\r\nConnection: %s\r\nContent-Length: %d\r\n\r\n%s",
+		status, http.StatusText(status), conn, len(msg), msg)
 }
 
 // tlsAuthority is a forwarder's own certificate authority: created on the

@@ -126,7 +126,7 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 	if g := f.guardFor(host, port); g != nil {
 		if err := g.check(req); err != nil {
 			g.refuse(req.Host, err)
-			writeRefusal(c, err)
+			writeRefusal(c, err, false) // one request per proxied connection
 			return
 		}
 	}

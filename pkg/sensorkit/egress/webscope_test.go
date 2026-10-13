@@ -174,9 +174,10 @@ func TestWebScopeHTTPS(t *testing.T) {
 }
 
 // SECURITY: raw requests in a tunnel (what a template with a raw request
-// sends): a denied path is refused and closes the connection, so a
-// pipelined request behind it never reaches the server; a request that is
-// not HTTP/1.x, a protocol upgrade, a Host for another name and HTTP/2 are
+// sends): a denied path is refused with a complete 403 and the connection
+// stays open, so the allowed request pipelined behind it is served (a tool
+// must not read a refusal as a broken host); a request that is not
+// HTTP/1.x, a protocol upgrade, a Host for another name and HTTP/2 are
 // refused.
 func TestWebScopeTunnel(t *testing.T) {
 	s := &webSite{}
@@ -205,11 +206,12 @@ func TestWebScopeTunnel(t *testing.T) {
 			}
 			_ = resp.Body.Close()
 			status = append(status, strconv.Itoa(resp.StatusCode))
+			_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		}
 	}
 	h := "app.test:" + strconv.Itoa(port)
 	got := tunnel(t, "app.test", "GET /public/a HTTP/1.1\r\nHost: "+h+"\r\n\r\nGET /Admin HTTP/1.1\r\nHost: "+h+"\r\n\r\nGET /public/b HTTP/1.1\r\nHost: "+h+"\r\n\r\n")
-	if strings.Join(got, ",") != "200,403" {
+	if strings.Join(got, ",") != "200,403,200" {
 		t.Errorf("keep-alive tunnel: %v", got)
 	}
 	for name, req := range map[string]string{
@@ -227,7 +229,7 @@ func TestWebScopeTunnel(t *testing.T) {
 	}
 	s.assertNoDenied(t)
 	for _, hit := range s.served() {
-		if strings.HasSuffix(hit, "/public/b") || !strings.HasPrefix(hit, "GET ") {
+		if !strings.HasPrefix(hit, "GET ") {
 			t.Errorf("the server saw %q", hit)
 		}
 	}
