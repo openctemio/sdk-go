@@ -726,7 +726,7 @@ of the gRPC binding, and the pairing requests themselves.
 | `platform_tls_pin_element` | Fingerprint of | Recorded when |
 |---|---|---|
 | `anchor_spki` | the SubjectPublicKeyInfo of the trust anchor of the chain the pairing connection verified: the root CA the trust store (system roots plus `SENSOR_CA_CERT_FILE`) found, or the platform's self-signed certificate | pairing over HTTPS without `SENSOR_CA_FINGERPRINT` |
-| `ca_cert` | a CA certificate in the presented chain (the `SENSOR_CA_FINGERPRINT` semantics) | `SENSOR_CA_FINGERPRINT` was set at pairing |
+| `ca_cert` | a CA certificate of the platform chain (the `SENSOR_CA_FINGERPRINT` semantics): one the platform presents, or a root it does not send that the chain verifies up to in the trust store (system roots plus `SENSOR_CA_CERT_FILE`) | `SENSOR_CA_FINGERPRINT` was set at pairing |
 
 Why the anchor's key: servers rarely send their root, so the pin must be on
 something the sensor builds itself, which the verified chain is. A leaf or
@@ -792,7 +792,10 @@ store := credentials.NewFileStore(path)  // Only for non-sensitive data
   private network; plain `http` to a non-loopback host logs a warning.
 - Never disable certificate verification. Trust a private CA with
   `SENSOR_CA_CERT_FILE`, and pin it with `SENSOR_CA_FINGERPRINT` (from the
-  install snippet). Without it, pairing pins the CA it verified.
+  install snippet). When the platform does not send its root (the built-in
+  gateway sends the server certificate and the intermediate), give the root
+  in `SENSOR_CA_CERT_FILE`: the pin must match a certificate of the chain
+  that verified. Without a pin, pairing pins the CA it verified.
 
 ### 3. Sensor Configuration
 
