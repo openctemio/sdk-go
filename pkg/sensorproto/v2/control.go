@@ -102,6 +102,11 @@ const (
 	// and manifests (api RFC-040 §5.7). Without it a sensor sends none; it
 	// enforces its local policy either way.
 	FeatureLocalPolicy = "local_policy"
+	// FeatureCommandProgress: the platform reads the heartbeat member
+	// "progress" (finished targets per held command) to tell a slow but
+	// progressing task from a stuck one (api research note 122). Without it
+	// a sensor sends none.
+	FeatureCommandProgress = "command_progress"
 	// FeaturePosture: the platform reads the manifest member "posture"
 	// (platform TLS pin, tool sandbox; api RFC-040). Without it a sensor
 	// sends none.

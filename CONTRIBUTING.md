@@ -62,6 +62,8 @@ Versioning follows the project rule (openctemio/openctem RFC-037): the version i
 
 `pkg/transfer` (with `pkg/transfer/bundle`) is its own Go module, `github.com/openctemio/sdk-go/pkg/transfer`, so the platform and the feed publishers do not take the whole SDK's dependency graph. It is released on its own: **Actions › Release Module Tag › Run** with the module and a `vX.Y.Z` version tags `pkg/transfer/vX.Y.Z` on main (`.github/scripts/release/tag-module.sh` checks the version is greater than the module's last tag, the commit is on main, and its `go.mod` has the right module path and no `replace`). Its changes still add a `changelog.d/` fragment. The root `./...` does not reach a nested module, so CI runs its tests, build, vet, lint and govulncheck in its directory; run them there locally too (`cd pkg/transfer; go test ./...`).
 
+`pkg/politeness` is a nested module the same way (`github.com/openctemio/sdk-go/pkg/politeness`, standard library only, tagged `pkg/politeness/vX.Y.Z` with the same workflow), because the platform imports it: the platform and the sensor must compute the same per-host keys. A change to its keys changes what the platform holds back, so it ships with a tag the platform then pins.
+
 Do not tag by hand. Without the `RELEASE_TOKEN` secret (a fine-grained PAT with Contents, Pull requests and Workflows read/write), you open the PR yourself from the link in the run summary, and the cross-repository PRs are skipped.
 
 ## License

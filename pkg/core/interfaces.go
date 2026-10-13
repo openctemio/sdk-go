@@ -104,6 +104,13 @@ type ScanOptions struct {
 	// "first-last" ranges) for a tool that can skip hosts itself (naabu
 	// -exclude-hosts). The sensor already cut the job's ranges around them.
 	ExcludeHosts []string `yaml:"-" json:"-"`
+
+	// TargetTimeout is the platform's per-target budget (TaskBudget.Target,
+	// clamped; 0 = none). A wrapper passes it as the tool's per-request or
+	// per-host timeout flag where the tool has one, and runs per-target
+	// tools through RunPerTarget, so one slow host costs one budget, not the
+	// whole task.
+	TargetTimeout time.Duration `yaml:"-" json:"-"`
 }
 
 // ScopeLimitScanner is a scanner that runs a job whose targets carry scope
@@ -552,6 +559,10 @@ type SensorStatus struct {
 	Capacity        *resource.Capacity      `json:"capacity,omitempty"`
 	Queue           *QueueStats             `json:"queue,omitempty"`
 	RunningCommands []string                `json:"running,omitzero"`
+	// Progress is each held command's finished targets (progress.go); the
+	// API client sends it only to a platform that lists the
+	// "command_progress" feature.
+	Progress map[string]CommandProgress `json:"progress,omitempty"`
 
 	// Control is the control channel's own stats (api RFC-035): BaseSensor
 	// sets it on every heartbeat.

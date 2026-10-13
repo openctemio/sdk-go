@@ -66,6 +66,7 @@ The `--capability` suites:
 | Capability | Fixture and check |
 |---|---|
 | `scan.ports@1` | Two open ports and one closed: exactly the open ones are reported. |
+| `discover.hosts@1` | A loopback address answering on one port, probed on that port: exactly that address is reported live, with the probe that answered (`properties.live_by`). |
 | `probe.http@1` | A page with a known title: `http_service` with status 200. |
 | `vuln.templates@1` | An app exposing `/.git/config` and `/.env`: at least one finding. |
 | `secrets.code@1` | A repository with fresh fake credentials: a masked value, and the raw value absent from the report and the logs. |

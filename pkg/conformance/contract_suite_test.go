@@ -80,6 +80,25 @@ func fakeTool(mode string, args []string) int {
 			}
 			assets = append(assets, map[string]any{"type": "open_port", "value": net.JoinHostPort(host, p), "properties": props})
 		}
+	case "hosts", "hosts-extra", "hosts-bad":
+		// Host discovery: the target is live when one probe port answers.
+		host := arg(0)
+		for _, p := range strings.Split(arg(1), ",") {
+			c, err := net.DialTimeout("tcp", net.JoinHostPort(host, p), 500*time.Millisecond)
+			if err != nil {
+				continue
+			}
+			_ = c.Close()
+			props := map[string]any{"live_by": "tcp:" + p}
+			if mode == "hosts-bad" {
+				props = nil
+			}
+			assets = append(assets, map[string]any{"type": "ip_address", "value": host, "properties": props})
+			break
+		}
+		if mode == "hosts-extra" {
+			assets = append(assets, map[string]any{"type": "ip_address", "value": "127.0.0.9", "properties": map[string]any{"live_by": "icmp"}})
+		}
 	case "secrets":
 		b, _ := os.ReadFile(filepath.Join(arg(0), "config.py"))
 		for _, k := range awsKeyRE.FindAllString(string(b), -1) {
@@ -187,6 +206,15 @@ const portsTool = `tier: T1
 implements: [{capability: scan.ports@1, params: {ports: {key: ports}}, output_shape: open_port_assets}]
 consumes: [ip_address, domain]
 produces: [asset:open_port]
+config: {type: object, additionalProperties: false, properties: {ports: {type: string, maxLength: 2048}}}
+permissions: {network: targets}
+run: {profile: exec, argv: [EXE, "{{target.value}}", "{{config.ports}}"], output: {format: ctis, from: stdout}}
+`
+
+const hostsTool = `tier: T1
+implements: [{capability: discover.hosts@1, params: {ports: {key: ports}}}]
+consumes: [ip_address]
+produces: [asset:ip_address]
 config: {type: object, additionalProperties: false, properties: {ports: {type: string, maxLength: 2048}}}
 permissions: {network: targets}
 run: {profile: exec, argv: [EXE, "{{target.value}}", "{{config.ports}}"], output: {format: ctis, from: stdout}}
@@ -547,5 +575,24 @@ run: {profile: exec, argv: [EXE, "{{target.value}}"], output: {format: ctis, fro
 	r := runContract(path, ContractOptions{Capability: true, Env: map[string]string{fakeToolEnv: "evidence", "CONFORMANCE_UNMARKED": "1"}})
 	if !hasErr(r, "Authorization header value is not marked sensitive") {
 		t.Fatalf("unmarked evidence passed: %v", r.errs)
+	}
+}
+
+// A host discovery tool that reports its live target with the probe that
+// answered passes the discover.hosts@1 suite; one that reports an address
+// it was not given, or a live address without the probe, fails it.
+func TestContractSuite_DiscoverHosts(t *testing.T) {
+	run := func(mode string) *suiteRecorder {
+		return runContract(fakeManifest(t, hostsTool, nil), ContractOptions{Capability: true,
+			Env: map[string]string{fakeToolEnv: mode}, Timeout: 20 * time.Second})
+	}
+	if r := run("hosts"); len(r.errs) > 0 {
+		t.Fatalf("errors: %v", r.errs)
+	}
+	if r := run("hosts-extra"); !hasErr(r, "Capability/discover.hosts@1") || !hasErr(r, "want exactly [127.0.0.1]") {
+		t.Fatalf("an address the tool was not given passed: %v", r.errs)
+	}
+	if r := run("hosts-bad"); !hasErr(r, "properties.live_by") {
+		t.Fatalf("a live address without the probe passed: %v", r.errs)
 	}
 }
