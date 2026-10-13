@@ -48,7 +48,7 @@ jobs:
           cache: true
 
       - name: Build
-        run: go build ./... && (cd pkg/transfer && go build ./...) && (cd pkg/politeness && go build ./...)
+        run: go build ./... && (cd pkg/transfer && go build ./...)
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
@@ -80,10 +80,6 @@ jobs:
 
       - name: Run govulncheck (pkg/transfer module)
         working-directory: pkg/transfer
-        run: govulncheck ./...
-
-      - name: Run govulncheck (pkg/politeness module)
-        working-directory: pkg/politeness
         run: govulncheck ./...
 
   # ============================================
