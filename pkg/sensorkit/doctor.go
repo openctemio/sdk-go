@@ -38,6 +38,7 @@ const (
 	CheckScanProxyInherit     = "network.scan_proxy_inherit"
 	CheckCAPinHost            = "platform.ca_pin_host"
 	CheckOOMProtect           = "runtime.oom_protect"
+	CheckSandboxNetwork       = "runtime.sandbox_network"
 	CheckAliasDeprecated      = "config.alias_deprecated"
 	CheckEnvUnknown           = "config.env_unknown"
 	CheckPlatformTLS          = "platform.tls"

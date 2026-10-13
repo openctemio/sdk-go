@@ -277,6 +277,14 @@ func (s Status) Complete() bool {
 
 var current atomic.Pointer[backendHolder]
 
+// CapabilityNetConfined is the capability a sensor advertises when every
+// tool it runs for a job runs in a sandbox whose network is confined to the
+// task's forwarder (Status.NetworkEnforced, and no tool runs in the sensor's
+// own process). The platform sends jobs that need confinement (a web scope,
+// scope limits) only to a sensor that advertises it. A sensor advertises
+// it only from its runtime's status, never from a setting.
+const CapabilityNetConfined = "net.confined@1"
+
 type backendHolder struct{ b Backend }
 
 // Current is the backend tasks run on: the one Configure installed, else a
