@@ -447,6 +447,9 @@ type HeartbeatRequest struct {
 	Capacity        *resource.Capacity      `json:"capacity,omitempty"`
 	Queue           *core.QueueStats        `json:"queue,omitempty"`
 	RunningCommands []string                `json:"running,omitzero"`
+	// Progress is each held command's finished targets; sent only to a
+	// platform that lists FeatureCommandProgress.
+	Progress map[string]core.CommandProgress `json:"progress,omitempty"`
 	// Control is the control channel's own stats (api RFC-035).
 	Control *core.ControlStats `json:"control,omitempty"`
 
@@ -674,6 +677,10 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus) (
 	// it reads it (an older one is never sent a member it does not know).
 	if status.LocalPolicy != nil && c.PlatformSupports(ctx, protov2.FeatureLocalPolicy) {
 		req.LocalPolicy = status.LocalPolicy
+	}
+	// Per-command progress is additive too (api research note 122).
+	if len(status.Progress) > 0 && c.PlatformSupports(ctx, protov2.FeatureCommandProgress) {
+		req.Progress = status.Progress
 	}
 	if status.ConfigReport != nil && c.PlatformSupports(ctx, protov2.FeatureConfigReport) {
 		req.ConfigReport = status.ConfigReport
