@@ -180,14 +180,15 @@ func normalizeToolName(name string) (string, bool) {
 }
 
 // normalizeCapability lowercases and checks a capability name (tool-name
-// characters plus ':'); "" when invalid.
+// characters plus ':' and '@', the version of a versioned capability such
+// as "scope.limits@1"); "" when invalid.
 func normalizeCapability(c string) string {
 	n := strings.ToLower(strings.TrimSpace(c))
 	if n == "" || len(n) > maxToolNameLen {
 		return ""
 	}
 	for _, r := range n {
-		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '.' && r != '_' && r != '-' && r != ':' {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '.' && r != '_' && r != '-' && r != ':' && r != '@' {
 			return ""
 		}
 	}

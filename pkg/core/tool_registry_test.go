@@ -231,6 +231,19 @@ func TestToolRegistryLimit(t *testing.T) {
 	}
 }
 
+// A versioned sensor-wide capability ("scope.limits@1", "net.confined@1")
+// is reported: the platform withholds jobs that need it from a sensor that
+// does not report it, so dropping it turned a confined sensor into one that
+// never gets them.
+func TestToolRegistryReportsVersionedCapabilities(t *testing.T) {
+	r := NewToolRegistry()
+	r.AddCapabilities("scope.limits@1", "Net.Confined@1", "bad@ word")
+	got := r.CapabilityReport(context.Background()).Capabilities
+	if !slices.Equal(got, []string{"scope.limits@1", "net.confined@1"}) {
+		t.Fatalf("capabilities = %v", got)
+	}
+}
+
 func TestToolRegistrySensorWideCapabilitiesAndConcurrency(t *testing.T) {
 	r := NewToolRegistry()
 	r.AddCapabilities("validate", "Validate", "bad word")
