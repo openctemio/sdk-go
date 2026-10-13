@@ -33,7 +33,7 @@ func TestNewChecksRequiredSandboxNetworkBeforePairing(t *testing.T) {
 	}
 }
 
-func TestCheckSandboxNetwork(t *testing.T) {
+func TestValidateSandboxNetwork(t *testing.T) {
 	clearEnv(t)
 	for _, tc := range []struct {
 		net, sandbox string
@@ -46,7 +46,7 @@ func TestCheckSandboxNetwork(t *testing.T) {
 		{"bogus", "off", true},
 	} {
 		t.Setenv(EnvSandboxNetwork, tc.net)
-		if err := CheckSandboxNetwork(tc.sandbox); (err != nil) != tc.wantErr {
+		if err := ValidateSandboxNetwork(tc.sandbox); (err != nil) != tc.wantErr {
 			t.Fatalf("%s=%q sandbox=%s: err %v, want error %v", EnvSandboxNetwork, tc.net, tc.sandbox, err, tc.wantErr)
 		}
 	}
