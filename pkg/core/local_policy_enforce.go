@@ -169,8 +169,19 @@ func (a *CommandAdmission) Partial() bool { return a != nil && len(a.Refused) > 
 // It rewrites cmd.Payload only when it removed targets. A removed target is
 // never handed to an executor or a tool.
 func (lp *LocalPolicy) AdmitCommandTargets(ctx context.Context, cmd *Command) (*CommandAdmission, error) {
+	// The job's exclusions and the deny lists first, address by address on
+	// a range (job_exclusions.go), with or without a policy file: what is
+	// cut here never reaches the checks below or a tool.
+	cut, err := lp.cutJobTargets(cmd)
+	if err != nil {
+		return &CommandAdmission{Total: len(cut.refused), Refused: cut.refused}, err
+	}
 	targets, err := lp.admitJob(cmd)
-	adm := &CommandAdmission{Total: len(targets)}
+	adm := &CommandAdmission{Total: len(targets) + len(cut.refused), Refused: cut.refused}
+	if err == nil && len(targets) == 0 && len(cut.refused) > 0 && !jobHasTargetsLeft(cmd) {
+		// Every target was cut and no policy check runs (no policy file).
+		return adm, &LocalPolicyError{Rule: cut.refused[0].Rule, Detail: refusedSummary(adm.Refused)}
+	}
 	if err != nil || len(targets) == 0 {
 		return adm, err
 	}

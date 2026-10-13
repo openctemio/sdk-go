@@ -22,6 +22,16 @@ func (e *DefaultCommandExecutor) newScanOptions(cmd *Command, target string, tar
 	if err := applySignedLimits(cmd, scanner, opts, p.Scanner); err != nil {
 		return nil, err
 	}
+	if len(p.Exclusions) > 0 {
+		// Read again here (admission read them first): only readable
+		// exclusions reach a tool's arguments.
+		if _, err := parseJobExclusions(p.Exclusions); err != nil {
+			return nil, err
+		}
+		for _, x := range p.Exclusions {
+			opts.ExcludeHosts = append(opts.ExcludeHosts, strings.TrimSpace(x))
+		}
+	}
 	return opts, nil
 }
 

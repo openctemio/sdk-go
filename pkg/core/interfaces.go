@@ -100,6 +100,10 @@ type ScanOptions struct {
 	// from its verified signed statement only (never the payload); only a
 	// ScopeLimitScanner receives them.
 	Limits []scopelimit.Limit `yaml:"-" json:"-"`
+	// ExcludeHosts are the job's exclusions (addresses, CIDR prefixes,
+	// "first-last" ranges) for a tool that can skip hosts itself (naabu
+	// -exclude-hosts). The sensor already cut the job's ranges around them.
+	ExcludeHosts []string `yaml:"-" json:"-"`
 }
 
 // ScopeLimitScanner is a scanner that runs a job whose targets carry scope

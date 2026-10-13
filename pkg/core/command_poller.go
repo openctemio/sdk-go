@@ -136,6 +136,12 @@ type ScanCommandPayload struct {
 	// HTTPPolicy is the organization's narrowing of its tools' requests
 	// (OrgHTTPPolicy); the local policy decides first.
 	HTTPPolicy *OrgHTTPPolicy `json:"http_policy,omitempty"`
+	// Exclusions are the scope exclusions that touch the job's targets
+	// (addresses, CIDR prefixes, "first-last" ranges), covered by the job
+	// signature with the rest of the payload. The sensor cuts its range
+	// targets around them address by address before any check or tool
+	// (job_exclusions.go) and hands them to the tool (ScanOptions.ExcludeHosts).
+	Exclusions []string `json:"exclusions,omitempty"`
 }
 
 // CapabilityScanner is a scanner that runs capability jobs: it takes the
