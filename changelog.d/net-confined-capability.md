@@ -5,4 +5,4 @@
 
 ### Fixed: versioned sensor-wide capabilities are reported
 
-- The tool registry dropped any capability with `@` in its name, so `scope.limits@1` (since sdk-go v0.18) and `net.confined@1` never reached the platform: a confined sensor was never given the jobs that need confinement or scope limits. Capability names may now contain `@`.
+- The tool registry dropped any capability with `@` in its name, so `scope.limits@1` and `net.confined@1` never reached the platform: a confined sensor was never given the jobs that need confinement or scope limits. Capability names may now contain `@`.
