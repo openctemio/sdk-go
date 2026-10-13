@@ -14,6 +14,7 @@ import (
 
 	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/adapt"
+	"github.com/openctemio/sdk-go/pkg/reach"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
@@ -67,6 +68,12 @@ func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared
 	e := &taskEgress{dir: dir, proxy: filepath.Join(dir, "proxy.sock"), dns: filepath.Join(dir, "dns.sock"),
 		fw: egress.New(scope, egress.Limits{Rate: ceiling, PerHostRate: ceiling})}
 	e.fw.Upstream = egress.UpstreamDNS("")
+	// The job's recorder when the caller set one (the command poller does),
+	// so the result's reach summary covers the tool's connections too.
+	e.fw.Reach = reach.FromContext(ctx)
+	if e.fw.Reach == nil {
+		e.fw.Reach = reach.NewRecorder()
+	}
 	e.fw.TargetRate().OnChange = e.change
 	pl, err := net.Listen("unix", e.proxy)
 	if err != nil {
@@ -132,6 +139,10 @@ func (e *taskEgress) finish(out *Outcome) []LogLine {
 	out.Egress, out.EgressDropped = e.stop()
 	s := e.fw.TargetRate().Summary()
 	out.TargetRate = &s
+	if !e.fw.Reach.Empty() {
+		r := e.fw.Reach.Report()
+		out.Reach = &r
+	}
 	lines := egressLog(out.Egress)
 	e.chMu.Lock()
 	for _, c := range e.changes {

@@ -44,6 +44,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/openctemio/sdk-go/pkg/adapt"
+	"github.com/openctemio/sdk-go/pkg/reach"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/webscope"
 )
@@ -169,6 +170,10 @@ type Forwarder struct {
 	// Upstream answers a DNS query of another type than A or AAAA for an
 	// admitted name (UpstreamDNS; nil: such queries get an empty answer).
 	Upstream func(ctx context.Context, query []byte) ([]byte, error)
+	// Reach, when set, receives the outcome of every connection toward a
+	// target (not toward a vendor host): reached, refused, no route,
+	// timeout, a name that does not resolve.
+	Reach *reach.Recorder
 
 	scopeLimits scopelimit.Set
 	addrLimits  map[netip.Addr][]string
@@ -331,8 +336,15 @@ func (f *Forwarder) allowRate(ctx context.Context, host string) error {
 // dial checks, rate-limits and dials host:port; it records the attempt.
 func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (net.Conn, *Record, error) {
 	rec := &Record{Time: time.Now().UTC(), Protocol: protocol, Host: host, Port: port}
+	target := f.Reach
+	if f.isVendor(normName(host)) {
+		target = nil
+	}
 	addrs, err := f.Resolve(ctx, host, port)
 	if err != nil {
+		if reach.Classify(err) == reach.DNSFailure {
+			target.RecordErr(host, netip.Addr{}, port, err)
+		}
 		rec.Verdict, rec.Reason = Refused, err.Error()
 		f.record(*rec)
 		return nil, nil, err
@@ -352,6 +364,9 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 		dctx, cancel := context.WithTimeout(ctx, f.limits.DialTimeout)
 		c, err := dial(dctx, "tcp", net.JoinHostPort(a.String(), strconv.Itoa(port)))
 		cancel()
+		if ctx.Err() == nil {
+			target.RecordErr(host, a, port, err)
+		}
 		if err == nil {
 			f.hostRate.ReportDial(normName(host), port, nil)
 			rec.Verdict, rec.Addr = Allowed, a.String()

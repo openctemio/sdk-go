@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/reach"
 )
 
 // blockedAlways reports whether ip is in the built-in deny list whatever
@@ -778,10 +779,14 @@ func (lp *LocalPolicy) DialContext(d *net.Dialer) func(ctx context.Context, netw
 		if err != nil {
 			return nil, err
 		}
-		_, port, _ := net.SplitHostPort(address)
+		host, port, _ := net.SplitHostPort(address)
+		portNum, _ := strconv.Atoi(port)
+		rec := reach.FromContext(ctx)
 		var last error
 		for _, ip := range ips {
+			addr, _ := netip.AddrFromSlice(ip)
 			conn, err := d.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			rec.RecordErr(host, addr, portNum, err)
 			if err == nil {
 				return conn, nil
 			}
