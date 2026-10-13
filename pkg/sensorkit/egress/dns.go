@@ -41,6 +41,10 @@ func (f *Forwarder) AnswerDNS(ctx context.Context, query []byte) ([]byte, error)
 	name := normName(q.Name.String())
 	resp := dnsmessage.Message{Header: dnsmessage.Header{ID: h.ID, Response: true, RecursionDesired: h.RecursionDesired,
 		RecursionAvailable: true}, Questions: []dnsmessage.Question{q}}
+	if f.searchVariant(name) {
+		resp.RCode = dnsmessage.RCodeNameError
+		return resp.Pack()
+	}
 	rec := Record{Time: time.Now().UTC(), Protocol: "dns", Host: name}
 	addrs, rerr := f.resolveName(ctx, name)
 	if rerr != nil {
@@ -80,6 +84,46 @@ func sameQuestion(resp []byte, id uint16, q dnsmessage.Question) bool {
 	}
 	got, err := p.Question()
 	return err == nil && got.Type == q.Type && got.Class == q.Class && normName(got.Name.String()) == normName(q.Name.String())
+}
+
+// searchVariant reports whether name is a search-domain variant of a name
+// that did not resolve: not a name this task may resolve (a target or a
+// vendor host), and ending in one of SearchDomains.
+func (f *Forwarder) searchVariant(name string) bool {
+	if _, ok := f.names[name]; ok || f.isVendor(name) {
+		return false
+	}
+	for _, d := range f.SearchDomains {
+		if d = normName(d); d != "" && strings.HasSuffix(name, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
+// SearchDomains returns the search domains of resolvConf (the sensor's own
+// /etc/resolv.conf when ""): the "search" and "domain" lines, at most 16.
+func SearchDomains(resolvConf string) []string {
+	if resolvConf == "" {
+		resolvConf = "/etc/resolv.conf"
+	}
+	b, err := os.ReadFile(resolvConf) // #nosec G304 -- the host resolver configuration
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 || (f[0] != "search" && f[0] != "domain") {
+			continue
+		}
+		for _, d := range f[1:] {
+			if d = normName(d); d != "" && d != "." && len(out) < 16 {
+				out = append(out, d)
+			}
+		}
+	}
+	return out
 }
 
 // UpstreamDNS returns an Upstream that sends a query to the first resolver

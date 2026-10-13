@@ -25,6 +25,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/platform"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
@@ -44,6 +45,7 @@ const (
 	CheckLocalPolicy          = "policy.local"
 	CheckTemplateKeys         = "policy.template_keys"
 	CheckCommandPoller        = "runtime.command_poller"
+	CheckDNSSearch            = "network.dns_search"
 	EnvSSLCertFile            = "SSL_CERT_FILE"
 	EnvSSLCertDir             = "SSL_CERT_DIR"
 	unknownEnvPrefixSensor    = "SENSOR_"
@@ -347,6 +349,7 @@ func readableDir(v string) error {
 func (k *Kit) preflightNew(proxies Proxies, proxyOpts ProxyOptions) {
 	k.checkTrustFiles()
 	k.checkCAPinHost()
+	k.checkDNSSearch()
 	for _, rv := range legacyv1.SensorRenamedEnv {
 		r := [2]string{rv.Old, rv.New}
 		if _, ok := os.LookupEnv(r[0]); ok {
@@ -594,4 +597,19 @@ func (k *Kit) printPreflight() {
 		where = " (the platform shows them under the sensor's Setup & health)"
 	}
 	_, _ = fmt.Fprintf(k.out, "  Preflight: %d passed, %d warning(s), %d failed%s\n", pass, warn, fail, where)
+}
+
+// checkDNSSearch notes (information only) that the host resolver has search
+// domains (resolv.conf "search", often from DHCP): the SDK looks target
+// names up as written, and a confined task's resolver has none, so they are
+// never appended to a target; a tool run without confinement may still
+// append them.
+func (k *Kit) checkDNSSearch() {
+	domains := egress.SearchDomains("")
+	if len(domains) == 0 {
+		return
+	}
+	k.ReportCheck(core.ConfigCheck{ID: CheckDNSSearch, Status: core.CheckPass, Severity: core.SeverityInfo, Code: "search_domains",
+		Params:  map[string]core.ConfigParam{"count": core.ParamInt(int64(len(domains)))},
+		Summary: "the host resolver has search domains; target names are looked up as written, never with a search domain"})
 }

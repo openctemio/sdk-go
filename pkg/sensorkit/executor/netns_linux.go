@@ -249,7 +249,7 @@ func bindResolvConf(workdir string) error {
 		return err
 	}
 	src := filepath.Join(workdir, ".resolv.conf")
-	if err := os.WriteFile(src, []byte("nameserver 127.0.0.1\noptions ndots:1\n"), 0o400); err != nil {
+	if err := os.WriteFile(src, []byte(taskResolvConf), 0o400); err != nil {
 		return err
 	}
 	return unix.Mount(src, "/etc/resolv.conf", "", unix.MS_BIND, "")
