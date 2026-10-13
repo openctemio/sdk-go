@@ -12,6 +12,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
 	"github.com/openctemio/sdk-go/pkg/tool/toolcompat"
+	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
 // RetestCommandType is the platform's command that asks a tool to check
@@ -34,7 +35,12 @@ type retestPayload struct {
 	RetestID       string   `json:"retest_id"`
 	TimeoutSeconds int      `json:"timeout_seconds"`
 	Targets        []string `json:"targets"`
-	Items          []struct {
+	// WebScope is the job's web scope, as on a scan command: the paths
+	// and methods the tool may request. The tool host enforces it (the
+	// task forwarder, on a sandbox that confines the network), and a tool
+	// that does not declare features.web_scope is refused.
+	WebScope *webscope.Scope `json:"web_scope,omitempty"`
+	Items    []struct {
 		Ref         string `json:"ref"`
 		Target      string `json:"target"`
 		Kind        string `json:"kind"`
@@ -153,7 +159,10 @@ func (x *retestExecutor) Execute(ctx context.Context, cmd *core.Command) (*core.
 
 // retestTask builds the task of a retest command.
 func retestTask(id string, p retestPayload) (tool.Task, error) {
-	task := tool.Task{ID: id}
+	task := tool.Task{ID: id, WebScope: p.WebScope}
+	if err := p.WebScope.Validate(); err != nil {
+		return task, fmt.Errorf("retest: web scope: %w", err)
+	}
 	if len(p.Items) == 0 {
 		return task, errors.New("retest: the command has no items")
 	}
