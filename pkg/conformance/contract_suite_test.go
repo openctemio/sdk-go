@@ -102,6 +102,36 @@ func fakeTool(mode string, args []string) int {
 			"properties": map[string]any{"status_code": resp.StatusCode, "title": title}})
 	case "crawl":
 		assets = fakeCrawl(arg(0), arg(1))
+	case "templates":
+		// Requests /.git/config, /.env and /env (a redirect to /.env),
+		// skipping what the web scope (arg 1) denies unless
+		// $CONFORMANCE_IGNORE_SCOPE=1.
+		var scope *webscope.Scope
+		if b, err := os.ReadFile(arg(1)); err == nil {
+			_ = json.Unmarshal(b, &scope)
+		}
+		if os.Getenv("CONFORMANCE_IGNORE_SCOPE") == "1" {
+			scope = nil
+		}
+		base, _ := url.Parse(arg(0))
+		client := &http.Client{CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			return scope.Allows("GET", req.URL, []string{base.Hostname()})
+		}}
+		for _, p := range []string{"/.git/config", "/.env", "/env"} {
+			u := base.JoinPath(p)
+			if scope.Allows("GET", u, []string{base.Hostname()}) != nil {
+				continue
+			}
+			resp, err := client.Get(u.String()) //nolint:noctx // the fixture
+			if err != nil {
+				continue
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				findings = append(findings, map[string]any{"type": "misconfiguration", "rule_id": "exposed" + strings.ReplaceAll(p, "/", "-"),
+					"title": p + " exposed", "asset_value": arg(0), "severity": "medium"})
+			}
+		}
 	case "evidence":
 		// A finding with an HTTP exchange; $CONFORMANCE_UNMARKED=1 leaves the
 		// Authorization value unmarked.
@@ -465,6 +495,34 @@ func TestContractSuite_WebScope(t *testing.T) {
 	undeclared := fakeManifest(t, strings.Replace(crawlTool, "FEATURES", "", 1), nil)
 	if r := runContract(undeclared, ContractOptions{Capability: true, Env: map[string]string{fakeToolEnv: "crawl"}}); !hasErr(r, "must declare features.web_scope") {
 		t.Fatalf("an undeclared crawler passed: %v", r.errs)
+	}
+}
+
+const templatesTool = `tier: T1
+implements: [{capability: vuln.templates@1}]
+consumes: [http_service]
+produces: [finding:misconfiguration]
+permissions: {network: targets}
+FEATURES
+run: {profile: exec, argv: [EXE, "{{target.value}}", "{{task.web_scope_file}}"], output: {format: ctis, from: stdout}}
+`
+
+// SECURITY (acceptance): a template scanner that declares features.web_scope
+// and keeps to it passes the vuln.templates web-scope check; one that
+// requests the denied path, directly or behind a redirect, fails it. One
+// that does not declare the feature is not given a web-scoped task.
+func TestContractSuite_VulnTemplatesWebScope(t *testing.T) {
+	declared := fakeManifest(t, strings.Replace(templatesTool, "FEATURES", "features: {web_scope: true}", 1), nil)
+	if r := runContract(declared, ContractOptions{Capability: true, Env: map[string]string{fakeToolEnv: "templates"}}); len(r.errs) > 0 {
+		t.Fatalf("a scanner that keeps to the scope: %v", r.errs)
+	}
+	r := runContract(declared, ContractOptions{Capability: true, Env: map[string]string{fakeToolEnv: "templates", "CONFORMANCE_IGNORE_SCOPE": "1"}})
+	if !hasErr(r, "vuln.templates@1/web_scope: the tool requested /.env") {
+		t.Fatalf("a scanner that ignores the scope passed: %v", r.errs)
+	}
+	undeclared := fakeManifest(t, strings.Replace(templatesTool, "FEATURES", "", 1), nil)
+	if r := runContract(undeclared, ContractOptions{Capability: true, Env: map[string]string{fakeToolEnv: "templates"}}); len(r.errs) > 0 {
+		t.Fatalf("an undeclared scanner without a web scope: %v", r.errs)
 	}
 }
 

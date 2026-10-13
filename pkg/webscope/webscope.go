@@ -123,16 +123,39 @@ func (s *Scope) Allows(method string, u *url.URL, targets []string) error {
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrOutOfScope, err)
 	}
-	lower := strings.ToLower(p)
-	for _, d := range s.DenyPaths {
-		if strings.HasPrefix(lower, strings.ToLower(d)) {
-			return fmt.Errorf("%w: path %s is denied", ErrOutOfScope, d)
+	// A server that drops path parameters (";jsessionid=...") reads
+	// "/;/admin" as "/admin": both readings must pass.
+	for _, v := range []string{p, withoutParams(p)} {
+		lower := strings.ToLower(v)
+		for _, d := range s.DenyPaths {
+			if strings.HasPrefix(lower, strings.ToLower(d)) {
+				return fmt.Errorf("%w: path %s is denied", ErrOutOfScope, d)
+			}
+		}
+		if len(s.PathPrefixes) > 0 && !slices.ContainsFunc(s.PathPrefixes, func(pre string) bool { return underPrefix(v, pre) }) {
+			return fmt.Errorf("%w: path outside the allowed prefixes", ErrOutOfScope)
 		}
 	}
-	if len(s.PathPrefixes) > 0 && !slices.ContainsFunc(s.PathPrefixes, func(pre string) bool { return underPrefix(p, pre) }) {
-		return fmt.Errorf("%w: path outside the allowed prefixes", ErrOutOfScope)
-	}
 	return nil
+}
+
+// withoutParams is a clean path with every segment's parameters (";...")
+// removed, cleaned again.
+func withoutParams(p string) string {
+	if !strings.Contains(p, ";") {
+		return p
+	}
+	segs := strings.Split(p, "/")
+	for i, seg := range segs {
+		segs[i], _, _ = strings.Cut(seg, ";")
+	}
+	q := strings.Join(segs, "/")
+	trailing := strings.HasSuffix(q, "/")
+	c := path.Clean("/" + q)
+	if trailing && c != "/" {
+		c += "/"
+	}
+	return c
 }
 
 // HostMatches reports whether host matches the pattern: equal ignoring case
@@ -151,8 +174,9 @@ func HostMatches(pattern, host string) bool {
 }
 
 // CleanPath is the path a server sees for u: percent-decoded, dot segments
-// resolved, never empty. A path that still holds an encoded slash or a
-// NUL after decoding is refused: servers disagree on it.
+// resolved, never empty. A path with an encoded slash, backslash or NUL, a
+// control character, or a dot segment with parameters ("..;") is refused:
+// servers disagree on it.
 func CleanPath(u *url.URL) (string, error) {
 	raw := u.EscapedPath()
 	if raw == "" {
@@ -166,7 +190,15 @@ func CleanPath(u *url.URL) (string, error) {
 	if err != nil {
 		return "", errors.New("invalid percent-encoding in the path")
 	}
+	if strings.ContainsFunc(dec, isControl) {
+		return "", errors.New("control character in the path")
+	}
 	dec = strings.ReplaceAll(dec, "\\", "/")
+	for _, seg := range strings.Split(dec, "/") {
+		if base, _, ok := strings.Cut(seg, ";"); ok && (base == "." || base == "..") {
+			return "", errors.New("dot segment with parameters in the path")
+		}
+	}
 	trailing := strings.HasSuffix(dec, "/")
 	c := path.Clean("/" + dec)
 	if trailing && c != "/" {

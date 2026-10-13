@@ -196,7 +196,13 @@ func (h *Host) taskScope(ctx context.Context, m tool.Manifest, task tool.Task) e
 	case tool.NetTargets, tool.NetResolver:
 		s.DNSOnly = m.Permissions.Network == tool.NetResolver
 		s.Limits = task.Limits
+		s.Web = task.WebScope
 		for _, t := range task.Targets {
+			if task.WebScope != nil {
+				if h := t.Host(); h != "" {
+					s.WebTargets = append(s.WebTargets, h)
+				}
+			}
 			if pfx, err := netip.ParsePrefix(strings.TrimSpace(t.Value)); err == nil {
 				s.Prefixes = append(s.Prefixes, pfx.Masked())
 				continue

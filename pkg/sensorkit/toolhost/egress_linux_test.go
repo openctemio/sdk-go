@@ -19,6 +19,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/tool"
+	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
 // SECURITY (acceptance, api RFC-060): on a backend that confines the
@@ -187,6 +188,69 @@ func TestConfinedTaskKeepsToScopeLimits(t *testing.T) {
 		}
 	}
 	if paths != 2 || ports != 1 {
+		t.Fatalf("egress records %+v", out.Egress)
+	}
+}
+
+// SECURITY (acceptance, web scope): on a backend that confines the
+// network, a task with a web scope reaches an allowed path through its
+// forwarder; a denied path, in any form and behind a redirect, is refused,
+// recorded and never reaches the server, and a direct connection to the
+// target has no route.
+func TestConfinedTaskKeepsToWebScope(t *testing.T) {
+	be, err := executor.NewProcessBackend(executor.Config{Mode: executor.ModeRequired, ConfineNetwork: true, RequireNetwork: true,
+		Limits: executor.Limits{Processes: 256}})
+	if err != nil {
+		if os.Getenv("OPENCTEM_TEST_REQUIRE_NETNS") == "1" {
+			t.Fatalf("network confinement required by the environment, not available: %v", err)
+		}
+		t.Skipf("network confinement not available here: %v", err)
+	}
+	var mu sync.Mutex
+	var served []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		served = append(served, r.URL.EscapedPath())
+		mu.Unlock()
+		if r.URL.Path == "/go" {
+			http.Redirect(w, r, "/admin/redirected", http.StatusFound)
+		}
+	}))
+	defer srv.Close()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	target := fmt.Sprintf("http://localhost:%d", port)
+	exe, _ := os.Executable()
+	m := tool.Manifest{
+		Name: "webscope-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
+		Consumes: []string{"http_service"}, Produces: []string{"finding:misconfiguration"},
+		Permissions: tool.Permissions{Network: tool.NetTargets}, Features: &tool.Features{WebScope: true},
+		Run: &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
+	}
+	h := testHost(t)
+	h.Backend = be
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "http_service", Value: target}},
+		WebScope: &webscope.Scope{DenyPaths: []string{"/admin"}}}
+	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,
+		Env: map[string]string{"TOOLHOST_HOSTILE": "webscope-probe", "TOOLHOST_TARGET": target}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Report.Findings) != 1 || out.Report.Findings[0].Title != "public=200 admin=403 enc=403 dots=403 redirect=403 direct=blocked" {
+		b, _ := json.Marshal(out.Report.Findings)
+		t.Fatalf("probe: %s (status %s, stderr %s, err %+v)", b, out.Status, out.Stderr, out.Err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(served, ",") != "/public/x,/go" {
+		t.Fatalf("the server served %v", served)
+	}
+	refused := 0
+	for _, r := range out.Egress {
+		if r.Verdict == egress.Refused && r.Protocol == egress.ProtocolHTTPPath {
+			refused++
+		}
+	}
+	if refused != 4 {
 		t.Fatalf("egress records %+v", out.Egress)
 	}
 }

@@ -90,37 +90,46 @@ func (f *Forwarder) indexLimits() {
 	}
 }
 
-// guard is the path check of one connection to a limited port.
+// guard is the request check of one connection: to a path-limited port,
+// or to any destination of a task with a web scope.
 type guard struct {
 	f    *Forwarder
 	host string // as dialed (a name, or an address)
 	port int
 	// hosts are the limited hosts behind the destination (limitHosts).
 	hosts []string
+	// tls is set once the guard terminated TLS on the connection.
+	tls bool
 }
 
-// guardFor returns the path guard of a connection to host:port, or nil
-// when no limit of the destination names a path for that port.
+// guardFor returns the guard of a connection to host:port, or nil when no
+// limit of the destination names a path for that port and the task has no
+// web scope.
 func (f *Forwarder) guardFor(host string, port int) *guard {
 	hosts := f.limitHosts(host)
+	g := &guard{f: f, host: normName(strings.Trim(host, "[]")), port: port, hosts: hosts}
 	for _, h := range hosts {
 		if _, guarded := f.scopeLimits.PathPrefixes(h, port); guarded {
-			return &guard{f: f, host: normName(strings.Trim(host, "[]")), port: port, hosts: hosts}
+			return g
 		}
+	}
+	if f.scope.Web != nil {
+		return g
 	}
 	return nil
 }
 
 // allowsName reports whether a request (its Host, or a TLS server name)
-// may name name on this connection: the host dialed, or a limited host
+// may name name on this connection: the host dialed, a limited host
 // behind the dialed address.
 func (g *guard) allowsName(name string) bool {
 	name = normName(strings.Trim(name, "[]"))
 	return name != "" && (name == g.host || slices.Contains(g.hosts, name))
 }
 
-// check decides one request: its Host must name the destination, and its
-// path must be under the prefixes that host's limits give this port.
+// check decides one request: its Host must name the destination, its path
+// must be under the prefixes that host's limits give this port, and the
+// request must be inside the task's web scope.
 func (g *guard) check(req *http.Request) error {
 	if req.URL == nil || req.URL.Opaque != "" || req.Method == http.MethodConnect {
 		return fmt.Errorf("%w: not an origin-form request", scopelimit.ErrOutside)
@@ -139,6 +148,17 @@ func (g *guard) check(req *http.Request) error {
 		return fmt.Errorf("%w: Host %q is not the destination", scopelimit.ErrOutside, clipString(host, 128))
 	}
 	name := normName(strings.Trim(host, "[]"))
+	if len(g.hosts) > 0 {
+		if err := g.checkLimits(req, name); err != nil {
+			return err
+		}
+	}
+	return g.checkWeb(req, name)
+}
+
+// checkLimits is the limit check of a request that names name on a
+// connection to a limited destination.
+func (g *guard) checkLimits(req *http.Request, name string) error {
 	if !g.f.scopeLimits.Limited(name) {
 		// A request by address to a name's address: only the address's
 		// own limits could allow it, and it has none.
@@ -227,6 +247,7 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 			return
 		}
 		client, upstream = srv, upTLS
+		g.tls = true
 	}
 	_ = c.SetReadDeadline(time.Time{})
 	lr := &io.LimitedReader{R: client, N: maxHeaderBytes}
