@@ -94,7 +94,21 @@ func (f *Forwarder) searchVariant(name string) bool {
 		return false
 	}
 	for _, d := range f.SearchDomains {
-		if d = normName(d); d != "" && strings.HasSuffix(name, "."+d) {
+		d = normName(d)
+		if d == "" || !strings.HasSuffix(name, "."+d) {
+			continue
+		}
+		// A target name with the suffix appended is a search variant. So is
+		// a dotted name with it when the task may resolve any public name
+		// (discovery): the base is the name the tool meant. A name inside
+		// the search domain that is neither (an internal host whose zone is
+		// also the search domain: host1.corp.example.com with search
+		// corp.example.com) is looked up as usual.
+		base := strings.TrimSuffix(name, "."+d)
+		if _, ok := f.names[base]; ok {
+			return true
+		}
+		if f.scope.AnyPublic && strings.Contains(base, ".") {
 			return true
 		}
 	}

@@ -59,6 +59,14 @@ func TestSearchSuffixVariantIsNXDOMAINNotARefusal(t *testing.T) {
 	if m := askDNS(t, f, "nas.lan."); len(m.Answers) != 1 {
 		t.Fatalf("a target in the search domain: %+v", m)
 	}
+	// An internal host whose zone is the search domain is not a variant.
+	g := New(Scope{Names: map[string][]netip.Addr{
+		"host1.corp.example": {addr("192.0.2.9")},
+	}}, Limits{})
+	g.SearchDomains = []string{"corp.example"}
+	if m := askDNS(t, g, "host1.corp.example."); len(m.Answers) != 1 {
+		t.Fatalf("an internal target in the search domain's zone: %+v", m)
+	}
 	if m := askDNS(t, f, "app.example.com."); len(m.Answers) != 1 {
 		t.Fatalf("the target: %+v", m)
 	}
