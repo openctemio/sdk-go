@@ -114,11 +114,14 @@ type ScanCommandPayload struct {
 	// Targets; when both are set, Target is the job.
 	Target string `json:"target"`
 	// Targets is the full target list (additive).
-	Targets         []string               `json:"targets,omitempty"`
-	Config          map[string]interface{} `json:"config,omitempty"`
-	TimeoutSeconds  int                    `json:"timeout_seconds,omitempty"`
-	ReportProgress  bool                   `json:"report_progress,omitempty"`
-	CustomTemplates []EmbeddedTemplate     `json:"custom_templates,omitempty"`
+	Targets        []string               `json:"targets,omitempty"`
+	Config         map[string]interface{} `json:"config,omitempty"`
+	TimeoutSeconds int                    `json:"timeout_seconds,omitempty"`
+	// Budget is the task's layered budget (per target, per task); nil
+	// from a platform that sends none (budget.go).
+	Budget          *TaskBudget        `json:"budget,omitempty"`
+	ReportProgress  bool               `json:"report_progress,omitempty"`
+	CustomTemplates []EmbeddedTemplate `json:"custom_templates,omitempty"`
 	// CustomTemplatesEnvelope is the platform's signed manifest of
 	// CustomTemplates (TemplateManifest in a DSSE envelope). Custom
 	// templates run only when it verifies (see TemplateVerifier.Verify).
@@ -644,6 +647,7 @@ func (p *CommandPoller) ReportStatus(status *SensorStatus) {
 	status.ActiveJobsReported = true
 	status.Queue = &st
 	status.RunningCommands = ids
+	status.Progress = p.queue.progress()
 	if p.resources != nil {
 		res, capacity := p.resources.Snapshot(active)
 		status.Resources = &res
@@ -1056,6 +1060,10 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	// result carries the summary (reach.Recorder.Metadata).
 	reached := reach.NewRecorder()
 	ctx = reach.WithRecorder(ctx, reached)
+	// Finished targets, reported on every heartbeat while the job runs.
+	progress := NewProgress(0)
+	ctx = WithProgress(ctx, progress)
+	p.queue.setProgress(cmd.ID, progress)
 
 	// Stopping (or canceled) before it started: hand it back unstarted.
 	if p.draining.Load() || ctx.Err() != nil {
@@ -1540,6 +1548,10 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// The local policy's rate ceiling: no scan runs above it, whatever the
 	// command asked for.
 	opts.RateLimit = local.CapRate(opts.RateLimit)
+	// The per-target budget: the wrapper passes it as the tool's own
+	// per-request timeout, RunPerTarget enforces it per target.
+	opts.TargetTimeout = payload.Budget.Target()
+	ProgressFrom(ctx).SetTargets(targets)
 
 	// Handle custom templates if provided
 	var templateDir string
@@ -1571,10 +1583,9 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// Create context with timeout if specified: never above MaxScanTimeout
 	// or the local policy's rate.max_job_seconds (which also applies when
 	// the command sets none).
-	var requested time.Duration
-	if payload.TimeoutSeconds > 0 {
-		requested = time.Duration(min(int64(payload.TimeoutSeconds), int64(MaxScanTimeout/time.Second))) * time.Second
-	}
+	// Without an explicit timeout the task budget's overrun applies, so a
+	// task is stopped only well past its estimate (budget.go).
+	requested := jobTimeout(payload.TimeoutSeconds, payload.Budget)
 	if timeout := local.CapTimeout(requested); timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
