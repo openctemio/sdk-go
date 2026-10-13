@@ -12,14 +12,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
-	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/politeness"
 	"github.com/openctemio/sdk-go/pkg/resource"
 )
 
@@ -90,8 +90,10 @@ func newLocalQueue() *localQueue {
 	return &localQueue{held: map[string]*heldCommand{}, byHost: map[string]int{}}
 }
 
-// admit reserves the command's hosts if each has fewer than perHost held
-// commands; false (nothing reserved) otherwise.
+// admit reserves the command's host keys if fewer than perHost held
+// commands hold a key they conflict with (politeness.Conflicts: the same
+// host, or an address and a range scan of its bucket; two addresses of one
+// bucket do not conflict); false (nothing reserved) otherwise.
 func (q *localQueue) admit(id string, hosts []string, perHost int, now time.Time) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -99,7 +101,7 @@ func (q *localQueue) admit(id string, hosts []string, perHost int, now time.Time
 		return false
 	}
 	if perHost > 0 {
-		for _, h := range hosts {
+		for _, h := range politeness.Conflicts(hosts) {
 			if q.byHost[h] >= perHost {
 				return false
 			}
@@ -214,9 +216,17 @@ type commandMeta struct {
 	PreferredTool string   `json:"preferred_tool"`
 	Target        string   `json:"target"`
 	Targets       []string `json:"targets"`
-	Class         string   `json:"class"`
-	Priority      string   `json:"priority"`
-	Limits        struct {
+	// HostKeys are the politeness keys the platform admitted the command
+	// under and holds while it runs (pkg/politeness); absent from an older
+	// platform. An empty list is a command that touches no target host
+	// (a passive stage).
+	HostKeys *[]string `json:"host_keys"`
+	// NetworkID is the network the command's targets belong to (api
+	// RFC-089); it scopes the keys of private addresses and names.
+	NetworkID string `json:"network_id"`
+	Class     string `json:"class"`
+	Priority  string `json:"priority"`
+	Limits    struct {
 		PerHostConcurrency int `json:"per_host_concurrency"`
 	} `json:"limits"`
 }
@@ -281,70 +291,60 @@ func orderCommands(cmds []*Command) {
 // when the command does not say (limits.per_host_concurrency).
 const DefaultPerHostConcurrency = 1
 
-// HostKey is the politeness key of a scan target: the host of a URL or
-// address, "host/owner" of a repository, the path of a local directory.
+// HostKey is the politeness key of a scan target: the host of a URL, a
+// service or an address, "host/owner" of a repository, the path of a local
+// directory (politeness.HostOf).
+//
+// Deprecated: use github.com/openctemio/sdk-go/pkg/politeness, the one
+// definition the platform uses too (HostOf, Keys).
 func HostKey(target string) string {
-	t := strings.TrimSpace(target)
-	if t == "" {
-		return ""
-	}
-	if u, err := url.Parse(t); err == nil && u.Scheme != "" && u.Host != "" {
-		host := strings.ToLower(u.Hostname())
-		if isRepoHost(u.Path) {
-			if owner := firstSegment(u.Path); owner != "" {
-				return host + "/" + strings.ToLower(owner)
-			}
-		}
-		return host
-	}
-	if strings.HasPrefix(t, "git@") { // git@github.com:owner/repo.git
-		rest := strings.TrimPrefix(t, "git@")
-		host, path, ok := strings.Cut(rest, ":")
-		if ok {
-			return strings.ToLower(host) + "/" + strings.ToLower(firstSegment(path))
-		}
-	}
-	if strings.HasPrefix(t, "/") || strings.HasPrefix(t, ".") || (len(t) > 1 && t[1] == ':') {
-		return t // local path
-	}
-	if h, _, err := net.SplitHostPort(t); err == nil {
-		return strings.ToLower(h)
-	}
-	if _, n, err := net.ParseCIDR(t); err == nil {
-		return n.String()
-	}
-	if host, path, ok := strings.Cut(t, "/"); ok && strings.Contains(host, ".") && path != "" {
-		return strings.ToLower(host) + "/" + strings.ToLower(firstSegment(path))
-	}
-	return strings.ToLower(t)
+	return politeness.HostOf(target)
 }
 
-func isRepoHost(path string) bool {
-	return strings.Count(strings.Trim(path, "/"), "/") >= 1
-}
+// maxHostKeyLen bounds one politeness key taken from a command.
+const maxHostKeyLen = 512
 
-func firstSegment(path string) string {
-	seg, _, _ := strings.Cut(strings.Trim(path, "/"), "/")
-	return seg
-}
-
-// commandHosts returns the distinct host keys of a command's targets.
+// commandHosts is the politeness keys a command is admitted under: the keys
+// the platform sent with it (it admitted the command under those and holds
+// them while it runs, so the sensor never refuses what the platform has
+// just offered for a host the two disagree on), else the keys of its
+// targets by the same function (pkg/politeness). Sent keys are bounded: at
+// most politeness.MaxKeys, each at most 512 bytes, empty ones dropped.
 func commandHosts(m commandMeta) []string {
-	seen := map[string]bool{}
-	var out []string
-	add := func(t string) {
-		if k := HostKey(t); k != "" && !seen[k] {
-			seen[k] = true
+	if m.HostKeys != nil {
+		out := make([]string, 0, min(len(*m.HostKeys), politeness.MaxKeys))
+		for _, k := range *m.HostKeys {
+			if k == "" || len(k) > maxHostKeyLen {
+				continue
+			}
+			if len(out) == politeness.MaxKeys {
+				break
+			}
 			out = append(out, k)
 		}
+		slices.Sort(out)
+		return slices.Compact(out)
 	}
-	if m.Target != "" {
-		add(m.Target)
+	return politeness.Keys(commandTargets(m), m.NetworkID)
+}
+
+// commandTargets is a command's target and targets.
+func commandTargets(m commandMeta) []string {
+	if m.Target == "" {
+		return m.Targets
 	}
-	for _, t := range m.Targets {
-		add(t)
+	return append([]string{m.Target}, m.Targets...)
+}
+
+// distinctHosts is how many hosts a command's targets name.
+func distinctHosts(m commandMeta) int {
+	seen := map[string]bool{}
+	for _, t := range commandTargets(m) {
+		if h := politeness.HostOf(t); h != "" {
+			seen[h] = true
+		}
 	}
-	return out
+	return len(seen)
 }
 
 // =============================================================================
@@ -407,7 +407,7 @@ func jobSample(cmd *Command, m commandMeta, wall time.Duration, rec *usageRecord
 		tool = cmd.Type
 	}
 	cpu, peak, killed := rec.sample()
-	s := resource.JobSample{Tool: tool, Targets: max(len(commandHosts(m)), len(m.Targets), 1), Wall: wall, CPUSeconds: cpu, PeakRSSBytes: peak}
+	s := resource.JobSample{Tool: tool, Targets: max(distinctHosts(m), len(m.Targets), 1), Wall: wall, CPUSeconds: cpu, PeakRSSBytes: peak}
 	switch {
 	// A timeout kills the process too (SIGKILL): test the deadline first.
 	case errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(execErr, context.DeadlineExceeded):
