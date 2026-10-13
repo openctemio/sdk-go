@@ -14,6 +14,7 @@ import (
 
 	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/adapt"
+	"github.com/openctemio/sdk-go/pkg/internal/absname"
 	"github.com/openctemio/sdk-go/pkg/reach"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
@@ -68,6 +69,7 @@ func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared
 	e := &taskEgress{dir: dir, proxy: filepath.Join(dir, "proxy.sock"), dns: filepath.Join(dir, "dns.sock"),
 		fw: egress.New(scope, egress.Limits{Rate: ceiling, PerHostRate: ceiling})}
 	e.fw.Upstream = egress.UpstreamDNS("")
+	e.fw.SearchDomains = egress.SearchDomains("")
 	// The job's recorder when the caller set one (the command poller does),
 	// so the result's reach summary covers the tool's connections too.
 	e.fw.Reach = reach.FromContext(ctx)
@@ -272,7 +274,7 @@ func (h *Host) admittedAddrs(ctx context.Context, host string) []netip.Addr {
 		addrs, _ := r.AdmittedAddrs(ctx, host)
 		return addrs
 	}
-	addrs, _ := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	addrs, _ := net.DefaultResolver.LookupNetIP(ctx, "ip", absname.Of(host))
 	return addrs
 }
 
