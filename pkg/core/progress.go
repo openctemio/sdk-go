@@ -10,6 +10,7 @@ package core
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"sync"
 )
@@ -35,6 +36,11 @@ type CommandProgress struct {
 	Records     int64    `json:"records,omitempty"`
 	OutputBytes int64    `json:"output_bytes,omitempty"`
 	CPUMs       int64    `json:"cpu_ms,omitempty"`
+	// ReleasedKeys are the politeness keys the sensor freed because the
+	// targets that needed them settled (politeness.Holding): the platform
+	// stops counting them as held by the command, so other work on those
+	// hosts can start before it ends. Sorted, at most politeness.MaxKeys.
+	ReleasedKeys []string `json:"released_keys,omitempty"`
 }
 
 // Progress records a job's finished targets. Safe for concurrent use; nil
@@ -51,6 +57,35 @@ type Progress struct {
 	// Liveness counters (CommandProgress).
 	records, outputBytes int64
 	cpu                  cpuMeter
+	// obs is told the job's targets and each finished target (the local
+	// queue frees their hosts); called outside mu.
+	obs progressObserver
+}
+
+// progressObserver is told a job's target list and each target it
+// finishes.
+type progressObserver struct {
+	targets func([]string)
+	done    func(string)
+}
+
+// observe sets the observer; a target list already set is passed at once.
+func (p *Progress) observe(o progressObserver) {
+	p.mu.Lock()
+	p.obs = o
+	var known []string
+	if p.index != nil {
+		known = make([]string, len(p.index))
+		for t, i := range p.index {
+			if i < len(known) {
+				known[i] = t
+			}
+		}
+	}
+	p.mu.Unlock()
+	if known != nil && o.targets != nil {
+		o.targets(known)
+	}
 }
 
 // NewProgress returns a Progress over total targets (names unknown).
@@ -65,13 +100,17 @@ func (p *Progress) SetTargets(targets []string) {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.total = len(targets)
 	p.index = make(map[string]int, len(targets))
 	for i, t := range targets {
 		if _, dup := p.index[t]; !dup {
 			p.index[t] = i
 		}
+	}
+	obs := p.obs.targets
+	p.mu.Unlock()
+	if obs != nil {
+		obs(slices.Clone(targets))
 	}
 }
 
@@ -94,7 +133,15 @@ func (p *Progress) TargetDone(target string) {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	obs := p.obs.done
+	p.targetDone(target)
+	p.mu.Unlock()
+	if obs != nil {
+		obs(target)
+	}
+}
+
+func (p *Progress) targetDone(target string) {
 	if p.done == nil {
 		p.done, p.named = map[int]struct{}{}, map[string]struct{}{}
 	}
