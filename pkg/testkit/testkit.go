@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openctemio/ctis/outcome"
 	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -248,7 +249,7 @@ var volatile = map[string]bool{
 
 // Normalize returns a report as stable, indented JSON: times and durations
 // removed, metadata.id removed, the runtime's provenance replaced by a
-// placeholder. Two runs of a deterministic tool normalize identically.
+// placeholder and its per-target outcomes (target_outcomes) removed. Two runs of a deterministic tool normalize identically.
 func Normalize(report *ctis.Report) ([]byte, error) {
 	raw, err := json.Marshal(report)
 	if err != nil {
@@ -261,6 +262,14 @@ func Normalize(report *ctis.Report) ([]byte, error) {
 		return nil, err
 	}
 	if root, ok := v.(map[string]any); ok {
+		// The per-target outcome ledger is the tool host's stamp, like the
+		// provenance: an in-process run has none.
+		if props, ok := root["properties"].(map[string]any); ok {
+			delete(props, outcome.ResultKey)
+			if len(props) == 0 {
+				delete(root, "properties")
+			}
+		}
 		if md, ok := root["metadata"].(map[string]any); ok {
 			delete(md, "id")
 			if props, ok := md["properties"].(map[string]any); ok {

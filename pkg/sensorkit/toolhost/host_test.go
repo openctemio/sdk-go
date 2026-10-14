@@ -18,6 +18,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 
+	"github.com/openctemio/ctis/outcome"
 	"github.com/openctemio/sdk-go/internal/toolwire"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
@@ -614,6 +615,10 @@ func TestSettledTargetsCountAsProgress(t *testing.T) {
 	if got := prog.Snapshot(); got.Done != len(out.Targets) || got.Done == 0 {
 		t.Fatalf("progress %+v, %d targets settled", got, len(out.Targets))
 	}
+	// Liveness: the accepted records and their bytes count.
+	if got := prog.Snapshot(); got.Records == 0 || got.Records > int64(out.Stats.Records) || got.OutputBytes <= 0 {
+		t.Fatalf("liveness %+v, %d records accepted", got, out.Stats.Records)
+	}
 }
 
 var twoTargets = []tool.Target{{Ref: "t1", Type: "domain", Value: "a.example"}, {Ref: "t2", Type: "domain", Value: "b.example"}}
@@ -671,6 +676,10 @@ func TestStoppedPartwayKeepsSettledTargets(t *testing.T) {
 			if out.Report.Metadata.CoverageType != "partial" {
 				t.Fatalf("coverage %q", out.Report.Metadata.CoverageType)
 			}
+			want := `[{"target":"a.example","state":"done"},{"target":"b.example","state":"unfinished"}]`
+			if got, _ := json.Marshal(out.Report.Properties[outcome.ResultKey]); string(got) != want {
+				t.Fatalf("report target_outcomes %s", got)
+			}
 		})
 	}
 }
@@ -684,5 +693,23 @@ func TestCanceledAfterSettlingStaysCanceled(t *testing.T) {
 	out := hostileRunCtx(t, ctx, "settle-then-wait")
 	if out.Status != tool.StatusCanceled || len(out.Unfinished) != 0 {
 		t.Fatalf("status %s err %v unfinished %v", out.Status, out.Err, out.Unfinished)
+	}
+	if _, ok := out.Report.Properties[outcome.ResultKey]; ok {
+		t.Fatal("a canceled run carries target outcomes")
+	}
+}
+
+// The platform asks for what a stalled task finished (stop, not cancel):
+// the settled target's records are delivered as partial and the rest is
+// unfinished, like a stop by the job's own budget.
+func TestStoppedByPlatformKeepsSettledTargets(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	go func() { time.Sleep(1500 * time.Millisecond); cancel(core.ErrStoppedByPlatform) }()
+	out := hostileRunCtx(t, ctx, "settle-then-wait")
+	if out.Status != tool.StatusPartial || out.Err == nil || out.Err.Class != tool.Timeout || !strings.Contains(out.Err.Detail, "platform") {
+		t.Fatalf("status %s err %+v", out.Status, out.Err)
+	}
+	if len(out.Report.Findings) != 1 || len(out.Unfinished) != 1 || out.Unfinished[0] != "b.example" {
+		t.Fatalf("findings %d unfinished %v", len(out.Report.Findings), out.Unfinished)
 	}
 }
