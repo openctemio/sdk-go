@@ -588,6 +588,7 @@ func (p *CommandPoller) SetDoorbell(d *Doorbell) {
 	p.doorbell = d
 	if d != nil {
 		d.setCancelHandler(func(ids []string) { p.CancelCommands(ids...) })
+		d.setStopHandler(func(ids []string) { p.StopCommands(ids...) })
 	}
 }
 
@@ -623,6 +624,19 @@ func (p *CommandPoller) CancelCommands(ids ...string) {
 	for _, id := range ids {
 		if p.queue.cancel(id, errCanceledByPlatform) && p.verbose.Load() {
 			fmt.Printf("[command-poller] Canceling command %s (platform)\n", id)
+		}
+	}
+}
+
+// StopCommands stops held commands the platform asks to stop and deliver
+// (stop_command_ids): a running one's context is canceled with
+// ErrStoppedByPlatform, and the run's settled targets are delivered and
+// reported (partial, the rest unfinished) instead of released. Ids not
+// held are ignored.
+func (p *CommandPoller) StopCommands(ids ...string) {
+	for _, id := range ids {
+		if p.queue.cancel(id, ErrStoppedByPlatform) && p.verbose.Load() {
+			fmt.Printf("[command-poller] Stopping command %s (platform: the task stalled)\n", id)
 		}
 	}
 }
@@ -1176,6 +1190,13 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		return
 	}
 
+	// Stopped by the platform (the task stalled): the run delivered what it
+	// finished; its result is reported under a context the stop does not
+	// end.
+	if errors.Is(context.Cause(ctx), ErrStoppedByPlatform) {
+		ctx = context.WithoutCancel(ctx)
+	}
+
 	if p.resources != nil {
 		p.resources.Observe(jobSample(cmd, parseCommandMeta(cmd), time.Since(startTime), usage, err, ctx))
 	}
@@ -1693,6 +1714,10 @@ func withJobTimeout(ctx context.Context, timeout time.Duration) (bounded, unboun
 // cancel), the job's without that budget, so a run stopped part-way still
 // delivers what it finished.
 func deliveryContext(ctx, unbounded context.Context) context.Context {
+	if errors.Is(context.Cause(ctx), ErrStoppedByPlatform) {
+		// The platform asked for what the run finished.
+		return context.WithoutCancel(ctx)
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) && unbounded.Err() == nil {
 		return unbounded
 	}

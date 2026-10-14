@@ -86,7 +86,10 @@ ignored, except during the handshake. A newer runtime may send more.
   (the tool crashes or reports a failure, goes silent past its idle timeout,
   or a time limit hits), the task ends `partial`: the accepted records are
   delivered and the targets never settled are listed as `unfinished_targets`.
-  A cancel, a policy refusal or rejected output still fails the task.
+  A cancel, a policy refusal or rejected output still fails the task. The
+  platform can also ask for what a stalled task finished (`stop_command_ids`
+  in the heartbeat answer): the run is stopped the same way and delivers
+  its settled targets as `partial`.
 - **Credentials** arrive only in the `run` message, and only those the manifest
   declares and the operator stored. They are never in the environment, argv or
   a file. Their values are masked in everything the runtime keeps.
