@@ -8,6 +8,22 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.27.0 — 2026-10-14
+
+### Removed: the `github.com/openctemio/sdk-go/pkg/politeness` module
+
+- The per-host politeness keys are part of the CTIS contract now: `github.com/openctemio/ctis/politeness`, with the same API and keys. The platform imports them from ctis, so it no longer depends on the SDK. The nested module was never tagged and nothing outside OpenCTEM imported it; import `github.com/openctemio/ctis/politeness` instead.
+
+### Changed: a tool run that stops part-way keeps the targets it finished
+
+- `pkg/sensorkit/toolhost`: a task that stops after the tool settled at least one target (the tool crashed, reported a failure, went silent past its idle timeout, or hit a time limit) now ends `partial` instead of `failed`. The records the runtime accepted are delivered, and the targets the tool never reached are listed in `Outcome.Unfinished` and in the report's `unfinished_targets` property; the report's coverage is `partial`, so nothing is auto-resolved from targets that were not scanned. A cancel (the platform took the task back, or the sensor is stopping), a policy refusal and rejected output still fail the task as before.
+- A task stopped by the job's own time budget (its context's deadline) is reported as a `timeout`, not a cancel, so the rule above applies to it.
+- `pkg/core`: when the job's time budget stops a scan that still returns results, the command executor parses and pushes them under the job's context without the expired budget, instead of failing the push. A cancel still ends the job and pushes nothing.
+
+### Changed: the command poller takes its politeness keys from ctis
+
+- `pkg/core` (the poller's per-host admission, and the deprecated `core.HostKey`) uses `github.com/openctemio/ctis/politeness`. The keys and the admission behaviour are unchanged.
+
 ## v0.26.0 — 2026-10-13
 
 ### Security: scan jobs carry their exclusions; ranges are cut address by address
