@@ -87,6 +87,12 @@ ignored, except during the handshake. A newer runtime may send more.
   or a time limit hits), the task ends `partial`: the accepted records are
   delivered and the targets never settled are listed as `unfinished_targets`.
   A cancel, a policy refusal or rejected output still fails the task.
+- **Per-target outcomes:** a task that delivers (`ok` or `partial`) carries each
+  target's outcome in the report's `target_outcomes` property and in the
+  command result (the ctis `outcome` contract): `done`, `failed` (`timeout`,
+  `unreachable` or `tool_error`, from the target's error class), `skipped`
+  (`refused` or `excluded`) or `unfinished`. The platform settles every target
+  with an outcome and runs only the unfinished ones again.
 - **Credentials** arrive only in the `run` message, and only those the manifest
   declares and the operator stored. They are never in the environment, argv or
   a file. Their values are masked in everything the runtime keeps.

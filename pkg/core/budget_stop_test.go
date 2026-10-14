@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -88,5 +89,29 @@ func TestExecuteScan_CancelDeliversNothing(t *testing.T) {
 	}
 	if pusher.pushed != 0 {
 		t.Fatalf("pushed %d times after a cancel", pusher.pushed)
+	}
+}
+
+// A completed scan's result carries one outcome per target: the report's
+// marks (here the target timed out) reach the platform, which settles it
+// instead of running it again.
+func TestExecuteScan_ResultCarriesTargetOutcomes(t *testing.T) {
+	report := ctis.NewReport()
+	report.Properties = ctis.Properties{"target_outcomes": []any{
+		map[string]any{"target": "http://203.0.113.10", "state": "failed", "class": "timeout"},
+	}}
+	exec := core.NewDefaultCommandExecutor(&ctxPusher{})
+	reg := core.NewParserRegistry()
+	reg.Register(&cannedParser{report: *report})
+	exec.SetParserRegistry(reg)
+	exec.AddScanner(&fixedScanner{name: "onescan", res: core.ScanResult{ScannerName: "onescan", RawOutput: []byte("x")}})
+	res, err := exec.Execute(context.Background(), budgetCommand(t, "onescan", 60))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(core.CommandResult{TargetOutcomes: res.TargetOutcomes})
+	want := `"target_outcomes":[{"target":"http://203.0.113.10","state":"failed","class":"timeout"}]`
+	if !strings.Contains(string(b), want) {
+		t.Fatalf("result = %s", b)
 	}
 }
