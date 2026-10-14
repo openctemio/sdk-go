@@ -261,8 +261,30 @@ var Dotenv = tool.Define("dotenv", "1.0.0").
 	MustBuild()
 ```
 
-Add it to a sensor with `kit.AddTool(Dotenv)` and test it with
-`testkit.Run`. The design: [docs/rfcs/sensor-sdk-v2.md](docs/rfcs/sensor-sdk-v2.md).
+Add it to a sensor with `kit.AddTool(Dotenv)` (and `adapter.Dispatch(Dotenv)`
+at the top of `main`) and test it with `testkit.Run`. The design:
+[docs/rfcs/sensor-sdk-v2.md](docs/rfcs/sensor-sdk-v2.md).
+
+A tool outside the sensor binary is a directory with its `tool.yaml`
+descriptor and program, scaffolded and checked with the `openctem tool` CLI
+([docs/tools/cli.md](docs/tools/cli.md)) and installed in a directory listed
+in `SENSOR_ADAPTER_DIRS`. Either way:
+
+- The descriptor's `config` is the tool's settings schema, in the closed
+  subset of JSON Schema defined by
+  [`github.com/openctemio/ctis/settings`](https://github.com/openctemio/ctis#tool-settings)
+  (`Params` of the builder write it). The platform validates administrators'
+  values with the same package, sends them inside the signed job
+  (`settings_layers`), and the sensor resolves them against the schema before
+  every task.
+- The sensor manifest reports each tool's contract with its full descriptor
+  (`core.ToolContract`, `tool.Manifest.Contract`). A tool reported with a
+  valid contract joins the organization's tool catalog on the platform, with
+  no platform change.
+- The platform assigns tier and trust: a tool it does not know as built into
+  the released sensor runs as unverified, T2.
+
+The full guide: [Writing a tool](https://docs.openctem.io/developers/tool-authoring/).
 
 ## Packages
 
