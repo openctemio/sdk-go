@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/openctemio/ctis/outcome"
 	ctissource "github.com/openctemio/ctis/source"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
@@ -100,6 +101,10 @@ type CommandResult struct {
 	// Refusal is set when a policy refused the command (RefusalOf): it was
 	// never run, or was stopped by the kill switch.
 	Refusal *Refusal `json:"refusal,omitempty"`
+	// TargetOutcomes is how each target of a completed scan command ended
+	// (ctis outcome.ResultKey): the platform settles the targets with an
+	// outcome and hands out only the unfinished ones again.
+	TargetOutcomes []outcome.Target `json:"target_outcomes,omitempty"`
 }
 
 // GetCommandsResponse is the response from GetCommands.
@@ -121,7 +126,11 @@ type ScanCommandPayload struct {
 	TimeoutSeconds int                    `json:"timeout_seconds,omitempty"`
 	// Budget is the task's layered budget (per target, per task); nil
 	// from a platform that sends none (budget.go).
-	Budget          *TaskBudget        `json:"budget,omitempty"`
+	Budget *TaskBudget `json:"budget,omitempty"`
+	// aliases maps a validated target to the payload's own value when the
+	// scan-target policy rewrote it (a resolved path): per-target outcomes
+	// name the payload's values (validateScanTargets).
+	aliases         map[string]string
 	ReportProgress  bool               `json:"report_progress,omitempty"`
 	CustomTemplates []EmbeddedTemplate `json:"custom_templates,omitempty"`
 	// CustomTemplatesEnvelope is the platform's signed manifest of
@@ -153,6 +162,10 @@ type ScanCommandPayload struct {
 	// targets around them address by address before any check or tool
 	// (job_exclusions.go) and hands them to the tool (ScanOptions.ExcludeHosts).
 	Exclusions []string `json:"exclusions,omitempty"`
+	// SettingsLayers are the tenant's and the sensor's tool settings for
+	// the command's tool, set by administrators on the platform; checked
+	// against the tool's own schema like the config (resolveScanSettings).
+	SettingsLayers *SettingsLayers `json:"settings_layers,omitempty"`
 }
 
 // CapabilityScanner is a scanner that runs capability jobs: it takes the
@@ -265,6 +278,9 @@ type CommandExecutionResult struct {
 	FindingsCount int
 	ExitCode      int
 	Metadata      map[string]interface{}
+	// TargetOutcomes is how each of a scan job's targets ended, in job
+	// order (target_outcomes.go); nil for other commands.
+	TargetOutcomes []outcome.Target
 }
 
 // CommandPoller polls the server for pending commands.
@@ -596,6 +612,7 @@ func (p *CommandPoller) SetDoorbell(d *Doorbell) {
 	p.doorbell = d
 	if d != nil {
 		d.setCancelHandler(func(ids []string) { p.CancelCommands(ids...) })
+		d.setStopHandler(func(ids []string) { p.StopCommands(ids...) })
 	}
 }
 
@@ -631,6 +648,19 @@ func (p *CommandPoller) CancelCommands(ids ...string) {
 	for _, id := range ids {
 		if p.queue.cancel(id, errCanceledByPlatform) && p.verbose.Load() {
 			fmt.Printf("[command-poller] Canceling command %s (platform)\n", id)
+		}
+	}
+}
+
+// StopCommands stops held commands the platform asks to stop and deliver
+// (stop_command_ids): a running one's context is canceled with
+// ErrStoppedByPlatform, and the run's settled targets are delivered and
+// reported (partial, the rest unfinished) instead of released. Ids not
+// held are ignored.
+func (p *CommandPoller) StopCommands(ids ...string) {
+	for _, id := range ids {
+		if p.queue.cancel(id, ErrStoppedByPlatform) && p.verbose.Load() {
+			fmt.Printf("[command-poller] Stopping command %s (platform: the task stalled)\n", id)
 		}
 	}
 }
@@ -1184,6 +1214,13 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		return
 	}
 
+	// Stopped by the platform (the task stalled): the run delivered what it
+	// finished; its result is reported under a context the stop does not
+	// end.
+	if errors.Is(context.Cause(ctx), ErrStoppedByPlatform) {
+		ctx = context.WithoutCancel(ctx)
+	}
+
 	if p.resources != nil {
 		p.resources.Observe(jobSample(cmd, parseCommandMeta(cmd), time.Since(startTime), usage, err, ctx))
 	}
@@ -1209,6 +1246,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 			reportResult.FindingsCount = result.FindingsCount
 			reportResult.ExitCode = result.ExitCode
 			reportResult.Metadata = result.Metadata
+			reportResult.TargetOutcomes = result.TargetOutcomes
 		}
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Command %s completed (findings: %d)\n", cmd.ID, reportResult.FindingsCount)
@@ -1224,6 +1262,9 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		}
 		for k, v := range RefusedTargetsMetadata(refused) {
 			reportResult.Metadata[k] = v
+		}
+		if err == nil && reportResult.TargetOutcomes != nil {
+			reportResult.TargetOutcomes = append(skippedOutcomes(admission.Refused), reportResult.TargetOutcomes...)
 		}
 	}
 	addReachMetadata(reportResult, reached)
@@ -1566,7 +1607,11 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 
 	// The rest of the config reaches the scanner only as typed settings its
 	// own schema declares (api RFC-038); an invalid value fails the command.
-	settings, ignoredConfig, err := scanSettings(e.scannerSettingsSchema(payload.Scanner, scanner), payload.Config)
+	// The tenant's and the sensor's layers come with the command; the job's
+	// limits and per-target budget reach the tool's common options; the
+	// local policy caps the rate last.
+	settings, ignoredConfig, err := resolveScanSettings(e.scannerSettingsSchema(payload.Scanner, scanner), payload.SettingsLayers, payload.Config,
+		jobSettings{rate: opts.RateLimit, concurrency: opts.Concurrency, targetBudget: payload.Budget.Target(), capRate: local.CapRate})
 	if err != nil {
 		return nil, fmt.Errorf("invalid %s settings: %w", payload.Scanner, err)
 	}
@@ -1647,6 +1692,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	if settings != nil {
 		result.Metadata["settings_applied"] = settings.Keys()
 		result.Metadata["settings_schema_digest"] = settings.SchemaDigest()
+		result.Metadata["effective_settings"] = effectiveSettings(settings)
 	}
 	if len(ignoredConfig) > 0 {
 		result.Metadata["ignored_config_keys"] = ignoredConfig
@@ -1659,11 +1705,15 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// result says which hosts and why.
 	maps.Copy(result.Metadata, CoverageGapsMetadata(scanResult))
 
+	// Every target is done unless the report marks it (refused, failed,
+	// unfinished); the report's marks are added once it is parsed.
+	result.TargetOutcomes = payload.outcomes(TargetOutcomes(targets, nil), refusedTargets)
+
 	// Parse and push results if pusher is configured. Empty (or whitespace-
 	// only) output is a scan that found nothing; anything else must be read by
 	// a parser, or the command fails: reporting it as 0 findings would hide
 	// real results behind a "completed" scan.
-	if err := e.pushScanResult(ctx, scanner, scanResult, target, &payload, src, result); err != nil {
+	if err := e.pushScanResult(ctx, scanner, scanResult, target, targets, refusedTargets, &payload, src, result); err != nil {
 		return result, err
 	}
 
@@ -1671,11 +1721,12 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 }
 
 // pushScanResult parses a scan's output and pushes the report (nothing when
-// no pusher is configured), counting the findings on result. A code-scan job
+// no pusher is configured), counting the findings and recording each
+// target's outcome (targets, with the refused ones) on result. A code-scan job
 // (src) reports on its repository as a full scan of the source's branch, an
 // empty report included.
 func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Scanner, scanResult *ScanResult, target string,
-	payload *ScanCommandPayload, src *fetchedSource, result *CommandExecutionResult) error {
+	targets []string, refusedTargets []RefusedTarget, payload *ScanCommandPayload, src *fetchedSource, result *CommandExecutionResult) error {
 	if e.pusher != nil && len(bytes.TrimSpace(scanResult.RawOutput)) > 0 {
 		parser, err := e.parsers.ForScanner(scanner.Name(), scanResult.RawOutput)
 		if err != nil {
@@ -1705,6 +1756,7 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 		}
 
 		result.FindingsCount = len(report.Findings)
+		result.TargetOutcomes = payload.outcomes(TargetOutcomes(targets, report), refusedTargets)
 		report.Metadata.CoverageType = reachCoverageType(ctx, scanCoverageType(report, scanResult))
 		src.annotate(report)
 
@@ -1739,6 +1791,10 @@ func withJobTimeout(ctx context.Context, timeout time.Duration) (bounded, unboun
 // cancel), the job's without that budget, so a run stopped part-way still
 // delivers what it finished.
 func deliveryContext(ctx, unbounded context.Context) context.Context {
+	if errors.Is(context.Cause(ctx), ErrStoppedByPlatform) {
+		// The platform asked for what the run finished.
+		return context.WithoutCancel(ctx)
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) && unbounded.Err() == nil {
 		return unbounded
 	}
@@ -1790,6 +1846,14 @@ func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payloa
 		if !seen[v] {
 			seen[v] = true
 			out = append(out, v)
+		}
+		if v != t {
+			if payload.aliases == nil {
+				payload.aliases = map[string]string{}
+			}
+			if _, ok := payload.aliases[v]; !ok {
+				payload.aliases[v] = t
+			}
 		}
 	}
 	if len(out) == 0 {

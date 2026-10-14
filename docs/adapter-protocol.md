@@ -81,12 +81,25 @@ ignored, except during the handshake. A newer runtime may send more.
   failure). A `result` of `ok` with targets never reported becomes `partial`.
   Send each target's status as soon as it is settled, not all at the end: the
   sensor reports settled targets as the task's progress, and the platform
-  treats a task whose progress does not move as stalled.
+  treats a task whose progress does not move as stalled. Next to the settled
+  targets the heartbeat carries liveness counters: the records the runtime
+  accepted (`records`, `output_bytes`) and the CPU time of the tool's
+  processes (`cpu_ms`). A batch tool that settles targets rarely is not
+  stalled while its records or CPU time move.
 - **Stopping part-way:** when the run stops after some targets were settled
   (the tool crashes or reports a failure, goes silent past its idle timeout,
   or a time limit hits), the task ends `partial`: the accepted records are
   delivered and the targets never settled are listed as `unfinished_targets`.
-  A cancel, a policy refusal or rejected output still fails the task.
+  A cancel, a policy refusal or rejected output still fails the task. The
+  platform can also ask for what a stalled task finished (`stop_command_ids`
+  in the heartbeat answer): the run is stopped the same way and delivers
+  its settled targets as `partial`.
+- **Per-target outcomes:** a task that delivers (`ok` or `partial`) carries each
+  target's outcome in the report's `target_outcomes` property and in the
+  command result (the ctis `outcome` contract): `done`, `failed` (`timeout`,
+  `unreachable` or `tool_error`, from the target's error class), `skipped`
+  (`refused` or `excluded`) or `unfinished`. The platform settles every target
+  with an outcome and runs only the unfinished ones again.
 - **Credentials** arrive only in the `run` message, and only those the manifest
   declares and the operator stored. They are never in the environment, argv or
   a file. Their values are masked in everything the runtime keeps.

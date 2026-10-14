@@ -93,6 +93,10 @@ type HeartbeatHints struct {
 	// may hold (cancel_command_ids, api RFC-030 §5.4): the poller stops
 	// them and releases them.
 	CancelCommandIDs []string
+	// StopCommandIDs are held commands the platform asks the sensor to stop
+	// and complete with what they finished (stop_command_ids: the task
+	// stalled). See ErrStoppedByPlatform.
+	StopCommandIDs []string
 }
 
 // heartbeatHintsWire is the JSON shape of the hints in a heartbeat response.
@@ -102,6 +106,7 @@ type heartbeatHintsWire struct {
 	Actions              []string `json:"actions"`
 	ConfigVersion        *string  `json:"config_version"`
 	CancelCommandIDs     []string `json:"cancel_command_ids"`
+	StopCommandIDs       []string `json:"stop_command_ids"`
 }
 
 // ParseHeartbeatHints reads the doorbell hints from a heartbeat response
@@ -141,6 +146,11 @@ func ParseHeartbeatHints(body []byte) *HeartbeatHints {
 	for _, id := range w.CancelCommandIDs {
 		if id != "" && len(id) <= maxCancelIDLen && len(h.CancelCommandIDs) < maxCancelIDs {
 			h.CancelCommandIDs = append(h.CancelCommandIDs, id)
+		}
+	}
+	for _, id := range w.StopCommandIDs {
+		if id != "" && len(id) <= maxCancelIDLen && len(h.StopCommandIDs) < maxCancelIDs {
+			h.StopCommandIDs = append(h.StopCommandIDs, id)
 		}
 	}
 	return h
@@ -204,9 +214,11 @@ type Doorbell struct {
 	mu          sync.Mutex
 	hintsActive bool
 	paused      bool
-	// onCancel stops held commands the platform canceled (set by the
-	// poller that shares this doorbell).
+	// onCancel stops held commands the platform canceled, and onStop those
+	// it asks to stop and deliver (set by the poller that shares this
+	// doorbell).
 	onCancel      func(ids []string)
+	onStop        func(ids []string)
 	draining      bool
 	configVersion string
 	pendingJobs   int
@@ -327,11 +339,14 @@ func (d *Doorbell) Handle(h *HeartbeatHints) {
 
 	takingJobs := !d.paused && !d.draining
 	d.pendingJobs = h.PendingJobs
-	onCancel := d.onCancel
+	onCancel, onStop := d.onCancel, d.onStop
 	d.mu.Unlock()
 
 	if len(h.CancelCommandIDs) > 0 && onCancel != nil {
 		onCancel(h.CancelCommandIDs)
+	}
+	if len(h.StopCommandIDs) > 0 && onStop != nil {
+		onStop(h.StopCommandIDs)
 	}
 
 	if h.PendingJobs > 0 && takingJobs {
@@ -350,6 +365,12 @@ func (d *Doorbell) Handle(h *HeartbeatHints) {
 func (d *Doorbell) setCancelHandler(f func(ids []string)) {
 	d.mu.Lock()
 	d.onCancel = f
+	d.mu.Unlock()
+}
+
+func (d *Doorbell) setStopHandler(f func(ids []string)) {
+	d.mu.Lock()
+	d.onStop = f
 	d.mu.Unlock()
 }
 

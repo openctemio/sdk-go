@@ -8,6 +8,63 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.29.0 — 2026-10-14
+
+### Upgrade notes
+
+- Source compatible for callers: every settings identifier of `pkg/core` (and `pkg/tool`'s `DecodeConfig` / `Manifest.ConfigSchema`, which use them) keeps its name; the types are now aliases of `github.com/openctemio/ctis/settings`, which the API compatibility check reports as type changes. A sensor that mixes both names needs no edit.
+- `(*core.SettingsSchema).ManifestSettings()` is removed (it was only used inside the SDK to build the manifest). Build `core.ManifestToolSettings{SchemaVersion: s.Version, Digest: s.Digest()}` if you need it.
+- A tool manifest that declares a top-level `proxy`, `user_agent` or `headers` setting no longer loads.
+
+### Removed
+
+- `(*SettingsSchema).ManifestSettings()`: the manifest builds the schema's version and digest itself.
+
+### Deprecated: `SENSOR_TOOLS`
+
+- When the kit reads `SENSOR_TOOLS` itself it logs a deprecation warning: the variable only narrows the installed tools and will be removed. Narrow with the local policy's `tools.allow` instead.
+
+### Added: `SENSOR_PAIRING_CODE` pairs a new sensor in one start
+
+- `pkg/sensorkit`: a sensor with no identity and no API key attaches to the pairing code in `SENSOR_PAIRING_CODE` (the code an administrator created with "expect a sensor") on its first start, so reverse pairing needs no separate `pair` command. The code is validated before any request (a malformed one stops the sensor with exit 2), is a secret in the settings registry, and is never printed: the pairing instructions name the variable instead. Once the sensor is paired, or when it has an API key, the variable is ignored with a note and can be removed.
+
+### Added: layered tool settings in the command executor
+
+- A scan command may carry `settings_layers: {tenant, sensor}`: the administrators' tool settings, covered by the job signature. The executor checks each layer against the tool's own schema and resolves, in order: the tool's defaults, the tenant's and the sensor's layers, the scan's config (declared keys), the job's decision and the local policy. An invalid layer, a key a layer may not set, or a raise of a narrowing option fails the command.
+- The job's decision reaches every tool through its common options (`x-octm-common`): the command's rate and concurrency (never above the value in force: the tool's default or what an administrator set), and the per-target budget as the tool's per-request timeout (budget ÷ (retries + 1), at least 2 s, never longer than the timeout in force). The local policy's `rate.max_rps` lowers the common rate (source `local`).
+- The result's metadata says what ran: `effective_settings` (each key's value and the layer that set it).
+
+### Changed: a tools allowlist no longer drops sensor-wide built-ins
+
+- `pkg/sensorkit`: new `ScannerOption` `Builtin()` marks a scanner that is part of the sensor itself (the reachability probe, compiled-in passive lookups). `Options.Tools` / `SENSOR_TOOLS` no longer drop such scanners from the inventory; the local policy's `tools.allow` still narrows them.
+
+### Changed: tool settings come from the CTIS contract
+
+- `pkg/core` settings types (`SettingsSchema`, `SettingProperty`, `ToolSettings`, `SettingsLayer`, `SettingsErrors`, scopes, sources) are now aliases of `github.com/openctemio/ctis/settings`, so the platform validates administrators' values with the same code the sensor runs. The golden vectors moved to ctis (`settings/testdata/vectors`).
+- New from the contract: `x-octm-common` (a manifest key is a common tool option: `timeout`, `rate`, `concurrency`, `retries`; type and bounds checked) and `x-octm-flag` (the tool's native flag, display only); top-level `proxy`, `user_agent` and `headers` keys are refused; layers `SettingSourceTenant` and `SettingSourceJob`; a later layer that raises a narrowing option (`rate`, `concurrency`, `retries`) an earlier layer set is an error.
+
+## v0.28.0 — 2026-10-14
+
+### Added: liveness counters in the heartbeat's command progress
+
+- `core.CommandProgress` carries `records`, `output_bytes` and `cpu_ms` next to `done`/`total`/`finished`: the records the tool host accepted for the job and their bytes, and the CPU time of the job's tool processes with the processes they start (read from `/proc` on Linux; 0 elsewhere). All are monotonic for the job and left out while zero.
+- `pkg/sensorkit/toolhost` counts each accepted record (`core.RecordOutput`) and tracks the tool process (`core.TrackProcess`); `core.ExecuteScanner` / `StreamScanner` track the scanner process.
+- The platform calls a task stalled only when none of these and the settled targets moved for its stall window, so a slow but working batch tool is not taken back. The counters are hints: they can delay a stall decision, never a task's overrun or a run's cap.
+
+### Added: the platform can ask for what a stalled task finished
+
+- A heartbeat answer may carry `stop_command_ids`: held commands the platform asks the sensor to stop and complete with what they finished (the task stalled). The poller cancels the run with `core.ErrStoppedByPlatform`; the tool host treats it like a stop by the job's own budget (the settled targets' records are delivered, the task ends `partial` with the rest in `unfinished_targets`), the executor parses and pushes under a context the stop does not end, and the result is reported, not released. A run that settled nothing is reported failed, and the platform re-queues it.
+- `cancel_command_ids` is unchanged: a canceled command delivers nothing and is released.
+- Needs the heartbeat doorbell (on by default); a sensor without it ignores stops, and the platform re-queues the task after a grace period.
+
+### Added: per-target outcomes in the command result
+
+- A completed scan command's result carries `target_outcomes`: one entry per target of the job, in the ctis `outcome` contract (`done`, `failed` with `unreachable` / `timeout` / `tool_error`, `skipped` with `refused` / `excluded`, `unfinished`). The platform settles every target with an outcome and hands out only the unfinished ones again, instead of rerunning the whole task.
+- `pkg/sensorkit/toolhost`: a run that delivers (ok or partial) writes the same list into the report's `target_outcomes` property, from each target's settled state and error class, plus the unfinished targets of a run that stopped part-way. A failed or canceled run carries none.
+- `pkg/core`: `TargetOutcomes` builds the list from a report (explicit outcomes, `unfinished_targets`, `failed_targets`; any other target of the run is done). Targets a policy refused before the run are `skipped`/`refused`; a target the scan-target policy rewrote (a resolved path) is named by the payload's own value.
+- `pkg/testkit`: `Normalize` removes the `target_outcomes` property (the tool host's stamp, absent in-process).
+- ctis bumped to the version with the `outcome` package.
+
 ## v0.27.0 — 2026-10-14
 
 ### Removed: the `github.com/openctemio/sdk-go/pkg/politeness` module

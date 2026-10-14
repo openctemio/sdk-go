@@ -20,8 +20,42 @@ import (
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/pairing"
 	"github.com/openctemio/sdk-go/pkg/sensorsig"
 )
+
+// validPairingCode validates SENSOR_PAIRING_CODE. The error never carries
+// the value: the code attaches a key to the tenant until it is approved.
+func validPairingCode(v string) error {
+	if _, err := pairing.NormalizeCode(v); err != nil {
+		return fmt.Errorf("%s is not a pairing code (XXXX-XXXX)", EnvPairingCode)
+	}
+	return nil
+}
+
+// pairingCode is SENSOR_PAIRING_CODE in canonical form ("" when unset).
+// A malformed code stops the sensor rather than starting a pairing the
+// administrator is not waiting for.
+func pairingCode() (string, error) {
+	v := strings.TrimSpace(os.Getenv(EnvPairingCode))
+	if v == "" {
+		return "", nil
+	}
+	c, err := pairing.NormalizeCode(v)
+	if err != nil {
+		return "", usageError(validPairingCode(v))
+	}
+	return c, nil
+}
+
+// notePairingCodeIgnored tells the operator SENSOR_PAIRING_CODE had no
+// effect (the sensor already has credentials) so it can be removed.
+func (k *Kit) notePairingCodeIgnored(why string) {
+	if strings.TrimSpace(os.Getenv(EnvPairingCode)) == "" {
+		return
+	}
+	_, _ = fmt.Fprintf(k.errw, "Note: %s is ignored: %s; it can be removed from the configuration\n", EnvPairingCode, why)
+}
 
 // checkCAPinHost warns when SENSOR_CA_FINGERPRINT is set but SENSOR_API_URL names
 // the platform by an IP address: a pinned connection needs a host name to
@@ -64,6 +98,7 @@ func (k *Kit) resolveIdentity() error {
 	id, signer, err := store.Load()
 	switch {
 	case err == nil:
+		k.notePairingCodeIgnored("the sensor is already paired")
 		if err := k.useIdentity(id, signer); err != nil {
 			return err
 		}
@@ -80,10 +115,16 @@ func (k *Kit) resolveIdentity() error {
 	// No identity. A key renewed into the state directory by an earlier
 	// bearer-key run still counts as a configured key.
 	if sk, err := resolveStartKey(k.opts.CredentialsFile, s.stateDir, "", s.sensorID, "false"); err == nil && sk.key != "" {
+		k.notePairingCodeIgnored("the sensor has an API key")
 		return nil
 	}
 	if !s.commands {
+		k.notePairingCodeIgnored("platform commands are off, so the sensor does not pair")
 		return nil
+	}
+	code, err := pairingCode()
+	if err != nil {
+		return err
 	}
 	if k.opts.NoAutoPair {
 		return usageError(fmt.Errorf("the sensor has no API key and is not paired: run `openctemio-sensor pair`, " +
@@ -96,6 +137,8 @@ func (k *Kit) resolveIdentity() error {
 	id, err = identity.Pair(ctx, identity.PairOptions{
 		BaseURL:        s.apiURL,
 		Store:          store,
+		Code:           code,
+		CodeLabel:      EnvPairingCode,
 		Host:           identity.DefaultHostFacts(k.opts.ProductName, k.opts.Version, name),
 		PlatformKeyPin: envOr(k.opts.PlatformKey, EnvPlatformKey),
 		Retry:          true,
