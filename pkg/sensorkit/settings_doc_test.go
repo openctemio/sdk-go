@@ -33,3 +33,15 @@ func TestSettingsDocUpToDate(t *testing.T) {
 		t.Fatal("docs/SETTINGS.md is stale: run UPDATE_SETTINGS_DOC=1 go test ./pkg/sensorkit -run TestSettingsDocUpToDate")
 	}
 }
+
+// Every SENSOR_* variable the kit itself reads is registered, so the config
+// report lists it and does not flag it as config.env_unknown.
+func TestRegisterSDKSettings_KitEnvVars(t *testing.T) {
+	r := settingsreg.New()
+	RegisterSDKSettings(r)
+	for _, name := range []string{EnvJobID, EnvMaxJobs, EnvDrainGrace, EnvStateDir} {
+		if !r.Has(name) {
+			t.Errorf("%s is not in the SDK settings registry", name)
+		}
+	}
+}
