@@ -130,9 +130,9 @@ func cleanPath(name string, lim Limits) (string, error) {
 	if strings.Count(p, "/") >= lim.MaxDepth {
 		return "", fmt.Errorf("%s: deeper than %d directories", p, lim.MaxDepth)
 	}
-	// .statement.json is the cache's own file.
-	if p == ".statement.json" {
-		return "", errors.New("the archive may not hold .statement.json")
+	// .statement.json and the file index are the cache's own files.
+	if p == ".statement.json" || p == indexFile {
+		return "", fmt.Errorf("the archive may not hold %s", p)
 	}
 	return p, nil
 }
