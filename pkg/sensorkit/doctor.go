@@ -256,6 +256,8 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "Cap on concurrent jobs, 1-100. Unset: the slots follow CPU, memory and tool costs."},
 		settingsreg.Setting{Name: EnvDrainGrace, Type: settingsreg.Duration, Default: "30s", Group: "runtime",
 			Description: "How long running jobs may finish on shutdown."},
+		settingsreg.Setting{Name: EnvJobID, Type: settingsreg.String, Group: "runtime",
+			Description: "Run the one platform command with this id and exit (RunJob; a Kubernetes Job) instead of polling for work. The -job flag wins over it."},
 		settingsreg.Setting{Name: EnvScannerPriority, Type: settingsreg.Enum, Enum: []string{"low", "normal"}, Default: "low",
 			Group: "runtime", Description: "Priority of scanner processes."},
 		settingsreg.Setting{Name: EnvProtectFromOOM, Type: settingsreg.Bool, Default: "false", Group: "runtime",
