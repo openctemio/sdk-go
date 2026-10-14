@@ -7,7 +7,7 @@ require (
 	github.com/google/go-github/v74 v74.0.0
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.20.1
-	github.com/openctemio/ctis v1.6.1-0.20261014061422-0be9d8dbd7f0
+	github.com/openctemio/ctis v1.6.1-0.20261014111010-59e1917b441a
 	github.com/prometheus/client_golang v1.25.0
 	gitlab.com/gitlab-org/api/client-go v1.46.0
 	golang.org/x/net v0.60.0

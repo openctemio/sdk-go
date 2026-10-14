@@ -92,6 +92,83 @@ func TestConfinedTaskReachesOnlyItsTargets(t *testing.T) {
 	}
 }
 
+// SECURITY (acceptance, live 2026-10-14): a port scanner resolves its
+// target name itself and dials the address it got over SOCKS5. On a
+// backend that confines the network that address is the name's (pinned at
+// admission) and is reached; an address it was not given is refused. A
+// task whose every connection the scope refused does not report its
+// target done: the target fails with egress_refused and the task is
+// partial, never "ok, nothing found".
+func TestConfinedPortScannerDialsPinnedAddress(t *testing.T) {
+	be, err := executor.NewProcessBackend(executor.Config{Mode: executor.ModeRequired, ConfineNetwork: true, RequireNetwork: true,
+		Limits: executor.Limits{Processes: 256}})
+	if err != nil {
+		if os.Getenv("OPENCTEM_TEST_REQUIRE_NETNS") == "1" {
+			t.Fatalf("network confinement required by the environment, not available: %v", err)
+		}
+		t.Skipf("network confinement not available here: %v", err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	exe, _ := os.Executable()
+	m := tool.Manifest{
+		Name: "socks-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
+		Consumes: []string{"domain"}, Produces: []string{"finding:misconfiguration"},
+		Permissions: tool.Permissions{Network: tool.NetTargets},
+		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
+	}
+	h := testHost(t)
+	h.Backend = be
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "domain", Value: "localhost"}}}
+	run := func(env map[string]string) *Outcome {
+		env["TOOLHOST_HOSTILE"], env["TOOLHOST_NAME"], env["TOOLHOST_PORT"] = "socks-probe", "localhost", port
+		out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: env})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !out.Sandbox.NetworkEnforced {
+			t.Fatalf("sandbox %+v", out.Sandbox)
+		}
+		return out
+	}
+	out := run(map[string]string{})
+	if len(out.Report.Findings) != 1 || out.Report.Findings[0].Title != "dns=ok target=ok outside=refused" {
+		b, _ := json.Marshal(out.Report.Findings)
+		t.Fatalf("probe: %s (status %s, stderr %s)", b, out.Status, out.Stderr)
+	}
+	if out.Status != tool.StatusOK || len(out.Targets) != 1 || out.Targets[0].State != tool.StateDone {
+		t.Fatalf("a reached target: status %s targets %+v", out.Status, out.Targets)
+	}
+	if out.EgressTally == nil || out.EgressTally.Targets["localhost"].Allowed != 1 || out.EgressTally.Refused != 1 {
+		t.Fatalf("tally %+v", out.EgressTally)
+	}
+
+	out = run(map[string]string{"TOOLHOST_OUTSIDE_ONLY": "1"})
+	if out.Status != tool.StatusPartial || len(out.Targets) != 1 || out.Targets[0].State != tool.StateFailed || out.Targets[0].Class != tool.EgressRefused {
+		t.Fatalf("an unreached target: status %s targets %+v", out.Status, out.Targets)
+	}
+	logged := false
+	for _, l := range out.Logs {
+		logged = logged || strings.Contains(l.Msg, "egress refused every connection toward 1 of 1 target")
+	}
+	if !logged {
+		t.Fatalf("the unreached target is not in the task log: %+v", out.Logs)
+	}
+}
+
 // A task's scope: its targets with the addresses admitted for names, its
 // vendor hosts, or any public address.
 func TestTaskScope(t *testing.T) {

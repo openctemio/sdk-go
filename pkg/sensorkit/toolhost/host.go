@@ -215,6 +215,11 @@ type Outcome struct {
 	// network was not confined.
 	Egress        []egress.Record
 	EgressDropped int
+	// EgressTally counts the task's connections the forwarder's scope
+	// allowed and refused, in all and per target (nil when the task's
+	// network was not confined). A target the scope refused every
+	// connection toward is failed with tool.EgressRefused in Targets.
+	EgressTally *egress.Tally
 	// TargetRate is a confined task's per-host rate outcome: the ceiling,
 	// the rates reached, and the hosts it could not fully cover (Gaps: the
 	// task still completes; the hosts are reported, not read as "no
@@ -668,7 +673,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 		res = <-waitDone
 	}
 	s.finish(res, stopReason, stopClass, stderr, start, execution)
-	for _, l := range eg.finish(s.out) {
+	for _, l := range eg.finish(s.out, p.task.Targets) {
 		s.log(l.Level, l.Msg, l.Fields)
 	}
 	return s.out, nil
@@ -1161,6 +1166,8 @@ func targetOutcome(t TargetOutcome) (outcome.Target, bool) {
 			o.Class = outcome.Timeout
 		case tool.TargetUnreachable, tool.NotFound:
 			o.Class = outcome.Unreachable
+		case tool.EgressRefused:
+			o.Class = outcome.EgressRefused
 		}
 	case tool.StateSkipped:
 		o.State, o.Class = outcome.Skipped, outcome.Excluded

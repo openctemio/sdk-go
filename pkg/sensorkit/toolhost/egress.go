@@ -131,14 +131,18 @@ func (e *taskEgress) stop() ([]egress.Record, int) {
 }
 
 // finish stops the forwarder (nil: no-op), puts what it recorded and the
-// task's target-rate outcome in out, and returns the log lines: refusals,
-// rate changes with their reason, and the rate summary with the coverage
-// gaps.
-func (e *taskEgress) finish(out *Outcome) []LogLine {
+// task's target-rate outcome in out, settles as failed (egress_refused) the
+// targets the scope refused every connection toward, and returns the log
+// lines: refusals, the unreached targets, rate changes with their reason,
+// and the rate summary with the coverage gaps.
+func (e *taskEgress) finish(out *Outcome, targets []tool.Target) []LogLine {
 	if e == nil {
 		return nil
 	}
 	out.Egress, out.EgressDropped = e.stop()
+	tally := e.fw.Tally()
+	out.EgressTally = &tally
+	unreached := markEgressRefused(out, targets, tally)
 	s := e.fw.TargetRate().Summary()
 	out.TargetRate = &s
 	if !e.fw.Reach.Empty() {
@@ -146,6 +150,11 @@ func (e *taskEgress) finish(out *Outcome) []LogLine {
 		out.Reach = &r
 	}
 	lines := egressLog(out.Egress)
+	if unreached > 0 {
+		lines = append(lines, LogLine{Level: "warn",
+			Msg:    fmt.Sprintf("egress refused every connection toward %d of %d target(s): the sensor's network confinement did not let the tool reach them", unreached, len(targets)),
+			Fields: map[string]any{"egress": "unreached", "targets_unreached": unreached, "connections_refused": tally.Refused, "connections_allowed": tally.Allowed}})
+	}
 	e.chMu.Lock()
 	for _, c := range e.changes {
 		lines = append(lines, LogLine{Level: "info", Msg: fmt.Sprintf("target rate %s: %.3g/s -> %.3g/s (%s)", c.Host, c.From, c.To, c.Reason),
@@ -170,6 +179,62 @@ func (e *taskEgress) finish(out *Outcome) []LogLine {
 			Fields: map[string]any{"coverage_gap": g.Reason, "host": g.Host}})
 	}
 	return lines
+}
+
+// markEgressRefused settles as failed (tool.EgressRefused) every target the
+// tool would otherwise report done although the scope refused each
+// connection it made toward it: the tool never reached it, so "nothing
+// found" would be a silent false negative. When the scope refused every
+// connection of the task and allowed none, every done target is unreached,
+// also those the refusals cannot be traced to (an address no target name
+// is pinned to). A target the tool made no connection toward is left as
+// the tool reported it. A task with an unreached target is at best
+// partial. It returns how many targets it settled so.
+func markEgressRefused(out *Outcome, targets []tool.Target, t egress.Tally) int {
+	if t.Refused == 0 {
+		return 0
+	}
+	all := t.Allowed == 0
+	keys := make(map[string]string, len(targets))
+	for _, tg := range targets {
+		keys[tg.Ref] = scopeKey(tg)
+	}
+	n := 0
+	for i := range out.Targets {
+		to := &out.Targets[i]
+		if to.State != tool.StateDone {
+			continue
+		}
+		if !all && !t.Targets[keys[to.Ref]].Unreached() {
+			continue
+		}
+		to.State, to.Class = tool.StateFailed, tool.EgressRefused
+		to.Detail = "the sensor's network confinement refused every connection toward the target"
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+	if out.Status == tool.StatusOK {
+		out.Status = tool.StatusPartial
+	}
+	markOutcomes(out)
+	return n
+}
+
+// scopeKey is the key the forwarder counts a target's connections under
+// (egress.Tally.Targets): its prefix for an address or range, else its
+// host name. taskScope admits targets under the same keys.
+func scopeKey(t tool.Target) string {
+	if pfx, err := netip.ParsePrefix(strings.TrimSpace(t.Value)); err == nil {
+		return pfx.Masked().String()
+	}
+	host := strings.Trim(t.Host(), "[]")
+	if a, err := netip.ParseAddr(host); err == nil {
+		a = a.Unmap()
+		return netip.PrefixFrom(a, a.BitLen()).String()
+	}
+	return egress.Key(host)
 }
 
 // change keeps a rate change for the task's log.

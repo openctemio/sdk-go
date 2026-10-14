@@ -166,7 +166,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		out.Logs = append(out.Logs, *p.rateLine)
 	}
 	out.Logs = append(out.Logs, p.notes...)
-	lines := eg.finish(out)
+	lines := eg.finish(out, p.task.Targets)
 	out.Logs = append(out.Logs, lines...)
 	if h.LogSink != nil {
 		for _, l := range lines {
