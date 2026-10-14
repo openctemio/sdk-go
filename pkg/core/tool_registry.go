@@ -552,7 +552,7 @@ func (r *ToolRegistry) CapabilityReport(ctx context.Context) CapabilityReport {
 			stale = append(stale, t)
 		}
 		info := ToolInfo{Name: t.spec.Name, Kind: t.spec.Kind, Version: t.version, Installed: t.installed,
-			Settings: t.spec.Settings.ManifestSettings(), Contract: t.spec.Contract.clone()}
+			Settings: manifestSettings(t.spec.Settings), Contract: t.spec.Contract.clone()}
 		if len(t.spec.Capabilities) > 0 {
 			info.Capabilities = slices.Clone(t.spec.Capabilities)
 		}
