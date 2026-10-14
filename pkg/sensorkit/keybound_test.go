@@ -109,3 +109,79 @@ func TestNew_CAFingerprint(t *testing.T) {
 		t.Fatal("PinnedURLHasIPHost")
 	}
 }
+
+// SENSOR_PAIRING_CODE: a malformed code stops a sensor with no identity,
+// and the error never echoes the value.
+func TestNew_PairingCodeMalformedRefused(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	opts, _, errw := baseOptions(t, f)
+	opts.APIKey = ""
+	const bad = "SECRET-NOT-A-CODE"
+	t.Setenv(EnvPairingCode, bad)
+	_, err := New(opts)
+	if err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), EnvPairingCode) {
+		t.Fatalf("err = %v (exit %d)", err, ExitCode(err))
+	}
+	if strings.Contains(err.Error(), bad) || strings.Contains(errw.String(), bad) {
+		t.Fatalf("the code leaked: err=%v stderr=%s", err, errw.String())
+	}
+}
+
+// A well-formed code passes validation (NoAutoPair then stops the start
+// before any request), and it is never printed.
+func TestNew_PairingCodeValidAccepted(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	opts, out, errw := baseOptions(t, f)
+	opts.APIKey = ""
+	opts.NoAutoPair = true
+	t.Setenv(EnvPairingCode, "k7qm-4ztd")
+	_, err := New(opts)
+	if err == nil || !strings.Contains(err.Error(), "openctemio-sensor pair") {
+		t.Fatalf("err = %v", err)
+	}
+	for _, s := range []string{out.String(), errw.String()} {
+		if strings.Contains(strings.ToUpper(s), "K7QM") {
+			t.Fatalf("the code was printed: %s", s)
+		}
+	}
+}
+
+// Once the sensor is paired, the code is ignored (with a note), even a
+// malformed one, and never printed.
+func TestNew_PairingCodeIgnoredOncePaired(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	opts, out, errw := baseOptions(t, f)
+	opts.APIKey = ""
+	pairedStore(t, opts.StateDir)
+	t.Setenv(EnvPairingCode, "K7QM-4ZTD")
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k.closeClient)
+	if !strings.Contains(errw.String(), EnvPairingCode+" is ignored: the sensor is already paired") {
+		t.Fatalf("stderr: %s", errw.String())
+	}
+	if strings.Contains(out.String()+errw.String(), "K7QM") {
+		t.Fatal("the code was printed")
+	}
+}
+
+// A sensor with an API key does not pair: the code is ignored with a note.
+func TestNew_PairingCodeIgnoredWithAPIKey(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	opts, _, errw := baseOptions(t, f)
+	t.Setenv(EnvPairingCode, "K7QM-4ZTD")
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k.closeClient)
+	if !strings.Contains(errw.String(), EnvPairingCode+" is ignored") {
+		t.Fatalf("stderr: %s", errw.String())
+	}
+}
