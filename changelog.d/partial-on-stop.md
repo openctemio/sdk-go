@@ -1,5 +1,0 @@
-### Changed: a tool run that stops part-way keeps the targets it finished
-
-- `pkg/sensorkit/toolhost`: a task that stops after the tool settled at least one target (the tool crashed, reported a failure, went silent past its idle timeout, or hit a time limit) now ends `partial` instead of `failed`. The records the runtime accepted are delivered, and the targets the tool never reached are listed in `Outcome.Unfinished` and in the report's `unfinished_targets` property; the report's coverage is `partial`, so nothing is auto-resolved from targets that were not scanned. A cancel (the platform took the task back, or the sensor is stopping), a policy refusal and rejected output still fail the task as before.
-- A task stopped by the job's own time budget (its context's deadline) is reported as a `timeout`, not a cancel, so the rule above applies to it.
-- `pkg/core`: when the job's time budget stops a scan that still returns results, the command executor parses and pushes them under the job's context without the expired budget, instead of failing the push. A cancel still ends the job and pushes nothing.
