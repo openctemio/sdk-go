@@ -114,7 +114,13 @@ func runScanner(ctx context.Context, cfg *ExecConfig, stdoutLine, stderrLine fun
 		Stderr:     stderr,
 		Hooks: executor.ProcessHooks{
 			Configure: ConfigureScannerProcess,
-			Started:   ApplyScannerPriority,
+			Started: func(cmd *exec.Cmd) {
+				ApplyScannerPriority(cmd)
+				// The scanner's CPU time counts as the job's liveness.
+				if cmd != nil && cmd.Process != nil {
+					TrackProcess(ctx, cmd.Process.Pid)
+				}
+			},
 			Finished: func(cmd *exec.Cmd) {
 				ReapScannerProcess(cmd)
 				RecordProcessState(ctx, cmd.ProcessState)

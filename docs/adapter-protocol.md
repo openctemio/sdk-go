@@ -81,7 +81,11 @@ ignored, except during the handshake. A newer runtime may send more.
   failure). A `result` of `ok` with targets never reported becomes `partial`.
   Send each target's status as soon as it is settled, not all at the end: the
   sensor reports settled targets as the task's progress, and the platform
-  treats a task whose progress does not move as stalled.
+  treats a task whose progress does not move as stalled. Next to the settled
+  targets the heartbeat carries liveness counters: the records the runtime
+  accepted (`records`, `output_bytes`) and the CPU time of the tool's
+  processes (`cpu_ms`). A batch tool that settles targets rarely is not
+  stalled while its records or CPU time move.
 - **Stopping part-way:** when the run stops after some targets were settled
   (the tool crashes or reports a failure, goes silent past its idle timeout,
   or a time limit hits), the task ends `partial`: the accepted records are
