@@ -1,0 +1,71 @@
+# A toy dast.web@1 tool built on sdk-go (scratch proof for research/140).
+# It is installed on a released sensor through SENSOR_ADAPTER_DIRS.
+apiVersion: openctem.io/tool/v1
+name: toyweb
+version: 0.1.1
+description: Checks web origins for missing security response headers.
+publisher: scratch
+presentation:
+  display_name: Toy web checker
+  category: web
+  icon: shield
+class: target-scan
+tier: T2
+implements:
+- capability: dast.web@1
+  params:
+    max_duration_minutes:
+      key: max_minutes
+consumes: [http_service, website, web_application]
+produces: ['asset:http_service', 'finding:misconfiguration']
+input:
+  batch: list
+config:
+  {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "x-octm-schema-version": 1,
+    "title": "toyweb",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "require_headers": {
+        "type": "array",
+        "uniqueItems": true,
+        "maxItems": 8,
+        "items": {"enum": ["content-security-policy", "strict-transport-security", "x-frame-options", "x-content-type-options"]},
+        "title": "Headers to require",
+        "description": "Report an origin that does not send one of these response headers.",
+        "x-octm-scope": "scan",
+        "x-octm-group": "Checks",
+        "x-octm-order": 10
+      },
+      "request_timeout": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 60,
+        "default": 10,
+        "title": "Request timeout",
+        "description": "Seconds to wait for each origin.",
+        "x-octm-common": "timeout",
+        "x-octm-scope": "scan",
+        "x-octm-group": "Performance",
+        "x-octm-order": 10
+      },
+      "max_minutes": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1440,
+        "title": "Maximum duration",
+        "description": "Stop after this many minutes.",
+        "x-octm-scope": "scan",
+        "x-octm-group": "Performance",
+        "x-octm-order": 20
+      }
+    }
+  }
+permissions:
+  network: targets
+resources:
+  timeout: 10m0s
+run:
+  argv: ["./toyweb"]
