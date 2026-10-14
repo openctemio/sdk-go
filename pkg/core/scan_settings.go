@@ -122,7 +122,8 @@ const minRequestTimeout = 2 * time.Second
 // an earlier layer narrowed fails the command; nothing is silently dropped.
 //
 // The job layer is the platform's per-job decision, so it is fitted, not
-// refused: its rate and concurrency never exceed an earlier layer's value,
+// refused: its rate and concurrency never exceed the value in force (the
+// tool's default or what an administrator set),
 // and the per-request timeout derived from the per-target budget
 // (budget ÷ (retries + 1), at least 2 s) only ever shortens the timeout.
 // The local layer lowers the common rate to the local policy's cap.
@@ -204,8 +205,12 @@ func fitJobLayers(schema *SettingsSchema, base *ToolSettings, job jobSettings) (
 		if p == nil || p.Scope != SettingScopeScan || want <= 0 {
 			return
 		}
-		if cur, _, set := current(p); set && want > cur {
-			want = cur
+		// Never above the value in force (an administrator raises it, not
+		// the job), the tool's default included.
+		if cur, ok, _ := current(p); ok {
+			if want >= cur {
+				return
+			}
 		}
 		jobLayer[p.Name] = clampToProperty(p, want)
 	}

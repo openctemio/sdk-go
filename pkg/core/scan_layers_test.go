@@ -79,8 +79,13 @@ func TestResolveScanSettings_JobLayerFits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, src := intSetting(t, ts, "rate_limit"); v != 1000 || src != SettingSourceJob {
+	// The job does not raise the tool's default; an administrator does.
+	if v, src := intSetting(t, ts, "rate_limit"); v != 150 || src != SettingSourceDefault {
 		t.Fatalf("rate above the tool default: %d from %s", v, src)
+	}
+	ts2, _, _ := resolveScanSettings(layersSchema(), &SettingsLayers{Sensor: map[string]any{"rate_limit": 2000}}, nil, jobSettings{rate: 1000})
+	if v, src := intSetting(t, ts2, "rate_limit"); v != 1000 || src != SettingSourceJob {
+		t.Fatalf("job under the sensor's raised rate: %d from %s", v, src)
 	}
 	if v, _ := intSetting(t, ts, "threads"); v != 10 {
 		t.Fatalf("job raised the sensor's concurrency to %d", v)
