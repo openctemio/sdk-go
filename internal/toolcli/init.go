@@ -325,9 +325,11 @@ func scaffoldManifest(kind string, c capability.Capability, name string) (tool.M
 	return m, nil
 }
 
-// paramSchema is the config schema of a standard param.
+// paramSchema is the config schema of a standard param. Standard params
+// are per-scan inputs the platform sends in the scan's config, so they are
+// scan-scoped: the executor refuses a scan value for a sensor-scoped key.
 func paramSchema(p capability.Param) map[string]any {
-	s := map[string]any{"description": p.Description}
+	s := map[string]any{"description": p.Description, "x-octm-scope": "scan"}
 	switch p.Type {
 	case capability.ParamString:
 		s["type"] = "string"
