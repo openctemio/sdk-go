@@ -38,6 +38,7 @@ package toolhost
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -568,8 +569,12 @@ type session struct {
 	result   *toolwire.Result
 	logMu    sync.Mutex
 	// budgetStop is set when the task was stopped because the job's own
-	// time budget ran out (its context's deadline), not by a cancel.
+	// time budget ran out (its context's deadline) or the platform asked
+	// for what it finished (core.ErrStoppedByPlatform), not by a cancel.
 	budgetStop bool
+	// stopDetail says why a stop that keeps the settled targets happened
+	// ("": the job's time budget).
+	stopDetail string
 }
 
 // run runs an adapter-protocol task.
@@ -740,10 +745,14 @@ func (s *session) drive(runCtx, parent context.Context, t executor.Task, w *tool
 		select {
 		case <-runCtx.Done():
 			if parent.Err() != nil {
-				if !canceled && errors.Is(parent.Err(), context.DeadlineExceeded) {
-					// The job's time budget, not a cancel: what the tool
+				if !canceled && (errors.Is(parent.Err(), context.DeadlineExceeded) || errors.Is(context.Cause(parent), core.ErrStoppedByPlatform)) {
+					// The job's time budget, or the platform asking for
+					// what the run finished, not a cancel: what the tool
 					// settled before it is kept (finish).
 					s.budgetStop = true
+					if errors.Is(context.Cause(parent), core.ErrStoppedByPlatform) {
+						s.stopDetail = "stopped by the platform: the task stalled"
+					}
 				}
 				if !canceled {
 					canceled = true
@@ -1033,7 +1042,7 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 		runErr.Detail = p.redact(toolrt.CleanString(runErr.Detail))
 	}
 	if s.budgetStop && runErr != nil && runErr.Class == tool.Canceled {
-		runErr = &tool.Error{Class: tool.Timeout, Retryable: true, Detail: "the job's time budget ran out"}
+		runErr = &tool.Error{Class: tool.Timeout, Retryable: true, Detail: cmp.Or(s.stopDetail, "the job's time budget ran out")}
 	}
 	stoppedPartway := false
 	switch {

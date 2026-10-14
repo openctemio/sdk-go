@@ -698,3 +698,18 @@ func TestCanceledAfterSettlingStaysCanceled(t *testing.T) {
 		t.Fatal("a canceled run carries target outcomes")
 	}
 }
+
+// The platform asks for what a stalled task finished (stop, not cancel):
+// the settled target's records are delivered as partial and the rest is
+// unfinished, like a stop by the job's own budget.
+func TestStoppedByPlatformKeepsSettledTargets(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	go func() { time.Sleep(1500 * time.Millisecond); cancel(core.ErrStoppedByPlatform) }()
+	out := hostileRunCtx(t, ctx, "settle-then-wait")
+	if out.Status != tool.StatusPartial || out.Err == nil || out.Err.Class != tool.Timeout || !strings.Contains(out.Err.Detail, "platform") {
+		t.Fatalf("status %s err %+v", out.Status, out.Err)
+	}
+	if len(out.Report.Findings) != 1 || len(out.Unfinished) != 1 || out.Unfinished[0] != "b.example" {
+		t.Fatalf("findings %d unfinished %v", len(out.Report.Findings), out.Unfinished)
+	}
+}

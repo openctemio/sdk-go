@@ -69,6 +69,13 @@ var (
 	errDrained            = errors.New("sensor is shutting down")
 )
 
+// ErrStoppedByPlatform is the cause a held command's context is canceled
+// with when the platform asks the sensor to stop it and deliver what it
+// finished (stop_command_ids: the task stalled). Unlike a cancel, the run's
+// settled targets are delivered and the command completes partial with the
+// rest unfinished; the platform runs only those again.
+var ErrStoppedByPlatform = errors.New("stopped by the platform (the task stalled); delivering what it finished")
+
 // heldCommand is one command this sensor holds.
 type heldCommand struct {
 	id        string
