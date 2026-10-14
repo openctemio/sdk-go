@@ -13,6 +13,8 @@
 // The trust root (trusted_root.json, the Sigstore public good instance's
 // Fulcio CAs, Rekor and CT log keys) is embedded and refreshed with SDK
 // releases, so verification needs no network.
+//
+// Stability: Beta (docs/STABILITY.md).
 package blobsig
 
 import (
