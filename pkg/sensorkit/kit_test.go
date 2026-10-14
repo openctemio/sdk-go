@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -399,17 +400,27 @@ func TestRun_ToolAllowlist(t *testing.T) {
 	}
 	k.AddScanner(&testScanner{name: "trivy", installed: true}, As("trivy-fs"))
 	k.AddScanner(&testScanner{name: "nuclei", installed: true})
+	// A sensor-wide built-in is not dropped by the allowlist.
+	k.AddScanner(&testScanner{name: "reach-probe", installed: true}, Builtin())
 	stop := runKit(t, k)
 	waitFor(t, "a heartbeat", func() bool { return len(f.Heartbeats()) > 0 })
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}
 	hb := lastBeat(t, f)
-	if len(hb.Tools) != 1 || hb.Tools[0].Name != "trivy" {
-		t.Fatalf("tools %+v, want only trivy", hb.Tools)
+	var names []string
+	for _, tl := range hb.Tools {
+		names = append(names, tl.Name)
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"reach-probe", "trivy"}) {
+		t.Fatalf("tools %v, want reach-probe and trivy", names)
 	}
 	if !strings.Contains(errw.String(), "scanner nuclei is not in SENSOR_TOOLS") {
 		t.Errorf("stderr: %s", errw.String())
+	}
+	if !strings.Contains(errw.String(), "SENSOR_TOOLS is deprecated: it only narrows") {
+		t.Errorf("no deprecation warning: %s", errw.String())
 	}
 	// An empty, non-nil Tools sets no allowlist whatever SENSOR_TOOLS says.
 	opts.Tools = []string{}
@@ -420,6 +431,35 @@ func TestRun_ToolAllowlist(t *testing.T) {
 	k2.AddScanner(&testScanner{name: "nuclei", installed: true})
 	if !k2.allowed(k2.scanners[0]) {
 		t.Fatal("Tools: []string{} must lift the allowlist")
+	}
+}
+
+// The local policy's tools.allow still narrows a built-in: the host owner
+// decides what runs on the host.
+func TestInventory_LocalPolicyNarrowsBuiltins(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	opts, _, errw := baseOptions(t, f)
+	opts.Tools = []string{"nuclei"}
+	pol, err := core.ParseLocalPolicy([]byte("apiVersion: openctem.io/sensor-policy/v1\ntools: {allow: [nuclei]}\n"),
+		core.LocalPolicyOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts.LocalPolicy = pol
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k.closeClient)
+	k.AddScanner(&testScanner{name: "nuclei", installed: true})
+	k.AddScanner(&testScanner{name: "reach-probe", installed: true}, Builtin())
+	got := k.inventory(core.NewToolRegistry())
+	if len(got) != 1 || got[0].s.Name() != "nuclei" {
+		t.Fatalf("inventory %v, want only nuclei", got)
+	}
+	if !strings.Contains(errw.String(), "reach-probe is not in the local policy's tools.allow") {
+		t.Fatalf("stderr: %s", errw.String())
 	}
 }
 

@@ -227,6 +227,24 @@ func TestPairReverseModeSendsTheCodeAndPrintsNoCode(t *testing.T) {
 	}
 }
 
+// A code from the configuration is named by its source, never printed.
+func TestPairReverseModeWithCodeLabelHidesTheCode(t *testing.T) {
+	f, srv := newFakePlatform(t)
+	var out bytes.Buffer
+	o := opts(t, srv, &out)
+	o.Code = "k7qm-4ztd"
+	o.CodeLabel = "SENSOR_PAIRING_CODE"
+	if _, err := Pair(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if f.lastCode != "K7QM4ZTD" {
+		t.Fatalf("code sent %q", f.lastCode)
+	}
+	if strings.Contains(out.String(), "K7QM") || !strings.Contains(out.String(), "from SENSOR_PAIRING_CODE") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
 func TestPairRefusesATamperedPlatformSignature(t *testing.T) {
 	f, srv := newFakePlatform(t)
 	f.tamperSignature = true

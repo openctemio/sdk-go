@@ -140,9 +140,10 @@ type Options struct {
 	// manifest declares are delivered, inside the task's run message,
 	// never in the environment, argv or a file another task can read.
 	ToolCredentials func(tool string) map[string]string
-	// Tools is an operator allowlist of tool names (SENSOR_TOOLS): scanners
-	// whose name (or As name) is not in it are neither run nor reported. nil
-	// reads SENSOR_TOOLS; an empty non-nil slice sets no allowlist.
+	// Tools is an operator allowlist of tool names (SENSOR_TOOLS, deprecated):
+	// scanners whose name (or As name) is not in it are neither run nor
+	// reported; built-ins (Builtin) are kept. nil reads SENSOR_TOOLS; an
+	// empty non-nil slice sets no allowlist.
 	Tools []string
 
 	// Targets are scanned by every scanner each ScanInterval (default 1h);
@@ -304,9 +305,10 @@ type settings struct {
 
 // scannerEntry is an added scanner.
 type scannerEntry struct {
-	s    core.Scanner
-	as   string
-	caps []string
+	s       core.Scanner
+	as      string
+	caps    []string
+	builtin bool
 }
 
 // label names the scanner the way the operator configured it.
@@ -508,14 +510,7 @@ func New(opts Options) (*Kit, error) {
 	if s.pollInterval <= 0 {
 		s.pollInterval = DefaultCommandPollInterval
 	}
-	switch {
-	case opts.Tools != nil:
-		if len(opts.Tools) > 0 {
-			s.allow = opts.Tools
-		}
-	default:
-		s.allow = ParseToolList(os.Getenv(EnvTools))
-	}
+	k.resolveAllowlist(opts.Tools)
 
 	s.name = firstNonEmpty(opts.Name, os.Getenv(EnvSensorName))
 	if s.name == "" {
@@ -749,6 +744,7 @@ func (k *Kit) resolveIdentityAndPolicy() error {
 		if _, err := k.preferIdentity(); err != nil {
 			return err
 		}
+		k.notePairingCodeIgnored("the sensor has an API key")
 	}
 	if !k.opts.Standalone && s.apiURL != "" && s.apiKey == "" && s.signer == nil {
 		if err := k.resolveIdentity(); err != nil {
@@ -808,6 +804,14 @@ func As(name string) ScannerOption {
 // Capabilities words map to ("container" for an image scanner).
 func WithCapabilities(caps ...string) ScannerOption {
 	return func(e *scannerEntry) { e.caps = append(e.caps, caps...) }
+}
+
+// Builtin marks a sensor-wide built-in (the reachability probe, a passive
+// lookup compiled into the sensor) rather than an installed tool: a tools
+// allowlist (Options.Tools, SENSOR_TOOLS) does not drop it. The local
+// policy's tools.allow still does, since narrowing is the host owner's call.
+func Builtin() ScannerOption {
+	return func(e *scannerEntry) { e.builtin = true }
 }
 
 // AddScanner adds a tool. Every heartbeat reports it (installed or not, with
@@ -877,9 +881,26 @@ func (k *Kit) Sensor() *core.BaseSensor { return k.sensor }
 // Name is the sensor's name.
 func (k *Kit) Name() string { return k.s.name }
 
-// allowed reports whether the allowlist lets e through.
+// resolveAllowlist sets the tools allowlist: Options.Tools, else the
+// deprecated SENSOR_TOOLS (with a warning). An empty non-nil Tools sets none.
+func (k *Kit) resolveAllowlist(tools []string) {
+	if tools != nil {
+		if len(tools) > 0 {
+			k.s.allow = tools
+		}
+		return
+	}
+	k.s.allow = ParseToolList(os.Getenv(EnvTools))
+	if k.s.allow != nil {
+		_, _ = fmt.Fprintf(k.errw, "Warning: %s is deprecated: it only narrows the installed tools and will be removed; "+
+			"narrow with the local policy's tools.allow instead\n", EnvTools)
+	}
+}
+
+// allowed reports whether the allowlist lets e through. Built-ins are not
+// subject to it.
 func (k *Kit) allowed(e scannerEntry) bool {
-	if k.s.allow == nil {
+	if k.s.allow == nil || e.builtin {
 		return true
 	}
 	for _, a := range k.s.allow {
