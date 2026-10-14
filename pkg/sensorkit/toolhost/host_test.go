@@ -18,6 +18,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 
+	"github.com/openctemio/ctis/outcome"
 	"github.com/openctemio/sdk-go/internal/toolwire"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
@@ -671,6 +672,10 @@ func TestStoppedPartwayKeepsSettledTargets(t *testing.T) {
 			if out.Report.Metadata.CoverageType != "partial" {
 				t.Fatalf("coverage %q", out.Report.Metadata.CoverageType)
 			}
+			want := `[{"target":"a.example","state":"done"},{"target":"b.example","state":"unfinished"}]`
+			if got, _ := json.Marshal(out.Report.Properties[outcome.ResultKey]); string(got) != want {
+				t.Fatalf("report target_outcomes %s", got)
+			}
 		})
 	}
 }
@@ -684,5 +689,8 @@ func TestCanceledAfterSettlingStaysCanceled(t *testing.T) {
 	out := hostileRunCtx(t, ctx, "settle-then-wait")
 	if out.Status != tool.StatusCanceled || len(out.Unfinished) != 0 {
 		t.Fatalf("status %s err %v unfinished %v", out.Status, out.Err, out.Unfinished)
+	}
+	if _, ok := out.Report.Properties[outcome.ResultKey]; ok {
+		t.Fatal("a canceled run carries target outcomes")
 	}
 }
