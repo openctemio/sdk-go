@@ -8,6 +8,41 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.29.0 — 2026-10-14
+
+### Upgrade notes
+
+- Source compatible for callers: every settings identifier of `pkg/core` (and `pkg/tool`'s `DecodeConfig` / `Manifest.ConfigSchema`, which use them) keeps its name; the types are now aliases of `github.com/openctemio/ctis/settings`, which the API compatibility check reports as type changes. A sensor that mixes both names needs no edit.
+- `(*core.SettingsSchema).ManifestSettings()` is removed (it was only used inside the SDK to build the manifest). Build `core.ManifestToolSettings{SchemaVersion: s.Version, Digest: s.Digest()}` if you need it.
+- A tool manifest that declares a top-level `proxy`, `user_agent` or `headers` setting no longer loads.
+
+### Removed
+
+- `(*SettingsSchema).ManifestSettings()`: the manifest builds the schema's version and digest itself.
+
+### Deprecated: `SENSOR_TOOLS`
+
+- When the kit reads `SENSOR_TOOLS` itself it logs a deprecation warning: the variable only narrows the installed tools and will be removed. Narrow with the local policy's `tools.allow` instead.
+
+### Added: `SENSOR_PAIRING_CODE` pairs a new sensor in one start
+
+- `pkg/sensorkit`: a sensor with no identity and no API key attaches to the pairing code in `SENSOR_PAIRING_CODE` (the code an administrator created with "expect a sensor") on its first start, so reverse pairing needs no separate `pair` command. The code is validated before any request (a malformed one stops the sensor with exit 2), is a secret in the settings registry, and is never printed: the pairing instructions name the variable instead. Once the sensor is paired, or when it has an API key, the variable is ignored with a note and can be removed.
+
+### Added: layered tool settings in the command executor
+
+- A scan command may carry `settings_layers: {tenant, sensor}`: the administrators' tool settings, covered by the job signature. The executor checks each layer against the tool's own schema and resolves, in order: the tool's defaults, the tenant's and the sensor's layers, the scan's config (declared keys), the job's decision and the local policy. An invalid layer, a key a layer may not set, or a raise of a narrowing option fails the command.
+- The job's decision reaches every tool through its common options (`x-octm-common`): the command's rate and concurrency (never above the value in force: the tool's default or what an administrator set), and the per-target budget as the tool's per-request timeout (budget ÷ (retries + 1), at least 2 s, never longer than the timeout in force). The local policy's `rate.max_rps` lowers the common rate (source `local`).
+- The result's metadata says what ran: `effective_settings` (each key's value and the layer that set it).
+
+### Changed: a tools allowlist no longer drops sensor-wide built-ins
+
+- `pkg/sensorkit`: new `ScannerOption` `Builtin()` marks a scanner that is part of the sensor itself (the reachability probe, compiled-in passive lookups). `Options.Tools` / `SENSOR_TOOLS` no longer drop such scanners from the inventory; the local policy's `tools.allow` still narrows them.
+
+### Changed: tool settings come from the CTIS contract
+
+- `pkg/core` settings types (`SettingsSchema`, `SettingProperty`, `ToolSettings`, `SettingsLayer`, `SettingsErrors`, scopes, sources) are now aliases of `github.com/openctemio/ctis/settings`, so the platform validates administrators' values with the same code the sensor runs. The golden vectors moved to ctis (`settings/testdata/vectors`).
+- New from the contract: `x-octm-common` (a manifest key is a common tool option: `timeout`, `rate`, `concurrency`, `retries`; type and bounds checked) and `x-octm-flag` (the tool's native flag, display only); top-level `proxy`, `user_agent` and `headers` keys are refused; layers `SettingSourceTenant` and `SettingSourceJob`; a later layer that raises a narrowing option (`rate`, `concurrency`, `retries`) an earlier layer set is an error.
+
 ## v0.28.0 — 2026-10-14
 
 ### Added: liveness counters in the heartbeat's command progress
