@@ -59,4 +59,3 @@ func TestSettingsManifestCarriesDigestNotSchema(t *testing.T) {
 		t.Fatalf("SettingsSchemas = %v", got)
 	}
 }
-

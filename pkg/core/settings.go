@@ -52,6 +52,7 @@ const (
 	SettingSourceProfile = settings.SourceProfile
 	SettingSourceScan    = settings.SourceScan
 	SettingSourceJob     = settings.SourceJob
+	SettingSourceLocal   = settings.SourceLocal
 )
 
 // ParseSettingsSchema parses and checks a schema (settings.ParseSchema).
