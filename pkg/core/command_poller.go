@@ -1591,12 +1591,11 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// the command sets none).
 	// Without an explicit timeout the task budget's overrun applies, so a
 	// task is stopped only well past its estimate (budget.go).
-	requested := jobTimeout(payload.TimeoutSeconds, payload.Budget)
-	if timeout := local.CapTimeout(requested); timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
+	// The job's context without its time budget (deliverCtx): a run the
+	// budget stopped part-way returns what it finished (partial), delivered
+	// under it, which a cancel still ends.
+	ctx, deliverCtx, cancelJob := withJobTimeout(ctx, local.CapTimeout(jobTimeout(payload.TimeoutSeconds, payload.Budget)))
+	defer cancelJob()
 
 	// Run scan
 	startTime := time.Now()
@@ -1609,6 +1608,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	if err != nil {
 		return nil, fmt.Errorf("scan failed: %w", err)
 	}
+	ctx = deliveryContext(ctx, deliverCtx)
 
 	result := &CommandExecutionResult{
 		DurationMs: time.Since(startTime).Milliseconds(),
@@ -1676,6 +1676,27 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	}
 
 	return result, nil
+}
+
+// withJobTimeout bounds a job's context by timeout (none when 0) and also
+// returns the context before the bound.
+func withJobTimeout(ctx context.Context, timeout time.Duration) (bounded, unbounded context.Context, cancel context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, ctx, func() {}
+	}
+	bounded, cancel = context.WithTimeout(ctx, timeout)
+	return bounded, ctx, cancel
+}
+
+// deliveryContext is the context a scan's results are parsed and pushed
+// under: the job's, or, when only the job's time budget ended (not a
+// cancel), the job's without that budget, so a run stopped part-way still
+// delivers what it finished.
+func deliveryContext(ctx, unbounded context.Context) context.Context {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) && unbounded.Err() == nil {
+		return unbounded
+	}
+	return ctx
 }
 
 // validateScanTargets returns the command's targets, each validated by the

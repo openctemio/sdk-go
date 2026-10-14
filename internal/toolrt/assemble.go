@@ -254,6 +254,33 @@ func (a *Assembler) Results() []TargetResult {
 	return out
 }
 
+// Done counts the targets the tool settled as done.
+func (a *Assembler) Done() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, r := range a.results {
+		if r.State == tool.StateDone {
+			n++
+		}
+	}
+	return n
+}
+
+// Unfinished returns the task's targets the tool gave no outcome, in task
+// order: the ones a run that stopped part-way never reached.
+func (a *Assembler) Unfinished() []tool.Target {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out []tool.Target
+	for _, ref := range a.order {
+		if _, ok := a.results[ref]; !ok {
+			out = append(out, a.targets[ref])
+		}
+	}
+	return out
+}
+
 // Status computes the task outcome from the run's error and what the
 // checker and the targets say: a run error is failed (canceled for a
 // cancel); otherwise partial when a target failed, was skipped or was

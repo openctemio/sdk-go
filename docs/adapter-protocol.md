@@ -79,6 +79,14 @@ ignored, except during the handshake. A newer runtime may send more.
 - **Targets:** report each target once with `target_status`
   (`done` | `failed` | `skipped`, with an error `class` and `detail` for a
   failure). A `result` of `ok` with targets never reported becomes `partial`.
+  Send each target's status as soon as it is settled, not all at the end: the
+  sensor reports settled targets as the task's progress, and the platform
+  treats a task whose progress does not move as stalled.
+- **Stopping part-way:** when the run stops after some targets were settled
+  (the tool crashes or reports a failure, goes silent past its idle timeout,
+  or a time limit hits), the task ends `partial`: the accepted records are
+  delivered and the targets never settled are listed as `unfinished_targets`.
+  A cancel, a policy refusal or rejected output still fails the task.
 - **Credentials** arrive only in the `run` message, and only those the manifest
   declares and the operator stored. They are never in the environment, argv or
   a file. Their values are masked in everything the runtime keeps.
