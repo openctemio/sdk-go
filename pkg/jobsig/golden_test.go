@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// goldenEnvelope is also asserted by github.com/openctemio/sdk-go/pkg/transfer/bundle,
-// a separate module that restates the DSSE envelope, pre-authentication
+// goldenEnvelope is also asserted by github.com/openctemio/ctis/transfer/bundle,
+// a contract module that restates the DSSE envelope, pre-authentication
 // encoding and key id. Change both together, or feed signatures break.
 const goldenEnvelope = `{"payloadType":"application/vnd.openctem.golden+json","payload":"eyJnb2xkZW4iOnRydWV9","signatures":[{"keyid":"SHA256:fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889","sig":"ur0zss6MVnpXevEdDrmZe2tCP4H2gRBwaYalVPUgdOzGN5paqxH+atfo3qvvKiz8mWe+CR1sblidSmQFcW4qDg=="}]}`
 

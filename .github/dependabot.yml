@@ -33,13 +33,6 @@ updates:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
-  # The nested pkg/transfer module (tagged pkg/transfer/vX.Y.Z)
-  - package-ecosystem: "gomod"
-    directory: "/pkg/transfer"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:00"
       timezone: "Asia/Ho_Chi_Minh"
     labels:
       - "dependencies"
