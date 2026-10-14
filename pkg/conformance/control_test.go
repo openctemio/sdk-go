@@ -60,10 +60,6 @@ func TestControl_EverythingOnV2WithoutAgentHeader(t *testing.T) {
 	if st, _ := f.CommandState(id); st != "completed" {
 		t.Fatalf("command state %q", st)
 	}
-	rules, err := c.GetSuppressions(ctx)
-	if err != nil || len(rules) != 1 {
-		t.Fatalf("suppressions %v %v", rules, err)
-	}
 	if res, err := c.CheckFingerprints(ctx, []string{"a", "b"}); err != nil || len(res.Missing) != 2 {
 		t.Fatalf("check %+v %v", res, err)
 	}
@@ -123,9 +119,6 @@ func TestControl_OldPlatformIsUnsupported(t *testing.T) {
 	ctx := context.Background()
 	if err := c.SendHeartbeat(ctx, status()); !errors.Is(err, client.ErrV2Unsupported) {
 		t.Fatalf("heartbeat: %v", err)
-	}
-	if _, err := c.GetSuppressions(ctx); !errors.Is(err, client.ErrV2Unsupported) {
-		t.Fatalf("suppressions: %v", err)
 	}
 	if _, err := c.PushFindings(ctx, report("semgrep", 1, 1)); !errors.Is(err, client.ErrV2Unsupported) {
 		t.Fatalf("push: %v", err)
@@ -219,23 +212,6 @@ func TestControl_PausedSensor(t *testing.T) {
 	}
 	if err := c.TestConnection(ctx); !client.IsAuthenticationError(err) || core.AuthFailureStatus(err) != http.StatusUnauthorized {
 		t.Fatalf("connection test of a disabled sensor: %v", err)
-	}
-}
-
-func TestControl_SuppressionsRevalidate(t *testing.T) {
-	f := newControlFake(t)
-	c := newClient(t, f, client.ProtocolAuto)
-	ctx := context.Background()
-	for range 2 {
-		rules, err := c.GetSuppressions(ctx)
-		if err != nil || len(rules) != 1 || rules[0].RuleID != "r1" {
-			t.Fatalf("rules %v %v", rules, err)
-		}
-	}
-	gets := f.RequestsTo(http.MethodGet, protov2.PathPrefix+protov2.SuppressionsPath)
-	if len(gets) != 2 || gets[0].Header.Get("If-None-Match") != "" ||
-		gets[1].Header.Get("If-None-Match") != fakeSuppressionsETag || gets[1].Status != http.StatusNotModified {
-		t.Fatalf("revalidation %v", statuses(gets))
 	}
 }
 

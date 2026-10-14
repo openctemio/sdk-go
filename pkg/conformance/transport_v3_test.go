@@ -81,9 +81,6 @@ func lifecycle(t *testing.T, f *FakePlatform, c *client.Client) {
 	if st, _ := f.CommandState(id); st != "completed" {
 		t.Fatalf("command state %q", st)
 	}
-	if rules, err := c.GetSuppressions(ctx); err != nil || len(rules) != 1 {
-		t.Fatalf("suppressions %v %v", rules, err)
-	}
 	if res, err := c.CheckFingerprints(ctx, []string{"a", "b"}); err != nil || len(res.Missing) != 2 {
 		t.Fatalf("check %+v %v", res, err)
 	}

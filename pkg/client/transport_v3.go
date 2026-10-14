@@ -252,21 +252,6 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 			return jsonResponse(http.StatusOK, m.GetResponseJson())
 		})
 
-	case rest == protov2.SuppressionsPath:
-		r, err := st.svc.GetSuppressions(ctx, connect.NewRequest(&sensorv3.GetSuppressionsRequest{Etag: req.Header.Get("If-None-Match")}))
-		return answer(r, err, func(m *sensorv3.GetSuppressionsResponse) *http.Response {
-			var resp *http.Response
-			if m.GetNotModified() {
-				resp = jsonResponse(http.StatusNotModified, nil)
-			} else {
-				resp = jsonResponse(http.StatusOK, m.GetSuppressionsJson())
-			}
-			if m.GetEtag() != "" {
-				resp.Header.Set("ETag", m.GetEtag())
-			}
-			return resp
-		})
-
 	case rest == protov2.FingerprintsCheckPath:
 		doc, err := plainBody(req, body)
 		if err != nil {
