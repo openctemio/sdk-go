@@ -652,13 +652,14 @@ first thing in `main`), which confines itself and then becomes the tool:
 
 | Manifest `permissions.network` | Forwarder scope |
 |---|---|
-| `targets` | The admitted targets only. Names are dialed at the addresses the local policy admitted (`core.LocalPolicy.AdmittedAddrs`) and never resolved again; IP and CIDR targets as given |
+| `targets` | The admitted targets only. Names are dialed at the addresses the local policy admitted (`core.LocalPolicy.AdmittedAddrs`) and never resolved again; those addresses are also admitted when the tool dials them itself (it resolved the name through the forwarder's DNS, which answers with them: a port scanner does), each address alone, with the same ports and limits as its names, never its range; IP and CIDR targets as given |
 | `vendor` | The manifest's vendor hosts, at public addresses |
 | `resolver` | No connection at all. DNS questions about the admitted targets are answered (A and AAAA from the admitted addresses, other record types from the sensor's resolver); any other name is NXDOMAIN |
 | `egress-proxy` | Any public address. Loopback, private ranges, link-local and cloud metadata addresses are refused |
 | `none` | Nothing: no forwarder, no way out |
 
 A tool that dials raw sockets without honouring the proxy variables gets "network unreachable" when confined; it must connect through the proxy (HTTP CONNECT or SOCKS5).
+- A target the scope refused every connection toward is never reported done: the tool host settles it as failed with class `egress_refused` (ctis outcome), the task is at best partial, and the task log says how many targets the confinement kept the tool from reaching. When the scope refused every connection of the task and allowed none, every target the tool reported done is settled so. `Outcome.EgressTally` has the counts, in all and per target.
 - Where `/etc/resolv.conf` cannot be bind-mounted (a profile that denies `mount`), the relay answers on each address the file names instead.
 - Target names are looked up exactly as written, never with a search domain appended. The task's `/etc/resolv.conf` names only the relay and has no `search` or `domain` line, and the SDK's own lookups use absolute names (a trailing dot). Where the host's file cannot be replaced, a tool's resolver may still append the host's search domain (`app.example.com.lan`). The forwarder answers such a name NXDOMAIN, never resolves it, and does not record it as a refusal. The doctor notes search domains on the host (`network.dns_search`, information only).
 

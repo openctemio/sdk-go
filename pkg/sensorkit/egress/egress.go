@@ -11,9 +11,11 @@
 //   - checks the destination against the task's Scope: a name must be an
 //     admitted target (dialed at the addresses pinned at admission, never
 //     resolved again) or a vendor host (resolved now, public addresses only);
-//     an address must be in an admitted prefix; metadata, link-local,
-//     multicast and unspecified addresses are refused whatever the scope
-//     says;
+//     an address must be in an admitted prefix or be one an admitted name is
+//     pinned to (a tool that resolves a target through the forwarder's DNS
+//     and dials the address it got, as a port scanner does); metadata,
+//     link-local, multicast and unspecified addresses are refused whatever
+//     the scope says;
 //   - applies the rate limit: connections per second for the task, and an
 //     adaptive rate per destination host (adapt.HostRate) that backs off
 //     on 429/503 (honoring Retry-After), resets, timeouts, failed TLS
@@ -56,8 +58,9 @@ type Scope struct {
 	// admission resolved and checked. A connection to a name goes to these
 	// addresses only: the name is never resolved again (no rebinding).
 	Names map[string][]netip.Addr
-	// Prefixes are the admitted address ranges (IP and CIDR targets, and
-	// the pinned addresses of Names are added by the forwarder).
+	// Prefixes are the admitted address ranges (IP and CIDR targets). The
+	// pinned addresses of Names are admitted too, each one alone and with
+	// the limits of the names pinned to it.
 	Prefixes []netip.Prefix
 	// Vendor are hosts the tool's manifest may reach besides its targets
 	// (permissions.vendor_hosts): resolved at connect time, public
@@ -159,7 +162,12 @@ type Forwarder struct {
 	scope    Scope
 	names    map[string][]netip.Addr
 	prefixes []netip.Prefix
-	limits   Limits
+	// pinned maps every address an admitted name is pinned to back to those
+	// names: the address alone is admitted (never its range), so a tool
+	// that dials what the forwarder's DNS answered reaches exactly what the
+	// name reaches.
+	pinned map[netip.Addr][]string
+	limits Limits
 
 	// Dial opens an upstream connection (default: a net.Dialer). The
 	// address is always an IP and a port the scope allowed.
@@ -190,6 +198,7 @@ type Forwarder struct {
 	mu       sync.Mutex
 	records  []Record
 	dropped  int
+	tally    Tally
 	conns    chan struct{}
 }
 
@@ -197,13 +206,21 @@ type Forwarder struct {
 // no trailing dot); their pinned addresses join the admitted prefixes.
 func New(scope Scope, limits Limits) *Forwarder {
 	limits = limits.withDefaults()
-	f := &Forwarder{scope: scope, limits: limits, names: map[string][]netip.Addr{},
+	f := &Forwarder{scope: scope, limits: limits, names: map[string][]netip.Addr{}, pinned: map[netip.Addr][]string{},
+		tally:    Tally{Targets: map[string]TargetTally{}},
 		rate:     rate.NewLimiter(rate.Limit(limits.Rate), max(1, int(limits.Rate))),
 		hostRate: adapt.NewHostRate(limits.PerHostRate),
 		conns:    make(chan struct{}, limits.MaxConns)}
 	for n, addrs := range scope.Names {
 		key := normName(n)
 		f.names[key] = append(f.names[key], addrs...)
+	}
+	for n, addrs := range f.names {
+		for _, a := range addrs {
+			if a = a.Unmap(); !alwaysRefused(a) && !slices.Contains(f.pinned[a], n) {
+				f.pinned[a] = append(f.pinned[a], n)
+			}
+		}
 	}
 	f.prefixes = slices.Clone(scope.Prefixes)
 	f.scopeLimits = scopelimit.NewSet(scope.Limits)
@@ -212,6 +229,11 @@ func New(scope Scope, limits Limits) *Forwarder {
 }
 
 func normName(n string) string { return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(n)), ".") }
+
+// Key is the key Tally.Targets counts a target name under: lower case, no
+// trailing dot, no brackets. An address or range target is counted under
+// its prefix (netip.Prefix.String of the prefix in Scope.Prefixes).
+func Key(host string) string { return normName(strings.Trim(host, "[]")) }
 
 // alwaysRefused are addresses no scope can admit: cloud metadata and other
 // link-local, multicast and unspecified addresses.
@@ -273,6 +295,10 @@ func (f *Forwarder) resolveHost(ctx context.Context, host string) ([]netip.Addr,
 		case alwaysRefused(a):
 			return nil, fmt.Errorf("%w: %s is a link-local, metadata or reserved address", ErrRefused, a)
 		case f.inPrefixes(a):
+		case len(f.pinned[a]) > 0:
+			// An address an admitted name is pinned to: the same address
+			// and the same ports (Ports, and the limits indexLimits gave it)
+			// as the name, nothing of its range.
 		case f.scope.AnyPublic && !publicOnly(a):
 		default:
 			return nil, fmt.Errorf("%w: %s is not a target", ErrRefused, a)
@@ -351,10 +377,14 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 		if reach.Classify(err) == reach.DNSFailure {
 			target.RecordErr(host, netip.Addr{}, port, err)
 		}
+		if errors.Is(err, ErrRefused) {
+			f.count(host, false)
+		}
 		rec.Verdict, rec.Reason = Refused, err.Error()
 		f.record(*rec)
 		return nil, nil, err
 	}
+	f.count(host, true)
 	if err := f.allowRate(ctx, normName(host)); err != nil {
 		rec.Verdict, rec.Reason = Refused, "rate: "+err.Error()
 		f.record(*rec)
@@ -420,4 +450,83 @@ func (f *Forwarder) Refusals() []Record {
 		}
 	}
 	return out
+}
+
+// Tally counts a task's connections the scope checked (connect, http and
+// socks5; not DNS questions, not requests the guard read): allowed (the
+// dial was attempted, whether it then succeeded or not) and refused by the
+// scope. A connection refused by the rate (a host backed off) is in
+// neither: that host is a coverage gap (TargetRate), not out of scope.
+type Tally struct {
+	Allowed int `json:"allowed"`
+	Refused int `json:"refused"`
+	// Targets counts the connections toward each target: under its name
+	// (Key) for a name, also when it was dialed at one of its pinned
+	// addresses, and under its prefix for an address or range target. A
+	// destination that is no target is counted in Allowed/Refused only.
+	Targets map[string]TargetTally `json:"targets,omitempty"`
+}
+
+// TargetTally is one target's connections.
+type TargetTally struct {
+	Allowed int `json:"allowed"`
+	Refused int `json:"refused"`
+}
+
+// Unreached reports whether the scope refused every connection the tool
+// made toward the target (at least one).
+func (t TargetTally) Unreached() bool { return t.Refused > 0 && t.Allowed == 0 }
+
+// count adds one connection toward host to the tally. The keys are bounded
+// by the scope (its names and prefixes), whatever the tool asks for.
+func (f *Forwarder) count(host string, allowed bool) {
+	keys := f.targetKeys(host)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if allowed {
+		f.tally.Allowed++
+	} else {
+		f.tally.Refused++
+	}
+	for _, k := range keys {
+		t := f.tally.Targets[k]
+		if allowed {
+			t.Allowed++
+		} else {
+			t.Refused++
+		}
+		f.tally.Targets[k] = t
+	}
+}
+
+// targetKeys are the targets a connection to host counts toward: the
+// admitted name; for an address, the names pinned to it and the admitted
+// prefixes that contain it.
+func (f *Forwarder) targetKeys(host string) []string {
+	h := Key(host)
+	if a, err := netip.ParseAddr(h); err == nil {
+		a = a.Unmap()
+		keys := slices.Clone(f.pinned[a])
+		for _, p := range f.prefixes {
+			if p.Contains(a) {
+				keys = append(keys, p.String())
+			}
+		}
+		return keys
+	}
+	if _, ok := f.names[h]; ok {
+		return []string{h}
+	}
+	return nil
+}
+
+// Tally returns the task's connection counts so far.
+func (f *Forwarder) Tally() Tally {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t := Tally{Allowed: f.tally.Allowed, Refused: f.tally.Refused, Targets: make(map[string]TargetTally, len(f.tally.Targets))}
+	for k, v := range f.tally.Targets {
+		t.Targets[k] = v
+	}
+	return t
 }
