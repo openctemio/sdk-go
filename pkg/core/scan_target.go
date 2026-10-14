@@ -88,6 +88,14 @@ type ScanTargetPolicy struct {
 	// httpsec.AllowLoopback.
 	AllowLoopback bool
 
+	// ByScanner checks each target by the scanner that receives it
+	// (ValidateFor): a code scanner's path is confined to AllowedRoots, and
+	// every other scanner is a network scanner whose targets must be hosts,
+	// host:port pairs, URLs or ranges, a name that does not resolve being
+	// refused. Off, a target is read by its shape whatever the scanner
+	// (Validate). A sensor whose tools are known by name sets it.
+	ByScanner bool
+
 	// Disabled turns validation off entirely. Only for callers that validate
 	// targets themselves before the executor sees the command.
 	Disabled bool
@@ -214,7 +222,13 @@ func (p *ScanTargetPolicy) validatePathTarget(target string) (string, error) {
 	if strings.HasPrefix(target, "~") {
 		return "", fmt.Errorf("scan target %q: '~' paths are not expanded; use an absolute path", target)
 	}
-	abs, err := filepath.Abs(target)
+	path := target
+	if !filepath.IsAbs(path) && len(p.AllowedRoots) > 0 {
+		// A relative target is taken in the first scan root, never in
+		// whatever directory the process happens to run in.
+		path = filepath.Join(p.AllowedRoots[0], path)
+	}
+	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", fmt.Errorf("invalid scan target path: %w", err)
 	}
@@ -234,18 +248,31 @@ func (p *ScanTargetPolicy) validatePathTarget(target string) (string, error) {
 				continue
 			}
 			if isWithin(rootResolved, resolved) {
+				// A root configured over a sensitive directory still
+				// does not expose it.
+				if err := checkSensitivePath(resolved); err != nil {
+					return "", err
+				}
 				return resolved, nil
 			}
 		}
 		return "", fmt.Errorf("scan target path %q is outside the allowed scan roots", target)
 	}
+	if err := checkSensitivePath(resolved); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
 
+// checkSensitivePath refuses the filesystem root, sensitive system
+// directories and credential directories in the user's home.
+func checkSensitivePath(resolved string) error {
 	if resolved == string(filepath.Separator) || filepath.Dir(resolved) == resolved {
-		return "", fmt.Errorf("refusing to scan filesystem root")
+		return fmt.Errorf("refusing to scan filesystem root")
 	}
 	for _, root := range sensitiveScanRoots {
 		if isWithin(root, resolved) {
-			return "", fmt.Errorf("refusing to scan sensitive system path %q", resolved)
+			return fmt.Errorf("refusing to scan sensitive system path %q", resolved)
 		}
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
@@ -254,11 +281,11 @@ func (p *ScanTargetPolicy) validatePathTarget(target string) (string, error) {
 		}
 		for _, d := range sensitiveHomeDirs {
 			if isWithin(filepath.Join(home, d), resolved) {
-				return "", fmt.Errorf("refusing to scan sensitive path %q", resolved)
+				return fmt.Errorf("refusing to scan sensitive path %q", resolved)
 			}
 		}
 	}
-	return resolved, nil
+	return nil
 }
 
 // isWithin reports whether path is root or lies inside it. Both must be
