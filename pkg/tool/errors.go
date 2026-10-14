@@ -45,6 +45,9 @@ const (
 	ResourceExhausted ErrorClass = "resource_exhausted"
 	OutputRejected    ErrorClass = "output_rejected"
 	ToolCrashed       ErrorClass = "tool_crashed"
+	// EgressRefused: the sensor's network confinement refused every
+	// connection the tool made toward a target (a target's class only).
+	EgressRefused ErrorClass = "egress_refused"
 )
 
 var toolClasses = map[ErrorClass]bool{
@@ -54,6 +57,7 @@ var toolClasses = map[ErrorClass]bool{
 
 var runtimeClasses = map[ErrorClass]bool{
 	Timeout: true, Canceled: true, ResourceExhausted: true, OutputRejected: true, ToolCrashed: true,
+	EgressRefused: true,
 }
 
 // Valid reports whether c is a class a tool may return.

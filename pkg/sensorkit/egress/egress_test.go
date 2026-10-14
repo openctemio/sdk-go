@@ -249,8 +249,103 @@ func TestSOCKS5(t *testing.T) {
 	if line != "echo:hi\n" {
 		t.Fatalf("socks tunnel: %q", line)
 	}
-	if _, err := d.Dial("tcp", fmt.Sprintf("%s:%d", host, port)); err == nil {
+	// The address the name is pinned to is the name's: a tool that resolved
+	// the name through the forwarder's DNS dials what it got (a port
+	// scanner does), and reaches the same host.
+	c, err = d.Dial("tcp", fmt.Sprintf("%s:%d", host, port))
+	if err != nil {
+		t.Fatalf("the pinned address of an admitted name was refused: %v", err)
+	}
+	_, _ = io.WriteString(c, "ip\n")
+	line, _ = bufio.NewReader(c).ReadString('\n')
+	c.Close()
+	if line != "echo:ip\n" {
+		t.Fatalf("socks tunnel by address: %q", line)
+	}
+	// SECURITY: an address no admitted name is pinned to is refused.
+	if _, err := d.Dial("tcp", fmt.Sprintf("192.0.2.99:%d", port)); err == nil {
 		t.Fatal("an address that is not admitted was reached over SOCKS5")
+	}
+}
+
+// SECURITY: a pinned address is admitted alone and with its name's limits:
+// never its range, never a port the name may not reach, never a metadata
+// address a name happened to be pinned to; a name resolving to an address
+// shared with other hosts opens that address and those ports, nothing
+// else.
+func TestPinnedAddressAdmittedAsItsName(t *testing.T) {
+	f := New(Scope{
+		Names: map[string][]netip.Addr{
+			"shop.example": {addr("203.0.113.10"), addr("2001:db8::10")},
+			"meta.example": {addr("169.254.169.254")},
+		},
+		Ports: []int{80, 443, 8443},
+	}, Limits{})
+	ctx := context.Background()
+	for _, h := range []string{"203.0.113.10", "2001:db8::10", "[2001:db8::10]", "::ffff:203.0.113.10"} {
+		if got, err := f.Resolve(ctx, h, 443); err != nil || len(got) != 1 {
+			t.Errorf("%s: %v %v, want admitted", h, got, err)
+		}
+	}
+	for _, c := range []struct {
+		host string
+		port int
+	}{
+		{"203.0.113.11", 443},      // the next address of the range
+		{"203.0.113.10", 22},       // a port the scope does not allow
+		{"169.254.169.254", 80},    // metadata, whatever a name is pinned to
+		{"2001:db8::11", 443},      // the next IPv6 address
+		{"198.51.100.10", 443},     // unrelated
+		{"shop.example.evil", 443}, // not a target name
+	} {
+		if _, err := f.Resolve(ctx, c.host, c.port); !errors.Is(err, ErrRefused) {
+			t.Errorf("%s:%d: %v, want refused", c.host, c.port, err)
+		}
+	}
+}
+
+// The tally counts each connection the scope checked toward the target it
+// belongs to: by name, by a pinned address, or by an admitted prefix; a
+// destination that is no target counts in the totals only.
+func TestTally(t *testing.T) {
+	f := New(Scope{
+		Names:    map[string][]netip.Addr{"a.example": {addr("192.0.2.1")}, "b.example": {addr("192.0.2.2")}},
+		Prefixes: []netip.Prefix{pfx("198.51.100.0/24")},
+		Ports:    []int{80},
+	}, Limits{DialTimeout: 50 * time.Millisecond})
+	f.Dial = func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("no network in the test")
+	}
+	ctx := context.Background()
+	for _, c := range []struct {
+		host string
+		port int
+	}{
+		{"a.example", 80},     // allowed, a.example
+		{"192.0.2.1", 80},     // allowed, a.example (pinned)
+		{"192.0.2.2", 22},     // refused, b.example (port)
+		{"192.0.2.2", 23},     // refused, b.example (port)
+		{"198.51.100.7", 80},  // allowed, the prefix
+		{"203.0.113.1", 80},   // refused, no target
+		{"other.example", 80}, // refused, no target
+	} {
+		_, _, _ = f.dial(ctx, "socks5", c.host, c.port)
+	}
+	got := f.Tally()
+	if got.Allowed != 3 || got.Refused != 4 {
+		t.Fatalf("totals %+v", got)
+	}
+	want := map[string]TargetTally{"a.example": {Allowed: 2}, "b.example": {Refused: 2}, "198.51.100.0/24": {Allowed: 1}}
+	if len(got.Targets) != len(want) {
+		t.Fatalf("targets %+v", got.Targets)
+	}
+	for k, w := range want {
+		if got.Targets[k] != w {
+			t.Errorf("%s: %+v, want %+v", k, got.Targets[k], w)
+		}
+	}
+	if got.Targets["a.example"].Unreached() || !got.Targets["b.example"].Unreached() || (TargetTally{}).Unreached() {
+		t.Fatal("Unreached")
 	}
 }
 

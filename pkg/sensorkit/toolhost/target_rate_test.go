@@ -51,7 +51,7 @@ func TestFinishReportsRateAndGaps(t *testing.T) {
 		fw.TargetRate().ReportHTTP("blocked.example", 403, "")
 	}
 	out := &Outcome{}
-	lines := e.finish(out)
+	lines := e.finish(out, nil)
 	if out.TargetRate == nil || out.TargetRate.Ceiling != 40 || out.TargetRate.Throttled != 2 {
 		t.Fatalf("summary %+v", out.TargetRate)
 	}
@@ -70,7 +70,7 @@ func TestFinishReportsRateAndGaps(t *testing.T) {
 		t.Errorf("gaps %+v", out.TargetRate.Gaps)
 	}
 	var nilEgress *taskEgress
-	if nilEgress.finish(out) != nil {
+	if nilEgress.finish(out, nil) != nil {
 		t.Fatal("finish without a forwarder logged")
 	}
 }
