@@ -996,6 +996,8 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			declined++
 			continue
 		}
+		// Its hosts are freed target by target as the job settles them.
+		p.queue.track(cmd.ID, commandTargets(meta), meta.NetworkID)
 
 		// Claim (acknowledge) it now that a slot is held.
 		if err := p.claim(ctx, cmd); err != nil {
@@ -1017,6 +1019,19 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		p.activeCmds.Add(1)
 		started++
 		go p.executeCommand(cmdCtx, cmd, jobErr)
+	}
+}
+
+// hostsFreed is called when a held command's settled targets freed hosts:
+// a command handed back because they were busy may run now, so the claim
+// backoff ends and a poll waiting for a free slot is woken.
+func (p *CommandPoller) hostsFreed() {
+	p.claims.progressed()
+	if p.backlog.Load() {
+		select {
+		case p.slotFreed <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -1107,7 +1122,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	// Finished targets, reported on every heartbeat while the job runs.
 	progress := NewProgress(0)
 	ctx = WithProgress(ctx, progress)
-	p.queue.setProgress(cmd.ID, progress)
+	p.queue.setProgress(cmd.ID, progress, p.hostsFreed)
 
 	// Stopping (or canceled) before it started: hand it back unstarted.
 	if p.draining.Load() || ctx.Err() != nil {
