@@ -154,6 +154,10 @@ type ScanCommandPayload struct {
 	// targets around them address by address before any check or tool
 	// (job_exclusions.go) and hands them to the tool (ScanOptions.ExcludeHosts).
 	Exclusions []string `json:"exclusions,omitempty"`
+	// SettingsLayers are the tenant's and the sensor's tool settings for
+	// the command's tool, set by administrators on the platform; checked
+	// against the tool's own schema like the config (resolveScanSettings).
+	SettingsLayers *SettingsLayers `json:"settings_layers,omitempty"`
 }
 
 // CapabilityScanner is a scanner that runs capability jobs: it takes the
@@ -1580,7 +1584,11 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 
 	// The rest of the config reaches the scanner only as typed settings its
 	// own schema declares (api RFC-038); an invalid value fails the command.
-	settings, ignoredConfig, err := scanSettings(e.scannerSettingsSchema(payload.Scanner, scanner), payload.Config)
+	// The tenant's and the sensor's layers come with the command; the job's
+	// limits and per-target budget reach the tool's common options; the
+	// local policy caps the rate last.
+	settings, ignoredConfig, err := resolveScanSettings(e.scannerSettingsSchema(payload.Scanner, scanner), payload.SettingsLayers, payload.Config,
+		jobSettings{rate: opts.RateLimit, concurrency: opts.Concurrency, targetBudget: payload.Budget.Target(), capRate: local.CapRate})
 	if err != nil {
 		return nil, fmt.Errorf("invalid %s settings: %w", payload.Scanner, err)
 	}
@@ -1661,6 +1669,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	if settings != nil {
 		result.Metadata["settings_applied"] = settings.Keys()
 		result.Metadata["settings_schema_digest"] = settings.SchemaDigest()
+		result.Metadata["effective_settings"] = effectiveSettings(settings)
 	}
 	if len(ignoredConfig) > 0 {
 		result.Metadata["ignored_config_keys"] = ignoredConfig
