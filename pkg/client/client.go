@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -71,7 +70,6 @@ type Client struct {
 	v2       v2State
 
 	// supp caches the v2 suppression list and its ETag.
-	supp suppressionCache
 	// leases keeps the lease epoch of each held v2 command (lease.go).
 	leases leaseTable
 
@@ -1415,134 +1413,6 @@ func (c *Client) GetKEVEntries(ctx context.Context, cveIDs []string) ([]KEVEntry
 	}
 
 	return resp.Entries, nil
-}
-
-// =============================================================================
-// Suppression API
-// =============================================================================
-
-// SuppressionRule represents a platform-controlled suppression rule.
-type SuppressionRule struct {
-	RuleID      string  `json:"rule_id,omitempty"`
-	ToolName    string  `json:"tool_name,omitempty"`
-	PathPattern string  `json:"path_pattern,omitempty"`
-	AssetID     *string `json:"asset_id,omitempty"`
-	ExpiresAt   *string `json:"expires_at,omitempty"`
-}
-
-// GetSuppressions fetches the tenant's active suppression rules from the
-// platform, for the security gate to leave out findings the platform has
-// suppressed.
-//
-// It calls GET /api/v2/sensor/suppressions (revalidated with its ETag).
-//
-// A failure is returned, never swallowed: the caller decides whether a gate
-// may run without suppressions, and should say so where the operator sees it.
-func (c *Client) GetSuppressions(ctx context.Context) ([]SuppressionRule, error) {
-	if c.verbose {
-		fmt.Println("[openctem] Fetching suppression rules")
-	}
-
-	rules, err := c.suppressionsV2(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch suppression rules: %w", c.v2Missing(err))
-	}
-	if c.verbose {
-		fmt.Printf("[openctem] Fetched %d suppression rules\n", len(rules))
-	}
-	return rules, nil
-}
-
-// FilterSuppressedFindings removes findings that match suppression rules.
-// This is used by the security gate to exclude false positives.
-func (c *Client) FilterSuppressedFindings(findings []ctis.Finding, rules []SuppressionRule) []ctis.Finding {
-	if len(rules) == 0 {
-		return findings
-	}
-
-	var filtered []ctis.Finding
-	for _, f := range findings {
-		if !c.isFiningSuppressed(f, rules) {
-			filtered = append(filtered, f)
-		}
-	}
-
-	return filtered
-}
-
-// isFiningSuppressed checks if a finding matches any suppression rule.
-func (c *Client) isFiningSuppressed(f ctis.Finding, rules []SuppressionRule) bool {
-	for _, rule := range rules {
-		if c.matchesSuppressionRule(f, rule) {
-			return true
-		}
-	}
-	return false
-}
-
-// matchesSuppressionRule checks if a finding matches a specific suppression rule.
-// Note: ToolName is not checked here because Finding doesn't have Tool info;
-// it should be checked at the Report level before calling this function.
-func (c *Client) matchesSuppressionRule(f ctis.Finding, rule SuppressionRule) bool {
-	// Track whether at least one finding-level matcher actually applied. A rule
-	// with no RuleID and no PathPattern (e.g. an asset-only rule, handled
-	// elsewhere) must NOT match every finding — returning true here would
-	// silently drop the entire result set (fail-open in a security gate).
-	matched := false
-
-	// Check rule ID (supports wildcard suffix)
-	if rule.RuleID != "" {
-		if strings.HasSuffix(rule.RuleID, "*") {
-			prefix := strings.TrimSuffix(rule.RuleID, "*")
-			if !strings.HasPrefix(f.RuleID, prefix) {
-				return false
-			}
-		} else if rule.RuleID != f.RuleID {
-			return false
-		}
-		matched = true
-	}
-
-	// Check path pattern. A path rule can only match a finding that has a path.
-	if rule.PathPattern != "" {
-		if f.Location == nil || f.Location.Path == "" {
-			return false
-		}
-		if !matchGlobPattern(rule.PathPattern, f.Location.Path) {
-			return false
-		}
-		matched = true
-	}
-
-	return matched
-}
-
-// matchGlobPattern provides simple glob matching with ** support.
-func matchGlobPattern(pattern, path string) bool {
-	// Handle ** patterns
-	if strings.Contains(pattern, "**") {
-		parts := strings.Split(pattern, "**")
-		if len(parts) == 2 {
-			prefix := strings.TrimSuffix(parts[0], "/")
-			suffix := strings.TrimPrefix(parts[1], "/")
-
-			if prefix != "" && !strings.HasPrefix(path, prefix) {
-				return false
-			}
-			if suffix != "" && !strings.HasSuffix(path, suffix) {
-				return false
-			}
-			return true
-		}
-	}
-
-	// Simple wildcard matching
-	if strings.HasSuffix(pattern, "*") {
-		prefix := strings.TrimSuffix(pattern, "*")
-		return strings.HasPrefix(path, prefix)
-	}
-
-	return pattern == path
 }
 
 // =============================================================================

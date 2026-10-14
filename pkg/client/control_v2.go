@@ -18,7 +18,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -352,41 +351,6 @@ func IsCommandGone(err error) bool {
 // =============================================================================
 // Suppressions
 // =============================================================================
-
-// suppressionCache keeps the last suppression list and its ETag, revalidated
-// with If-None-Match.
-type suppressionCache struct {
-	mu    sync.Mutex
-	etag  string
-	rules []SuppressionRule
-}
-
-func (c *Client) suppressionsV2(ctx context.Context) ([]SuppressionRule, error) {
-	c.supp.mu.Lock()
-	etag, cached := c.supp.etag, c.supp.rules
-	c.supp.mu.Unlock()
-	var extra http.Header
-	if etag != "" {
-		extra = http.Header{"If-None-Match": []string{etag}}
-	}
-	var list protov2.SuppressionList
-	hdr, err := c.v2JSON(ctx, http.MethodGet, protov2.PathPrefix+protov2.SuppressionsPath, nil, &list, extra, c.maxRetries)
-	if err != nil {
-		var ve *V2Error
-		if errors.As(err, &ve) && ve.Status == http.StatusNotModified {
-			return append([]SuppressionRule(nil), cached...), nil
-		}
-		return nil, err
-	}
-	rules := make([]SuppressionRule, 0, len(list.Rules))
-	for _, r := range list.Rules {
-		rules = append(rules, SuppressionRule{RuleID: r.RuleID, ToolName: r.ToolName, PathPattern: r.PathPattern, AssetID: r.AssetID, ExpiresAt: r.ExpiresAt})
-	}
-	c.supp.mu.Lock()
-	c.supp.etag, c.supp.rules = hdr.Get("ETag"), rules
-	c.supp.mu.Unlock()
-	return append([]SuppressionRule(nil), rules...), nil
-}
 
 // =============================================================================
 // Fingerprint queries
