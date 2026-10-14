@@ -8,6 +8,32 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.33.0 — 2026-10-14
+
+### Added: the scan-target guard checks each target by the scanner that receives it
+
+- `ScanTargetPolicy.ByScanner` checks each target of a scan command by its scanner (`ScanTargetPolicy.ValidateFor`): a code scanner's path is confined to the allowed roots (relative paths in the first root), a trivy image gets its registry host checked, and every other scanner is a network scanner whose target must be a URL, host, `host:port`, address or range, a name that does not resolve being refused. `ValidateNetworkTarget` and `IsCodeScanner` are exported for checks outside the executor. Off (the default), targets are checked by their shape as before.
+- A target the executor's built-in check refuses is listed in `metadata.refused_targets` with rule `target_guard` (`RefusedTargetRuleGuard`), so the platform can count the targets the sensor's target guard refused; its outcome stays skipped/refused, and the command runs on the other targets.
+- A path inside an allowed scan root that is a sensitive directory (`/etc`, `~/.ssh`, ...) is refused too, as it is without roots.
+- The conformance suite has a `TargetGuard` check (`SuiteOptions.GuardScanner`, `GuardTarget`): a scan mixing a good target with refused ones completes on the good one, lists each refused target with a reason and settles it skipped/refused; a scan of refused targets only fails.
+
+### Added: run a list tool in waves of whole hosts, releasing each wave's hosts as it ends
+
+- `core.PlanWaves(targets, network, maxWaves)` cuts a target list into at most `maxWaves` waves of whole hosts (`politeness.Group`): every target of one host is in one wave, waves are balanced by target count and keep the targets' order.
+- `core.RunWaves(ctx, targets, network, maxWaves, fn, done)` runs `fn` once per wave, one after the other, and settles a wave's targets as soon as its run succeeds (`done`, or the job's `TargetDone` when nil). A failed wave and the waves after it are not settled: their targets stay unfinished and go out again, while the earlier waves keep their results. The local queue frees those hosts at once and reports them as `released_keys`, so the next tool of a pipeline starts on them while later waves run.
+- For tools that report no per-target end while they run (nuclei runs every template over every host and its output gives no "host finished" signal); a tool that streams per-target results keeps calling `TargetDone` as each one ends.
+- Needs ctis with `politeness.Group`.
+
+### Fixed: `SENSOR_JOB_ID` is in the SDK settings registry
+
+- `RegisterSDKSettings` registers `SENSOR_JOB_ID` (`EnvJobID`, group `runtime`), the variable a kit-based sensor reads to run one platform command and exit. The config report now lists it, `docs/SETTINGS.md` documents it, and a sensor started with it no longer gets a `config.env_unknown` check for it.
+- Sensors that register `SENSOR_JOB_ID` themselves must drop that line when they move to this release: the registry refuses a name registered twice.
+
+### Fixed: `openctem tool init` marks the standard params scan-scoped
+
+- The `tool.yaml` that `openctem tool init` writes declares each of the capability's standard params (for example `ports`, `top_n`, `rate` of `scan.ports@1`) with `x-octm-scope: scan`. Without it they defaulted to the sensor scope, so a scan that set one of them was refused ("may be set only in the sensor's settings, not by a scan").
+- Migration: a tool scaffolded with an earlier release adds `"x-octm-scope": "scan"` to each standard param in its `config` schema.
+
 ## v0.32.0 — 2026-10-14
 
 ### Upgrade notes
