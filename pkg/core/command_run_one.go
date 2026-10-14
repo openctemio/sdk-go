@@ -42,6 +42,7 @@ func (p *CommandPoller) RunClaimed(ctx context.Context, cmd *Command) error {
 	}
 	meta := parseCommandMeta(cmd)
 	p.queue.admit(cmd.ID, commandHosts(meta), 0, time.Now())
+	p.queue.track(cmd.ID, commandTargets(meta), meta.NetworkID)
 	select {
 	case p.sem <- struct{}{}:
 	case <-ctx.Done():

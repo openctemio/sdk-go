@@ -51,8 +51,8 @@ func TestQueueReportsProgressOfHeldCommands(t *testing.T) {
 	}
 	p := NewProgress(4)
 	p.TargetDone("a")
-	q.setProgress("c1", p)
-	q.setProgress("c2", NewProgress(0)) // nothing known: not reported
+	q.setProgress("c1", p, nil)
+	q.setProgress("c2", NewProgress(0), nil) // nothing known: not reported
 	got := q.progress()
 	if len(got) != 1 || !sameCounts(got["c1"], CommandProgress{Done: 1, Total: 4}) {
 		t.Fatalf("got %+v", got)

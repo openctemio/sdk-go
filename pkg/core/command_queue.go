@@ -81,9 +81,20 @@ type heldCommand struct {
 	id        string
 	claimedAt time.Time
 	started   bool
-	hosts     []string
-	cancel    context.CancelCauseFunc
-	progress  *Progress
+	// hosts are the politeness keys the command still holds: its keys at
+	// admission minus those its settled targets released.
+	hosts    []string
+	cancel   context.CancelCauseFunc
+	progress *Progress
+	// holding tracks which keys the command's pending targets still need
+	// (politeness.Holding); nil until its targets are known.
+	holding *politeness.Holding
+	// network scopes the keys of its targets (commandMeta.NetworkID).
+	network string
+	// released are the keys its settled targets released, reported on the
+	// heartbeat (CommandProgress.ReleasedKeys): sorted, at most
+	// politeness.MaxKeys.
+	released []string
 }
 
 // localQueue tracks held commands and per-host politeness. Safe for
@@ -122,6 +133,55 @@ func (q *localQueue) admit(id string, hosts []string, perHost int, now time.Time
 	return true
 }
 
+// track starts releasing the held command's keys target by target: a key
+// is freed once a settled target produced it and no pending target does
+// (politeness.Holding). targets are the command's targets in network.
+// Called again with the job's own target list (Progress.SetTargets: the
+// targets the executor runs, as it reports them done), it starts over
+// from the keys still held.
+func (q *localQueue) track(id string, targets []string, network string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	hc := q.held[id]
+	if hc == nil || len(hc.hosts) == 0 {
+		return
+	}
+	hc.network = network
+	hc.holding = politeness.NewHolding(hc.hosts, targets, network)
+}
+
+// settle records that target of the held command id ended and frees the
+// keys no pending target of it needs any more. A target the command does
+// not have, or one settled before, frees nothing. Reports whether a key
+// was freed.
+func (q *localQueue) settle(id, target string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	hc := q.held[id]
+	if hc == nil || hc.holding == nil {
+		return false
+	}
+	freed := hc.holding.Settle(target)
+	if len(freed) == 0 {
+		return false
+	}
+	for _, h := range freed {
+		if q.byHost[h]--; q.byHost[h] <= 0 {
+			delete(q.byHost, h)
+		}
+		if i := slices.Index(hc.hosts, h); i >= 0 {
+			hc.hosts = slices.Delete(hc.hosts, i, i+1)
+		}
+	}
+	hc.released = append(hc.released, freed...)
+	slices.Sort(hc.released)
+	hc.released = slices.Compact(hc.released)
+	if len(hc.released) > politeness.MaxKeys {
+		hc.released = hc.released[:politeness.MaxKeys]
+	}
+	return true
+}
+
 // forget drops a held command and frees its hosts.
 func (q *localQueue) forget(id string) {
 	q.mu.Lock()
@@ -146,12 +206,31 @@ func (q *localQueue) setCancel(id string, cancel context.CancelCauseFunc) {
 	}
 }
 
-func (q *localQueue) setProgress(id string, p *Progress) {
+// setProgress attaches the held command's progress. With onFreed, the
+// targets the job reports done free their hosts at once (settle), and
+// onFreed is called (outside the queue's lock) when one did.
+func (q *localQueue) setProgress(id string, p *Progress, onFreed func()) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
-	if hc := q.held[id]; hc != nil {
+	hc := q.held[id]
+	if hc != nil {
 		hc.progress = p
 	}
+	network := ""
+	if hc != nil {
+		network = hc.network
+	}
+	q.mu.Unlock()
+	if hc == nil || p == nil {
+		return
+	}
+	p.observe(progressObserver{
+		targets: func(targets []string) { q.track(id, targets, network) },
+		done: func(target string) {
+			if q.settle(id, target) && onFreed != nil {
+				onFreed()
+			}
+		},
+	})
 }
 
 // progress is the progress of every held command that reports one; nil
@@ -167,6 +246,9 @@ func (q *localQueue) progress() map[string]CommandProgress {
 		snap := hc.progress.Snapshot()
 		if snap.Total == 0 && snap.Done == 0 {
 			continue
+		}
+		if len(hc.released) > 0 {
+			snap.ReleasedKeys = slices.Clone(hc.released)
 		}
 		if out == nil {
 			out = make(map[string]CommandProgress, len(q.held))
