@@ -8,6 +8,45 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.32.0 — 2026-10-14
+
+### Upgrade notes
+
+- Platforms must accept the ctis `egress_refused` class (ctis with `outcome.EgressRefused`) before sensors built on this release report it; an older platform reads such a target as unfinished and hands it out again.
+
+- Breaking for a caller of the removed functions: drop the call; the platform already leaves suppressed and decided findings out of its views and gate.
+
+### Behaviour change: a target the confinement kept the tool from reaching is not "done"
+
+- When the forwarder's scope refused every connection a tool made toward a target, the tool host settles that target as failed with the class `egress_refused` (`tool.EgressRefused`, ctis `outcome.EgressRefused`) and the task is at best partial; when it refused every connection of the task, every target the tool reported done is settled so. The task log has one line with the count. `toolhost.Outcome.EgressTally` and `egress.Forwarder.Tally` give the counts per target.
+
+### Removed: the client-side suppression filter
+
+- `Client.GetSuppressions`, `Client.FilterSuppressedFindings` and `client.SuppressionRule` are removed. Nothing called them, and filtering on a sensor would hide matches from the platform, which decides known false positives itself (rules, triage status, gate) and must see every match to notice when flagged code changes. The wire protocol is unchanged: `GET /api/v2/sensor/suppressions`, the v3 `GetSuppressions` RPC and their types stay for platform compatibility.
+
+### Added: offline sigstore signature check for downloaded content (pkg/blobsig)
+
+- `blobsig.Verify` / `VerifyDigest` check a cosign keyless bundle (`cosign sign-blob --bundle`) for a file. The certificate must chain to the Sigstore public good Fulcio roots, the signature must have a Rekor inclusion proof and signed timestamp, and the certificate identity must equal the expected OIDC issuer and subject exactly. `blobsig.GitHubWorkflow(repo, workflow, ref)` builds the identity of a GitHub Actions release workflow.
+- The trust root (`trusted_root.json`) is embedded, so verification needs no network. It is refreshed with SDK releases.
+- New dependency: `github.com/sigstore/sigstore-go` v1.3.0.
+
+### Added: content delivery from the platform with delta installs (contentcache, client)
+
+- `contentcache.HTTPFetcher` gets content from the platform's sensor content routes (`/api/v2/sensor/content`): the desired-state document, packs by digest, a pack's file index, and files by sha256. `Client.ContentFetcher()` builds one on the sensor's connection and credentials.
+- **Delta installs.** When the fetcher serves indexes, a new version of a pack is built from the files the cache already holds plus the changed files it fetches. The rebuilt canonical archive must match the signed digest and size, so integrity is the same as a full download, and any mismatch falls back to the full archive. Each held pack records its file index (`.openctem-index.json`); an archive may not contain that name.
+- **Conditional desired state.** `HTTPFetcher.Desired` sends the last `ETag`. A 304 costs no body and reuses the last document.
+- **Prefetch.** `Cache.Prefetch` syncs the desired set on a jittered schedule (±20%, with a random first run) and at once on a wake-up, so scans find their content already held.
+- **Stats.** `Cache.Stats()` reports hits (held, nothing fetched), misses, delta installs, bytes downloaded and bytes saved.
+
+### Fixed: a confined port scan reaches its target names' addresses
+
+- A tool that resolves a target name itself through the task forwarder's DNS and dials the address it got (naabu over SOCKS5) was refused (`IP is not a target`) on every connection, so a confined port scan found nothing. The forwarder now admits the addresses an admitted name is pinned to: each address alone (never its range), with the same ports and scope limits as its names, never a metadata or link-local address. Names are still never resolved again, so a rebound DNS answer cannot move a target.
+
+### Documentation: README matches v0.31
+
+- The README no longer says the old `AGENT_*` names are applied with a warning: a sensor refuses to start while a removed name is set and names its replacement.
+- The README describes protocol v3 (gRPC or HTTPS) as the default with v2 as fallback, lists `SENSOR_TRANSPORT`, `SENSOR_SANDBOX`, `SENSOR_SANDBOX_NETWORK`, `SENSOR_KEY_BIND` and the local-policy variables, and states the GPL-3.0 license the `LICENSE` file carries.
+
 ## v0.31.0 — 2026-10-14
 
 ### Upgrade notes
