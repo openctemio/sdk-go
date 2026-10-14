@@ -8,6 +8,28 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.28.0 — 2026-10-14
+
+### Added: liveness counters in the heartbeat's command progress
+
+- `core.CommandProgress` carries `records`, `output_bytes` and `cpu_ms` next to `done`/`total`/`finished`: the records the tool host accepted for the job and their bytes, and the CPU time of the job's tool processes with the processes they start (read from `/proc` on Linux; 0 elsewhere). All are monotonic for the job and left out while zero.
+- `pkg/sensorkit/toolhost` counts each accepted record (`core.RecordOutput`) and tracks the tool process (`core.TrackProcess`); `core.ExecuteScanner` / `StreamScanner` track the scanner process.
+- The platform calls a task stalled only when none of these and the settled targets moved for its stall window, so a slow but working batch tool is not taken back. The counters are hints: they can delay a stall decision, never a task's overrun or a run's cap.
+
+### Added: the platform can ask for what a stalled task finished
+
+- A heartbeat answer may carry `stop_command_ids`: held commands the platform asks the sensor to stop and complete with what they finished (the task stalled). The poller cancels the run with `core.ErrStoppedByPlatform`; the tool host treats it like a stop by the job's own budget (the settled targets' records are delivered, the task ends `partial` with the rest in `unfinished_targets`), the executor parses and pushes under a context the stop does not end, and the result is reported, not released. A run that settled nothing is reported failed, and the platform re-queues it.
+- `cancel_command_ids` is unchanged: a canceled command delivers nothing and is released.
+- Needs the heartbeat doorbell (on by default); a sensor without it ignores stops, and the platform re-queues the task after a grace period.
+
+### Added: per-target outcomes in the command result
+
+- A completed scan command's result carries `target_outcomes`: one entry per target of the job, in the ctis `outcome` contract (`done`, `failed` with `unreachable` / `timeout` / `tool_error`, `skipped` with `refused` / `excluded`, `unfinished`). The platform settles every target with an outcome and hands out only the unfinished ones again, instead of rerunning the whole task.
+- `pkg/sensorkit/toolhost`: a run that delivers (ok or partial) writes the same list into the report's `target_outcomes` property, from each target's settled state and error class, plus the unfinished targets of a run that stopped part-way. A failed or canceled run carries none.
+- `pkg/core`: `TargetOutcomes` builds the list from a report (explicit outcomes, `unfinished_targets`, `failed_targets`; any other target of the run is done). Targets a policy refused before the run are `skipped`/`refused`; a target the scan-target policy rewrote (a resolved path) is named by the payload's own value.
+- `pkg/testkit`: `Normalize` removes the `target_outcomes` property (the tool host's stamp, absent in-process).
+- ctis bumped to the version with the `outcome` package.
+
 ## v0.27.0 — 2026-10-14
 
 ### Removed: the `github.com/openctemio/sdk-go/pkg/politeness` module
