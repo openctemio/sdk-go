@@ -52,7 +52,7 @@ func scanSettings(schema *SettingsSchema, config map[string]any) (settings *Tool
 		if isExecutorConfigKey(k) {
 			continue
 		}
-		if schema != nil && settingNameRE.MatchString(k) && schema.Property(k) != nil {
+		if schema != nil && isSettingName(k) && schema.Property(k) != nil {
 			layer[k] = v
 			continue
 		}
@@ -70,7 +70,7 @@ func scanSettings(schema *SettingsSchema, config map[string]any) (settings *Tool
 }
 
 func ignoredKeyName(k string) string {
-	if settingNameRE.MatchString(k) {
+	if isSettingName(k) {
 		return k
 	}
 	return invalidConfigKey
