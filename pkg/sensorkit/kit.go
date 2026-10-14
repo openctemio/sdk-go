@@ -510,18 +510,7 @@ func New(opts Options) (*Kit, error) {
 	if s.pollInterval <= 0 {
 		s.pollInterval = DefaultCommandPollInterval
 	}
-	switch {
-	case opts.Tools != nil:
-		if len(opts.Tools) > 0 {
-			s.allow = opts.Tools
-		}
-	default:
-		s.allow = ParseToolList(os.Getenv(EnvTools))
-		if s.allow != nil {
-			_, _ = fmt.Fprintf(k.errw, "Warning: %s is deprecated: it only narrows the installed tools and will be removed; "+
-				"narrow with the local policy's tools.allow instead\n", EnvTools)
-		}
-	}
+	k.resolveAllowlist(opts.Tools)
 
 	s.name = firstNonEmpty(opts.Name, os.Getenv(EnvSensorName))
 	if s.name == "" {
@@ -891,6 +880,22 @@ func (k *Kit) Sensor() *core.BaseSensor { return k.sensor }
 
 // Name is the sensor's name.
 func (k *Kit) Name() string { return k.s.name }
+
+// resolveAllowlist sets the tools allowlist: Options.Tools, else the
+// deprecated SENSOR_TOOLS (with a warning). An empty non-nil Tools sets none.
+func (k *Kit) resolveAllowlist(tools []string) {
+	if tools != nil {
+		if len(tools) > 0 {
+			k.s.allow = tools
+		}
+		return
+	}
+	k.s.allow = ParseToolList(os.Getenv(EnvTools))
+	if k.s.allow != nil {
+		_, _ = fmt.Fprintf(k.errw, "Warning: %s is deprecated: it only narrows the installed tools and will be removed; "+
+			"narrow with the local policy's tools.allow instead\n", EnvTools)
+	}
+}
 
 // allowed reports whether the allowlist lets e through. Built-ins are not
 // subject to it.
