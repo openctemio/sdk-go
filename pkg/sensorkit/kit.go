@@ -1217,6 +1217,10 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// (through the scan target policy), templates, callbacks, rate and
 	// run time.
 	executor.SetLocalPolicy(k.LocalPolicy())
+	// Code-scan jobs ask the platform for their source's credential.
+	if sc, ok := any(k.client).(core.SourceCredentials); ok {
+		executor.SetSourceCredentials(sc)
+	}
 	k.executor.Store(executor)
 	if r := k.opts.CommandAssetResolver; r != nil {
 		executor.SetAssetResolver(r)

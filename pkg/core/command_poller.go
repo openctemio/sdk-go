@@ -20,6 +20,8 @@ import (
 	"unicode"
 
 	"github.com/openctemio/ctis/outcome"
+	ctissource "github.com/openctemio/ctis/source"
+
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
 	"github.com/openctemio/sdk-go/pkg/reach"
@@ -148,6 +150,12 @@ type ScanCommandPayload struct {
 	// HTTPPolicy is the organization's narrowing of its tools' requests
 	// (OrgHTTPPolicy); the local policy decides first.
 	HTTPPolicy *OrgHTTPPolicy `json:"http_policy,omitempty"`
+	// Source is the repository a code-scan job fetches before the scan
+	// (api RFC-091): the executor fetches exactly that commit read-only
+	// into the scan workspace (pkg/source), scans the checkout instead of
+	// Target, reports the findings on the repository Target names with the
+	// source's branch and commit as a full scan, and removes the checkout.
+	Source *ctissource.Repository `json:"source,omitempty"`
 	// Exclusions are the scope exclusions that touch the job's targets
 	// (addresses, CIDR prefixes, "first-last" ranges), covered by the job
 	// signature with the rest of the payload. The sensor cuts its range
@@ -1329,6 +1337,9 @@ type DefaultCommandExecutor struct {
 	sensorID atomic.Pointer[string]
 	// local is the sensor-local policy (SetLocalPolicy); nil: none.
 	local atomic.Pointer[LocalPolicy]
+	// sourceCreds fetches the credential of a code-scan job's source
+	// (SetSourceCredentials); nil refuses jobs whose source names one.
+	sourceCreds atomic.Pointer[sourceCredentialsBox]
 }
 
 // SetLocalPolicy makes the executor enforce the sensor-local policy (api
@@ -1533,6 +1544,18 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		return nil, fmt.Errorf("scanner not found: %s", payload.Scanner)
 	}
 
+	// A code-scan job: fetch the source first and scan the checkout. The
+	// repository the platform named stays the findings' asset.
+	var src *fetchedSource
+	if payload.Source != nil {
+		fs, err := e.fetchSource(ctx, cmd, &payload)
+		if err != nil {
+			return nil, err
+		}
+		defer fs.remove()
+		src = fs
+	}
+
 	// SECURITY: targets are server-supplied. Validate every one before any
 	// scanner sees it: SSRF blocklist for network targets, confinement for
 	// filesystem targets, and no leading '-' (flag injection).
@@ -1690,10 +1713,24 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// only) output is a scan that found nothing; anything else must be read by
 	// a parser, or the command fails: reporting it as 0 findings would hide
 	// real results behind a "completed" scan.
+	if err := e.pushScanResult(ctx, scanner, scanResult, target, targets, refusedTargets, &payload, src, result); err != nil {
+		return result, err
+	}
+
+	return result, nil
+}
+
+// pushScanResult parses a scan's output and pushes the report (nothing when
+// no pusher is configured), counting the findings and recording each
+// target's outcome (targets, with the refused ones) on result. A code-scan job
+// (src) reports on its repository as a full scan of the source's branch, an
+// empty report included.
+func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Scanner, scanResult *ScanResult, target string,
+	targets []string, refusedTargets []RefusedTarget, payload *ScanCommandPayload, src *fetchedSource, result *CommandExecutionResult) error {
 	if e.pusher != nil && len(bytes.TrimSpace(scanResult.RawOutput)) > 0 {
 		parser, err := e.parsers.ForScanner(scanner.Name(), scanResult.RawOutput)
 		if err != nil {
-			return result, fmt.Errorf("parse failed: %w", err)
+			return fmt.Errorf("parse failed: %w", err)
 		}
 		parseOpts := &ParseOptions{ToolName: scanner.Name()}
 		if target != "" && filepath.IsAbs(target) {
@@ -1704,9 +1741,12 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		if e.assetResolver != nil && target != "" {
 			parseOpts.AssetType, parseOpts.AssetValue = e.assetResolver(payload.Scanner, target)
 		}
+		if src != nil {
+			parseOpts.AssetType, parseOpts.AssetValue = ctis.AssetTypeRepository, src.repository
+		}
 		report, err := parser.Parse(ctx, scanResult.RawOutput, parseOpts)
 		if err != nil {
-			return result, fmt.Errorf("parse failed (%s parser): %w", parser.Name(), err)
+			return fmt.Errorf("parse failed (%s parser): %w", parser.Name(), err)
 		}
 		if report.Tool == nil || report.Tool.Name == "" {
 			if report.Tool == nil {
@@ -1718,15 +1758,22 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		result.FindingsCount = len(report.Findings)
 		result.TargetOutcomes = payload.outcomes(TargetOutcomes(targets, report), refusedTargets)
 		report.Metadata.CoverageType = reachCoverageType(ctx, scanCoverageType(report, scanResult))
+		src.annotate(report)
 
 		// Push findings
 		_, err = e.pusher.PushFindings(ctx, report)
 		if err != nil {
-			return result, fmt.Errorf("push failed: %w", err)
+			return fmt.Errorf("push failed: %w", err)
+		}
+	} else if e.pusher != nil && src != nil {
+		// A full scan of a branch that found nothing still reports, so the
+		// platform marks what this tool no longer sees there as fixed.
+		if _, err := e.pusher.PushFindings(ctx, src.emptyReport(scanner.Name())); err != nil {
+			return fmt.Errorf("push failed: %w", err)
 		}
 	}
 
-	return result, nil
+	return nil
 }
 
 // withJobTimeout bounds a job's context by timeout (none when 0) and also

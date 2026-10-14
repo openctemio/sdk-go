@@ -367,6 +367,22 @@ type CommandList struct {
 	Commands []Command `json:"commands"`
 }
 
+// SourceCredentialAction is the action of POST /commands/{id}/source-credential:
+// the sensor holding a code-scan command's lease (HeaderLeaseEpoch) asks for
+// the short-lived, read-only credential of the command's repository source
+// (api RFC-091). The platform mints it for that one repository on each call
+// and never stores it. Not carried by protocol v3: it stays on v2 HTTPS.
+const SourceCredentialAction = "source-credential"
+
+// SourceCredentialResponse is the answer of POST /commands/{id}/source-credential:
+// HTTP basic credentials for the clone URL (for a GitHub App installation
+// token the username is "x-access-token").
+type SourceCredentialResponse struct {
+	Username  string     `json:"username"`
+	Password  string     `json:"password"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
 // CompleteRequest is the body of POST /commands/{id}/complete.
 type CompleteRequest struct {
 	Result json.RawMessage `json:"result,omitempty"`
