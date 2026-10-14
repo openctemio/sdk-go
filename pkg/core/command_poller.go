@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/openctemio/ctis/outcome"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
 	"github.com/openctemio/sdk-go/pkg/reach"
@@ -98,6 +99,10 @@ type CommandResult struct {
 	// Refusal is set when a policy refused the command (RefusalOf): it was
 	// never run, or was stopped by the kill switch.
 	Refusal *Refusal `json:"refusal,omitempty"`
+	// TargetOutcomes is how each target of a completed scan command ended
+	// (ctis outcome.ResultKey): the platform settles the targets with an
+	// outcome and hands out only the unfinished ones again.
+	TargetOutcomes []outcome.Target `json:"target_outcomes,omitempty"`
 }
 
 // GetCommandsResponse is the response from GetCommands.
@@ -119,7 +124,11 @@ type ScanCommandPayload struct {
 	TimeoutSeconds int                    `json:"timeout_seconds,omitempty"`
 	// Budget is the task's layered budget (per target, per task); nil
 	// from a platform that sends none (budget.go).
-	Budget          *TaskBudget        `json:"budget,omitempty"`
+	Budget *TaskBudget `json:"budget,omitempty"`
+	// aliases maps a validated target to the payload's own value when the
+	// scan-target policy rewrote it (a resolved path): per-target outcomes
+	// name the payload's values (validateScanTargets).
+	aliases         map[string]string
 	ReportProgress  bool               `json:"report_progress,omitempty"`
 	CustomTemplates []EmbeddedTemplate `json:"custom_templates,omitempty"`
 	// CustomTemplatesEnvelope is the platform's signed manifest of
@@ -257,6 +266,9 @@ type CommandExecutionResult struct {
 	FindingsCount int
 	ExitCode      int
 	Metadata      map[string]interface{}
+	// TargetOutcomes is how each of a scan job's targets ended, in job
+	// order (target_outcomes.go); nil for other commands.
+	TargetOutcomes []outcome.Target
 }
 
 // CommandPoller polls the server for pending commands.
@@ -1222,6 +1234,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 			reportResult.FindingsCount = result.FindingsCount
 			reportResult.ExitCode = result.ExitCode
 			reportResult.Metadata = result.Metadata
+			reportResult.TargetOutcomes = result.TargetOutcomes
 		}
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Command %s completed (findings: %d)\n", cmd.ID, reportResult.FindingsCount)
@@ -1237,6 +1250,9 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		}
 		for k, v := range RefusedTargetsMetadata(refused) {
 			reportResult.Metadata[k] = v
+		}
+		if err == nil && reportResult.TargetOutcomes != nil {
+			reportResult.TargetOutcomes = append(skippedOutcomes(admission.Refused), reportResult.TargetOutcomes...)
 		}
 	}
 	addReachMetadata(reportResult, reached)
@@ -1657,6 +1673,10 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// result says which hosts and why.
 	maps.Copy(result.Metadata, CoverageGapsMetadata(scanResult))
 
+	// Every target is done unless the report marks it (refused, failed,
+	// unfinished); the report's marks are added once it is parsed.
+	result.TargetOutcomes = payload.outcomes(TargetOutcomes(targets, nil), refusedTargets)
+
 	// Parse and push results if pusher is configured. Empty (or whitespace-
 	// only) output is a scan that found nothing; anything else must be read by
 	// a parser, or the command fails: reporting it as 0 findings would hide
@@ -1687,6 +1707,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		}
 
 		result.FindingsCount = len(report.Findings)
+		result.TargetOutcomes = payload.outcomes(TargetOutcomes(targets, report), refusedTargets)
 		report.Metadata.CoverageType = reachCoverageType(ctx, scanCoverageType(report, scanResult))
 
 		// Push findings
@@ -1769,6 +1790,14 @@ func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payloa
 		if !seen[v] {
 			seen[v] = true
 			out = append(out, v)
+		}
+		if v != t {
+			if payload.aliases == nil {
+				payload.aliases = map[string]string{}
+			}
+			if _, ok := payload.aliases[v]; !ok {
+				payload.aliases[v] = t
+			}
 		}
 	}
 	if len(out) == 0 {
