@@ -247,55 +247,7 @@ func hostile(mode string) int {
 		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
 		return 0
 	case "socks-probe":
-		// A port scanner's way out: it resolves its target name itself
-		// (through the sandbox's resolver, the forwarder's DNS) and dials the
-		// address it got over SOCKS5; then an address it was not given. With
-		// TOOLHOST_OUTSIDE_ONLY it dials only the outside address. The
-		// results go in the finding title.
-		proxyAddr := strings.TrimPrefix(os.Getenv("ALL_PROXY"), "http://")
-		socks := func(ip net.IP, port int) string {
-			c, err := net.DialTimeout("tcp", proxyAddr, 3*time.Second)
-			if err != nil {
-				return "noproxy"
-			}
-			defer c.Close()
-			_ = c.SetDeadline(time.Now().Add(5 * time.Second))
-			req := []byte{5, 1, 0}
-			if _, err := c.Write(req); err != nil {
-				return "err"
-			}
-			var greet [2]byte
-			if _, err := io.ReadFull(c, greet[:]); err != nil {
-				return "err"
-			}
-			msg := []byte{5, 1, 0, 1}
-			msg = append(msg, ip.To4()...)
-			msg = append(msg, byte(port>>8), byte(port))
-			if _, err := c.Write(msg); err != nil {
-				return "err"
-			}
-			var rep [10]byte
-			if _, err := io.ReadFull(c, rep[:]); err != nil {
-				return "err"
-			}
-			if rep[1] == 0 {
-				return "ok"
-			}
-			return "refused"
-		}
-		port, _ := strconv.Atoi(os.Getenv("TOOLHOST_PORT"))
-		var res []string
-		if os.Getenv("TOOLHOST_OUTSIDE_ONLY") == "" {
-			ips, err := net.DefaultResolver.LookupIP(context.Background(), "ip4", os.Getenv("TOOLHOST_NAME"))
-			if err != nil || len(ips) == 0 {
-				res = append(res, "dns=fail")
-			} else {
-				res = append(res, "dns=ok", "target="+socks(ips[0], port))
-			}
-		}
-		res = append(res, "outside="+socks(net.IPv4(192, 0, 2, 1), 80))
-		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
-		return 0
+		return socksProbe()
 	case "limits-probe":
 		// HTTP requests to its path-limited target through the proxy it was
 		// given (inside and outside the prefix), and a CONNECT to another
@@ -763,4 +715,57 @@ func TestStoppedByPlatformKeepsSettledTargets(t *testing.T) {
 	if len(out.Report.Findings) != 1 || len(out.Unfinished) != 1 || out.Unfinished[0] != "b.example" {
 		t.Fatalf("findings %d unfinished %v", len(out.Report.Findings), out.Unfinished)
 	}
+}
+
+// socksProbe is the hostile tool's "socks-probe" mode.
+func socksProbe() int {
+	// A port scanner's way out: it resolves its target name itself
+	// (through the sandbox's resolver, the forwarder's DNS) and dials the
+	// address it got over SOCKS5; then an address it was not given. With
+	// TOOLHOST_OUTSIDE_ONLY it dials only the outside address. The
+	// results go in the finding title.
+	proxyAddr := strings.TrimPrefix(os.Getenv("ALL_PROXY"), "http://")
+	socks := func(ip net.IP, port int) string {
+		c, err := net.DialTimeout("tcp", proxyAddr, 3*time.Second)
+		if err != nil {
+			return "noproxy"
+		}
+		defer c.Close()
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		req := []byte{5, 1, 0}
+		if _, err := c.Write(req); err != nil {
+			return "err"
+		}
+		var greet [2]byte
+		if _, err := io.ReadFull(c, greet[:]); err != nil {
+			return "err"
+		}
+		msg := []byte{5, 1, 0, 1}
+		msg = append(msg, ip.To4()...)
+		msg = append(msg, byte(port>>8), byte(port))
+		if _, err := c.Write(msg); err != nil {
+			return "err"
+		}
+		var rep [10]byte
+		if _, err := io.ReadFull(c, rep[:]); err != nil {
+			return "err"
+		}
+		if rep[1] == 0 {
+			return "ok"
+		}
+		return "refused"
+	}
+	port, _ := strconv.Atoi(os.Getenv("TOOLHOST_PORT"))
+	var res []string
+	if os.Getenv("TOOLHOST_OUTSIDE_ONLY") == "" {
+		ips, err := net.DefaultResolver.LookupIP(context.Background(), "ip4", os.Getenv("TOOLHOST_NAME"))
+		if err != nil || len(ips) == 0 {
+			res = append(res, "dns=fail")
+		} else {
+			res = append(res, "dns=ok", "target="+socks(ips[0], port))
+		}
+	}
+	res = append(res, "outside="+socks(net.IPv4(192, 0, 2, 1), 80))
+	fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
+	return 0
 }
