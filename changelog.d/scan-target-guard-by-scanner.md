@@ -1,6 +1,0 @@
-### Added: the scan-target guard checks each target by the scanner that receives it
-
-- `ScanTargetPolicy.ByScanner` checks each target of a scan command by its scanner (`ScanTargetPolicy.ValidateFor`): a code scanner's path is confined to the allowed roots (relative paths in the first root), a trivy image gets its registry host checked, and every other scanner is a network scanner whose target must be a URL, host, `host:port`, address or range, a name that does not resolve being refused. `ValidateNetworkTarget` and `IsCodeScanner` are exported for checks outside the executor. Off (the default), targets are checked by their shape as before.
-- A target the executor's built-in check refuses is listed in `metadata.refused_targets` with rule `target_guard` (`RefusedTargetRuleGuard`), so the platform can count the targets the sensor's target guard refused; its outcome stays skipped/refused, and the command runs on the other targets.
-- A path inside an allowed scan root that is a sensitive directory (`/etc`, `~/.ssh`, ...) is refused too, as it is without roots.
-- The conformance suite has a `TargetGuard` check (`SuiteOptions.GuardScanner`, `GuardTarget`): a scan mixing a good target with refused ones completes on the good one, lists each refused target with a reason and settles it skipped/refused; a scan of refused targets only fails.
