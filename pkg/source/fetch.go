@@ -20,6 +20,8 @@
 // repository) reaches git only through its environment as an HTTP header
 // scoped to the clone URL, never in argv (visible to every local user) or a
 // file in the checkout, and never reaches a scanner.
+//
+// Stability: Beta (docs/STABILITY.md).
 package source
 
 import (

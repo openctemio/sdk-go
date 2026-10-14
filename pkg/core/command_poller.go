@@ -1663,10 +1663,23 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// only) output is a scan that found nothing; anything else must be read by
 	// a parser, or the command fails: reporting it as 0 findings would hide
 	// real results behind a "completed" scan.
+	if err := e.pushScanResult(ctx, scanner, scanResult, target, &payload, src, result); err != nil {
+		return result, err
+	}
+
+	return result, nil
+}
+
+// pushScanResult parses a scan's output and pushes the report (nothing when
+// no pusher is configured), counting the findings on result. A code-scan job
+// (src) reports on its repository as a full scan of the source's branch, an
+// empty report included.
+func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Scanner, scanResult *ScanResult, target string,
+	payload *ScanCommandPayload, src *fetchedSource, result *CommandExecutionResult) error {
 	if e.pusher != nil && len(bytes.TrimSpace(scanResult.RawOutput)) > 0 {
 		parser, err := e.parsers.ForScanner(scanner.Name(), scanResult.RawOutput)
 		if err != nil {
-			return result, fmt.Errorf("parse failed: %w", err)
+			return fmt.Errorf("parse failed: %w", err)
 		}
 		parseOpts := &ParseOptions{ToolName: scanner.Name()}
 		if target != "" && filepath.IsAbs(target) {
@@ -1682,7 +1695,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		}
 		report, err := parser.Parse(ctx, scanResult.RawOutput, parseOpts)
 		if err != nil {
-			return result, fmt.Errorf("parse failed (%s parser): %w", parser.Name(), err)
+			return fmt.Errorf("parse failed (%s parser): %w", parser.Name(), err)
 		}
 		if report.Tool == nil || report.Tool.Name == "" {
 			if report.Tool == nil {
@@ -1698,17 +1711,17 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		// Push findings
 		_, err = e.pusher.PushFindings(ctx, report)
 		if err != nil {
-			return result, fmt.Errorf("push failed: %w", err)
+			return fmt.Errorf("push failed: %w", err)
 		}
 	} else if e.pusher != nil && src != nil {
 		// A full scan of a branch that found nothing still reports, so the
 		// platform marks what this tool no longer sees there as fixed.
 		if _, err := e.pusher.PushFindings(ctx, src.emptyReport(scanner.Name())); err != nil {
-			return result, fmt.Errorf("push failed: %w", err)
+			return fmt.Errorf("push failed: %w", err)
 		}
 	}
 
-	return result, nil
+	return nil
 }
 
 // withJobTimeout bounds a job's context by timeout (none when 0) and also
