@@ -3,7 +3,7 @@
 Go SDK for building sensors, tools and integrations for the OpenCTEM
 platform. Product documentation: https://docs.openctem.io.
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-blue?logo=go)](https://golang.org/)
 [![Go Reference](https://pkg.go.dev/badge/github.com/openctemio/sdk-go.svg)](https://pkg.go.dev/github.com/openctemio/sdk-go)
 
@@ -40,9 +40,14 @@ go run github.com/openctemio/sdk-go/cmd/sensor-migrate@v0.7.0 -dry-run   # revie
 go run github.com/openctemio/sdk-go/cmd/sensor-migrate@v0.7.0            # apply
 ```
 
-The SDK migrates a sensor's saved credentials and old `AGENT_*` settings by
-itself. Current SDK releases speak only sensor protocol v2 (protocol v1 is
-retired), so they need an OpenCTEM platform from 2026-10 on. See
+The SDK migrates a sensor's saved credentials by itself. The old setting
+names (`AGENT_ID`, `AGENT_NAME`, `AGENT_ALLOW_PRIVATE_TARGETS`, `API_URL`,
+`API_KEY`, `REGION`, `PLATFORM_KEY_AUTORENEW`,
+`OPENCTEM_SDK_ALLOW_PRIVATE_TARGETS`) are no longer read: a sensor refuses to
+start (exit 2) while one is set and names its replacement. Current SDK
+releases speak sensor protocol v3 (gRPC over mutual TLS, or HTTPS) and fall
+back to v2 on a platform without v3; protocol v1 is retired, so they need an
+OpenCTEM platform from 2026-10 on. See
 [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## Quick Start
@@ -146,6 +151,10 @@ one, the new key wins. Every heartbeat also carries the process's
 | Pairing code | `SENSOR_PAIRING_CODE` (`XXXX-XXXX`, from "expect a sensor"): a sensor with no identity attaches to it on first start; ignored once paired; never logged | none: the sensor prints a code to enter in the console |
 | Name | `SENSOR_NAME` | `sensor-<hostname>` |
 | Protocol | `SENSOR_PROTOCOL` = `auto`, `v2` (same; `v1` is retired and refused) | `auto` |
+| Transport (protocol v3) | `SENSOR_TRANSPORT` = `auto` (gRPC over mutual TLS, then HTTPS, then protocol v2), `grpc`, `https`, `v2` | `auto` |
+| Tool confinement | `SENSOR_SANDBOX` = `auto`, `required`, `off`; `SENSOR_SANDBOX_NETWORK` = `auto` (each task in its own network namespace where the host allows user namespaces), `required` (refuse to start without it), `off` | `auto` |
+| Key binding | `SENSOR_KEY_BIND` = `auto` (an API key is replaced by a signing key the sensor makes), `off` | `auto` |
+| Local policy | `SENSOR_LOCAL_POLICY` (file), `SENSOR_ALLOWED_RANGES` / `SENSOR_ALLOWED_PORTS` (shorthand), `SENSOR_REQUIRE_LOCAL_POLICY`, `SENSOR_KILL_SWITCH_FILE` | `/etc/openctem/sensor-policy.yaml` |
 | Concurrency cap | `SENSOR_MAX_JOBS` (1-100) | none: slots follow CPU, memory and tool cost |
 | Tool allowlist (deprecated) | `SENSOR_TOOLS` (comma-separated): only narrows the installed tools; built-ins (`sensorkit.Builtin()`) are kept. Use the local policy's `tools.allow` instead | none |
 | Drain grace | `SENSOR_DRAIN_GRACE` (1s-1h) | 30s |
@@ -159,7 +168,7 @@ one, the new key wins. Every heartbeat also carries the process's
 | Proxy for content and feeds | `SENSOR_CONTENT_PROXY` (URL or `direct`), else the platform setting | the platform setting |
 | Proxy variables for scanners | `SENSOR_SCAN_PROXY`: `inherit` (scanners get the sensor's `HTTP(S)_PROXY`; warned at start) or `direct` | `inherit` |
 | Key renewal | `SENSOR_KEY_AUTORENEW=true\|false`, `Options.KeyAutoRenew` / `NoKeyAutoRenew`, `Options.CredentialsFile` | on when the state directory persists (outside a container; inside one, a mounted, non-tmpfs volume), else off |
-| Pre-rename names | `AGENT_ID`, `AGENT_NAME`, `AGENT_ALLOW_PRIVATE_TARGETS`, `-agent-id` | applied with a warning; both names set differently: exit 2 |
+| Pre-rename names | `AGENT_ID`, `AGENT_NAME`, `AGENT_ALLOW_PRIVATE_TARGETS` and the other removed names | refused: the sensor exits 2 and names the replacement; only the `-agent-id` flag is still applied, with a warning |
 
 Plug your own parts in: `kit.AddCollector`, `kit.AddParser` (your tool's
 output format), `kit.HandleCommand("type", executor)`,
@@ -325,4 +334,4 @@ Report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
 
 ## License
 
-Apache License 2.0 - see [LICENSE](LICENSE).
+GNU General Public License v3.0; see [LICENSE](LICENSE).
