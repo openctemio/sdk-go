@@ -45,6 +45,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -607,7 +608,13 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 		ID: m.Name, Argv: argv, Env: core.ScannerEnvironFor(envOwner(m), o.Env), SetEnv: o.Env, Dir: p.workdir,
 		WritePaths: append([]string{p.workdir}, o.WritePaths...), ReadPaths: p.contentPaths, Limits: o.Limits,
 		Network: networkClass(m.Permissions.Network), Stdin: inR, Stdout: outW, Stderr: stderr,
-		Hooks:       executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: core.ApplyScannerPriority, Finished: core.ReapScannerProcess},
+		Hooks: executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: func(cmd *exec.Cmd) {
+			core.ApplyScannerPriority(cmd)
+			// The tool's CPU time, with the processes it starts (liveness).
+			if cmd != nil && cmd.Process != nil {
+				core.TrackProcess(ctx, cmd.Process.Pid)
+			}
+		}, Finished: core.ReapScannerProcess},
 		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(),
 	})
 	if err != nil {
@@ -879,6 +886,10 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 			}
 		default:
 			return refuse("unknown record kind")
+		}
+		if err == nil && s.ctx != nil {
+			// An accepted record: the job's output moves (liveness).
+			core.RecordOutput(s.ctx, 1, len(rec.Data))
 		}
 		switch {
 		case errors.Is(err, tool.ErrOutputLimit):

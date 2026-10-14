@@ -22,10 +22,19 @@ const MaxProgressRanges = 256
 // finished targets as inclusive [first, last] index ranges into the
 // command's target list, sorted and merged; it is omitted when the job's
 // targets are unknown or there are more than MaxProgressRanges ranges.
+//
+// Records, OutputBytes and CPUMs are liveness counters, all monotonic for
+// the job: the records the tool's output delivered and their bytes, and the
+// CPU time of the job's tool processes. A batch tool that finishes targets
+// rarely still shows it is working through them; the platform calls a task
+// stalled only when none of done and these moves for its stall window.
 type CommandProgress struct {
-	Done     int      `json:"done"`
-	Total    int      `json:"total"`
-	Finished [][2]int `json:"finished,omitempty"`
+	Done        int      `json:"done"`
+	Total       int      `json:"total"`
+	Finished    [][2]int `json:"finished,omitempty"`
+	Records     int64    `json:"records,omitempty"`
+	OutputBytes int64    `json:"output_bytes,omitempty"`
+	CPUMs       int64    `json:"cpu_ms,omitempty"`
 }
 
 // Progress records a job's finished targets. Safe for concurrent use; nil
@@ -39,6 +48,9 @@ type Progress struct {
 	// known), by name, so each counts once.
 	named map[string]struct{}
 	extra int
+	// Liveness counters (CommandProgress).
+	records, outputBytes int64
+	cpu                  cpuMeter
 }
 
 // NewProgress returns a Progress over total targets (names unknown).
@@ -118,7 +130,32 @@ func (p *Progress) Snapshot() CommandProgress {
 	if p.total > 0 {
 		done = min(done, p.total)
 	}
-	return CommandProgress{Done: done, Total: p.total, Finished: ranges(p.done)}
+	return CommandProgress{Done: done, Total: p.total, Finished: ranges(p.done),
+		Records: p.records, OutputBytes: p.outputBytes, CPUMs: p.cpu.read()}
+}
+
+// RecordOutput counts records the tool's output delivered, of n bytes in
+// all (a liveness counter).
+func (p *Progress) RecordOutput(records int, bytes int) {
+	if p == nil || (records <= 0 && bytes <= 0) {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.records += int64(max(records, 0))
+	p.outputBytes += int64(max(bytes, 0))
+}
+
+// TrackProcess adds a tool process (and the processes it starts) to the
+// job's CPU time (a liveness counter). Where the CPU time of a process
+// cannot be read, it counts nothing.
+func (p *Progress) TrackProcess(pid int) {
+	if p == nil || pid <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cpu.track(pid)
 }
 
 // ranges merges finished indexes into sorted inclusive ranges; nil when
@@ -164,4 +201,16 @@ func ProgressFrom(ctx context.Context) *Progress {
 // job). A scanner that runs its targets itself calls it as each finishes.
 func TargetDone(ctx context.Context, target string) {
 	ProgressFrom(ctx).TargetDone(target)
+}
+
+// RecordOutput counts records of the job's tool output in its Progress
+// (no-op outside a job).
+func RecordOutput(ctx context.Context, records, bytes int) {
+	ProgressFrom(ctx).RecordOutput(records, bytes)
+}
+
+// TrackProcess adds a tool process to the job's CPU time in its Progress
+// (no-op outside a job).
+func TrackProcess(ctx context.Context, pid int) {
+	ProgressFrom(ctx).TrackProcess(pid)
 }
