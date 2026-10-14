@@ -49,7 +49,9 @@ func TestKitPassesSensorConformanceSuite(t *testing.T) {
 			}
 		}
 	}, conformance.SuiteOptions{
-		ScanPayload: json.RawMessage(fmt.Sprintf(`{"scanner":"kit-tool","target":%q}`, target)),
-		Timeout:     30 * time.Second,
+		ScanPayload:  json.RawMessage(fmt.Sprintf(`{"scanner":"kit-tool","target":%q}`, target)),
+		GuardScanner: "kit-tool",
+		GuardTarget:  "203.0.113.7:443",
+		Timeout:      30 * time.Second,
 	})
 }

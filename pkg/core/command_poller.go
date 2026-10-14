@@ -1849,13 +1849,13 @@ func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payloa
 		details []RefusedTarget
 	)
 	for _, t := range raw {
-		v, err := policy.Validate(ctx, t)
+		v, err := policy.ValidateFor(ctx, payload.Scanner, t)
 		if err != nil {
 			if cerr := ctx.Err(); cerr != nil {
 				return nil, nil, cerr
 			}
 			refused = append(refused, fmt.Sprintf("%q: %v", t, err))
-			details = append(details, refusedTargetOf(t, err))
+			details = append(details, guardRefusal(t, err))
 			continue
 		}
 		if !seen[v] {
