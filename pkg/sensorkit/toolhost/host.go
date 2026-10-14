@@ -198,10 +198,14 @@ type Outcome struct {
 	// without a verdict, and Fixed on a target not reported done or in a
 	// task that did not finish are Unverifiable.
 	Verdicts []tool.RetestVerdict
-	Sandbox  executor.Status
-	Stderr   string
-	ExitCode int
-	Duration time.Duration
+	// Unfinished are the targets (values, in task order) a run that
+	// stopped part-way never reached; the run is partial and delivers what
+	// it settled. Empty when the run finished.
+	Unfinished []string
+	Sandbox    executor.Status
+	Stderr     string
+	ExitCode   int
+	Duration   time.Duration
 	// Egress is what a confined task asked its forwarder for (api
 	// RFC-060): every destination, allowed or refused, at most
 	// MaxEgressRecords; EgressDropped counts the rest. Nil when the task's
@@ -561,6 +565,9 @@ type session struct {
 	lastProg time.Time
 	result   *toolwire.Result
 	logMu    sync.Mutex
+	// budgetStop is set when the task was stopped because the job's own
+	// time budget ran out (its context's deadline), not by a cancel.
+	budgetStop bool
 }
 
 // run runs an adapter-protocol task.
@@ -725,6 +732,11 @@ func (s *session) drive(runCtx, parent context.Context, t executor.Task, w *tool
 		select {
 		case <-runCtx.Done():
 			if parent.Err() != nil {
+				if !canceled && errors.Is(parent.Err(), context.DeadlineExceeded) {
+					// The job's time budget, not a cancel: what the tool
+					// settled before it is kept (finish).
+					s.budgetStop = true
+				}
 				if !canceled {
 					canceled = true
 					_ = w.Write(toolwire.Cancel{Envelope: toolwire.Env(toolwire.TypeCancel), Reason: "canceled"})
@@ -1008,10 +1020,22 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 		}
 		runErr.Detail = p.redact(toolrt.CleanString(runErr.Detail))
 	}
+	if s.budgetStop && runErr != nil && runErr.Class == tool.Canceled {
+		runErr = &tool.Error{Class: tool.Timeout, Retryable: true, Detail: "the job's time budget ran out"}
+	}
+	stoppedPartway := false
 	switch {
 	case runErr != nil && runErr.Class == tool.ResourceExhausted:
 		// Stopped at the output limit: what was accepted is delivered.
 		out.Status = tool.StatusPartial
+		stoppedPartway = true
+	case runErr != nil && keepsSettled(runErr.Class) && !p.task.IsRetest() && p.asm.Done() > 0:
+		// Stopped part-way (the tool crashed or failed, or a time limit
+		// hit) after it settled some targets: those targets' accepted
+		// records are delivered and the rest are listed as unfinished, so
+		// one bad target or a late crash never discards the finished work.
+		out.Status = tool.StatusPartial
+		stoppedPartway = true
 	default:
 		out.Status = p.asm.Status(runErr)
 		if runErr == nil && s.result != nil && s.result.Status == tool.StatusPartial {
@@ -1020,6 +1044,9 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 	}
 	out.Err = runErr
 	out.Report = p.asm.Report(time.Now().UTC())
+	if stoppedPartway {
+		markUnfinished(out, p.asm.Unfinished())
+	}
 	st := p.asm.Checker().Stats()
 	out.Stats = Stats{Records: st.Records, Bytes: st.Bytes, Capped: st.Capped, Quarantined: st.Quarantined, Invalid: st.Invalid + s.invalidMessages()}
 	for _, r := range p.asm.Results() {
@@ -1036,6 +1063,41 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 		out.Logs = append(out.Logs, *p.rateLine)
 	}
 	s.h.stamp(out, p.m, p.task, execution)
+}
+
+// keepsSettled reports whether a run stopped with class still delivers the
+// targets it settled: a crash, a tool failure or a time limit. A cancel
+// (the platform took the task back, or the sensor is stopping), a policy
+// refusal and rejected output (a tool that broke the protocol) never do.
+func keepsSettled(class tool.ErrorClass) bool {
+	switch class {
+	case tool.ToolCrashed, tool.ToolError, tool.Timeout:
+		return true
+	}
+	return false
+}
+
+// UnfinishedTargetsKey is the report property listing the targets a run
+// that stopped part-way never reached.
+const UnfinishedTargetsKey = "unfinished_targets"
+
+// markUnfinished lists the targets a partial run never reached, in the
+// outcome and the report (whose coverage is then partial: nothing may be
+// auto-resolved from targets that were not scanned).
+func markUnfinished(out *Outcome, unfinished []tool.Target) {
+	if len(unfinished) == 0 || out.Report == nil {
+		return
+	}
+	values := make([]string, 0, len(unfinished))
+	for _, t := range unfinished {
+		values = append(values, t.Value)
+	}
+	out.Unfinished = values
+	if out.Report.Properties == nil {
+		out.Report.Properties = ctis.Properties{}
+	}
+	out.Report.Properties[UnfinishedTargetsKey] = values
+	out.Report.Metadata.CoverageType = "partial"
 }
 
 // verdicts are the final verdicts in the order of the task as it was asked

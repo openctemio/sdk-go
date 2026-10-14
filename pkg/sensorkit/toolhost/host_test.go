@@ -136,6 +136,27 @@ func hostile(mode string) int {
 	case "silent":
 		handshake()
 		time.Sleep(time.Minute)
+	case "settle-then-crash", "settle-then-hang", "settle-then-fail", "settle-then-wait":
+		// Settles the first of two targets, then crashes (exits without a
+		// result), hangs, reports a failure, or waits for a cancel.
+		handshake()
+		send(`{"v":1,"type":"record","kind":"finding","target":"t1","data":{"type":"misconfiguration","title":"on t1","severity":"low"}}`)
+		send(`{"v":1,"type":"target_status","target":"t1","status":"done"}`)
+		switch mode {
+		case "settle-then-crash":
+			return 2
+		case "settle-then-hang":
+			time.Sleep(time.Minute)
+		case "settle-then-fail":
+			send(`{"v":1,"type":"result","status":"failed","error":{"class":"tool_error","detail":"segfault"}}`)
+		case "settle-then-wait":
+			for {
+				if m := read(); m["type"] == "cancel" {
+					send(`{"v":1,"type":"result","status":"canceled"}`)
+					return 0
+				}
+			}
+		}
 	case "liar":
 		handshake()
 		send(`{"v":1,"type":"result","status":"ok"}`)
@@ -592,5 +613,76 @@ func TestSettledTargetsCountAsProgress(t *testing.T) {
 	}
 	if got := prog.Snapshot(); got.Done != len(out.Targets) || got.Done == 0 {
 		t.Fatalf("progress %+v, %d targets settled", got, len(out.Targets))
+	}
+}
+
+var twoTargets = []tool.Target{{Ref: "t1", Type: "domain", Value: "a.example"}, {Ref: "t2", Type: "domain", Value: "b.example"}}
+
+func hostileRunCtx(t *testing.T, ctx context.Context, mode string) *Outcome {
+	t.Helper()
+	exe, _ := os.Executable()
+	m := hostileManifest
+	m.Run = &tool.RunSpec{Argv: []string{exe}}
+	out, err := testHost(t).RunManifest(ctx, m, tool.Task{Targets: twoTargets}, RunOptions{Trusted: true,
+		Env: map[string]string{"TOOLHOST_HOSTILE": mode}, Credentials: map[string]string{"api_key": "sk-declared-123"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// A run that stops part-way after settling a target (a crash, a hang past
+// the idle timeout, a reported failure, the job's own time budget) delivers
+// that target's records as partial and lists the others as unfinished: one
+// bad target or a late crash never discards the finished work (research
+// note 125 in openctem).
+func TestStoppedPartwayKeepsSettledTargets(t *testing.T) {
+	cases := []struct {
+		mode   string
+		budget time.Duration
+		class  tool.ErrorClass
+	}{
+		{"settle-then-crash", 0, tool.ToolCrashed},
+		{"settle-then-hang", 0, tool.Timeout},
+		{"settle-then-fail", 0, tool.ToolError},
+		{"settle-then-wait", 1500 * time.Millisecond, tool.Timeout},
+	}
+	for _, c := range cases {
+		t.Run(c.mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if c.budget > 0 {
+				ctx, cancel = context.WithTimeout(ctx, c.budget)
+				defer cancel()
+			}
+			out := hostileRunCtx(t, ctx, c.mode)
+			if out.Status != tool.StatusPartial || out.Err == nil || out.Err.Class != c.class {
+				t.Fatalf("status %s err %v (stderr %q)", out.Status, out.Err, out.Stderr)
+			}
+			if len(out.Report.Findings) != 1 || out.Report.Findings[0].Title != "on t1" {
+				t.Fatalf("the settled target's records were not delivered: %+v", out.Report.Findings)
+			}
+			if len(out.Unfinished) != 1 || out.Unfinished[0] != "b.example" {
+				t.Fatalf("unfinished %v", out.Unfinished)
+			}
+			if got, _ := json.Marshal(out.Report.Properties[UnfinishedTargetsKey]); string(got) != `["b.example"]` {
+				t.Fatalf("report unfinished_targets %s", got)
+			}
+			if out.Report.Metadata.CoverageType != "partial" {
+				t.Fatalf("coverage %q", out.Report.Metadata.CoverageType)
+			}
+		})
+	}
+}
+
+// A cancel (the platform took the task back, or the sensor is stopping)
+// still cancels: nothing is delivered as a result of a task the platform
+// no longer expects.
+func TestCanceledAfterSettlingStaysCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(1500 * time.Millisecond); cancel() }()
+	out := hostileRunCtx(t, ctx, "settle-then-wait")
+	if out.Status != tool.StatusCanceled || len(out.Unfinished) != 0 {
+		t.Fatalf("status %s err %v unfinished %v", out.Status, out.Err, out.Unfinished)
 	}
 }
