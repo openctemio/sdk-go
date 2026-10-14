@@ -67,12 +67,14 @@ func targetKeys(targets []string, network string) [][]string {
 }
 
 // RunWaves runs fn once per wave of targets (PlanWaves), one wave after the
-// other, and calls done for every target of a wave when its run returns,
-// whatever it returned, so the wave's hosts are freed while later waves
-// run. A nil done marks the target done in the job's Progress (TargetDone);
-// a tool run out of process passes its tool context's TargetDone. It stops
-// at the first error, or when ctx ends, and returns it; the targets of the
-// waves not run are not marked done.
+// other, and calls done for every target of a wave whose run returned nil,
+// at once, so the wave's hosts are freed while later waves run. A nil done
+// marks the target done in the job's Progress (TargetDone); a tool run out
+// of process passes its tool context's TargetDone. fn should deliver the
+// wave's results before it returns: a settled target is not run again. It
+// stops at the first error, or when ctx ends, and returns it; the targets
+// of the failed wave and of the waves not run are not marked done, so they
+// stay unfinished (and are sent again) rather than settled without results.
 func RunWaves(ctx context.Context, targets []string, network string, maxWaves int,
 	fn func(ctx context.Context, wave []string) error, done func(target string),
 ) error {
@@ -83,12 +85,11 @@ func RunWaves(ctx context.Context, targets []string, network string, maxWaves in
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := fn(ctx, wave)
+		if err := fn(ctx, wave); err != nil {
+			return err
+		}
 		for _, t := range wave {
 			done(t)
-		}
-		if err != nil {
-			return err
 		}
 	}
 	return nil

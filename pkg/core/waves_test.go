@@ -103,11 +103,13 @@ func TestRunWaves_StopsAtError(t *testing.T) {
 	ctx := WithProgress(context.Background(), p)
 	boom := errors.New("boom")
 	runs := 0
+	// The first wave fails: its target is not settled (it stays
+	// unfinished), and the later waves do not run.
 	err := RunWaves(ctx, targets, "", 3, func(context.Context, []string) error {
 		runs++
 		return boom
 	}, nil)
-	if !errors.Is(err, boom) || runs != 1 || p.Snapshot().Done != 1 {
+	if !errors.Is(err, boom) || runs != 1 || p.Snapshot().Done != 0 {
 		t.Fatalf("err %v runs %d done %d", err, runs, p.Snapshot().Done)
 	}
 	cctx, cancel := context.WithCancel(ctx)
@@ -123,6 +125,23 @@ func TestRunWaves_OwnDone(t *testing.T) {
 		func(context.Context, []string) error { return nil },
 		func(t string) { settled = append(settled, t) })
 	if err != nil || !slices.Equal(settled, []string{"a.example.com", "b.example.com"}) {
+		t.Fatalf("err %v settled %q", err, settled)
+	}
+}
+
+func TestRunWaves_KeepsEarlierWavesWhenALaterOneFails(t *testing.T) {
+	var settled []string
+	boom := errors.New("boom")
+	n := 0
+	err := RunWaves(context.Background(), []string{"a.example.com", "b.example.com", "c.example.com"}, "", 3,
+		func(context.Context, []string) error {
+			if n++; n == 2 {
+				return boom
+			}
+			return nil
+		},
+		func(t string) { settled = append(settled, t) })
+	if !errors.Is(err, boom) || !slices.Equal(settled, []string{"a.example.com"}) {
 		t.Fatalf("err %v settled %q", err, settled)
 	}
 }
