@@ -24,6 +24,7 @@ Setup & health checklist shows each one's presence, never its value.
 | [`SENSOR_KEY_AUTORENEW`](https://docs.openctem.io/sensors/settings/#SENSOR_KEY_AUTORENEW) | bool |  | `auto` |  | API key auto-renewal: true, false, or unset (on when the state directory persists). |
 | [`SENSOR_MAX_JOBS`](https://docs.openctem.io/sensors/settings/#SENSOR_MAX_JOBS) | int |  |  |  | Cap on concurrent jobs, 1-100. Unset: the slots follow CPU, memory and tool costs. |
 | [`SENSOR_DRAIN_GRACE`](https://docs.openctem.io/sensors/settings/#SENSOR_DRAIN_GRACE) | duration |  | `30s` |  | How long running jobs may finish on shutdown. |
+| [`SENSOR_JOB_ID`](https://docs.openctem.io/sensors/settings/#SENSOR_JOB_ID) | string |  |  |  | Run the one platform command with this id and exit (RunJob; a Kubernetes Job) instead of polling for work. The -job flag wins over it. |
 | [`SENSOR_SCANNER_PRIORITY`](https://docs.openctem.io/sensors/settings/#SENSOR_SCANNER_PRIORITY) | enum |  | `low` |  | Priority of scanner processes. |
 | [`SENSOR_PROTECT_FROM_OOM`](https://docs.openctem.io/sensors/settings/#SENSOR_PROTECT_FROM_OOM) | bool |  | `false` |  | Protect the sensor itself from the OOM killer (needs CAP_SYS_RESOURCE). |
 | [`SENSOR_TOOLS`](https://docs.openctem.io/sensors/settings/#SENSOR_TOOLS) | list |  |  |  | Deprecated: narrows the installed tools to this comma-separated list (built-ins such as the reachability probe are kept). Unset: every installed tool. Narrow with the local policy's tools.allow instead. |
