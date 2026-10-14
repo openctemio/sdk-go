@@ -54,6 +54,7 @@ import (
 	"unicode"
 
 	"github.com/openctemio/ctis/importer/mapping"
+	"github.com/openctemio/ctis/outcome"
 	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/internal/toolwire"
 	"github.com/openctemio/sdk-go/pkg/adapt"
@@ -1058,6 +1059,7 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 	}
 	p.checkContract(out)
 	p.addRefused(out)
+	markOutcomes(out)
 	out.Verdicts = p.verdicts(runErr)
 	if p.rateLine != nil {
 		out.Logs = append(out.Logs, *p.rateLine)
@@ -1098,6 +1100,57 @@ func markUnfinished(out *Outcome, unfinished []tool.Target) {
 	}
 	out.Report.Properties[UnfinishedTargetsKey] = values
 	out.Report.Metadata.CoverageType = "partial"
+}
+
+// markOutcomes writes each target's outcome into the report of a run that
+// delivers (ok or partial) as the target_outcomes property (ctis outcome):
+// done, failed with its class, skipped (refused or excluded) or unfinished.
+// A failed or canceled run delivers nothing, so it carries none.
+func markOutcomes(out *Outcome) {
+	if out.Report == nil || (out.Status != tool.StatusOK && out.Status != tool.StatusPartial) {
+		return
+	}
+	list := make([]outcome.Target, 0, len(out.Targets)+len(out.Unfinished))
+	for _, t := range out.Targets {
+		if o, ok := targetOutcome(t); ok {
+			list = append(list, o)
+		}
+	}
+	for _, v := range out.Unfinished {
+		list = append(list, outcome.Target{Target: v, State: outcome.Unfinished})
+	}
+	if len(list) == 0 {
+		return
+	}
+	if out.Report.Properties == nil {
+		out.Report.Properties = ctis.Properties{}
+	}
+	out.Report.Properties[outcome.ResultKey] = list
+}
+
+// targetOutcome is a target's outcome in the shared contract.
+func targetOutcome(t TargetOutcome) (outcome.Target, bool) {
+	o := outcome.Target{Target: t.Value}
+	switch t.State {
+	case tool.StateDone:
+		o.State = outcome.Done
+	case tool.StateFailed:
+		o.State, o.Class = outcome.Failed, outcome.ToolError
+		switch t.Class {
+		case tool.Timeout:
+			o.Class = outcome.Timeout
+		case tool.TargetUnreachable, tool.NotFound:
+			o.Class = outcome.Unreachable
+		}
+	case tool.StateSkipped:
+		o.State, o.Class = outcome.Skipped, outcome.Excluded
+		if t.Class == tool.RefusedByPolicy {
+			o.Class = outcome.Refused
+		}
+	default:
+		return o, false
+	}
+	return o, o.Valid()
 }
 
 // verdicts are the final verdicts in the order of the task as it was asked
