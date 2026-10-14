@@ -614,6 +614,10 @@ func TestSettledTargetsCountAsProgress(t *testing.T) {
 	if got := prog.Snapshot(); got.Done != len(out.Targets) || got.Done == 0 {
 		t.Fatalf("progress %+v, %d targets settled", got, len(out.Targets))
 	}
+	// Liveness: the accepted records and their bytes count.
+	if got := prog.Snapshot(); got.Records == 0 || got.Records > int64(out.Stats.Records) || got.OutputBytes <= 0 {
+		t.Fatalf("liveness %+v, %d records accepted", got, out.Stats.Records)
+	}
 }
 
 var twoTargets = []tool.Target{{Ref: "t1", Type: "domain", Value: "a.example"}, {Ref: "t2", Type: "domain", Value: "b.example"}}
