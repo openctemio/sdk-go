@@ -143,10 +143,11 @@ one, the new key wins. Every heartbeat also carries the process's
 | Setting | Environment (an `Options` field wins) | Default |
 |---|---|---|
 | Platform | `SENSOR_API_URL`, `SENSOR_API_KEY`, `SENSOR_ID` | required to run commands (exit 2 with what is missing) |
+| Pairing code | `SENSOR_PAIRING_CODE` (`XXXX-XXXX`, from "expect a sensor"): a sensor with no identity attaches to it on first start; ignored once paired; never logged | none: the sensor prints a code to enter in the console |
 | Name | `SENSOR_NAME` | `sensor-<hostname>` |
 | Protocol | `SENSOR_PROTOCOL` = `auto`, `v2` (same; `v1` is retired and refused) | `auto` |
 | Concurrency cap | `SENSOR_MAX_JOBS` (1-100) | none: slots follow CPU, memory and tool cost |
-| Tool allowlist | `SENSOR_TOOLS` (comma-separated) | none |
+| Tool allowlist (deprecated) | `SENSOR_TOOLS` (comma-separated): only narrows the installed tools; built-ins (`sensorkit.Builtin()`) are kept. Use the local policy's `tools.allow` instead | none |
 | Drain grace | `SENSOR_DRAIN_GRACE` (1s-1h) | 30s |
 | Scanner priority | `SENSOR_SCANNER_PRIORITY` = `low`, `normal` | `low`: scanners at nice +10, lowest best-effort I/O, `oom_score_adj` 500 (Linux) |
 | Sensor OOM protection | `SENSOR_PROTECT_FROM_OOM=true\|false`: the sensor sets its own `oom_score_adj` to -500 (Linux; needs `CAP_SYS_RESOURCE`, e.g. `docker run --cap-add SYS_RESOURCE`; without it, one warning and the sensor runs unprotected). Scanners never inherit it | off |

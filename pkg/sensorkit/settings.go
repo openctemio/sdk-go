@@ -37,12 +37,15 @@ const (
 	EnvTransport  = "SENSOR_TRANSPORT"
 	EnvMaxJobs    = "SENSOR_MAX_JOBS"    // 1-100; unset: the slots follow the resources
 	EnvDrainGrace = "SENSOR_DRAIN_GRACE" // e.g. 45s, 2m (1s-1h; default 30s)
-	EnvTools      = "SENSOR_TOOLS"       // comma-separated allowlist
+	EnvTools      = "SENSOR_TOOLS"       // deprecated: comma-separated narrowing list
 	EnvStateDir   = "SENSOR_STATE_DIR"   // local state: the renewed API key, the tool cost history
 	EnvCACertFile = "SENSOR_CA_CERT_FILE"
 	// EnvCAFingerprint pins the platform CA by its SHA-256 fingerprint
 	// (install snippet; api RFC-052).
 	EnvCAFingerprint = "SENSOR_CA_FINGERPRINT"
+	// EnvPairingCode is the code an administrator created with "expect a
+	// sensor": a sensor with no identity attaches to it on first start.
+	EnvPairingCode = "SENSOR_PAIRING_CODE"
 	// EnvPlatformKey pins the platform's pairing key (its thumbprint).
 	EnvPlatformKey  = "SENSOR_PLATFORM_KEY"
 	EnvKeyAutoRenew = "SENSOR_KEY_AUTORENEW" // true | false; unset: on when the state directory persists

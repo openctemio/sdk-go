@@ -41,6 +41,10 @@ type PairOptions struct {
 	// sensor" (reverse mode). Empty: the platform gives a code for the
 	// administrator to enter.
 	Code string
+	// CodeLabel, when set, names where Code came from (an environment
+	// variable); the instructions print it instead of the code, so a code
+	// from the configuration never reaches the logs.
+	CodeLabel string
 	// RepairSensorID asks to re-pair this existing registration (lost or
 	// stolen key); NewKey makes a fresh key first.
 	RepairSensorID string
@@ -300,8 +304,12 @@ func printInstructions(o PairOptions, start pairing.StartResponse, sas pairing.S
 		_, _ = fmt.Fprintf(w, "\nPair this sensor in OpenCTEM: Sensors > Pair a sensor\n")
 		_, _ = fmt.Fprintf(w, "  Code:        %s\n", start.UserCode)
 	} else {
+		shown := pairing.FormatCode(o.Code)
+		if o.CodeLabel != "" {
+			shown = "from " + o.CodeLabel
+		}
 		_, _ = fmt.Fprintf(w, "\nAttached to pairing code %s. In the console, check that the fingerprint matches before approving.\n",
-			pairing.FormatCode(o.Code))
+			shown)
 	}
 	_, _ = fmt.Fprintf(w, "  Fingerprint: %s    (expires %s)\n", sas, exp)
 	_, _ = fmt.Fprintf(w, "  Key:         %s\n", pairing.KeyFingerprint(keyID))
