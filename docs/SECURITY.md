@@ -284,6 +284,17 @@ with a `core.ScanTargetPolicy` before a scanner runs:
   are refused. The scanner receives the resolved path.
 - Targets starting with `-` (flag injection) or containing control
   characters are refused; so are flag-like `exclude` entries.
+- With `ByScanner: true` each target is checked by the scanner that receives
+  it (`ScanTargetPolicy.ValidateFor`). A code scanner (`core.IsCodeScanner`:
+  semgrep, betterleaks, trivy, ...) takes a path, confined to the allowed
+  roots (a relative path is taken in the first root), a repository URL
+  (network-checked) or, for trivy, an image whose registry host is checked.
+  Every other scanner is a network scanner: its target must be a URL, host,
+  `host:port` (`203.0.113.7:80`, `[2001:db8::1]:443`, checked on the host),
+  address or range, and a name that does not resolve is refused, dotless
+  names included. `ScanTargetPolicy.ValidateNetworkTarget` is the same
+  network check for callers outside the executor (a validation probe, a
+  retest).
 
 ```go
 exec := core.NewDefaultCommandExecutor(pusher)
@@ -405,14 +416,18 @@ and the executor's own check right before the scanner starts.
 
 | Reason (`refused_targets[].reason`) | When |
 |---|---|
-| `unresolvable` | A dotted host name that does not resolve (NXDOMAIN, resolver failure): its addresses cannot be checked |
+| `unresolvable` | A dotted host name (any name for a network scanner under `ByScanner`) that does not resolve (NXDOMAIN, resolver failure): its addresses cannot be checked |
 | `wildcard_pattern` | A pattern such as `*.example.com`: not a host a policy can check or a tool can reach |
 | `denied_by_policy` | Outside `targets.allow`, inside `targets.deny`, a private address without the switch, the built-in deny list, a port outside `ports.allow` |
 | `invalid_target` | Not a URL, host, address, range or path, or unsafe to hand to a tool (a leading `-`, control characters) |
 
 - The command completes with `metadata.refused_targets` (at most 100
   entries of `{target, reason, rule, detail}`), `metadata.refused_targets_total`
-  and `metadata.partial: true`.
+  and `metadata.partial: true`. A target the executor's built-in check (the
+  scan-target guard, not a local policy rule) refused has rule
+  `target_guard` (`core.RefusedTargetRuleGuard`).
+- Each refused target's per-target outcome (`target_outcomes`) is
+  `skipped` with class `refused`: it is settled, not handed out again.
 - When every target is refused, or the single target of a single-target job
   (payload `target`), the command fails as before; the error lists the
   targets and reasons.

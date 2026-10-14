@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openctemio/ctis/outcome"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
@@ -31,9 +32,19 @@ type SuiteOptions struct {
 	// ScanPayload the command checks are skipped.
 	ScanType    string
 	ScanPayload json.RawMessage
+	// GuardScanner and GuardTarget are a network scanner the sensor runs
+	// and a public target it completes a scan of; set, the TargetGuard
+	// check runs ("" skips it).
+	GuardScanner string
+	GuardTarget  string
 	// Timeout bounds every wait. Zero is 60s.
 	Timeout time.Duration
 }
+
+// GuardRefusedTargets are targets every sensor's target guard refuses: cloud
+// metadata (as host:port), carrier-grade NAT, and a name that never resolves
+// (RFC 6761 .invalid).
+var GuardRefusedTargets = []string{"169.254.169.254:80", "100.64.0.1", "unresolvable.invalid:443"}
 
 // UnknownCommandType is the command type the suite dispatches to check that
 // a sensor fails a command it does not know instead of hanging or crashing.
@@ -75,6 +86,10 @@ const UnknownCommandType = "x_conformance_unknown"
 //     ScanPayload).
 //   - Command (with ScanPayload): the command completes, and every report
 //     sent for it is committed before the command is completed.
+//   - TargetGuard (with GuardScanner): a scan whose targets mix GuardTarget
+//     with GuardRefusedTargets completes on GuardTarget; each refused target
+//     is listed in the result with a reason and settled as skipped/refused,
+//     never handed to the tool. A scan of refused targets only fails.
 func RunSensorSuite(t *testing.T, start StartSensor, opts SuiteOptions) {
 	t.Helper()
 	timeout := opts.Timeout
@@ -164,6 +179,70 @@ func RunSensorSuite(t *testing.T, start StartSensor, opts SuiteOptions) {
 			if r.CommandID == id && !r.Committed {
 				t.Errorf("report %s of the command is not committed", rid)
 			}
+		}
+	})
+
+	t.Run("TargetGuard", func(t *testing.T) {
+		if opts.GuardScanner == "" || opts.GuardTarget == "" {
+			t.Skip("no SuiteOptions.GuardScanner")
+		}
+		f := newFake(t)
+		const mixed = "0192a3b4-0000-7000-8000-00000000c0f4"
+		const refused = "0192a3b4-0000-7000-8000-00000000c0f5"
+		payload := func(targets []string) json.RawMessage {
+			raw, _ := json.Marshal(map[string]any{"scanner": opts.GuardScanner, "targets": targets})
+			return raw
+		}
+		f.QueueCommandPayload(mixed, "scan", payload(append([]string{opts.GuardTarget}, GuardRefusedTargets...)))
+		f.QueueCommandPayload(refused, "scan", payload(GuardRefusedTargets))
+		run(t, f)
+		for _, id := range []string{mixed, refused} {
+			suiteWait(t, timeout, "the guard commands to finish", func() bool {
+				s, _ := f.CommandState(id)
+				return s == "failed" || s == "completed"
+			})
+		}
+		if s, e := f.CommandState(refused); s != "failed" || e == "" {
+			t.Errorf("a scan whose every target is refused ended %q (%q); want failed with a reason", s, e)
+		}
+		if s, e := f.CommandState(mixed); s != "completed" {
+			t.Fatalf("a scan with one good target ended %q (%s); want completed on it", s, e)
+		}
+		var res struct {
+			Metadata       map[string]json.RawMessage `json:"metadata"`
+			TargetOutcomes []outcome.Target           `json:"target_outcomes"`
+		}
+		if err := json.Unmarshal(f.CommandResult(mixed), &res); err != nil {
+			t.Fatalf("result: %v", err)
+		}
+		var listed []struct {
+			Target string `json:"target"`
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal(res.Metadata["refused_targets"], &listed)
+		got := map[string]string{}
+		for _, r := range listed {
+			got[r.Target] = r.Reason
+		}
+		for _, want := range GuardRefusedTargets {
+			if got[want] == "" {
+				t.Errorf("refused target %q is not listed with a reason in the result (refused_targets: %s)", want, res.Metadata["refused_targets"])
+			}
+		}
+		if _, ok := got[opts.GuardTarget]; ok {
+			t.Errorf("the good target %q is listed as refused", opts.GuardTarget)
+		}
+		settled := map[string]outcome.Target{}
+		for _, o := range res.TargetOutcomes {
+			settled[o.Target] = o
+		}
+		for _, want := range GuardRefusedTargets {
+			if o := settled[want]; o.State != outcome.Skipped || o.Class != outcome.Refused {
+				t.Errorf("refused target %q has outcome %+v; want skipped/refused", want, o)
+			}
+		}
+		if o := settled[opts.GuardTarget]; o.State == outcome.Skipped {
+			t.Errorf("the good target %q was skipped: %+v", opts.GuardTarget, o)
 		}
 	})
 }
