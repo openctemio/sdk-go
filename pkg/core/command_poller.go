@@ -1592,6 +1592,10 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// Without an explicit timeout the task budget's overrun applies, so a
 	// task is stopped only well past its estimate (budget.go).
 	requested := jobTimeout(payload.TimeoutSeconds, payload.Budget)
+	// The job's context without its time budget: a run the budget stopped
+	// part-way returns what it finished (partial), delivered under this
+	// context, which a cancel still ends.
+	deliverCtx := ctx
 	if timeout := local.CapTimeout(requested); timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -1608,6 +1612,9 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	}
 	if err != nil {
 		return nil, fmt.Errorf("scan failed: %w", err)
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) && deliverCtx.Err() == nil {
+		ctx = deliverCtx
 	}
 
 	result := &CommandExecutionResult{
