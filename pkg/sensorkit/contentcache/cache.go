@@ -116,6 +116,7 @@ type Cache struct {
 	used   map[string]time.Time
 	banned map[string]bool // revoked
 	now    func() time.Time
+	stats  statsBox
 }
 
 // Open opens (creating) a cache rooted at root, private to the sensor.
@@ -215,6 +216,7 @@ func (c *Cache) Install(ctx context.Context, p Pack) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrRevoked, p.Digest)
 	}
 	if d, ok := c.Path(p.Digest); ok {
+		c.stats.add(func(s *Stats) { s.Hits++; s.BytesSaved += p.Size })
 		return d, nil
 	}
 	st, err := c.verifyStatement(p)
@@ -226,6 +228,14 @@ func (c *Cache) Install(ctx context.Context, p Pack) (string, error) {
 	}
 	if c.opts.Fetch == nil {
 		return "", errors.New("content cache: no fetcher")
+	}
+	if df, ok := c.opts.Fetch.(IndexFetcher); ok {
+		// A delta install falls back to the full archive on any failure:
+		// the result is verified the same way either way.
+		if files, err := c.installDelta(ctx, df, p.Digest, st.Size); err == nil {
+			c.stats.add(func(s *Stats) { s.Misses++ })
+			return c.store(p.Digest, files, p.Signature)
+		}
 	}
 	rc, err := c.opts.Fetch.Fetch(ctx, p.Digest)
 	if err != nil {
@@ -247,6 +257,7 @@ func (c *Cache) Install(ctx context.Context, p Pack) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: %s: %w", ErrVerify, p.Digest, err)
 	}
+	c.stats.add(func(s *Stats) { s.Misses++; s.BytesDownloaded += int64(len(data)) })
 	return c.store(p.Digest, files, p.Signature)
 }
 
@@ -325,6 +336,9 @@ func (c *Cache) store(digest string, files []file, statement []byte) (string, er
 		}
 	}
 	if err := os.WriteFile(filepath.Join(staging, ".statement.json"), statement, 0o400); err != nil {
+		return "", err
+	}
+	if err := writeIndex(staging, files); err != nil {
 		return "", err
 	}
 	if err := sealTree(staging); err != nil {
