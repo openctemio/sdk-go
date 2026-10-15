@@ -27,6 +27,10 @@ import (
 //     verified signed statement (none yet: public only); loopback,
 //     link-local, metadata and CGNAT
 //     addresses never;
+//   - only signed jobs for the instance scope and this sensor run, of any
+//     organization; each job's results are bound to its organization
+//     (core.JobLedger) and nothing is stored or sent for a job the sensor
+//     does not hold;
 //   - the sensor advertises CapabilitySharedIsolation, from its runtime
 //     state, so the platform can send shared jobs only to a sensor that
 //     enforces all of this.

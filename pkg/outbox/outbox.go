@@ -128,6 +128,9 @@ type Meta struct {
 	ReportID string `json:"report_id,omitempty"`
 	// CommandID binds the item to a platform command.
 	CommandID string `json:"command_id,omitempty"`
+	// TenantID, on a shared sensor, is the organization of the command's
+	// verified signed job (core.JobLedger): every item of a job carries it.
+	TenantID string `json:"tenant_id,omitempty"`
 	// CreatedAt orders the items (oldest first). Enqueue sets it.
 	CreatedAt time.Time `json:"created_at"`
 	// Attrs are free-form small strings for the deliverer.

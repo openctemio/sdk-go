@@ -149,7 +149,14 @@ func (k *Kit) resolveJobSigning() error {
 			return usageError(err)
 		}
 	}
-	g, err := core.NewJobGuard(v, required, tenantID, sensorID)
+	var g *core.JobGuard
+	if s.shared {
+		// A shared sensor runs only instance-scope signed jobs, of any
+		// organization, and binds each job's results to it.
+		g, err = core.NewSharedJobGuard(v, sensorID)
+	} else {
+		g, err = core.NewJobGuard(v, required, tenantID, sensorID)
+	}
 	if err != nil {
 		return usageError(err)
 	}
