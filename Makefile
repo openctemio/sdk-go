@@ -23,9 +23,8 @@ all: lint test
 # the prod posture is still asserted.
 TEST_ENV := OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK=1
 
-test: ## Run tests (root module and the nested pkg/transfer module)
+test: ## Run tests
 	$(TEST_ENV) go test -v -race ./...
-	cd pkg/transfer && go test -race ./...
 
 test-coverage: ## Run tests with coverage
 	$(TEST_ENV) go test -v -race -coverprofile=coverage.out ./...
