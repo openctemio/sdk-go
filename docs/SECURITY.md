@@ -728,6 +728,19 @@ an `egress-proxy` tool resolves at connect time, public addresses only; a
 built-in Go probe that dials in the sensor's own process is outside the
 task sandbox, so a shared sensor must run its tools out of process.
 
+**Only TCP goes through the pinned-address check.** The forwarder relays
+TCP (HTTP CONNECT, absolute-form HTTP, SOCKS5 CONNECT) and answers DNS; it
+checks and pins each TCP destination. UDP other than the task's DNS, ICMP
+and raw sockets are not relayed at all: the task's network namespace has
+only loopback, so such traffic has no route and is dropped there. The
+network namespace is what stops them, not the address check, which is why
+shared mode refuses to start without network confinement.
+
+**A local policy is mandatory.** A shared sensor without a loaded local
+policy refuses to start (before pairing): its targets come from many
+tenants, and the operator's own target, range, port and tool rules must
+bound them.
+
 ### 8. Web scope of a job (`pkg/webscope`)
 
 A job can carry a web scope (`web_scope`): the hosts (`app.example.com`, or

@@ -14,8 +14,9 @@ import (
 // the SDK's; a sensor only switches them on (Options.Shared or
 // SENSOR_SHARED_MODE=1):
 //
-//   - the tool sandbox and network confinement are required: the sensor
-//     refuses to start where the host cannot give them (never degraded);
+//   - the tool sandbox, network confinement and a local policy are
+//     required: the sensor refuses to start, before pairing, without any
+//     of them (never degraded);
 //   - every task runs in a fresh private directory under the task root,
 //     removed after the task; its write paths and state directories
 //     (HOME, TMPDIR, XDG_*) must lie there, so no writable cache is shared
