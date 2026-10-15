@@ -278,6 +278,16 @@ with a `core.ScanTargetPolicy` before a scanner runs:
   multicast, unspecified and reserved ranges are always blocked; RFC1918/ULA
   are blocked unless private targets are allowed. Hostnames are resolved and
   every address is checked (fail closed for dotted names).
+- The deny list is `github.com/openctemio/ctis/addrscope` (`IsInternal`,
+  `IsInternalPrefix`), the same definition the platform checks job targets
+  with, so the two never disagree. An IPv6 address that carries an IPv4
+  address (IPv4-mapped or -compatible, NAT64 `64:ff9b::/96` and
+  `64:ff9b:1::/48`, 6to4 `2002::/16`, Teredo `2001::/32`) is judged by that
+  IPv4 address: `64:ff9b::a00:1` is 10.0.0.1 and is refused even where
+  private targets are allowed (only private ranges written directly can be
+  allowed, and never the metadata addresses inside ULA). The SDK's own
+  outbound guard (`pkg/httpsec`) and the egress forwarder's public-only
+  check use the same list.
 - Filesystem targets: symlinks are resolved first; with allowed roots set the
   path must be inside one of them, otherwise `/`, system directories
   (`/etc`, `/proc`, ...) and home credential dirs (`~/.ssh`, `~/.aws`, ...)
