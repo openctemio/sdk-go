@@ -250,7 +250,7 @@ func (i *Identity) HeaderLines() []string {
 
 // Overrides reports whether a configured "Name: value" header line names
 // a header the identification sets (case-insensitive): such a line must be
-// dropped in favour of the identification.
+// dropped in favor of the identification.
 func (i *Identity) Overrides(line string) bool {
 	if i.Empty() {
 		return false
