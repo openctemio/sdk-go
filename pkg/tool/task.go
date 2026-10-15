@@ -71,7 +71,8 @@ type Task struct {
 	// wins) and headers from the job. Set by the runtime, never taken from
 	// a job; ctx.HTTP() sets it on every request over what the tool set
 	// itself, and an exec tool receives it through {{http.user_agent}} and
-	// {{http.headers:-flag}}. nil when the job carries none.
+	// {{http.headers:-flag}}. nil when the job carries none, or when the
+	// task sends no HTTP to its targets (Manifest.SendsHTTPToTargets).
 	Identity *Identity `json:"identity,omitempty"`
 	// OrgHTTP is the organization's HTTP policy from the job. The tool host
 	// merges it into HTTP (after the local policy) and clears it; a tool

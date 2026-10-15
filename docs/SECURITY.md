@@ -749,8 +749,13 @@ or the task does not start:
   argument).
 - The identification is HTTP headers, so it applies to tasks that may send
   HTTP to their targets: a tool whose network class is not `targets`
-  (vendor API, resolver, egress proxy, none) or a task whose capability reaches targets without HTTP
-  (`scan.ports`, `discover.hosts`, DNS lookups) is not affected.
+  (vendor API, resolver, egress proxy, none) or a task whose capability
+  reaches targets without HTTP (`scan.ports`, `discover.hosts`,
+  `resolve.dns`, `discover.subdomains`, `lookup.rdap`, `lookup.asn`) is not
+  affected: its `Task.Identity` is nil, so the tool never refuses for it and
+  never sends the program's headers to a third party (a passive source, a
+  vendor API). `tool.Manifest.SendsHTTPToTargets` is the rule, for a sensor
+  that checks the same thing outside the tool host.
 - A networked tool that can do neither (an exec tool whose argv lacks the
   placeholders, or a tool that does not declare `features.http_identity`) is
   refused with `refused_by_policy`. A tool that declares

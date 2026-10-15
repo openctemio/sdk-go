@@ -234,39 +234,8 @@ func checkIdentity(m tool.Manifest, task tool.Task) *tool.Error {
 	return refusedErr("%s cannot send the job's identification (User-Agent and headers) on every request: it declares no features.http_identity", m.Name)
 }
 
-// noHTTPCapabilities are the capabilities whose tools reach targets
-// without HTTP (a port scan, host discovery, DNS lookups): the
-// identification is HTTP headers, so it does not apply to them.
-var noHTTPCapabilities = map[string]bool{
-	"scan.ports": true, "discover.hosts": true, "resolve.dns": true,
-	"lookup.rdap": true, "lookup.asn": true, "discover.subdomains": true,
-}
-
-// sendsHTTPToTargets reports whether a task may send HTTP requests to its
-// targets: the tool reaches the task's targets (network class targets), and the task's capability, or else every capability the tool
-// implements, is not one that reaches targets without HTTP. A tool that
-// implements nothing counts as sending HTTP (fail closed).
+// sendsHTTPToTargets reports whether the task may send HTTP requests to
+// its targets (tool.Manifest.SendsHTTPToTargets).
 func sendsHTTPToTargets(m tool.Manifest, task tool.Task) bool {
-	if m.Normalized().Permissions.Network != tool.NetTargets {
-		// Vendor APIs, the resolver, the egress proxy (registries,
-		// repositories, vulnerability databases) and no network never
-		// reach a program's targets with the tool's own HTTP requests.
-		return false
-	}
-	noHTTP := func(ref string) bool {
-		key, _, _ := strings.Cut(strings.TrimSpace(ref), "@")
-		return noHTTPCapabilities[key]
-	}
-	if task.Capability != "" {
-		return !noHTTP(task.Capability)
-	}
-	if len(m.Implements) == 0 {
-		return true
-	}
-	for _, im := range m.Implements {
-		if !noHTTP(im.Capability) {
-			return true
-		}
-	}
-	return false
+	return m.SendsHTTPToTargets(task.Capability)
 }

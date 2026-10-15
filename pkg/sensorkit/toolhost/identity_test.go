@@ -237,3 +237,64 @@ func TestHeaderArgsRefuseHostileValues(t *testing.T) {
 		t.Fatalf("a plain value: %q %v", got, ierr)
 	}
 }
+
+// SECURITY: the identification goes only to a task that sends HTTP to its
+// targets. A DNS resolver, a passive subdomain source behind the egress
+// proxy or a port scan is admitted with no identification at all: it is
+// not refused for one, and never hands the program's headers to a third
+// party. A tool that sends HTTP to its targets still receives it.
+func TestIdentityClearedForTasksWithoutHTTPToTargets(t *testing.T) {
+	ctx := context.Background()
+	compiled := func(n tool.Network, caps ...string) tool.Manifest {
+		m := httpManifest
+		m.Run = nil
+		m.Tier = tool.T1
+		m.Consumes = []string{"domain"}
+		m.Produces = []string{"asset:domain"}
+		if n == tool.NetTargets {
+			m.Produces = []string{"asset:host"}
+			if caps[0] == "probe.http@1" {
+				m.Produces = []string{"asset:http_service"}
+			}
+		}
+		m.Permissions = tool.Permissions{Network: n}
+		m.Implements = nil
+		for _, c := range caps {
+			m.Implements = append(m.Implements, tool.Implementation{Capability: c})
+		}
+		return m
+	}
+	cases := []struct {
+		name     string
+		m        tool.Manifest
+		capab    string
+		identity bool
+	}{
+		{"resolver (dnsx)", compiled(tool.NetResolver, "resolve.dns@1"), "resolve.dns@1", false},
+		{"passive sources (subfinder)", compiled(tool.NetEgressProxy, "discover.subdomains@1"), "discover.subdomains@1", false},
+		{"port scan (naabu)", compiled(tool.NetTargets, "scan.ports@1", "discover.hosts@1"), "scan.ports@1", false},
+		{"port scan, no capability named", compiled(tool.NetTargets, "scan.ports@1", "discover.hosts@1"), "", false},
+	}
+	declared := compiled(tool.NetTargets, "probe.http@1")
+	declared.Features = &tool.Features{HTTPIdentity: true}
+	cases = append(cases, struct {
+		name     string
+		m        tool.Manifest
+		capab    string
+		identity bool
+	}{"http prober declaring features.http_identity", declared, "probe.http@1", true})
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			task := identityTask()
+			task.Targets = []tool.Target{{Ref: "d", Type: "domain", Value: "example.com"}}
+			task.Capability = c.capab
+			p, ierr, err := (&Host{}).prepare(ctx, c.m, task, RunOptions{})
+			if err != nil || ierr != nil {
+				t.Fatalf("refused: %v %v", err, ierr)
+			}
+			if got := !p.task.Identity.Empty(); got != c.identity {
+				t.Fatalf("identity handed to the tool: %v, want %v (%+v)", got, c.identity, p.task.Identity)
+			}
+		})
+	}
+}

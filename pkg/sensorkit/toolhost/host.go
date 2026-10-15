@@ -409,6 +409,13 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if ierr := checkIdentity(m, task); ierr != nil {
 		return nil, ierr, nil
 	}
+	if !sendsHTTPToTargets(m, task) {
+		// The identification is for the program's targets: a task that
+		// sends them no HTTP (DNS, a port scan, passive sources, a vendor
+		// API) neither needs it nor hands it to third parties. Its tool
+		// sees no identification, so it never refuses for one.
+		task.Identity = nil
+	}
 	contentPaths, err := tool.CheckTaskContent(m, task, h.ContentRoot)
 	if err != nil {
 		return nil, tool.AsError(err), nil
