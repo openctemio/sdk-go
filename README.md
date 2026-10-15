@@ -3,7 +3,7 @@
 Go SDK for building sensors, tools and integrations for the OpenCTEM
 platform. Product documentation: https://docs.openctem.io.
 
-[![License](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-blue?logo=go)](https://golang.org/)
 [![Go Reference](https://pkg.go.dev/badge/github.com/openctemio/sdk-go.svg)](https://pkg.go.dev/github.com/openctemio/sdk-go)
 
@@ -356,4 +356,6 @@ Report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
 
 ## License
 
-GNU General Public License v3.0; see [LICENSE](LICENSE).
+Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE). Copyright 2026 The OpenCTEM Authors ([AUTHORS](AUTHORS)).
+
+Third-party and commercial sensors, tools and adapters may import and link the SDK under the Apache License 2.0. Releases before the change to the Apache License 2.0 stay available under the GNU General Public License v3.0 they were published with; every later release is Apache License 2.0 only.
