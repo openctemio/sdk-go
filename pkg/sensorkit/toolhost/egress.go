@@ -334,14 +334,36 @@ func (h *Host) checkLimits(m tool.Manifest, task tool.Task) *tool.Error {
 	return nil
 }
 
+// admittedAddrs are the addresses a confined task's forwarder dials for an
+// admitted name: never an address no check has seen. Admission checked the
+// name with an earlier lookup, and the name may resolve elsewhere now (DNS
+// rebinding), so every address of this lookup is checked again: by the
+// policy's own AdmittedAddrs when it has one, else each address against
+// the policy's target check. An address that fails is dropped; a name
+// with none left is unreachable for the task. Without a policy (a CI run,
+// whose admission checks no target either) the name is pinned as it
+// resolves.
 func (h *Host) admittedAddrs(ctx context.Context, host string) []netip.Addr {
 	if r, ok := h.Policy.(HostResolver); ok && r != nil {
 		addrs, _ := r.AdmittedAddrs(ctx, host)
 		return addrs
 	}
-	addrs, _ := net.DefaultResolver.LookupNetIP(ctx, "ip", absname.Of(host))
-	return addrs
+	addrs, _ := lookupNetIP(ctx, "ip", absname.Of(host))
+	if h.Policy == nil {
+		return addrs
+	}
+	out := make([]netip.Addr, 0, len(addrs))
+	for _, a := range addrs {
+		a = a.Unmap()
+		if h.Policy.CheckTarget(ctx, a.String()) == nil {
+			out = append(out, a)
+		}
+	}
+	return out
 }
+
+// lookupNetIP resolves a target name for admittedAddrs (tests replace it).
+var lookupNetIP = net.DefaultResolver.LookupNetIP
 
 // egressRate is the forwarder's connection rate: the tool's own rate
 // setting (already capped by the local policy) when it has one, else a
