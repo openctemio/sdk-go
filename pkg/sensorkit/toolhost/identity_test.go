@@ -162,3 +162,21 @@ func TestIdentityOnlyForHTTPTools(t *testing.T) {
 		}
 	}
 }
+
+// HeaderLines and Overrides are what a tool that maps the identification
+// onto its own flags uses.
+func TestIdentityHeaderLines(t *testing.T) {
+	id := &tool.Identity{UserAgent: "jdoe-research", Headers: map[string]string{"X-Bug-Bounty": "jdoe", "A-First": "1"}}
+	got := id.HeaderLines()
+	want := []string{"User-Agent: jdoe-research", "A-First: 1", "X-Bug-Bounty: jdoe"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%q", got)
+	}
+	if !id.Overrides("user-agent: other") || !id.Overrides("x-bug-bounty:someone") || id.Overrides("X-Scan: 1") {
+		t.Fatal("Overrides")
+	}
+	var none *tool.Identity
+	if none.HeaderLines() != nil || none.Overrides("User-Agent: x") {
+		t.Fatal("nil identity")
+	}
+}

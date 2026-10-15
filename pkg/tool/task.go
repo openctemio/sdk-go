@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -222,3 +223,47 @@ type Identity struct {
 
 // Empty reports whether the identification sets nothing.
 func (i *Identity) Empty() bool { return i == nil || (i.UserAgent == "" && len(i.Headers) == 0) }
+
+// HeaderLines is the identification as "Name: value" lines: the User-Agent
+// first, then the headers in name order. A tool that maps the
+// identification onto its own header flags (features.http_identity) passes
+// one line per flag and drops any header of the same name it was
+// configured with, so the identification wins.
+func (i *Identity) HeaderLines() []string {
+	if i.Empty() {
+		return nil
+	}
+	var out []string
+	if i.UserAgent != "" {
+		out = append(out, "User-Agent: "+i.UserAgent)
+	}
+	names := make([]string, 0, len(i.Headers))
+	for k := range i.Headers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		out = append(out, k+": "+i.Headers[k])
+	}
+	return out
+}
+
+// Overrides reports whether a configured "Name: value" header line names
+// a header the identification sets (case-insensitive): such a line must be
+// dropped in favour of the identification.
+func (i *Identity) Overrides(line string) bool {
+	if i.Empty() {
+		return false
+	}
+	name, _, _ := strings.Cut(line, ":")
+	name = strings.TrimSpace(name)
+	if i.UserAgent != "" && strings.EqualFold(name, "User-Agent") {
+		return true
+	}
+	for k := range i.Headers {
+		if strings.EqualFold(k, name) {
+			return true
+		}
+	}
+	return false
+}
