@@ -102,13 +102,15 @@ func Admit(ctx context.Context, m tool.Manifest, task tool.Task, pol Policy, mod
 }
 
 // CapabilityHTTPIdentity is the capability a sensor advertises when every
-// request its tools send carries the job's identification: the
-// organization's User-Agent and headers (core.OrgHTTPPolicy, for example the
-// headers a bug-bounty program requires). The tool host applies them to
-// every tool it runs, so a sensor whose tools all run through the tool host
-// advertises it (ToolRegistry.AddCapabilities). The platform holds a job
-// that carries such identification from a sensor that does not report it,
-// so it never reaches a sensor that would probe without it.
+// HTTP request its tools send to their targets carries the job's
+// identification: the organization's User-Agent and headers
+// (core.OrgHTTPPolicy, for example the headers a bug-bounty program
+// requires). The tool host enforces it per task (Task.Identity,
+// checkIdentity): Context.HTTP sets it on every request, an exec tool gets
+// it on its argv, and a tool that can do neither is refused. So a sensor
+// whose tools all run through the tool host advertises it
+// (ToolRegistry.AddCapabilities), and the platform gives jobs that carry an
+// identification only to a sensor that reports it.
 const CapabilityHTTPIdentity = "http.identity@1"
 
 // HTTPPolicy is a policy that decides about the tools' requests
@@ -178,4 +180,93 @@ func effectiveHTTP(m tool.Manifest, pol Policy, org *core.OrgHTTPPolicy) (*tool.
 
 func refusedErr(format string, args ...any) *tool.Error {
 	return tool.AsError(tool.Refused(fmt.Sprintf(format, args...)))
+}
+
+// identityOf is the identification the task's requests must carry: the
+// organization's headers, and its User-Agent as it ends up effective (the
+// sensor-local policy's wins). nil when the organization sets neither.
+func identityOf(eff *tool.HTTPSpec, org *core.OrgHTTPPolicy) *tool.Identity {
+	if org == nil || (org.UserAgent == "" && len(org.Headers) == 0) {
+		return nil
+	}
+	id := &tool.Identity{}
+	if org.UserAgent != "" && eff != nil {
+		id.UserAgent = eff.UserAgent
+	}
+	if len(org.Headers) > 0 {
+		id.Headers = maps.Clone(org.Headers)
+	}
+	if id.Empty() {
+		return nil
+	}
+	return id
+}
+
+// checkIdentity refuses a task whose identification the tool cannot put on
+// every request: a networked tool must declare features.http_identity, or
+// be an exec-profile tool whose argv passes the User-Agent
+// ({{http.user_agent}}) and the headers ({{http.headers:-flag}}) it is
+// given. A tool that would probe without the identification never starts
+// (CapabilityHTTPIdentity).
+func checkIdentity(m tool.Manifest, task tool.Task) *tool.Error {
+	if task.Identity.Empty() || !sendsHTTPToTargets(m, task) {
+		return nil
+	}
+	if m.Features != nil && m.Features.HTTPIdentity {
+		return nil
+	}
+	if m.Run != nil && m.Run.Profile == tool.ProfileExec {
+		var ua, headers bool
+		for _, a := range m.Run.Argv {
+			for _, name := range tool.ArgvPlaceholders(a) {
+				if name == "http.user_agent" {
+					ua = true
+				}
+				if _, ok := tool.HeaderArgs(name); ok {
+					headers = true
+				}
+			}
+		}
+		if (task.Identity.UserAgent == "" || ua) && (len(task.Identity.Headers) == 0 || headers) {
+			return nil
+		}
+	}
+	return refusedErr("%s cannot send the job's identification (User-Agent and headers) on every request: it declares no features.http_identity", m.Name)
+}
+
+// noHTTPCapabilities are the capabilities whose tools reach targets
+// without HTTP (a port scan, host discovery, DNS lookups): the
+// identification is HTTP headers, so it does not apply to them.
+var noHTTPCapabilities = map[string]bool{
+	"scan.ports": true, "discover.hosts": true, "resolve.dns": true,
+	"lookup.rdap": true, "lookup.asn": true, "discover.subdomains": true,
+}
+
+// sendsHTTPToTargets reports whether a task may send HTTP requests to its
+// targets: the tool reaches the task's targets (network class targets), and the task's capability, or else every capability the tool
+// implements, is not one that reaches targets without HTTP. A tool that
+// implements nothing counts as sending HTTP (fail closed).
+func sendsHTTPToTargets(m tool.Manifest, task tool.Task) bool {
+	if m.Normalized().Permissions.Network != tool.NetTargets {
+		// Vendor APIs, the resolver, the egress proxy (registries,
+		// repositories, vulnerability databases) and no network never
+		// reach a program's targets with the tool's own HTTP requests.
+		return false
+	}
+	noHTTP := func(ref string) bool {
+		key, _, _ := strings.Cut(strings.TrimSpace(ref), "@")
+		return noHTTPCapabilities[key]
+	}
+	if task.Capability != "" {
+		return !noHTTP(task.Capability)
+	}
+	if len(m.Implements) == 0 {
+		return true
+	}
+	for _, im := range m.Implements {
+		if !noHTTP(im.Capability) {
+			return true
+		}
+	}
+	return false
 }

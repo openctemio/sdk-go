@@ -391,11 +391,24 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, ierr, nil
 	}
 	task = adm.Task
+	// The job's identification is checked at this boundary before any of
+	// it reaches a request header or an argv element: an invalid one
+	// refuses the task, never stripped.
+	if err := task.OrgHTTP.Validate(); err != nil {
+		return nil, refusedErr("the job's identification is invalid: %v", err), nil
+	}
 	eff, ierr := effectiveHTTP(m, h.Policy, task.OrgHTTP)
 	if ierr != nil {
 		return nil, ierr, nil
 	}
+	task.Identity = identityOf(eff, task.OrgHTTP)
+	if err := task.Identity.Validate(); err != nil {
+		return nil, refusedErr("the job's identification is invalid: %v", err), nil
+	}
 	task.HTTP, task.OrgHTTP = eff, nil
+	if ierr := checkIdentity(m, task); ierr != nil {
+		return nil, ierr, nil
+	}
 	contentPaths, err := tool.CheckTaskContent(m, task, h.ContentRoot)
 	if err != nil {
 		return nil, tool.AsError(err), nil

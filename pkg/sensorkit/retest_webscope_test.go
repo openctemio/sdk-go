@@ -84,3 +84,31 @@ func stateMsg(f *conformance.FakePlatform, id string) string {
 	_, msg := f.CommandState(id)
 	return msg
 }
+
+// SECURITY: a retest command's identification (a bug-bounty program's
+// User-Agent and headers) reaches the task, as a scan command's does, so the
+// tool host puts it on every request or refuses the tool; an invalid one
+// fails the command before anything runs.
+func TestRetestTaskCarriesTheIdentification(t *testing.T) {
+	var p retestPayload
+	if err := json.Unmarshal([]byte(`{"scanner":"x","targets":["https://app.example/"],
+		"http_policy":{"user_agent":"jdoe-research","headers":{"X-Bug-Bounty":"jdoe"}},
+		"items":[{"ref":"f1","target":"https://app.example/","kind":"finding","rule_id":"r"}]}`), &p); err != nil {
+		t.Fatal(err)
+	}
+	task, err := retestTask("c1", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.OrgHTTP == nil || task.OrgHTTP.UserAgent != "jdoe-research" || task.OrgHTTP.Headers["X-Bug-Bounty"] != "jdoe" {
+		t.Fatalf("task http policy %+v", task.OrgHTTP)
+	}
+	if err := json.Unmarshal([]byte(`{"scanner":"x","targets":["https://app.example/"],
+		"http_policy":{"headers":{"Authorization":"Bearer x"}},
+		"items":[{"ref":"f1","target":"https://app.example/","kind":"finding","rule_id":"r"}]}`), &p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retestTask("c2", p); err == nil || !strings.Contains(err.Error(), "http policy") {
+		t.Fatalf("an invalid http policy must fail the retest: %v", err)
+	}
+}

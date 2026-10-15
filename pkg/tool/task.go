@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -65,6 +66,13 @@ type Task struct {
 	// with what the sensor's local policy decides (a forced User-Agent).
 	// Set by the runtime, never taken from a job; ctx.HTTP() applies it.
 	HTTP *HTTPSpec `json:"http,omitempty"`
+	// Identity is the identification every request of the task must carry:
+	// the organization's User-Agent (after the sensor-local policy, which
+	// wins) and headers from the job. Set by the runtime, never taken from
+	// a job; ctx.HTTP() sets it on every request over what the tool set
+	// itself, and an exec tool receives it through {{http.user_agent}} and
+	// {{http.headers:-flag}}. nil when the job carries none.
+	Identity *Identity `json:"identity,omitempty"`
 	// OrgHTTP is the organization's HTTP policy from the job. The tool host
 	// merges it into HTTP (after the local policy) and clears it; a tool
 	// never acts on it.
@@ -205,3 +213,72 @@ const (
 	StateFailed  TargetState = "failed"
 	StateSkipped TargetState = "skipped"
 )
+
+// Identity is the identification every request of a task carries
+// (Task.Identity).
+type Identity struct {
+	UserAgent string            `json:"user_agent,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+}
+
+// Empty reports whether the identification sets nothing.
+func (i *Identity) Empty() bool { return i == nil || (i.UserAgent == "" && len(i.Headers) == 0) }
+
+// HeaderLines is the identification as "Name: value" lines: the User-Agent
+// first, then the headers in name order. A tool that maps the
+// identification onto its own header flags (features.http_identity) passes
+// one line per flag and drops any header of the same name it was
+// configured with, so the identification wins.
+func (i *Identity) HeaderLines() []string {
+	if i.Empty() {
+		return nil
+	}
+	var out []string
+	if i.UserAgent != "" {
+		out = append(out, "User-Agent: "+i.UserAgent)
+	}
+	names := make([]string, 0, len(i.Headers))
+	for k := range i.Headers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		out = append(out, k+": "+i.Headers[k])
+	}
+	return out
+}
+
+// Overrides reports whether a configured "Name: value" header line names
+// a header the identification sets (case-insensitive): such a line must be
+// dropped in favor of the identification.
+func (i *Identity) Overrides(line string) bool {
+	if i.Empty() {
+		return false
+	}
+	name, _, _ := strings.Cut(line, ":")
+	name = strings.TrimSpace(name)
+	if i.UserAgent != "" && strings.EqualFold(name, "User-Agent") {
+		return true
+	}
+	for k := range i.Headers {
+		if strings.EqualFold(k, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate checks the identification as the organization's policy is
+// checked (core.OrgHTTPPolicy.Validate): a User-Agent of printable ASCII
+// up to 256 bytes, at most 10 headers with token names, printable ASCII
+// values up to 200 bytes (no CR, LF, NUL or other control character), and
+// no credential, hop-by-hop or connection header (Host, Authorization,
+// Cookie, Content-Length, Transfer-Encoding, Connection, Proxy-*, ...).
+// The tool host refuses a task whose identification fails it; nothing is
+// stripped.
+func (i *Identity) Validate() error {
+	if i == nil {
+		return nil
+	}
+	return (&core.OrgHTTPPolicy{UserAgent: i.UserAgent, Headers: i.Headers}).Validate()
+}

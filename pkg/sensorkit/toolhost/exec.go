@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -227,6 +228,16 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 		// arguments; an element whose optional or list value is empty is
 		// left out (the tool then uses its own default).
 		if whole := wholePlaceholder(a); whole != "" {
+			// The task's headers, the identification included: the flag
+			// and "Name: value" for each, in name order.
+			if flag, ok := tool.HeaderArgs(whole); ok {
+				hs, ierr := headerArgs(flag, p.task.HTTP)
+				if ierr != nil {
+					return nil, ierr
+				}
+				out = append(out, hs...)
+				continue
+			}
 			// A content slot's packs, one argument each.
 			if slot, ok := strings.CutSuffix(strings.TrimPrefix(whole, "content."), "..."); ok && strings.HasPrefix(whole, "content.") {
 				out = append(out, p.task.ContentPaths(slot)...)
@@ -596,3 +607,32 @@ func ingestRecord(p *prepared, kind, ref string, data json.RawMessage) error {
 	}
 	return nil
 }
+
+// headerArgs is {{http.headers:-flag}}: the flag and "Name: value" for each
+// header of the task's http settings, in name order. Each pair is one
+// argument. A name that is not a token or a value with a control character
+// (CR, LF, NUL, ...) refuses the task: it could add headers or requests in a
+// tool that writes the line into a raw request. The settings were checked
+// when they were built; this holds whatever built them.
+func headerArgs(flag string, h *tool.HTTPSpec) ([]string, *tool.Error) {
+	if h == nil || len(h.Headers) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(h.Headers))
+	for k := range h.Headers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	out := make([]string, 0, 2*len(names))
+	for _, k := range names {
+		v := h.Headers[k]
+		if !headerTokenRE.MatchString(k) || strings.IndexFunc(v, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+			return nil, refusedErr("{{http.headers}}: header %q has an invalid name or a control character in its value", k)
+		}
+		out = append(out, flag, k+": "+v)
+	}
+	return out, nil
+}
+
+// headerTokenRE is an HTTP header name (an RFC 9110 token).
+var headerTokenRE = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+.^_|~-]{1,64}$`)
