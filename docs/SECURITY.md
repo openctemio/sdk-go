@@ -448,6 +448,17 @@ themselves. The window between the executor's check and the tool's own
 lookup is not closed for them. To close it, route the tool through the egress
 forwarder, or list addresses instead of names in `targets.allow`.
 
+A confined task's forwarder (section 7) dials a name only at the addresses
+pinned for the task, and every pinned address has passed a check: the
+policy's `AdmittedAddrs`; without it, the policy's target check applied to
+each address of the tool host's own lookup (a local policy without a file
+applies the built-in deny list). A tool host with no policy at all (a CI
+run, whose admission checks no target either) pins a name as it resolves.
+A name re-bound to a private, loopback, CGNAT, link-local or
+metadata address between admission and task start is therefore never
+pinned, and a tool that resolves it again through the forwarder's DNS gets
+the pinned addresses back.
+
 #### Signed jobs
 
 The platform's job signer is a process apart from the API (api RFC-040

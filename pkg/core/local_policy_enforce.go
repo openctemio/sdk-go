@@ -602,20 +602,19 @@ func (lp *LocalPolicy) nameAllowed(name string) bool {
 // AdmittedAddrs checks a host name or address as CheckTarget does and
 // returns the addresses it checked: a confined task's forwarder dials a
 // target at these addresses only, never at what the name resolves to
-// later. Without a policy the name is resolved and every address returned
-// (the forwarder still refuses metadata and link-local ones).
+// later. Without a policy the built-in deny list applies, as CheckTarget
+// applies it: every address of this lookup is checked again, so a name
+// re-bound to a private, loopback, CGNAT or metadata address after the
+// target check is refused here and never pinned (DNS rebinding).
 func (lp *LocalPolicy) AdmittedAddrs(ctx context.Context, host string) ([]netip.Addr, error) {
 	if lp.failsClosed() {
 		return nil, noLocalPolicyTarget(host)
 	}
+	check := lp
 	if !lp.Present() {
-		addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", absname.Of(strings.Trim(host, "[]")))
-		if err != nil {
-			return nil, err
-		}
-		return addrs, nil
+		check = lp.builtinOnly()
 	}
-	ips, err := lp.checkHost(ctx, host, true)
+	ips, err := check.checkHost(ctx, host, true)
 	if err != nil {
 		return nil, err
 	}
