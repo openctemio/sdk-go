@@ -44,7 +44,7 @@ type retestPayload struct {
 	// User-Agent and headers), as on a scan command: the tool host puts it
 	// on every request of the retest or refuses a tool that cannot.
 	HTTPPolicy *core.OrgHTTPPolicy `json:"http_policy,omitempty"`
-	Items    []struct {
+	Items      []struct {
 		Ref         string `json:"ref"`
 		Target      string `json:"target"`
 		Kind        string `json:"kind"`
