@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // flipResolver answers the first lookup with first and every later one
@@ -19,6 +21,15 @@ func flipResolver(first, later string) (func(context.Context, string) ([]net.IP,
 		}
 		return []net.IP{net.ParseIP(later)}, nil
 	}, &n
+}
+
+// noLoopbackAllowance pins the production loopback posture for a test
+// (CI sets OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK=1 for its local fakes).
+func noLoopbackAllowance(t *testing.T) {
+	t.Helper()
+	prev := httpsec.AllowLoopback
+	httpsec.AllowLoopback = false
+	t.Cleanup(func() { httpsec.AllowLoopback = prev })
 }
 
 func absentPolicyWithResolver(t *testing.T, lookup func(context.Context, string) ([]net.IP, error)) *LocalPolicy {
@@ -38,6 +49,7 @@ func absentPolicyWithResolver(t *testing.T, lookup func(context.Context, string)
 // (AdmittedAddrs) pass the built-in deny list too: a name that resolves to
 // a private, loopback, CGNAT or metadata address is refused, never pinned.
 func TestAdmittedAddrs_NoPolicyRefusesInternalAddresses(t *testing.T) {
+	noLoopbackAllowance(t)
 	t.Setenv(EnvSensorAllowPrivateTargets, "")
 	for _, addr := range []string{"10.1.2.3", "169.254.169.254", "127.0.0.1", "100.64.0.1", "fd00:ec2::254", "192.168.1.1"} {
 		lp := absentPolicyWithResolver(t, func(context.Context, string) ([]net.IP, error) {
