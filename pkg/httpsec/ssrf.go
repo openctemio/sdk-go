@@ -30,11 +30,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/openctemio/ctis/addrscope"
 )
 
 // allowLoopbackEnvVar is the env var name a test harness can set to
@@ -55,40 +59,21 @@ const allowLoopbackEnvVar = "OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK"
 // external test harnesses; this variable is for in-process overrides.
 var AllowLoopback = os.Getenv(allowLoopbackEnvVar) == "1"
 
-// hardBlockedIPRanges lists CIDRs that MUST NEVER be reachable.
-// Mirror of api/pkg/httpsec. See that file for the full rationale.
-// Attacks these ranges are not "aggressive configuration" but
-// immediate security incidents (cloud IMDS leak, loopback self-
-// scan, etc.) — no env var should be able to open them.
-var hardBlockedIPRanges = []string{
-	"127.0.0.0/8",        // Loopback
-	"169.254.0.0/16",     // Link-local (incl. AWS/GCP/Azure IMDS)
-	"100.64.0.0/10",      // Carrier-grade NAT
-	"0.0.0.0/8",          // "This" network
-	"224.0.0.0/4",        // Multicast
-	"240.0.0.0/4",        // Reserved
-	"255.255.255.255/32", // Broadcast
-	"::1/128",            // IPv6 loopback
-	"::/128",             // IPv6 unspecified
-	"fe80::/10",          // IPv6 link-local
-	"ff00::/8",           // IPv6 multicast
-	"fd00:ec2::254/128",  // AWS IMDS over IPv6 (inside fc00::/7)
-	"fd20:ce::254/128",   // GCP metadata server over IPv6 (inside fc00::/7)
-	// Ranges that embed an IPv4 address the network may translate to: on a
-	// NAT64/DNS64 or 6to4 network 64:ff9b::a9fe:a9fe reaches 169.254.169.254.
-	"64:ff9b::/96",   // NAT64 well-known prefix
-	"64:ff9b:1::/48", // NAT64 local-use prefix
-	"2002::/16",      // 6to4
-	"2001::/32",      // Teredo
-	// IPv4 special-purpose ranges that are never a tenant service.
-	"192.0.0.0/24",  // IETF protocol assignments (DS-Lite, NAT64 discovery)
-	"198.18.0.0/15", // Benchmarking
+// The deny list is ctis addrscope (IsInternal): the one definition of an
+// internal address, shared with the platform, which checks job targets with
+// it. It covers loopback, link-local (cloud metadata), CGNAT, "this"
+// network, multicast, reserved and broadcast, IETF protocol assignments,
+// benchmarking, the private ranges below, IPv6 unspecified, loopback,
+// link-local, site-local, ULA and multicast, and judges an IPv6 address
+// that carries an IPv4 address (IPv4-mapped or -compatible, NAT64, 6to4,
+// Teredo) by that address. Of all that, only the private ranges below,
+// written directly (never carried inside another IPv6 range), can be
+// allowed; the metadata addresses inside ULA never.
+var metadataInPrivate = []netip.Addr{
+	netip.MustParseAddr("fd00:ec2::254"), // AWS IMDS over IPv6
+	netip.MustParseAddr("fd20:ce::254"),  // GCP metadata server over IPv6
 }
 
-// privateIPRanges — blocked by default, opened by setting
-// OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1. An on-prem
-// deployment scanning its own 10.x / 192.168.x services needs this
-// on.
 var privateIPRanges = []string{
 	"10.0.0.0/8",     // RFC1918 class A
 	"172.16.0.0/12",  // RFC1918 class B
@@ -117,15 +102,9 @@ var dangerousHosts = []string{
 	"169.254.169.254",
 }
 
-var hardBlockedCIDRs []*net.IPNet
 var privateCIDRs []*net.IPNet
 
 func init() {
-	for _, cidr := range hardBlockedIPRanges {
-		if _, ipNet, err := net.ParseCIDR(cidr); err == nil {
-			hardBlockedCIDRs = append(hardBlockedCIDRs, ipNet)
-		}
-	}
 	for _, cidr := range privateIPRanges {
 		if _, ipNet, err := net.ParseCIDR(cidr); err == nil {
 			privateCIDRs = append(privateCIDRs, ipNet)
@@ -152,28 +131,25 @@ func IsIPBlocked(ip net.IP) bool {
 // reserved) is enforced regardless of either toggle; allowLoopback only
 // relaxes 127.0.0.0/8 and ::1.
 func IsIPBlockedWith(ip net.IP, allowPrivateRanges, allowLoopback bool) bool {
-	if ip == nil {
+	a, ok := netip.AddrFromSlice(ip)
+	if !ok {
 		return true
 	}
-	if allowLoopback && (ip.IsLoopback() || ip.Equal(net.IPv6loopback)) {
+	a = a.Unmap()
+	if allowLoopback && a.IsLoopback() {
 		return false
 	}
-	if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return true
+	if !addrscope.IsInternal(a) {
+		return false
 	}
-	for _, cidr := range hardBlockedCIDRs {
-		if cidr.Contains(ip) {
-			return true
-		}
-	}
-	if !allowPrivateRanges {
+	if allowPrivateRanges && !slices.Contains(metadataInPrivate, a) {
 		for _, cidr := range privateCIDRs {
-			if cidr.Contains(ip) {
-				return true
+			if cidr.Contains(a.AsSlice()) {
+				return false
 			}
 		}
 	}
-	return false
+	return true
 }
 
 // ValidationResult carries the parsed URL + the DNS-pinned IP set so

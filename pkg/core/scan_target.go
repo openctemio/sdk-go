@@ -449,8 +449,12 @@ var blockedRangesForOverlap = mustCIDRs(
 	"127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10", "0.0.0.0/8",
 	"224.0.0.0/4", "240.0.0.0/4", "255.255.255.255/32",
 	"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-	"::1/128", "::/128", "fe80::/10", "ff00::/8", "fc00::/7",
+	"192.0.0.0/24", "198.18.0.0/15",
+	"::1/128", "::/128", "fe80::/10", "fec0::/10", "ff00::/8", "fc00::/7",
 	"fd00:ec2::254/128", "fd20:ce::254/128",
+	// IPv6 ranges that carry IPv4 addresses (ctis addrscope): a range
+	// holding their start holds addresses that carry internal ones.
+	"64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32",
 )
 
 func mustCIDRs(cidrs ...string) []*net.IPNet {
