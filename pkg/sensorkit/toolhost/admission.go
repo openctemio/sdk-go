@@ -243,14 +243,14 @@ var noHTTPCapabilities = map[string]bool{
 }
 
 // sendsHTTPToTargets reports whether a task may send HTTP requests to its
-// targets: the tool reaches the targets (directly or through the egress
-// proxy), and the task's capability, or else every capability the tool
+// targets: the tool reaches the task's targets (network class targets), and the task's capability, or else every capability the tool
 // implements, is not one that reaches targets without HTTP. A tool that
 // implements nothing counts as sending HTTP (fail closed).
 func sendsHTTPToTargets(m tool.Manifest, task tool.Task) bool {
-	switch m.Normalized().Permissions.Network {
-	case tool.NetTargets, tool.NetEgressProxy:
-	default:
+	if m.Normalized().Permissions.Network != tool.NetTargets {
+		// Vendor APIs, the resolver, the egress proxy (registries,
+		// repositories, vulnerability databases) and no network never
+		// reach a program's targets with the tool's own HTTP requests.
 		return false
 	}
 	noHTTP := func(ref string) bool {

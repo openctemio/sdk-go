@@ -151,7 +151,7 @@ func TestIdentityOnlyForHTTPTools(t *testing.T) {
 		{"its port-scan task", withNet(tool.NetTargets, "scan.ports@1", "probe.http@1"), "scan.ports@1", false},
 		{"its http task", withNet(tool.NetTargets, "scan.ports@1", "probe.http@1"), "probe.http@1", true},
 		{"implements nothing (fail closed)", withNet(tool.NetTargets), "", true},
-		{"through the egress proxy", withNet(tool.NetEgressProxy, "crawl.web@1"), "", true},
+		{"egress proxy (registries, repositories)", withNet(tool.NetEgressProxy, "sca.deps@1"), "", false},
 		{"vendor API", withNet(tool.NetVendor, "discover.subdomains@1"), "", false},
 		{"resolver", withNet(tool.NetResolver, "resolve.dns@1"), "", false},
 		{"no network", withNet(tool.NetNone, "sast.code@1"), "", false},
