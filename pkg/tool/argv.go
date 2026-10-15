@@ -50,6 +50,21 @@ func ConfigArg(name string) (key string, form ArgForm, flag string, ok bool) {
 	}
 }
 
+// headerArgsRE is the header-list placeholder, {{http.headers:-H}}.
+var headerArgsRE = regexp.MustCompile(`^http\.headers:(--?[A-Za-z0-9][A-Za-z0-9_-]{0,63})$`)
+
+// HeaderArgs parses the header-list placeholder name "http.headers:-flag":
+// as the whole argv element it becomes the flag and "Name: value" for each
+// of the task's headers (Task.HTTP), the identification included. ok is
+// false for any other name.
+func HeaderArgs(name string) (flag string, ok bool) {
+	m := headerArgsRE.FindStringSubmatch(strings.TrimSpace(name))
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
 // ArgvPlaceholders returns the placeholder names in an argv element.
 func ArgvPlaceholders(element string) []string {
 	var out []string

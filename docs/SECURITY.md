@@ -733,6 +733,33 @@ SDK enforces it:
   again with `/.env` denied: it fails a tool that requests it (directly or
   behind a redirect) and one that no longer finds the exposed `/.git/config`.
 
+#### Job identification on every request
+
+A job can carry the organization's identification (`http_policy`: a
+User-Agent and headers, for example the header a bug-bounty program requires
+of its researchers). The tool host makes it reach every request of the task,
+or the task does not start:
+
+- `Task.Identity` holds it (after the sensor-local policy, whose User-Agent
+  wins). `Context.HTTP` sets it on every request, redirects included, over
+  any value the tool set itself; the tool's other headers keep their default
+  rule.
+- An exec-profile tool receives it on its argv: `{{http.user_agent}}` and
+  `{{http.headers:-flag}}` (the flag and `Name: value` per header, a whole
+  argument).
+- The identification is HTTP headers, so it applies to tasks that may send
+  HTTP to their targets: a tool whose network class is not `targets`
+  (vendor API, resolver, egress proxy, none) or a task whose capability reaches targets without HTTP
+  (`scan.ports`, `discover.hosts`, DNS lookups) is not affected.
+- A networked tool that can do neither (an exec tool whose argv lacks the
+  placeholders, or a tool that does not declare `features.http_identity`) is
+  refused with `refused_by_policy`. A tool that declares
+  `features.http_identity` maps the identification onto its own flags or
+  requests only through `Context.HTTP`.
+- A sensor whose tools all run through the tool host advertises
+  `http.identity@1`; the platform gives identification-carrying jobs only to
+  such a sensor.
+
 ### 9. API Client Transport
 
 - API clients (`pkg/client`, `pkg/platform`) refuse HTTP redirects; the API

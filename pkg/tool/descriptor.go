@@ -136,6 +136,15 @@ type Features struct {
 	// only through Context.HTTP, which enforces it. A job with a web scope
 	// is refused for a networked tool that does not declare it.
 	WebScope bool `json:"web_scope,omitempty"`
+	// HTTPIdentity: every request the tool sends carries the task's
+	// identification (Task.Identity: the organization's User-Agent and
+	// headers, for example the headers a bug-bounty program requires of
+	// its researchers): it maps them onto its own flags, or requests only
+	// through Context.HTTP, which applies them. A job that carries an
+	// identification is refused for a networked tool that does not
+	// declare it. An exec-profile tool whose argv carries
+	// {{http.user_agent}} and {{http.headers:-flag}} needs no declaration.
+	HTTPIdentity bool `json:"http_identity,omitempty"`
 	// Streaming is reserved: feeding records to the next stage while the
 	// task runs is not part of protocol v1.
 	Streaming bool `json:"streaming,omitempty"`

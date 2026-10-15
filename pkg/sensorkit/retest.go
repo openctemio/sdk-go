@@ -40,7 +40,11 @@ type retestPayload struct {
 	// task forwarder, on a sandbox that confines the network), and a tool
 	// that does not declare features.web_scope is refused.
 	WebScope *webscope.Scope `json:"web_scope,omitempty"`
-	Items    []struct {
+	// HTTPPolicy is the job's identification (a bug-bounty program's
+	// User-Agent and headers), as on a scan command: the tool host puts it
+	// on every request of the retest or refuses a tool that cannot.
+	HTTPPolicy *core.OrgHTTPPolicy `json:"http_policy,omitempty"`
+	Items      []struct {
 		Ref         string `json:"ref"`
 		Target      string `json:"target"`
 		Kind        string `json:"kind"`
@@ -159,9 +163,12 @@ func (x *retestExecutor) Execute(ctx context.Context, cmd *core.Command) (*core.
 
 // retestTask builds the task of a retest command.
 func retestTask(id string, p retestPayload) (tool.Task, error) {
-	task := tool.Task{ID: id, WebScope: p.WebScope}
+	task := tool.Task{ID: id, WebScope: p.WebScope, OrgHTTP: p.HTTPPolicy}
 	if err := p.WebScope.Validate(); err != nil {
 		return task, fmt.Errorf("retest: web scope: %w", err)
+	}
+	if err := p.HTTPPolicy.Validate(); err != nil {
+		return task, fmt.Errorf("retest: http policy: %w", err)
 	}
 	if len(p.Items) == 0 {
 		return task, errors.New("retest: the command has no items")

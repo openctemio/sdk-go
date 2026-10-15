@@ -151,6 +151,7 @@
         "retest": {"type": "boolean"},
         "cancel": {"type": "boolean"},
         "web_scope": {"type": "boolean"},
+        "http_identity": {"type": "boolean"},
         "streaming": {"const": false}
       }
     },
