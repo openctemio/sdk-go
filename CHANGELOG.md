@@ -8,6 +8,47 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.34.0 — 2026-10-15
+
+### Security: the job's identification reaches every request, or the task is refused
+
+- The tool host now enforces the organization's identification (`http_policy` User-Agent and headers, such as a bug-bounty program's required header) per task. Before, `Context.HTTP` only added it when the tool set no value of its own, and an exec tool received the headers nowhere: a program's targets could be probed without its required identification.
+- `Task.Identity` carries it. `Context.HTTP` sets it on every request, redirects included, over what the tool set.
+- An exec tool receives it through `{{http.user_agent}}` and the new `{{http.headers:-flag}}` (the flag and `Name: value` per header).
+- A tool that may send HTTP to its targets and can do neither is refused (`refused_by_policy`). Port scans, host discovery and DNS lookups, and tools that reach no target, are not affected. A tool that applies it itself declares `features.http_identity` (new descriptor key).
+
+### Upgrade notes
+
+- Tools that receive identification-carrying jobs must pass `{{http.user_agent}}` and `{{http.headers:-flag}}` on their argv or declare `features.http_identity`; otherwise those tasks are refused.
+
+- Replace the import path `github.com/openctemio/sdk-go/pkg/transfer` with `github.com/openctemio/ctis/transfer`; nothing else changes.
+
+### Removed: pkg/transfer moved to ctis
+
+- The feed transfer module `github.com/openctemio/sdk-go/pkg/transfer` (`transfer`, `transfer/bundle`) moved unchanged to the contract module `github.com/openctemio/ctis/transfer`. Bundles are byte-identical (a golden test in ctis pins them to v0.1.0). The tag `pkg/transfer/v0.1.0` stays fetchable, so existing pins keep building.
+- The module-tag workflow and script are removed with it: the SDK has no nested module left.
+
+### Added: capability http.identity@1
+
+- `toolhost.CapabilityHTTPIdentity` (`http.identity@1`): a sensor whose tools all run through the tool host advertises it (`ToolRegistry.AddCapabilities`). The tool host sends the job's User-Agent and headers (`OrgHTTPPolicy`, for example a bug-bounty program's required identification) on every request of every tool it runs.
+- The platform gates jobs that carry such identification on this capability instead of on the SDK version.
+
+### Changed: the SDK is licensed under the Apache License 2.0
+
+- The SDK moves from the GNU General Public License v3.0 to the Apache License 2.0, so third-party and commercial sensors, tools and adapters can import and link it without taking on the GPL's terms.
+- This and every later release is Apache License 2.0. Releases published before it stay available under the GPL-3.0 they carried; nothing changes for code that already uses them.
+- New `NOTICE` and `AUTHORS` files: the copyright notice is "Copyright 2026 The OpenCTEM Authors", and `AUTHORS` lists the copyright holders.
+- The OpenCTEM platform and the sensor stay GPL-3.0.
+
+### Fixed: the job's identification goes only to tasks that send HTTP to their targets
+
+- The tool host gave every task of an identification-carrying job the organization's User-Agent and headers, including tasks it exempts: a DNS resolver, passive subdomain sources behind the egress proxy, a port scan.
+  - A tool that checks the identification itself refused those tasks ("cannot send the job's identification").
+  - A tool requesting through `Context.HTTP`, or an exec tool passing `{{http.user_agent}}` / `{{http.headers:-flag}}`, sent the program's identification to third-party sources.
+- A task that sends no HTTP to its targets now gets none of it: `Task.Identity` is nil, and its http settings are built without the organization's User-Agent and headers. The organization's TLS rule still applies. Tasks that do send HTTP to their targets are unchanged: the identification reaches every request, or the task is refused.
+- On a target-reaching tool, only `scan.ports`, `discover.hosts` and `resolve.dns` are exempt. `discover.subdomains`, `lookup.rdap` and `lookup.asn` are no longer exempt on such a tool, because it could serve them over HTTP to the targets. Passive tools stay exempt by their network class.
+- New `tool.Manifest.SendsHTTPToTargets(capability)`: the rule the tool host applies, exported so a sensor can check the same thing outside the tool host.
+
 ## v0.33.0 — 2026-10-14
 
 ### Added: the scan-target guard checks each target by the scanner that receives it
