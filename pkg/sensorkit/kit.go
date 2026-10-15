@@ -287,16 +287,19 @@ type settings struct {
 	name, apiURL, apiKey, sensorID, protocol string
 	commands                                 bool
 	shared                                   bool
-	verbose                                  bool
-	maxJobs                                  int
-	drainGrace                               time.Duration
-	pollInterval                             time.Duration
-	allow                                    []string // nil: no allowlist
-	scannerPriority                          *core.ScannerPriority
-	protectFromOOM                           bool
-	outbox                                   OutboxPlan
-	stateDir                                 string
-	key                                      startKey
+	// ledger: a shared sensor's held jobs; the client refuses results
+	// for any other (core.JobLedger).
+	ledger          *core.JobLedger
+	verbose         bool
+	maxJobs         int
+	drainGrace      time.Duration
+	pollInterval    time.Duration
+	allow           []string // nil: no allowlist
+	scannerPriority *core.ScannerPriority
+	protectFromOOM  bool
+	outbox          OutboxPlan
+	stateDir        string
+	key             startKey
 	// signer and identity: a key-bound sensor (api RFC-052); no API key.
 	signer    *sensorsig.Signer
 	identity  *identity.Identity
@@ -492,6 +495,10 @@ func New(opts Options) (*Kit, error) {
 		if err := k.enableTransportV3(); err != nil {
 			k.closeClient()
 			return nil, err
+		}
+		if s.shared {
+			s.ledger = core.NewJobLedger()
+			k.client.SetJobLedger(s.ledger)
 		}
 		// Durable outbox: results are on disk before the first send.
 		if err := EnableOutbox(k.client, s.outbox, s.verbose, k.out, k.errw); err != nil {
@@ -1303,6 +1310,7 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 		MaxConcurrent: resources.MaxSlots(),
 		AllowedTypes:  types,
 		Verbose:       k.s.verbose,
+		Ledger:        k.s.ledger,
 	})
 	poller.SetResourceManager(resources)
 	if doorbell != nil {

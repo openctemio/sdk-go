@@ -49,12 +49,15 @@ func (c *Client) QueueCommandLogs(ctx context.Context, commandID string, batch p
 	if commandID == "" || len(batch.Lines) == 0 {
 		return nil
 	}
+	if err := c.jobLedger().Result(commandID); err != nil {
+		return err
+	}
 	if ob := c.Outbox(); ob != nil {
 		payload, err := json.Marshal(commandLogItem{CommandID: commandID, Batch: batch})
 		if err != nil {
 			return err
 		}
-		if _, err := ob.Enqueue(outbox.Meta{Kind: outbox.KindCommandLog, CommandID: commandID}, payload); err == nil {
+		if _, err := ob.Enqueue(outbox.Meta{Kind: outbox.KindCommandLog, CommandID: commandID, TenantID: c.jobTenantOf(commandID)}, payload); err == nil {
 			return nil
 		}
 		// The disk refused it: try once directly.

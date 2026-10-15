@@ -1,0 +1,5 @@
+### Security: a shared sensor runs only instance-scope signed jobs and binds results to the job's organization
+
+- `jobsig.Statement.SensorScope` (`sensor_scope`) and `jobsig.Binding.Shared`. An organization's sensor refuses a statement that carries `sensor_scope`. A shared sensor requires `sensor_scope` `instance` and its own `sensor_id`, and accepts any `tenant_id` (refusal reason `sensor_scope`).
+- `core.NewSharedJobGuard`: in shared mode every command must carry a signed job that verifies. A shared sensor without a pinned job-signing key or root refuses to start.
+- `core.JobLedger` (`CommandPollerConfig.Ledger`, `Client.SetJobLedger`): the poller holds each command while it runs it, with the organization of its verified job (`core.WithJobTenant`). The client refuses, before storing or sending, any of the following for a command it does not hold (`core.ErrJobNotHeld`): a report, a command result, a log batch, or an unsolicited push. Outbox items of a held job carry `outbox.Meta.TenantID` next to `CommandID`.
