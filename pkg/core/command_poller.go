@@ -75,6 +75,11 @@ type Command struct {
 	// delivery ("signed_job" of a claim answer; api RFC-040 §5.6). It binds
 	// Payload's exact bytes, so Payload must be kept as received.
 	SignedJob json.RawMessage `json:"signed_job,omitempty"`
+	// ZoneRanges are the private ranges the job may reach on a shared
+	// sensor (api RFC-100 §8). The poller puts them on the command's
+	// context (WithJobZone); only a shared sensor's checks read them, and
+	// only within what its operator allows.
+	ZoneRanges []string `json:"zone_ranges,omitempty"`
 	// Claimed is true when the poll already claimed the command for this
 	// sensor (claim-N, api RFC-046 §11). The poller still acknowledges it
 	// (a replay) when it runs it, and releases it when it does not.
@@ -1113,6 +1118,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	// an outbox binds them to it and reports the command only after they
 	// were accepted.
 	ctx = WithCommandID(ctx, cmd.ID)
+	ctx = WithJobZone(ctx, ParseZoneRanges(cmd.ZoneRanges))
 	ctx, usage := withUsageRecorder(ctx)
 	// Every target the job dials through the guarded dialer or a task
 	// forwarder, and every outcome a scanner records, lands here; the

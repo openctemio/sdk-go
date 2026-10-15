@@ -699,6 +699,35 @@ process group with `setsid` is bounded by its rlimits but not killed with the
 group. The sandbox never uses a Docker socket; future backends (a Kubernetes
 Pod per task, a rootless container) plug in behind the same interface.
 
+#### Shared mode (`SENSOR_SHARED_MODE=1`, `sensorkit.Options.Shared`)
+
+A sensor that runs jobs of many tenants (an instance's shared sensors, api
+RFC-100 §8) switches on one profile. The mechanisms are the SDK's; the
+sensor only sets the switch:
+
+| Control | Enforced by | What it stops |
+|---|---|---|
+| The tool sandbox in `required` mode and network confinement required; `SENSOR_SANDBOX` or `SENSOR_SANDBOX_NETWORK` set to anything else is a configuration error, and a host that cannot give both refuses to start (before pairing) | `sensorkit` (`sandboxModes`, `validateSandboxNetwork`), `executor.Config.Shared`, `toolhost.Host.Shared` (a tool on any other backend is refused) | a shared sensor degrading silently to unconfined tools |
+| A fresh private task directory per task, removed after it whatever the outcome; write paths and `HOME`, `TMPDIR`, `TMP`, `TEMP`, `XDG_*` given by the caller must lie beneath the task root | `executor.Config.Shared` (`Prepare` refuses the task) | a writable cache, output or configuration directory shared between jobs: one tenant's job poisoning or reading another's tool state. Read-only signed content packs stay shared |
+| Targets: the policy (the built-in deny list without one), then the job's zone rule. A private address (RFC 1918, ULA) passes only when the operator allows private targets (`SENSOR_ALLOW_PRIVATE_TARGETS=1`, and `targets.allow_private` in a local policy) **and** it lies in the job's zone ranges; loopback, link-local, metadata (169.254.169.254, fd00:ec2::254, ...), CGNAT, multicast and reserved addresses never pass | `core.ScanTargetPolicy.Shared`, `toolhost.Host.Shared` (admission, and again for every address pinned for the task's forwarder), `core.CheckSharedAddr` / `CheckSharedPrefix` | a tenant reaching the operator's network or a cloud metadata service through a shared sensor |
+| The capability `shared.isolation@1`, advertised from the runtime state only | `sensorkit` | the platform sending shared jobs to a sensor that does not enforce this profile |
+
+**Zone ranges.** The platform sends a job's zone as `zone_ranges` (a list of
+CIDRs) on the delivered command (`protov2.Command.ZoneRanges`): the
+instance scan zone assigned to the job's tenant. The poller puts the
+parsed ranges on the command's context (`core.WithJobZone`); entries that
+are not wholly private are dropped, so the platform can only narrow what
+the operator allows. No zone: public addresses only.
+
+**DNS rebinding on a shared sensor.** Every address a confined task dials
+for a name was checked (policy and zone rule) when the task's scope was
+built; the forwarder never resolves an admitted name again, and its DNS
+answers with the pinned addresses. A tool cannot bypass the forwarder: its
+network namespace has no other way out. Residual risks: a vendor host or
+an `egress-proxy` tool resolves at connect time, public addresses only; a
+built-in Go probe that dials in the sensor's own process is outside the
+task sandbox, so a shared sensor must run its tools out of process.
+
 ### 8. Web scope of a job (`pkg/webscope`)
 
 A job can carry a web scope (`web_scope`): the hosts (`app.example.com`, or

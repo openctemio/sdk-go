@@ -360,6 +360,12 @@ type Command struct {
 	// listing poll or another transition. Its payload_sha256 is over the
 	// exact bytes of Payload.
 	SignedJob json.RawMessage `json:"signed_job,omitempty"`
+	// ZoneRanges are the private ranges a job for a shared sensor may
+	// reach (api RFC-100 §8): the instance scan zone assigned to the job's
+	// tenant. Empty: public addresses only. A shared sensor reaches a
+	// private address only inside them and only when its operator allows
+	// private targets; any other sensor ignores them.
+	ZoneRanges []string `json:"zone_ranges,omitempty"`
 }
 
 // CommandList is the answer of GET /commands.

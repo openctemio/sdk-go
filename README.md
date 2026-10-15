@@ -153,6 +153,7 @@ one, the new key wins. Every heartbeat also carries the process's
 | Protocol | `SENSOR_PROTOCOL` = `auto`, `v2` (same; `v1` is retired and refused) | `auto` |
 | Transport (protocol v3) | `SENSOR_TRANSPORT` = `auto` (gRPC over mutual TLS, then HTTPS, then protocol v2), `grpc`, `https`, `v2` | `auto` |
 | Tool confinement | `SENSOR_SANDBOX` = `auto`, `required`, `off`; `SENSOR_SANDBOX_NETWORK` = `auto` (each task in its own network namespace where the host allows user namespaces), `required` (refuse to start without it), `off` | `auto` |
+| Shared mode | `SENSOR_SHARED_MODE=1` for a sensor that runs jobs of many tenants: sandbox and network confinement required, no writable state shared between jobs, private targets only inside the job's zone ([docs/SECURITY.md](docs/SECURITY.md)) | `0` |
 | Key binding | `SENSOR_KEY_BIND` = `auto` (an API key is replaced by a signing key the sensor makes), `off` | `auto` |
 | Local policy | `SENSOR_LOCAL_POLICY` (file), `SENSOR_ALLOWED_RANGES` / `SENSOR_ALLOWED_PORTS` (shorthand), `SENSOR_REQUIRE_LOCAL_POLICY`, `SENSOR_KILL_SWITCH_FILE` | `/etc/openctem/sensor-policy.yaml` |
 | Concurrency cap | `SENSOR_MAX_JOBS` (1-100) | none: slots follow CPU, memory and tool cost |

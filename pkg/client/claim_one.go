@@ -35,7 +35,8 @@ func (c *Client) ClaimCommand(ctx context.Context, id string) (*core.Command, er
 	}
 	c.leases.record(id, answer.LeaseEpoch)
 	cmd := &core.Command{ID: answer.ID, Type: answer.Type, Priority: answer.Priority, Payload: answer.Payload,
-		CreatedAt: answer.CreatedAt, LeaseEpoch: answer.LeaseEpoch, Claimed: true, SignedJob: answer.SignedJob}
+		CreatedAt: answer.CreatedAt, LeaseEpoch: answer.LeaseEpoch, Claimed: true, SignedJob: answer.SignedJob,
+		ZoneRanges: answer.ZoneRanges}
 	if answer.ExpiresAt != nil {
 		cmd.ExpiresAt = *answer.ExpiresAt
 	}

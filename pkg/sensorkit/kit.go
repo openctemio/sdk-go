@@ -213,6 +213,11 @@ type Options struct {
 	// executor.RunLauncherIfRequested first in main; without it, auto runs
 	// tools unconfined and says so.
 	Sandbox string
+	// Shared runs the sensor in shared mode, for jobs of many tenants
+	// (see EnvSharedMode; SENSOR_SHARED_MODE=1 does the same): the tool
+	// sandbox and network confinement are required, each job's files
+	// live and die with its tasks, and private targets need the job's zone.
+	Shared bool
 	// ProtectedPaths are more paths no tool may read or write (the
 	// sensor's own configuration files, connector credentials). The kit
 	// protects its credentials file, outbox, outbox key and local policy
@@ -281,6 +286,7 @@ var defaultCommandTypes = []string{"scan", "collect", "health_check"}
 type settings struct {
 	name, apiURL, apiKey, sensorID, protocol string
 	commands                                 bool
+	shared                                   bool
 	verbose                                  bool
 	maxJobs                                  int
 	drainGrace                               time.Duration
@@ -396,6 +402,11 @@ func New(opts Options) (*Kit, error) {
 	if err := core.CheckEnv(); err != nil {
 		return nil, err
 	}
+	shared, err := resolveShared(opts)
+	if err != nil {
+		return nil, err
+	}
+	s.shared = shared
 	// The sensor-local policy: a policy that cannot be loaded stops the
 	// sensor (fail closed). Whether a sensor without one refuses network
 	// jobs is decided once the identity is known (applyRequireLocalPolicy).
@@ -536,6 +547,11 @@ func New(opts Options) (*Kit, error) {
 	}
 	// NewBaseSensor fills the config's defaults (the banner prints them).
 	k.sensor = core.NewBaseSensor(&k.bcfg, pusher)
+	if s.shared {
+		// From the runtime: New failed above unless the shared profile
+		// is enforced.
+		k.Tools().AddCapabilities(CapabilitySharedIsolation)
+	}
 	// Every heartbeat and manifest reports the local policy, and every
 	// manifest the platform TLS pin and the tool sandbox (to a platform
 	// that reads them).
@@ -733,7 +749,7 @@ func (k *Kit) resolveIdentityAndPolicy() error {
 	// A required tool network confinement this host cannot give fails
 	// here, before a sensor without an identity pairs (resolveIdentity):
 	// otherwise the platform admits a sensor that then refuses to start.
-	if err := ValidateSandboxNetwork(k.opts.Sandbox); err != nil {
+	if err := validateSandboxNetwork(k.opts.Sandbox, s.shared); err != nil {
 		return err
 	}
 	if _, err := keyBindEnabled(); err != nil {
@@ -1210,7 +1226,10 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 		// for another sensor is refused.
 		executor.SetSensorID(k.s.sensorID)
 	}
-	if k.opts.ScanTargetPolicy != nil {
+	switch {
+	case k.s.shared:
+		executor.SetScanTargetPolicy(sharedScanTargetPolicy(k.opts.ScanTargetPolicy))
+	case k.opts.ScanTargetPolicy != nil:
 		executor.SetScanTargetPolicy(k.opts.ScanTargetPolicy)
 	}
 	// The local policy, behind the poller's admission check: targets
