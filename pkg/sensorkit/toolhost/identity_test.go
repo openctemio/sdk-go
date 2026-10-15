@@ -2,9 +2,13 @@ package toolhost
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
@@ -151,6 +155,9 @@ func TestIdentityOnlyForHTTPTools(t *testing.T) {
 		{"its port-scan task", withNet(tool.NetTargets, "scan.ports@1", "probe.http@1"), "scan.ports@1", false},
 		{"its http task", withNet(tool.NetTargets, "scan.ports@1", "probe.http@1"), "probe.http@1", true},
 		{"implements nothing (fail closed)", withNet(tool.NetTargets), "", true},
+		{"target-reaching subdomain discovery (vhost probing)", withNet(tool.NetTargets, "discover.subdomains@1"), "", true},
+		{"target-reaching lookup", withNet(tool.NetTargets, "lookup.rdap@1"), "lookup.rdap@1", true},
+		{"passive subdomain sources", withNet(tool.NetEgressProxy, "discover.subdomains@1"), "", false},
 		{"egress proxy (registries, repositories)", withNet(tool.NetEgressProxy, "sca.deps@1"), "", false},
 		{"vendor API", withNet(tool.NetVendor, "discover.subdomains@1"), "", false},
 		{"resolver", withNet(tool.NetResolver, "resolve.dns@1"), "", false},
@@ -296,5 +303,110 @@ func TestIdentityClearedForTasksWithoutHTTPToTargets(t *testing.T) {
 				t.Fatalf("identity handed to the tool: %v, want %v (%+v)", got, c.identity, p.task.Identity)
 			}
 		})
+	}
+}
+
+// SECURITY: what a task that sends no HTTP to its targets actually SENDS
+// carries none of the organization's identification. A passive-source tool
+// requesting through Context.HTTP sends neither the program's User-Agent
+// nor its headers to the source, and an exec tool's {{http.user_agent}}
+// and {{http.headers:-flag}} expand without them. The tool's own headers
+// still go; a tool that sends HTTP to its targets still sends the
+// identification (the control).
+func TestNoIdentificationSentToThirdParties(t *testing.T) {
+	type seen struct{ ua, bounty, own string }
+	var got []seen
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, seen{r.UserAgent(), r.Header.Get("X-Bug-Bounty"), r.Header.Get("X-Tool")})
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	send := func(t *testing.T, m tool.Manifest, capab string) seen {
+		t.Helper()
+		task := identityTask()
+		// The request goes to the test server, the one host the tool's
+		// network permission lets it dial here.
+		task.Targets = []tool.Target{{Ref: "d", Type: "domain", Value: "127.0.0.1"}}
+		task.Capability = capab
+		p, ierr, err := (&Host{}).prepare(context.Background(), m, task, RunOptions{})
+		if err != nil || ierr != nil {
+			t.Fatalf("refused: %v %v", err, ierr)
+		}
+		got = nil
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/q", nil)
+		resp, err := toolrt.NewHTTPClient(m, p.task).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if len(got) != 1 {
+			t.Fatalf("requests seen: %d", len(got))
+		}
+		return got[0]
+	}
+	compiled := func(n tool.Network, capab, produces string) tool.Manifest {
+		m := httpManifest
+		m.Run = nil
+		m.Tier = tool.T1
+		m.Consumes = []string{"domain"}
+		m.Produces = []string{produces}
+		m.Permissions = tool.Permissions{Network: n}
+		m.Implements = []tool.Implementation{{Capability: capab}}
+		m.HTTP = &tool.HTTPSpec{UserAgent: "passive-tool/1", Headers: map[string]string{"X-Tool": "1"}}
+		return m
+	}
+
+	passive := compiled(tool.NetEgressProxy, "discover.subdomains@1", "asset:domain")
+	s := send(t, passive, "discover.subdomains@1")
+	if s.bounty != "" || strings.Contains(s.ua, "jdoe") {
+		t.Fatalf("a passive source received the identification: %+v", s)
+	}
+	if s.ua != "passive-tool/1" || s.own != "1" {
+		t.Fatalf("the tool's own settings were lost: %+v", s)
+	}
+
+	prober := compiled(tool.NetTargets, "probe.http@1", "asset:http_service")
+	prober.Features = &tool.Features{HTTPIdentity: true}
+	if s := send(t, prober, "probe.http@1"); s.ua != "jdoe-research" || s.bounty != "jdoe" {
+		t.Fatalf("a target-reaching http tool lost the identification: %+v", s)
+	}
+
+	// An exec tool behind the egress proxy: the placeholders expand
+	// without the identification.
+	m := netManifest("-ua", "{{http.user_agent}}", "{{http.headers:-H}}", "{{target.value}}")
+	m.Permissions = tool.Permissions{Network: tool.NetEgressProxy}
+	m.HTTP = &tool.HTTPSpec{Headers: map[string]string{"Accept": "*/*"}}
+	p, ierr, err := (&Host{}).prepare(context.Background(), m, identityTask(), RunOptions{})
+	if err != nil || ierr != nil {
+		t.Fatal(err, ierr)
+	}
+	argv, ierr := expandArgv(m.Run.Argv, p)
+	if ierr != nil {
+		t.Fatal(ierr)
+	}
+	for _, a := range argv {
+		if strings.Contains(a, "jdoe") || strings.Contains(a, "X-Bug-Bounty") {
+			t.Fatalf("exec argv carries the identification: %q", argv)
+		}
+	}
+	if !slices.Contains(argv, "Accept: */*") {
+		t.Fatalf("the tool's own header was lost: %q", argv)
+	}
+}
+
+// The organization's TLS rule still applies to a task that gets no
+// identification: a passive tool that skips TLS verification is refused
+// where the organization forbids it.
+func TestOrgTLSRuleKeptWithoutIdentification(t *testing.T) {
+	m := httpManifest
+	m.Run = nil
+	m.Permissions = tool.Permissions{Network: tool.NetEgressProxy}
+	m.HTTP = &tool.HTTPSpec{TLS: &tool.TLSSpec{InsecureSkipVerify: true}}
+	task := identityTask()
+	no := false
+	task.OrgHTTP.AllowInsecureTLS = &no
+	if _, ierr, err := (&Host{}).prepare(context.Background(), m, task, RunOptions{}); err != nil || ierr == nil || ierr.Class != tool.RefusedByPolicy {
+		t.Fatalf("want refused_by_policy, got %v %v", err, ierr)
 	}
 }

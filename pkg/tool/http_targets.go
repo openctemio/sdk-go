@@ -2,13 +2,15 @@ package tool
 
 import "strings"
 
-// noHTTPCapabilities are the capabilities whose tools reach targets
-// without HTTP (a port scan, host discovery, DNS lookups, subdomain
-// enumeration, registry lookups): a task's identification is HTTP
-// headers, so it does not apply to them.
+// noHTTPCapabilities are the capabilities that reach targets without HTTP
+// by definition (a port scan, host discovery, DNS lookups): a task's
+// identification is HTTP headers, so it does not apply to them on a
+// target-reaching tool. A capability a target-reaching tool could serve
+// over HTTP (subdomain discovery by virtual-host probing, a lookup) is
+// not listed: its tasks carry the identification. Passive tools are
+// exempt by their network class, never by a capability.
 var noHTTPCapabilities = map[string]bool{
 	"scan.ports": true, "discover.hosts": true, "resolve.dns": true,
-	"lookup.rdap": true, "lookup.asn": true, "discover.subdomains": true,
 }
 
 // SendsHTTPToTargets reports whether a task of the tool for capability
@@ -19,8 +21,8 @@ var noHTTPCapabilities = map[string]bool{
 // APIs, the resolver, the egress proxy (registries, repositories,
 // vulnerability databases, passive sources) and no network never send the
 // tool's own requests to a program's targets. Of those, a task whose
-// capability reaches targets without HTTP (scan.ports, resolve.dns, ...)
-// does not either; a task naming no capability is judged by every
+// capability reaches targets without HTTP (scan.ports, discover.hosts,
+// resolve.dns) does not either; a task naming no capability is judged by every
 // capability the tool implements. A target-reaching tool that implements
 // nothing counts as sending HTTP (fail closed).
 func (m Manifest) SendsHTTPToTargets(capability string) bool {

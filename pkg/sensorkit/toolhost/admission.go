@@ -239,3 +239,19 @@ func checkIdentity(m tool.Manifest, task tool.Task) *tool.Error {
 func sendsHTTPToTargets(m tool.Manifest, task tool.Task) bool {
 	return m.SendsHTTPToTargets(task.Capability)
 }
+
+// orgPolicyFor is the part of the job's organization HTTP policy that
+// applies to the task: all of it for a task that sends HTTP to its
+// targets; for any other task only the TLS rule, never the User-Agent or
+// headers (the identification is for the program's targets, not for a
+// passive source, a vendor API or a registry).
+func orgPolicyFor(m tool.Manifest, task tool.Task) *core.OrgHTTPPolicy {
+	org := task.OrgHTTP
+	if org == nil || sendsHTTPToTargets(m, task) {
+		return org
+	}
+	if org.AllowInsecureTLS == nil {
+		return nil
+	}
+	return &core.OrgHTTPPolicy{AllowInsecureTLS: org.AllowInsecureTLS}
+}
