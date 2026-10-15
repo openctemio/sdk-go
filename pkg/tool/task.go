@@ -65,6 +65,13 @@ type Task struct {
 	// with what the sensor's local policy decides (a forced User-Agent).
 	// Set by the runtime, never taken from a job; ctx.HTTP() applies it.
 	HTTP *HTTPSpec `json:"http,omitempty"`
+	// Identity is the identification every request of the task must carry:
+	// the organization's User-Agent (after the sensor-local policy, which
+	// wins) and headers from the job. Set by the runtime, never taken from
+	// a job; ctx.HTTP() sets it on every request over what the tool set
+	// itself, and an exec tool receives it through {{http.user_agent}} and
+	// {{http.headers:-flag}}. nil when the job carries none.
+	Identity *Identity `json:"identity,omitempty"`
 	// OrgHTTP is the organization's HTTP policy from the job. The tool host
 	// merges it into HTTP (after the local policy) and clears it; a tool
 	// never acts on it.
@@ -205,3 +212,13 @@ const (
 	StateFailed  TargetState = "failed"
 	StateSkipped TargetState = "skipped"
 )
+
+// Identity is the identification every request of a task carries
+// (Task.Identity).
+type Identity struct {
+	UserAgent string            `json:"user_agent,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+}
+
+// Empty reports whether the identification sets nothing.
+func (i *Identity) Empty() bool { return i == nil || (i.UserAgent == "" && len(i.Headers) == 0) }

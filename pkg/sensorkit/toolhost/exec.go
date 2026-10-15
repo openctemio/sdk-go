@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -227,6 +228,12 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 		// arguments; an element whose optional or list value is empty is
 		// left out (the tool then uses its own default).
 		if whole := wholePlaceholder(a); whole != "" {
+			// The task's headers, the identification included: the flag
+			// and "Name: value" for each, in name order.
+			if flag, ok := tool.HeaderArgs(whole); ok {
+				out = append(out, headerArgs(flag, p.task.HTTP)...)
+				continue
+			}
 			// A content slot's packs, one argument each.
 			if slot, ok := strings.CutSuffix(strings.TrimPrefix(whole, "content."), "..."); ok && strings.HasPrefix(whole, "content.") {
 				out = append(out, p.task.ContentPaths(slot)...)
@@ -595,4 +602,24 @@ func ingestRecord(p *prepared, kind, ref string, data json.RawMessage) error {
 		return err
 	}
 	return nil
+}
+
+// headerArgs is {{http.headers:-flag}}: the flag and "Name: value" for each
+// header of the task's http settings, in name order. The names and values
+// were checked when the settings were built (printable ASCII, no line
+// breaks), so each pair is one argument and never a second flag.
+func headerArgs(flag string, h *tool.HTTPSpec) []string {
+	if h == nil || len(h.Headers) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(h.Headers))
+	for k := range h.Headers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	out := make([]string, 0, 2*len(names))
+	for _, k := range names {
+		out = append(out, flag, k+": "+h.Headers[k])
+	}
+	return out
 }

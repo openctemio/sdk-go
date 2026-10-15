@@ -444,6 +444,9 @@ func (m Manifest) validateRun(add func(p, format string, args ...any), schema *c
 			if msg := checkPlaceholder(mm[1], schema, m.Content); msg != "" {
 				add(ptr, "%s: %s", mm[0], msg)
 			}
+			if _, ok := HeaderArgs(mm[1]); ok && strings.TrimSpace(a) != mm[0] {
+				add(ptr, "%s: a header list must be the whole argument", mm[0])
+			}
 			if _, form, _, ok := ConfigArg(mm[1]); ok && form != ArgScalar {
 				special++
 				if form == ArgSwitch && strings.TrimSpace(a) != mm[0] {
@@ -462,6 +465,9 @@ func (m Manifest) validateRun(add func(p, format string, args ...any), schema *c
 
 func checkPlaceholder(name string, schema *core.SettingsSchema, slots []ContentSlot) string {
 	if slices.Contains(argvPlaceholders, name) {
+		return ""
+	}
+	if _, ok := HeaderArgs(name); ok {
 		return ""
 	}
 	if slot, ok := strings.CutPrefix(name, "content."); ok {

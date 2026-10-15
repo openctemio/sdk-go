@@ -395,7 +395,11 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if ierr != nil {
 		return nil, ierr, nil
 	}
+	task.Identity = identityOf(eff, task.OrgHTTP)
 	task.HTTP, task.OrgHTTP = eff, nil
+	if ierr := checkIdentity(m, task); ierr != nil {
+		return nil, ierr, nil
+	}
 	contentPaths, err := tool.CheckTaskContent(m, task, h.ContentRoot)
 	if err != nil {
 		return nil, tool.AsError(err), nil

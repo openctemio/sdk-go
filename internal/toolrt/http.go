@@ -98,7 +98,7 @@ func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
 		rt = scopedTransport{next: tr, scope: task.WebScope, targets: hosts}
 	}
 	timeout := 5 * time.Minute
-	defaults := requestDefaults{next: rt, ua: EffectiveUserAgent(m, task)}
+	defaults := requestDefaults{next: rt, ua: EffectiveUserAgent(m, task), identity: task.Identity}
 	if h := SpecOf(m, task); h != nil {
 		defaults.headers = h.Headers
 		if h.Timeout > 0 {
@@ -158,11 +158,13 @@ func EffectiveUserAgent(m tool.Manifest, task tool.Task) string {
 }
 
 // requestDefaults sets the User-Agent and the tool's headers on a request
-// that does not set them itself.
+// that does not set them itself, and the task's identification on every
+// request, over what the tool set (Task.Identity).
 type requestDefaults struct {
-	next    http.RoundTripper
-	ua      string
-	headers map[string]string
+	next     http.RoundTripper
+	ua       string
+	headers  map[string]string
+	identity *tool.Identity
 }
 
 func (u requestDefaults) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -176,6 +178,24 @@ func (u requestDefaults) RoundTrip(req *http.Request) (*http.Response, error) {
 			cloned = true
 		}
 		req.Header.Set(k, v)
+	}
+	force := func(k, v string) {
+		if req.Header.Get(k) == v && len(req.Header.Values(k)) == 1 {
+			return
+		}
+		if !cloned {
+			req = req.Clone(req.Context())
+			cloned = true
+		}
+		req.Header.Set(k, v)
+	}
+	if u.identity != nil {
+		if u.identity.UserAgent != "" {
+			force("User-Agent", u.identity.UserAgent)
+		}
+		for k, v := range u.identity.Headers {
+			force(k, v)
+		}
 	}
 	set("User-Agent", u.ua)
 	for k, v := range u.headers {

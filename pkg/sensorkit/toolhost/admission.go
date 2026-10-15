@@ -169,3 +169,55 @@ func effectiveHTTP(m tool.Manifest, pol Policy, org *core.OrgHTTPPolicy) (*tool.
 func refusedErr(format string, args ...any) *tool.Error {
 	return tool.AsError(tool.Refused(fmt.Sprintf(format, args...)))
 }
+
+// identityOf is the identification the task's requests must carry: the
+// organization's headers, and its User-Agent as it ends up effective (the
+// sensor-local policy's wins). nil when the organization sets neither.
+func identityOf(eff *tool.HTTPSpec, org *core.OrgHTTPPolicy) *tool.Identity {
+	if org == nil || (org.UserAgent == "" && len(org.Headers) == 0) {
+		return nil
+	}
+	id := &tool.Identity{}
+	if org.UserAgent != "" && eff != nil {
+		id.UserAgent = eff.UserAgent
+	}
+	if len(org.Headers) > 0 {
+		id.Headers = maps.Clone(org.Headers)
+	}
+	if id.Empty() {
+		return nil
+	}
+	return id
+}
+
+// checkIdentity refuses a task whose identification the tool cannot put on
+// every request: a networked tool must declare features.http_identity, or
+// be an exec-profile tool whose argv passes the User-Agent
+// ({{http.user_agent}}) and the headers ({{http.headers:-flag}}) it is
+// given. A tool that would probe without the identification never starts
+// (CapabilityHTTPIdentity).
+func checkIdentity(m tool.Manifest, task tool.Task) *tool.Error {
+	if task.Identity.Empty() || m.Normalized().Permissions.Network == tool.NetNone {
+		return nil
+	}
+	if m.Features != nil && m.Features.HTTPIdentity {
+		return nil
+	}
+	if m.Run != nil && m.Run.Profile == tool.ProfileExec {
+		var ua, headers bool
+		for _, a := range m.Run.Argv {
+			for _, name := range tool.ArgvPlaceholders(a) {
+				if name == "http.user_agent" {
+					ua = true
+				}
+				if _, ok := tool.HeaderArgs(name); ok {
+					headers = true
+				}
+			}
+		}
+		if (task.Identity.UserAgent == "" || ua) && (len(task.Identity.Headers) == 0 || headers) {
+			return nil
+		}
+	}
+	return refusedErr("%s cannot send the job's identification (User-Agent and headers) on every request: it declares no features.http_identity", m.Name)
+}
