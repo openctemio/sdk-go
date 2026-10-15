@@ -1,0 +1,9 @@
+OpenCTEM SDK for Go
+Copyright 2026 The OpenCTEM Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+The copyright holders are listed in the AUTHORS file.
+
+This repository contains no third-party source code. Its Go module
+dependencies are fetched by the Go toolchain and keep their own licenses and
+notices.
