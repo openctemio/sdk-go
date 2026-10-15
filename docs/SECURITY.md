@@ -747,6 +747,10 @@ or the task does not start:
 - An exec-profile tool receives it on its argv: `{{http.user_agent}}` and
   `{{http.headers:-flag}}` (the flag and `Name: value` per header, a whole
   argument).
+- The identification is HTTP headers, so it applies to tasks that may send
+  HTTP to their targets: a tool that reaches no target (vendor API,
+  resolver, none) or a task whose capability reaches targets without HTTP
+  (`scan.ports`, `discover.hosts`, DNS lookups) is not affected.
 - A networked tool that can do neither (an exec tool whose argv lacks the
   placeholders, or a tool that does not declare `features.http_identity`) is
   refused with `refused_by_policy`. A tool that declares

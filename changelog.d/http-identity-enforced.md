@@ -3,7 +3,7 @@
 - The tool host now enforces the organization's identification (`http_policy` User-Agent and headers, such as a bug-bounty program's required header) per task. Before, `Context.HTTP` only added it when the tool set no value of its own, and an exec tool received the headers nowhere: a program's targets could be probed without its required identification.
 - `Task.Identity` carries it. `Context.HTTP` sets it on every request, redirects included, over what the tool set.
 - An exec tool receives it through `{{http.user_agent}}` and the new `{{http.headers:-flag}}` (the flag and `Name: value` per header).
-- A networked tool that can do neither is refused (`refused_by_policy`). A tool that applies it itself declares `features.http_identity` (new descriptor key).
+- A tool that may send HTTP to its targets and can do neither is refused (`refused_by_policy`). Port scans, host discovery and DNS lookups, and tools that reach no target, are not affected. A tool that applies it itself declares `features.http_identity` (new descriptor key).
 
 ### Upgrade notes
 

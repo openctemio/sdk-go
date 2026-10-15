@@ -122,3 +122,43 @@ func TestHeaderListMustBeWholeArgument(t *testing.T) {
 		t.Fatalf("whole header list: %v", err)
 	}
 }
+
+// The identification is HTTP headers: a tool that reaches its targets
+// without HTTP (a port scan, DNS) or reaches no target (a vendor API, the
+// resolver) is not refused for it; a tool that implements nothing is.
+func TestIdentityOnlyForHTTPTools(t *testing.T) {
+	impl := func(caps ...string) []tool.Implementation {
+		out := make([]tool.Implementation, 0, len(caps))
+		for _, c := range caps {
+			out = append(out, tool.Implementation{Capability: c})
+		}
+		return out
+	}
+	withNet := func(n tool.Network, caps ...string) tool.Manifest {
+		m := tool.Manifest{Name: "x", Permissions: tool.Permissions{Network: n}, Implements: impl(caps...)}
+		return m
+	}
+	cases := []struct {
+		name string
+		m    tool.Manifest
+		cap  string
+		want bool
+	}{
+		{"port scanner", withNet(tool.NetTargets, "scan.ports@1"), "", false},
+		{"host discovery and DNS", withNet(tool.NetTargets, "discover.hosts@1", "resolve.dns@1"), "", false},
+		{"http prober", withNet(tool.NetTargets, "probe.http@1"), "", true},
+		{"port scanner that also probes http", withNet(tool.NetTargets, "scan.ports@1", "probe.http@1"), "", true},
+		{"its port-scan task", withNet(tool.NetTargets, "scan.ports@1", "probe.http@1"), "scan.ports@1", false},
+		{"its http task", withNet(tool.NetTargets, "scan.ports@1", "probe.http@1"), "probe.http@1", true},
+		{"implements nothing (fail closed)", withNet(tool.NetTargets), "", true},
+		{"through the egress proxy", withNet(tool.NetEgressProxy, "crawl.web@1"), "", true},
+		{"vendor API", withNet(tool.NetVendor, "discover.subdomains@1"), "", false},
+		{"resolver", withNet(tool.NetResolver, "resolve.dns@1"), "", false},
+		{"no network", withNet(tool.NetNone, "sast.code@1"), "", false},
+	}
+	for _, c := range cases {
+		if got := sendsHTTPToTargets(c.m, tool.Task{Capability: c.cap}); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
