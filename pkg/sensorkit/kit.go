@@ -415,6 +415,11 @@ func New(opts Options) (*Kit, error) {
 		return nil, err
 	}
 	s.local = local
+	if s.shared && !local.Present() {
+		// A shared sensor's targets come from many tenants: the operator's
+		// own policy (targets, ranges, ports, tools) is mandatory.
+		return nil, usageError(fmt.Errorf("%s=1: a shared sensor needs a local policy (%s, or -local-policy); none is loaded", EnvSharedMode, core.EnvLocalPolicy))
+	}
 	protocol, err := ResolveProtocol(opts.Protocol, "")
 	if err != nil {
 		return nil, err

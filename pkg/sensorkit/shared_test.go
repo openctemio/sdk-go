@@ -3,6 +3,8 @@ package sensorkit
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,7 +41,7 @@ func TestSharedModeRefusesWeakerSandbox(t *testing.T) {
 			t.Setenv(EnvSharedMode, tc.env)
 			t.Setenv(EnvSandboxNetwork, tc.sandboxNet)
 			_, err := New(Options{Name: "shared", Version: "1.0.0", APIURL: srv.URL, Sandbox: tc.sandbox, Shared: tc.shared,
-				StateDir: t.TempDir(), Outbox: OutboxSettings{Dir: t.TempDir()}})
+				LocalPolicyPath: writeSharedPolicy(t), StateDir: t.TempDir(), Outbox: OutboxSettings{Dir: t.TempDir()}})
 			if err == nil || !strings.Contains(err.Error(), tc.wantErrContains) {
 				t.Fatalf("want a refusal naming %s, got %v", tc.wantErrContains, err)
 			}
@@ -64,6 +66,54 @@ func TestSharedModeFailsClosedWithoutSandbox(t *testing.T) {
 	if err != nil && !strings.Contains(err.Error(), EnvSharedMode+"=1") {
 		t.Fatalf("the refusal does not name shared mode: %v", err)
 	}
+}
+
+// writeSharedPolicy writes a minimal local policy and returns its path.
+func writeSharedPolicy(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "sensor-policy.yaml")
+	if err := os.WriteFile(p, []byte("apiVersion: openctem.io/sensor-policy/v1\ntargets: {allow: [203.0.113.0/24]}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// SECURITY: a shared sensor without a local policy refuses to start, before
+// it pairs, whatever its sandbox: its targets come from many tenants and
+// the operator's own policy is mandatory.
+func TestSharedModeRequiresLocalPolicy(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		http.Error(w, "unexpected", http.StatusTeapot)
+	}))
+	t.Cleanup(srv.Close)
+	clearEnv(t)
+	t.Setenv("HOME", t.TempDir())
+	_, err := New(Options{Name: "shared", Version: "1.0.0", APIURL: srv.URL, Shared: true,
+		LocalPolicy: absentLocalPolicy(t), StateDir: t.TempDir(), Outbox: OutboxSettings{Dir: t.TempDir()}})
+	if err == nil || !strings.Contains(err.Error(), "local policy") {
+		t.Fatalf("want the local policy refusal, got %v", err)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("the platform got %d requests before the refusal", n)
+	}
+	// With a policy, the refusal (on a host without confinement) or the
+	// start no longer names the policy.
+	_, err = New(Options{Name: "shared", Version: "1.0.0", APIURL: srv.URL, Shared: true,
+		LocalPolicyPath: writeSharedPolicy(t), StateDir: t.TempDir(), Outbox: OutboxSettings{Dir: t.TempDir()}})
+	if err != nil && strings.Contains(err.Error(), "needs a local policy") {
+		t.Fatalf("a policy was given: %v", err)
+	}
+}
+
+func absentLocalPolicy(t *testing.T) *core.LocalPolicy {
+	t.Helper()
+	lp, err := core.LoadLocalPolicy(core.LocalPolicyOptions{DefaultPath: filepath.Join(t.TempDir(), "none.yaml")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lp
 }
 
 func TestSharedModeFromEnv(t *testing.T) {
