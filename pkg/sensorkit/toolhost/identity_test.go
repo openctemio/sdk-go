@@ -180,3 +180,60 @@ func TestIdentityHeaderLines(t *testing.T) {
 		t.Fatal("nil identity")
 	}
 }
+
+// SECURITY: an identification is checked where the task is built. CR/LF
+// in a value, a name that is not a token, a credential or connection header
+// and too many headers each refuse the task with refused_by_policy; nothing
+// is stripped, and nothing reaches a request or an argv.
+func TestIdentityIsValidatedAtTheBoundary(t *testing.T) {
+	m := netManifest("-ua", "{{http.user_agent}}", "{{http.headers:-H}}")
+	many := map[string]string{}
+	for i := range 11 {
+		many["X-H"+string(rune('a'+i))] = "1"
+	}
+	cases := map[string]*core.OrgHTTPPolicy{
+		"CRLF in a value":      {Headers: map[string]string{"X-Bug-Bounty": "jdoe\r\nX-Evil: 1"}},
+		"NUL in a value":       {Headers: map[string]string{"X-Bug-Bounty": "jdoe\x00"}},
+		"LF in the User-Agent": {UserAgent: "jdoe\nGET / HTTP/1.1"},
+		"name not a token":     {Headers: map[string]string{"X Bug: Bounty": "jdoe"}},
+		"Host":                 {Headers: map[string]string{"Host": "evil.example"}},
+		"Authorization":        {Headers: map[string]string{"Authorization": "Bearer x"}},
+		"Transfer-Encoding":    {Headers: map[string]string{"Transfer-Encoding": "chunked"}},
+		"Proxy-* header":       {Headers: map[string]string{"Proxy-Foo": "1"}},
+		"too many headers":     {Headers: many},
+		"value too long":       {Headers: map[string]string{"X-Bug-Bounty": string(make([]byte, 201))}},
+	}
+	for name, pol := range cases {
+		t.Run(name, func(t *testing.T) {
+			task := httpTask
+			task.OrgHTTP = pol
+			_, ierr, err := (&Host{}).prepare(context.Background(), m, task, RunOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ierr == nil || ierr.Class != tool.RefusedByPolicy {
+				t.Fatalf("want refused_by_policy, got %v", ierr)
+			}
+		})
+	}
+}
+
+// SECURITY: whatever built the task's settings, a hostile header never
+// becomes more than one argv element: expansion refuses it.
+func TestHeaderArgsRefuseHostileValues(t *testing.T) {
+	for _, h := range []map[string]string{
+		{"X-Bug-Bounty": "jdoe\r\nX-Evil: 1"},
+		{"X-Bug-Bounty": "jdoe\x00"},
+		{"Bad Name": "1"},
+	} {
+		p := &prepared{m: netManifest("{{http.headers:-H}}"), task: tool.Task{HTTP: &tool.HTTPSpec{Headers: h}}}
+		if got, ierr := expandArgv(p.m.Run.Argv, p); ierr == nil || ierr.Class != tool.RefusedByPolicy {
+			t.Fatalf("%q expanded to %q", h, got)
+		}
+	}
+	p := &prepared{m: netManifest("{{http.headers:-H}}"), task: tool.Task{HTTP: &tool.HTTPSpec{Headers: map[string]string{"X-Bug-Bounty": "jdoe; a=b"}}}}
+	got, ierr := expandArgv(p.m.Run.Argv, p)
+	if ierr != nil || !slices.Equal(got, []string{"acme", "-H", "X-Bug-Bounty: jdoe; a=b"}) {
+		t.Fatalf("a plain value: %q %v", got, ierr)
+	}
+}

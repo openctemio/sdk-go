@@ -267,3 +267,18 @@ func (i *Identity) Overrides(line string) bool {
 	}
 	return false
 }
+
+// Validate checks the identification as the organization's policy is
+// checked (core.OrgHTTPPolicy.Validate): a User-Agent of printable ASCII
+// up to 256 bytes, at most 10 headers with token names, printable ASCII
+// values up to 200 bytes (no CR, LF, NUL or other control character), and
+// no credential, hop-by-hop or connection header (Host, Authorization,
+// Cookie, Content-Length, Transfer-Encoding, Connection, Proxy-*, ...).
+// The tool host refuses a task whose identification fails it; nothing is
+// stripped.
+func (i *Identity) Validate() error {
+	if i == nil {
+		return nil
+	}
+	return (&core.OrgHTTPPolicy{UserAgent: i.UserAgent, Headers: i.Headers}).Validate()
+}
