@@ -101,6 +101,16 @@ func Admit(ctx context.Context, m tool.Manifest, task tool.Task, pol Policy, mod
 	return a, nil
 }
 
+// CapabilityHTTPIdentity is the capability a sensor advertises when every
+// request its tools send carries the job's identification: the
+// organization's User-Agent and headers (core.OrgHTTPPolicy, for example the
+// headers a bug-bounty program requires). The tool host applies them to
+// every tool it runs, so a sensor whose tools all run through the tool host
+// advertises it (ToolRegistry.AddCapabilities). The platform holds a job
+// that carries such identification from a sensor that does not report it,
+// so it never reaches a sensor that would probe without it.
+const CapabilityHTTPIdentity = "http.identity@1"
+
 // HTTPPolicy is a policy that decides about the tools' requests
 // (*core.LocalPolicy, schema v3): a User-Agent that replaces every tool's,
 // and whether a tool may skip TLS verification.
