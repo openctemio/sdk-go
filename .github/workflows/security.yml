@@ -48,7 +48,7 @@ jobs:
           cache: true
 
       - name: Build
-        run: go build ./... && (cd pkg/transfer && go build ./...)
+        run: go build ./...
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
@@ -76,10 +76,6 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
       - name: Run govulncheck
-        run: govulncheck ./...
-
-      - name: Run govulncheck (pkg/transfer module)
-        working-directory: pkg/transfer
         run: govulncheck ./...
 
   # ============================================

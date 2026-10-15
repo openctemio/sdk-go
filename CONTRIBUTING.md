@@ -60,9 +60,7 @@ Versioning follows the project rule (openctemio/openctem RFC-037): the version i
 
 ### Nested modules
 
-`pkg/transfer` (with `pkg/transfer/bundle`) is its own Go module, `github.com/openctemio/sdk-go/pkg/transfer`, so the platform and the feed publishers do not take the whole SDK's dependency graph. It is released on its own: **Actions › Release Module Tag › Run** with the module and a `vX.Y.Z` version tags `pkg/transfer/vX.Y.Z` on main (`.github/scripts/release/tag-module.sh` checks the version is greater than the module's last tag, the commit is on main, and its `go.mod` has the right module path and no `replace`). Its changes still add a `changelog.d/` fragment. The root `./...` does not reach a nested module, so CI runs its tests, build, vet, lint and govulncheck in its directory; run them there locally too (`cd pkg/transfer; go test ./...`).
-
-Do not tag by hand. Without the `RELEASE_TOKEN` secret (a fine-grained PAT with Contents, Pull requests and Workflows read/write), you open the PR yourself from the link in the run summary, and the cross-repository PRs are skipped.
+The SDK is one Go module. Code that the platform also needs is a contract and belongs in ctis (the feed transfer moved there as `github.com/openctemio/ctis/transfer`), never in a nested module of the SDK that the platform imports.
 
 ## License
 

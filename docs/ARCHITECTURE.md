@@ -205,13 +205,13 @@ Large data moves in two directions, and each direction has one code path
   `report_id` plus segment number is the idempotency key, `V2Progress`
   resumes after a restart, and the outbox is the encrypted, capped
   store-and-forward spool.
-- **Pull** (published feed to platform or sensor): `pkg/transfer` and
-  `pkg/transfer/bundle`. They form their own Go module
-  (`github.com/openctemio/sdk-go/pkg/transfer`, tagged `pkg/transfer/vX.Y.Z`,
-  standard library plus the Prometheus client) so the platform and the feed
-  publishers take only this code, not the SDK's dependency graph. The DSSE
-  envelope is restated there, byte-identical to `pkg/jobsig` (a shared golden
-  vector in both test suites).
+- **Pull** (published feed to platform or sensor): the contract module
+  `github.com/openctemio/ctis/transfer` (`transfer` and `transfer/bundle`),
+  which lived here as `pkg/transfer` until v0.1.0 of that module. It is a
+  format shared by the platform, the feed publishers and sensors, so it is
+  part of ctis and the platform never depends on the SDK. Its DSSE envelope
+  is restated byte-identical to `pkg/jobsig` (the same golden vector is in
+  both test suites).
 
 `transfer.Fetcher` downloads from an ordered list of origins (release URL,
 mirrors, a local directory for air-gapped installs) through the caller's
