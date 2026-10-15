@@ -10,13 +10,23 @@ import (
 
 func ptr[T any](v T) *T { return &v }
 
+// targetHTTPManifest is httpManifest as a tool that sends HTTP to its
+// targets and applies the identification itself: the organization's
+// User-Agent and headers are for such a tool only.
+func targetHTTPManifest() tool.Manifest {
+	m := httpManifest
+	m.Permissions = tool.Permissions{Network: tool.NetTargets}
+	m.Features = &tool.Features{HTTPIdentity: true}
+	return m
+}
+
 // The organization's HTTP policy (from the job) narrows after the local
 // policy: its User-Agent applies unless the local policy forces one, and a
 // tool that skips TLS verification is refused when either forbids it. The
 // task the tool receives carries the result, never the policy itself.
 func TestOrgHTTPPolicyNarrowsAfterTheLocalPolicy(t *testing.T) {
 	ctx := context.Background()
-	m := httpManifest
+	m := targetHTTPManifest()
 	m.HTTP = &tool.HTTPSpec{UserAgent: "acme-cli/1.0"}
 
 	task := httpTask
@@ -60,7 +70,7 @@ func TestOrgHTTPPolicyNarrowsAfterTheLocalPolicy(t *testing.T) {
 // same name, whatever its case; the policy itself never reaches the tool.
 func TestOrgHTTPPolicyHeaders(t *testing.T) {
 	ctx := context.Background()
-	m := httpManifest
+	m := targetHTTPManifest()
 	m.HTTP = &tool.HTTPSpec{Headers: map[string]string{"x-bug-bounty": "tool", "Accept": "*/*"}}
 	task := httpTask
 	task.OrgHTTP = &core.OrgHTTPPolicy{Headers: map[string]string{"X-Bug-Bounty": "jdoe"}}
@@ -77,7 +87,7 @@ func TestOrgHTTPPolicyHeaders(t *testing.T) {
 	}
 
 	// A tool without http settings still gets them.
-	bare := httpManifest
+	bare := targetHTTPManifest()
 	bare.HTTP = nil
 	p, ierr, err = (&Host{}).prepare(ctx, bare, task, RunOptions{})
 	if err != nil || ierr != nil || p.task.HTTP == nil || p.task.HTTP.Headers["X-Bug-Bounty"] != "jdoe" {

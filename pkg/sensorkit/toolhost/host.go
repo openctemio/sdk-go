@@ -261,7 +261,7 @@ func (h *Host) lifecycle(ctx context.Context, m tool.Manifest, task tool.Task, r
 	}
 	start := time.Now()
 	started := map[string]any{"tool": m.Name, "tool_version": m.Version, "targets": len(task.Targets), "capability": task.Capability}
-	if eff, _ := effectiveHTTP(m, h.Policy, task.OrgHTTP); eff.String() != "" {
+	if eff, _ := effectiveHTTP(m, h.Policy, orgPolicyFor(m, task)); eff.String() != "" {
 		s := eff.String()
 		// What the tool's requests look like to the targets (tool.yaml http),
 		// recorded with the task.
@@ -397,11 +397,17 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if err := task.OrgHTTP.Validate(); err != nil {
 		return nil, refusedErr("the job's identification is invalid: %v", err), nil
 	}
-	eff, ierr := effectiveHTTP(m, h.Policy, task.OrgHTTP)
+	// A task that sends no HTTP to its targets gets none of the
+	// organization's identification: not in Task.Identity, not in its http
+	// settings (Context.HTTP defaults, {{http.user_agent}},
+	// {{http.headers:-flag}}), so it never reaches a passive source, a
+	// vendor API or a registry. The organization's TLS rule still applies.
+	org := orgPolicyFor(m, task)
+	eff, ierr := effectiveHTTP(m, h.Policy, org)
 	if ierr != nil {
 		return nil, ierr, nil
 	}
-	task.Identity = identityOf(eff, task.OrgHTTP)
+	task.Identity = identityOf(eff, org)
 	if err := task.Identity.Validate(); err != nil {
 		return nil, refusedErr("the job's identification is invalid: %v", err), nil
 	}
