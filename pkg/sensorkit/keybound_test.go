@@ -185,3 +185,58 @@ func TestNew_PairingCodeIgnoredWithAPIKey(t *testing.T) {
 		t.Fatalf("stderr: %s", errw.String())
 	}
 }
+
+// SENSOR_INSTANCE_ENROLLMENT_TOKEN (api RFC-100 §7): a malformed token
+// stops a sensor with no identity, the error never echoes the value, and it
+// cannot be combined with SENSOR_PAIRING_CODE.
+func TestNew_InstanceEnrollmentTokenMalformedRefused(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	opts, _, errw := baseOptions(t, f)
+	opts.APIKey = ""
+	const bad = "octe_SECRETSECRET"
+	t.Setenv(EnvInstanceEnrollmentToken, bad)
+	_, err := New(opts)
+	if err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), EnvInstanceEnrollmentToken) {
+		t.Fatalf("err = %v (exit %d)", err, ExitCode(err))
+	}
+	if strings.Contains(err.Error(), bad) || strings.Contains(errw.String(), bad) {
+		t.Fatalf("the token leaked: err=%v stderr=%s", err, errw.String())
+	}
+}
+
+func TestNew_InstanceEnrollmentTokenWithPairingCodeRefused(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	opts, _, _ := baseOptions(t, f)
+	opts.APIKey = ""
+	t.Setenv(EnvPairingCode, "K7QM-4ZTD")
+	t.Setenv(EnvInstanceEnrollmentToken, "octe_"+strings.Repeat("a", 49))
+	_, err := New(opts)
+	if err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), "not both") {
+		t.Fatalf("err = %v (exit %d)", err, ExitCode(err))
+	}
+}
+
+// Once the sensor is paired, the token is ignored (with a note) and never
+// printed.
+func TestNew_InstanceEnrollmentTokenIgnoredOncePaired(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	t.Cleanup(f.Close)
+	opts, out, errw := baseOptions(t, f)
+	opts.APIKey = ""
+	pairedStore(t, opts.StateDir)
+	tok := "octe_" + strings.Repeat("Z", 49)
+	t.Setenv(EnvInstanceEnrollmentToken, tok)
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k.closeClient)
+	if !strings.Contains(errw.String(), EnvInstanceEnrollmentToken+" is ignored: the sensor is already paired") {
+		t.Fatalf("stderr: %s", errw.String())
+	}
+	if strings.Contains(out.String()+errw.String(), tok) {
+		t.Fatal("the token was printed")
+	}
+}
