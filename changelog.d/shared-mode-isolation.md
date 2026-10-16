@@ -5,8 +5,8 @@
 - `core.ScanTargetPolicy.Shared` and `toolhost.Host.Shared`: a private target passes only when the operator allows private targets and it lies in the job's zone ranges. Loopback, link-local, metadata and CGNAT addresses never pass. The rule applies at admission and again to every address pinned for the task's forwarder.
 - `toolhost.Host.Shared` refuses to run a tool on a backend that does not enforce every sandbox control and confine the network.
 
-### Added: zone ranges on a delivered command; capability shared.isolation@1
+### Added: zone rule helpers; capability shared.isolation@1
 
-- `protov2.Command.ZoneRanges` (`zone_ranges`), `client.Command.ZoneRanges` and `core.Command.ZoneRanges` carry a shared job's zone. `core.WithJobZone`, `core.JobZoneFromContext`, `core.ParseZoneRanges`, `core.CheckSharedAddr` and `core.CheckSharedPrefix` apply it. Entries that are not wholly private are dropped.
+- `core.WithJobZone`, `core.JobZoneFromContext`, `core.ParseZoneRanges`, `core.CheckSharedAddr` and `core.CheckSharedPrefix` implement a shared job's zone rule. Zone ranges will come only from the job's verified signed statement. An unsigned `zone_ranges` command field is ignored, so until the statement carries ranges, shared jobs reach public addresses only.
 - A sensor in shared mode advertises `shared.isolation@1` (`sensorkit.CapabilitySharedIsolation`), based on its runtime state.
 - Setting `SENSOR_SHARED_MODE` (`0`, `1`).

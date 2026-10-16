@@ -37,9 +37,6 @@ type Command struct {
 	// SignedJob is the job signer's envelope for this delivery (claim-N
 	// answers; api RFC-040 §5.6).
 	SignedJob json.RawMessage `json:"signed_job,omitempty"`
-	// ZoneRanges are the private ranges a shared sensor's job may reach
-	// (protov2.Command.ZoneRanges).
-	ZoneRanges []string `json:"zone_ranges,omitempty"`
 }
 
 // PollCommands retrieves pending commands for this sensor
@@ -93,7 +90,6 @@ func (c *Client) GetCommandsLimit(ctx context.Context, limit int) (*core.GetComm
 		}
 		cc.LeaseEpoch = cmd.LeaseEpoch
 		cc.SignedJob = cmd.SignedJob
-		cc.ZoneRanges = cmd.ZoneRanges
 		// Claim-N: the platform already claimed it for this sensor.
 		cc.Claimed = cmd.Status == "acknowledged"
 		if cmd.LeaseExpiresAt != nil {

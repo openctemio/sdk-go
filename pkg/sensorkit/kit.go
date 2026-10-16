@@ -402,11 +402,6 @@ func New(opts Options) (*Kit, error) {
 	if err := core.CheckEnv(); err != nil {
 		return nil, err
 	}
-	shared, err := resolveShared(opts)
-	if err != nil {
-		return nil, err
-	}
-	s.shared = shared
 	// The sensor-local policy: a policy that cannot be loaded stops the
 	// sensor (fail closed). Whether a sensor without one refuses network
 	// jobs is decided once the identity is known (applyRequireLocalPolicy).
@@ -415,10 +410,8 @@ func New(opts Options) (*Kit, error) {
 		return nil, err
 	}
 	s.local = local
-	if s.shared && !local.Present() {
-		// A shared sensor's targets come from many tenants: the operator's
-		// own policy (targets, ranges, ports, tools) is mandatory.
-		return nil, usageError(fmt.Errorf("%s=1: a shared sensor needs a local policy (%s, or -local-policy); none is loaded", EnvSharedMode, core.EnvLocalPolicy))
+	if err := k.resolveShared(); err != nil {
+		return nil, err
 	}
 	protocol, err := ResolveProtocol(opts.Protocol, "")
 	if err != nil {

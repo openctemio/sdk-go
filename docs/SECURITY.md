@@ -712,12 +712,16 @@ sensor only sets the switch:
 | Targets: the policy (the built-in deny list without one), then the job's zone rule. A private address (RFC 1918, ULA) passes only when the operator allows private targets (`SENSOR_ALLOW_PRIVATE_TARGETS=1`, and `targets.allow_private` in a local policy) **and** it lies in the job's zone ranges; loopback, link-local, metadata (169.254.169.254, fd00:ec2::254, ...), CGNAT, multicast and reserved addresses never pass | `core.ScanTargetPolicy.Shared`, `toolhost.Host.Shared` (admission, and again for every address pinned for the task's forwarder), `core.CheckSharedAddr` / `CheckSharedPrefix` | a tenant reaching the operator's network or a cloud metadata service through a shared sensor |
 | The capability `shared.isolation@1`, advertised from the runtime state only | `sensorkit` | the platform sending shared jobs to a sensor that does not enforce this profile |
 
-**Zone ranges.** The platform sends a job's zone as `zone_ranges` (a list of
-CIDRs) on the delivered command (`protov2.Command.ZoneRanges`): the
-instance scan zone assigned to the job's tenant. The poller puts the
-parsed ranges on the command's context (`core.WithJobZone`); entries that
-are not wholly private are dropped, so the platform can only narrow what
-the operator allows. No zone: public addresses only.
+**Zone ranges.** A shared sensor's job zone (the instance scan zone
+assigned to the job's tenant) is taken only from the job's verified signed
+statement, never from an unsigned field of the delivered command: a
+compromised API or queue cannot widen the private ranges a shared sensor
+reaches. A `zone_ranges` field on a command is ignored. The signed
+statement does not carry zone ranges yet, so until it does every shared job
+has no zone and reaches public addresses only. When it does, the parsed
+ranges go on the job's context (`core.WithJobZone`); entries that are not
+wholly private are dropped (`core.ParseZoneRanges`), so the platform can
+only narrow what the operator allows.
 
 **DNS rebinding on a shared sensor.** Every address a confined task dials
 for a name was checked (policy and zone rule) when the task's scope was
