@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -90,6 +91,10 @@ type Command struct {
 	// jobTenant is the organization of a verified shared (instance) job:
 	// its results are bound to it. Only JobGuard.Check sets it.
 	jobTenant string
+	// jobZone are the private ranges a verified shared job may reach: the
+	// zone of its signed statement (ParseZoneRanges), nil without one. Only
+	// JobGuard.Check sets it; an unsigned command field never does.
+	jobZone []netip.Prefix
 }
 
 // CommandResult represents the result of command execution.
@@ -1130,6 +1135,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		p.ledger.Hold(cmd.ID, cmd.jobTenant)
 		defer p.ledger.Release(cmd.ID)
 		ctx = WithJobTenant(ctx, cmd.jobTenant)
+		ctx = WithJobZone(ctx, cmd.jobZone)
 	}
 	ctx, usage := withUsageRecorder(ctx)
 	// Every target the job dials through the guarded dialer or a task
