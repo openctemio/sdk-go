@@ -15,13 +15,13 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/openctemio/sdk-go/internal/sensorstate"
 	"github.com/openctemio/sdk-go/pkg/client"
-	"github.com/openctemio/sdk-go/pkg/platform"
 )
 
 // statePersistence judges whether the state directory survives the sensor
 // being recreated; replaceable in tests.
-var statePersistence = platform.CheckStatePersistence
+var statePersistence = sensorstate.CheckStatePersistence
 
 // startKey is the key a kit starts with, after the state directory was
 // consulted, and the renewal decision.
@@ -39,31 +39,31 @@ type startKey struct {
 // resolveStartKey picks the credentials file in stateDir (explicit wins; a
 // ~/.openctem file from an earlier version is moved there), the key to start
 // with (a renewed key wins unless the configured key changed since,
-// platform.ChooseAPIKey) and whether to renew (renewSetting "true"/"false",
-// else only when the state persists, platform.DecideKeyAutoRenew).
+// sensorstate.ChooseAPIKey) and whether to renew (renewSetting "true"/"false",
+// else only when the state persists, sensorstate.DecideKeyAutoRenew).
 func resolveStartKey(explicitFile, stateDir, configuredKey, sensorID, renewSetting string) (startKey, error) {
-	file, err := platform.ResolveStateCredentialsFile(explicitFile, stateDir)
+	file, err := sensorstate.ResolveStateCredentialsFile(explicitFile, stateDir)
 	if err != nil {
 		return startKey{}, err
 	}
-	choice := platform.ChooseAPIKey(platform.NewFileCredentialStore(file), configuredKey, sensorID)
+	choice := sensorstate.ChooseAPIKey(sensorstate.NewFileCredentialStore(file), configuredKey, sensorID)
 	sk := startKey{
 		file: file, configuredKey: configuredKey, key: choice.APIKey,
 		fromStateFile: choice.FromStateFile && choice.APIKey != configuredKey,
 		expiresAt:     choice.ExpiresAt, neverExpires: choice.NeverExpires,
 	}
-	sk.autoRenew, sk.why = platform.DecideKeyAutoRenew(renewSetting, statePersistence(filepath.Dir(file)))
+	sk.autoRenew, sk.why = sensorstate.DecideKeyAutoRenew(renewSetting, statePersistence(filepath.Dir(file)))
 	return sk, nil
 }
 
 // keyRenewer renews the API key and swaps the new key into every client
 // that uses it.
 type keyRenewer struct {
-	renew *platform.PlatformClient // RenewKey only: POST /api/v2/sensor/keys (v1 renew on an older platform)
+	renew *sensorstate.RenewClient // RenewKey only: POST /api/v2/sensor/keys
 	api   *client.Client           // heartbeat, poll, ingest
 }
 
-func (r *keyRenewer) RenewKey(ctx context.Context) (*platform.RenewKeyResponse, error) {
+func (r *keyRenewer) RenewKey(ctx context.Context) (*sensorstate.RenewKeyResponse, error) {
 	return r.renew.RenewKey(ctx)
 }
 
@@ -72,11 +72,11 @@ func (r *keyRenewer) SetAPIKey(key string) {
 	r.api.SetAPIKey(key)
 }
 
-// keyRenewConfig saves each rotated key (platform.RotatedKeySaver: atomic,
+// keyRenewConfig saves each rotated key (sensorstate.RotatedKeySaver: atomic,
 // 0600, with its expiry and the configured key's fingerprint) and logs it.
-func keyRenewConfig(sk startKey, sensorID string, verbose bool, w io.Writer) *platform.KeyRenewConfig {
-	save := platform.RotatedKeySaver(platform.NewFileCredentialStore(sk.file), sk.configuredKey, sensorID)
-	return &platform.KeyRenewConfig{
+func keyRenewConfig(sk startKey, sensorID string, verbose bool, w io.Writer) *sensorstate.KeyRenewConfig {
+	save := sensorstate.RotatedKeySaver(sensorstate.NewFileCredentialStore(sk.file), sk.configuredKey, sensorID)
+	return &sensorstate.KeyRenewConfig{
 		Verbose:                verbose,
 		CurrentKeyExpiresAt:    sk.expiresAt,
 		CurrentKeyNeverExpires: sk.neverExpires,
@@ -91,16 +91,12 @@ func keyRenewConfig(sk startKey, sensorID string, verbose bool, w io.Writer) *pl
 }
 
 // startKeyRenewal starts key auto-renewal.
-func startKeyRenewal(ctx context.Context, s *settings, api *client.Client, w io.Writer) (*platform.KeyRenewManager, error) {
+func startKeyRenewal(ctx context.Context, s *settings, api *client.Client, w io.Writer) (*sensorstate.KeyRenewManager, error) {
 	renewer := &keyRenewer{
-		renew: platform.NewPlatformClient(&platform.ClientConfig{
-			BaseURL:  s.apiURL,
-			APIKey:   s.apiKey,
-			SensorID: s.sensorID,
-		}),
-		api: api,
+		renew: sensorstate.NewRenewClient(s.apiURL, s.apiKey),
+		api:   api,
 	}
-	m := platform.NewKeyRenewManager(renewer, keyRenewConfig(s.key, s.sensorID, s.verbose, w))
+	m := sensorstate.NewKeyRenewManager(renewer, keyRenewConfig(s.key, s.sensorID, s.verbose, w))
 	if err := m.Start(ctx); err != nil {
 		return nil, err
 	}

@@ -2,14 +2,11 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"os"
 
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
-	"github.com/openctemio/sdk-go/pkg/platform"
 )
 
 // AgentPool is the caller's own type: it must keep its name.
@@ -30,7 +27,6 @@ func newClient(agentID string) *client.Client {
 }
 
 func main() {
-	ctx := context.Background()
 	agent := "a local variable called agent" // never touched
 	fmt.Println(agent)
 
@@ -53,16 +49,4 @@ func main() {
 
 	_ = newClient(os.Getenv("AGENT_ID")) // string literal: never touched
 	_ = client.NewWithOptions(client.WithAgentID("s-1"))
-
-	creds, err := platform.EnsureRegistered(ctx, &platform.EnsureRegisteredConfig{BaseURL: "https://api.example.com"})
-	if errors.Is(err, platform.ErrAgentAlreadyExists) {
-		return
-	}
-	var stored *platform.AgentCredentials = creds
-	fmt.Println(stored.AgentID)
-
-	b := platform.NewAgentBuilder().WithCredentials("https://api.example.com", stored.APIKey, stored.AgentID)
-	var pa *platform.PlatformAgent
-	pa, _ = b.Build()
-	_ = pa
 }

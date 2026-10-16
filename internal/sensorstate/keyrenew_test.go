@@ -1,4 +1,4 @@
-package platform
+package sensorstate
 
 import (
 	"context"
@@ -139,9 +139,9 @@ func TestKeyRenewManager_StartStop(t *testing.T) {
 	}
 }
 
-// PlatformClient.RenewKey uses protocol v2 (POST /api/v2/sensor/keys, 201),
+// RenewClient.RenewKey uses protocol v2 (POST /api/v2/sensor/keys, 201),
 // identifies the sensor by its key alone and parses the answer.
-func TestPlatformClient_RenewKeyV2(t *testing.T) {
+func TestRenewClient_RenewKeyV2(t *testing.T) {
 	exp := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
 	var paths []string
 	var gotAuth, gotSensor string
@@ -154,7 +154,7 @@ func TestPlatformClient_RenewKeyV2(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "rda_old", SensorID: "sensor-1"})
+	c := NewRenewClient(srv.URL, "rda_old")
 	out, err := c.RenewKey(context.Background())
 	if err != nil {
 		t.Fatalf("RenewKey: %v", err)
@@ -173,7 +173,7 @@ func TestPlatformClient_RenewKeyV2(t *testing.T) {
 // Against a platform without the v2 route (404, not a problem document) the
 // renewal is ErrRenewUnsupported: protocol v1 is retired, nothing is sent to
 // /api/v1/agent/renew.
-func TestPlatformClient_RenewKeyWithoutV2IsUnsupported(t *testing.T) {
+func TestRenewClient_RenewKeyWithoutV2IsUnsupported(t *testing.T) {
 	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
@@ -181,7 +181,7 @@ func TestPlatformClient_RenewKeyWithoutV2IsUnsupported(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "rda_old", SensorID: "sensor-1"})
+	c := NewRenewClient(srv.URL, "rda_old")
 	if _, err := c.RenewKey(context.Background()); !errors.Is(err, ErrRenewUnsupported) {
 		t.Fatalf("err = %v, want ErrRenewUnsupported", err)
 	}
@@ -192,7 +192,7 @@ func TestPlatformClient_RenewKeyWithoutV2IsUnsupported(t *testing.T) {
 
 // A refused renewal (a problem document) is a RenewError: without a TTL a
 // second renewal is never safe.
-func TestPlatformClient_RenewKeyRefusedDoesNotFallBack(t *testing.T) {
+func TestRenewClient_RenewKeyRefusedDoesNotFallBack(t *testing.T) {
 	var n int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n++
@@ -201,7 +201,7 @@ func TestPlatformClient_RenewKeyRefusedDoesNotFallBack(t *testing.T) {
 		_, _ = w.Write([]byte(`{"type":"https://openctem.io/problems/sensor/renewal-refused","status":403}`))
 	}))
 	defer srv.Close()
-	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "rda_old", SensorID: "sensor-1"})
+	c := NewRenewClient(srv.URL, "rda_old")
 	_, err := c.RenewKey(context.Background())
 	var re *RenewError
 	if !errors.As(err, &re) || re.HTTPStatusCode() != http.StatusForbidden || n != 1 {
@@ -209,32 +209,12 @@ func TestPlatformClient_RenewKeyRefusedDoesNotFallBack(t *testing.T) {
 	}
 }
 
-// SetAPIKey swaps the key used by both the lease and job sub-clients.
-func TestPlatformClient_SetAPIKey_FansOut(t *testing.T) {
-	c := NewPlatformClient(&ClientConfig{BaseURL: "http://x", APIKey: "old", SensorID: "a"})
-	if c.httpLease == nil || c.httpJob == nil {
-		t.Fatal("expected concrete sub-client refs to be captured")
-	}
-	c.SetAPIKey("new")
-	if c.httpLease.getAPIKey() != "new" {
-		t.Errorf("lease client key not swapped: %q", c.httpLease.getAPIKey())
-	}
-	if c.httpJob.getAPIKey() != "new" {
-		t.Errorf("job client key not swapped: %q", c.httpJob.getAPIKey())
-	}
-	if c.currentAPIKey() != "new" {
-		t.Errorf("currentAPIKey stale: %q", c.currentAPIKey())
-	}
-}
-
-// Concurrent readers and a rotator must not race (run with -race). Mirrors the
-// live pattern: poll/lease goroutines read the key while the renew loop swaps it.
-func TestPlatformClient_ConcurrentKeyRotation(t *testing.T) {
-	c := NewPlatformClient(&ClientConfig{BaseURL: "http://x", APIKey: "k0", SensorID: "a"})
+// SetAPIKey swaps the key later renewals present; concurrent readers and a
+// rotator must not race (run with -race).
+func TestRenewClient_SetAPIKeyConcurrent(t *testing.T) {
+	c := NewRenewClient("http://x", "k0")
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
-
-	// Readers
 	for range 8 {
 		wg.Go(func() {
 			for {
@@ -242,32 +222,32 @@ func TestPlatformClient_ConcurrentKeyRotation(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					_ = c.httpLease.getAPIKey()
-					_ = c.httpJob.getAPIKey()
 					_ = c.currentAPIKey()
 				}
 			}
 		})
 	}
-	// Rotator
 	wg.Go(func() {
 		for i := range 1000 {
 			c.SetAPIKey("k" + string(rune('a'+i%26)))
 		}
 		close(stop)
 	})
-
 	wg.Wait()
+	c.SetAPIKey("new")
+	if c.currentAPIKey() != "new" {
+		t.Errorf("currentAPIKey stale: %q", c.currentAPIKey())
+	}
 }
 
 // A non-200 renew response surfaces an error (e.g. expired/revoked key → 401).
-func TestPlatformClient_RenewKey_Non200(t *testing.T) {
+func TestRenewClient_RenewKey_Non200(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer srv.Close()
 
-	c := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "old", SensorID: "a"})
+	c := NewRenewClient(srv.URL, "old")
 	if _, err := c.RenewKey(context.Background()); err == nil {
 		t.Error("expected an error on non-200 renew response")
 	}

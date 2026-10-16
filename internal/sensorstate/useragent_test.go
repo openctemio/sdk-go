@@ -1,4 +1,4 @@
-package platform
+package sensorstate
 
 import (
 	"context"
@@ -9,9 +9,9 @@ import (
 	"github.com/openctemio/sdk-go/pkg/useragent"
 )
 
-// Platform requests used to carry Go's default User-Agent; they now send the
-// SDK's, with the product the embedding binary set.
-func TestPlatformClientSendsUserAgent(t *testing.T) {
+// The renew request sends the SDK's User-Agent, with the product the
+// embedding binary set.
+func TestRenewClientSendsUserAgent(t *testing.T) {
 	useragent.SetProduct("openctemio-sensor", "0.3.1")
 	t.Cleanup(func() { useragent.SetProduct("", "") })
 
@@ -23,7 +23,7 @@ func TestPlatformClientSendsUserAgent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	pc := NewPlatformClient(&ClientConfig{BaseURL: srv.URL, APIKey: "rda_old", SensorID: "s1"})
+	pc := NewRenewClient(srv.URL, "rda_old")
 	if _, err := pc.RenewKey(context.Background()); err != nil {
 		t.Fatalf("RenewKey: %v", err)
 	}
