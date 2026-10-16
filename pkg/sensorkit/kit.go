@@ -22,6 +22,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
 	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/pairing"
 	"github.com/openctemio/sdk-go/pkg/sensorsig"
 	"github.com/openctemio/sdk-go/pkg/tool/toolcompat"
 )
@@ -213,6 +214,11 @@ type Options struct {
 	// executor.RunLauncherIfRequested first in main; without it, auto runs
 	// tools unconfined and says so.
 	Sandbox string
+	// Shared runs the sensor in shared mode, for jobs of many tenants
+	// (see EnvSharedMode; SENSOR_SHARED_MODE=1 does the same): the tool
+	// sandbox and network confinement are required, each job's files
+	// live and die with its tasks, and private targets need the job's zone.
+	Shared bool
 	// ProtectedPaths are more paths no tool may read or write (the
 	// sensor's own configuration files, connector credentials). The kit
 	// protects its credentials file, outbox, outbox key and local policy
@@ -281,16 +287,20 @@ var defaultCommandTypes = []string{"scan", "collect", "health_check"}
 type settings struct {
 	name, apiURL, apiKey, sensorID, protocol string
 	commands                                 bool
-	verbose                                  bool
-	maxJobs                                  int
-	drainGrace                               time.Duration
-	pollInterval                             time.Duration
-	allow                                    []string // nil: no allowlist
-	scannerPriority                          *core.ScannerPriority
-	protectFromOOM                           bool
-	outbox                                   OutboxPlan
-	stateDir                                 string
-	key                                      startKey
+	shared                                   bool
+	// ledger: a shared sensor's held jobs; the client refuses results
+	// for any other (core.JobLedger).
+	ledger          *core.JobLedger
+	verbose         bool
+	maxJobs         int
+	drainGrace      time.Duration
+	pollInterval    time.Duration
+	allow           []string // nil: no allowlist
+	scannerPriority *core.ScannerPriority
+	protectFromOOM  bool
+	outbox          OutboxPlan
+	stateDir        string
+	key             startKey
 	// signer and identity: a key-bound sensor (api RFC-052); no API key.
 	signer    *sensorsig.Signer
 	identity  *identity.Identity
@@ -404,6 +414,9 @@ func New(opts Options) (*Kit, error) {
 		return nil, err
 	}
 	s.local = local
+	if err := k.resolveShared(); err != nil {
+		return nil, err
+	}
 	protocol, err := ResolveProtocol(opts.Protocol, "")
 	if err != nil {
 		return nil, err
@@ -536,6 +549,11 @@ func New(opts Options) (*Kit, error) {
 	}
 	// NewBaseSensor fills the config's defaults (the banner prints them).
 	k.sensor = core.NewBaseSensor(&k.bcfg, pusher)
+	if s.shared {
+		// From the runtime: New failed above unless the shared profile
+		// is enforced.
+		k.Tools().AddCapabilities(CapabilitySharedIsolation)
+	}
 	// Every heartbeat and manifest reports the local policy, and every
 	// manifest the platform TLS pin and the tool sandbox (to a platform
 	// that reads them).
@@ -730,10 +748,13 @@ func ResolveRequireLocalPolicy(id *identity.Identity) (required bool, from strin
 // (applyRequireLocalPolicy), which depends on that identity.
 func (k *Kit) resolveIdentityAndPolicy() error {
 	s := &k.s
+	if err := checkSharedModeRuns(s.shared, s.commands, k.opts.Standalone); err != nil {
+		return err
+	}
 	// A required tool network confinement this host cannot give fails
 	// here, before a sensor without an identity pairs (resolveIdentity):
 	// otherwise the platform admits a sensor that then refuses to start.
-	if err := ValidateSandboxNetwork(k.opts.Sandbox); err != nil {
+	if err := validateSandboxNetwork(k.opts.Sandbox, s.shared); err != nil {
 		return err
 	}
 	if _, err := keyBindEnabled(); err != nil {
@@ -751,7 +772,46 @@ func (k *Kit) resolveIdentityAndPolicy() error {
 			return err
 		}
 	}
+	if err := checkSharedIdentity(s.shared, s.identity); err != nil {
+		return err
+	}
 	return k.applyRequireLocalPolicy()
+}
+
+// checkSharedModeRuns refuses shared mode on a sensor that takes no platform
+// jobs: shared mode exists to isolate the jobs of many organizations, so with
+// commands off or in standalone mode it would only claim an isolation profile
+// nothing uses, and hide that the sensor is not a shared sensor at all.
+func checkSharedModeRuns(shared, commands, standalone bool) error {
+	switch {
+	case !shared:
+		return nil
+	case standalone:
+		return usageError(fmt.Errorf("%s=1 (shared mode) cannot run standalone: shared mode isolates platform jobs, and a standalone sensor takes none", EnvSharedMode))
+	case !commands:
+		return usageError(fmt.Errorf("%s=1 (shared mode) needs platform commands on: shared mode isolates platform jobs, and this sensor takes none", EnvSharedMode))
+	}
+	return nil
+}
+
+// checkSharedIdentity refuses a mode and an identity that do not belong
+// together, before the sensor takes any job: an identity enrolled as a shared
+// sensor of the instance (scope "instance") runs only with shared mode on,
+// whose isolation is what makes jobs of many organizations safe on one host;
+// and shared mode never runs on an organization's own sensor identity (it
+// has a tenant), which would put other tenants' jobs on a sensor the
+// organization trusts with its own network.
+func checkSharedIdentity(shared bool, id *identity.Identity) error {
+	if id == nil {
+		return nil
+	}
+	switch {
+	case id.Scope == pairing.ScopeInstance && !shared:
+		return usageError(fmt.Errorf("this sensor is enrolled as a shared sensor of the instance; set %s=1 (or Options.Shared) so its jobs run under the shared isolation profile, or enroll an organization sensor", EnvSharedMode))
+	case shared && id.TenantID != "":
+		return usageError(fmt.Errorf("%s=1 needs a shared sensor of the instance, but this identity belongs to an organization; unset it, or enroll with an instance enrollment token", EnvSharedMode))
+	}
+	return nil
 }
 
 // applyRequireLocalPolicy applies ResolveRequireLocalPolicy to the loaded
@@ -1210,7 +1270,10 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 		// for another sensor is refused.
 		executor.SetSensorID(k.s.sensorID)
 	}
-	if k.opts.ScanTargetPolicy != nil {
+	switch {
+	case k.s.shared:
+		executor.SetScanTargetPolicy(sharedScanTargetPolicy(k.opts.ScanTargetPolicy))
+	case k.opts.ScanTargetPolicy != nil:
 		executor.SetScanTargetPolicy(k.opts.ScanTargetPolicy)
 	}
 	// The local policy, behind the poller's admission check: targets
@@ -1286,6 +1349,7 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 		MaxConcurrent: resources.MaxSlots(),
 		AllowedTypes:  types,
 		Verbose:       k.s.verbose,
+		Ledger:        k.s.ledger,
 	})
 	poller.SetResourceManager(resources)
 	if doorbell != nil {

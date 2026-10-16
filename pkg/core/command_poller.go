@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -87,6 +88,13 @@ type Command struct {
 	signedTemplates []string
 	// signedLimits are the scope limits of the verified statement.
 	signedLimits []scopelimit.Limit
+	// jobTenant is the organization of a verified shared (instance) job:
+	// its results are bound to it. Only JobGuard.Check sets it.
+	jobTenant string
+	// jobZone are the private ranges a verified shared job may reach: the
+	// zone of its signed statement (ParseZoneRanges), nil without one. Only
+	// JobGuard.Check sets it; an unsigned command field never does.
+	jobZone []netip.Prefix
 }
 
 // CommandResult represents the result of command execution.
@@ -285,6 +293,8 @@ type CommandExecutionResult struct {
 
 // CommandPoller polls the server for pending commands.
 type CommandPoller struct {
+	// ledger: a shared sensor's held jobs (CommandPollerConfig.Ledger).
+	ledger        *JobLedger
 	client        CommandClient
 	executor      CommandExecutor
 	interval      time.Duration
@@ -431,6 +441,11 @@ type CommandPollerConfig struct {
 	// DrainGrace is how long a stopping poller lets running commands finish
 	// before it cancels them and releases them to the platform. Default 30s.
 	DrainGrace time.Duration `yaml:"drain_grace" json:"drain_grace"`
+	// Ledger, on a shared sensor, holds each command while it runs, with
+	// the organization its verified signed job names; the client refuses
+	// results for a command the ledger does not hold (JobLedger). A
+	// command without a verified organization is refused, never run.
+	Ledger *JobLedger `yaml:"-" json:"-"`
 }
 
 // DefaultCommandPollerConfig returns default config.
@@ -470,6 +485,7 @@ func NewCommandPoller(client CommandClient, executor CommandExecutor, cfg *Comma
 	}
 
 	p := &CommandPoller{
+		ledger:        cfg.Ledger,
 		client:        client,
 		executor:      executor,
 		interval:      cfg.PollInterval,
@@ -1113,6 +1129,14 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	// an outbox binds them to it and reports the command only after they
 	// were accepted.
 	ctx = WithCommandID(ctx, cmd.ID)
+	// A shared sensor holds the command (its result included, the defer
+	// above releases it last) for the organization its verified job names.
+	if p.ledger != nil {
+		p.ledger.Hold(cmd.ID, cmd.jobTenant)
+		defer p.ledger.Release(cmd.ID)
+		ctx = WithJobTenant(ctx, cmd.jobTenant)
+		ctx = WithJobZone(ctx, cmd.jobZone)
+	}
 	ctx, usage := withUsageRecorder(ctx)
 	// Every target the job dials through the guarded dialer or a task
 	// forwarder, and every outcome a scanner records, lands here; the
@@ -1132,6 +1156,9 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 
 	// A job signature that does not verify (or a missing one where signed
 	// jobs are required): failed from the claimed state, never started.
+	if jobErr == nil && p.ledger != nil && cmd.jobTenant == "" {
+		jobErr = jobRefusal("a shared sensor runs only jobs whose verified signature names the organization they belong to")
+	}
 	if jobErr != nil {
 		p.clog(ctx, cmd.ID, "error", "Refused before running: "+jobErr.Error(), refusalFields(jobErr))
 		p.finishLog(ctx, cmd.ID)

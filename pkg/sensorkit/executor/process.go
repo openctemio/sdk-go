@@ -50,6 +50,15 @@ type Config struct {
 	// it (the sensor's content cache: one tenant's packs are never
 	// readable by another tenant's task).
 	Private []string
+	// Shared is the profile of a sensor that runs jobs of many tenants:
+	// every control must hold (ModeRequired and network confinement, or
+	// NewProcessBackend fails), and a task writes nothing that outlives it
+	// or that another task reads. Its WritePaths and the directories its
+	// SetEnv points HOME, TMPDIR and XDG_* at must lie beneath the task
+	// root (a directory NewTaskDir made, removed with the task): no tool
+	// cache, output directory or configuration directory is shared between
+	// jobs. Read-only content (signed packs, ReadPaths) is unaffected.
+	Shared bool
 }
 
 // ProcessBackend runs each task as a child process, through the launcher
@@ -70,6 +79,12 @@ type ProcessBackend struct {
 // is missing in Status. With RequireNetwork it fails unless tasks' network
 // is confined.
 func NewProcessBackend(cfg Config) (*ProcessBackend, error) {
+	if cfg.Shared {
+		if cfg.Mode != ModeRequired {
+			return nil, fmt.Errorf("executor: a shared sensor needs the sandbox in required mode, not %q", cfg.Mode)
+		}
+		cfg.ConfineNetwork, cfg.RequireNetwork = true, true
+	}
 	b, err := newProcessBackend(cfg)
 	if err == nil && cfg.RequireNetwork && !b.confine {
 		why := b.status.NetworkMissing
@@ -231,6 +246,10 @@ func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 			_ = os.RemoveAll(dir)
 			return nil, fmt.Errorf("executor: write path %q is a protected path", p)
 		}
+	}
+	if err := b.checkShared(spec); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, err
 	}
 	cwd := spec.Dir
 	if cwd == "" {

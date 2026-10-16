@@ -115,6 +115,13 @@ type Host struct {
 	// own packs there (hide the root from tasks with executor
 	// Config.Private). "": tasks with content packs are refused.
 	ContentRoot string
+	// Shared is the profile of a sensor that runs jobs of many tenants
+	// (api RFC-100 §8): a task runs only on a backend that enforces every
+	// sandbox control and confines its network; every target passes the
+	// policy (the built-in deny list without one) and then the job's zone
+	// rule (core.CheckSharedAddr), at admission and again for each address
+	// pinned for the task's forwarder.
+	Shared bool
 }
 
 // RunOptions adjust one task.
@@ -386,7 +393,14 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, tool.AsError(tool.Invalid("%v", err)), nil
 	}
 	task.Config = cfg
-	adm, ierr := Admit(ctx, m, task, h.Policy, o.Mode)
+	pol := h.Policy
+	if h.Shared {
+		if st := h.backend().Status(); !st.NetworkEnforced || st.Mode != executor.ModeRequired {
+			return nil, tool.AsError(tool.Refused("a shared sensor runs tools only on a sandbox that enforces every control and confines the network")), nil
+		}
+		pol = sharedPolicy{inner: h.Policy}
+	}
+	adm, ierr := Admit(ctx, m, task, pol, o.Mode)
 	if ierr != nil {
 		return nil, ierr, nil
 	}

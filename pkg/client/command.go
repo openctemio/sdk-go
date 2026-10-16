@@ -207,6 +207,9 @@ func (c *Client) commandV2(ctx context.Context, cmdID, action string, body any, 
 // (no free capacity) or, before the platform knew the sensor's capacity,
 // handed one command too many.
 func (c *Client) ReportCommandResult(ctx context.Context, cmdID string, result *core.CommandResult) error {
+	if err := c.jobLedger().Result(cmdID); err != nil {
+		return err
+	}
 	if ob := c.Outbox(); ob != nil {
 		if tk, err := c.enqueueCommandResult(ob, cmdID, result); err == nil {
 			return c.awaitResultTicket(ctx, tk)
