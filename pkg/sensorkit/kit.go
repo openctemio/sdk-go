@@ -748,6 +748,9 @@ func ResolveRequireLocalPolicy(id *identity.Identity) (required bool, from strin
 // (applyRequireLocalPolicy), which depends on that identity.
 func (k *Kit) resolveIdentityAndPolicy() error {
 	s := &k.s
+	if err := checkSharedModeRuns(s.shared, s.commands, k.opts.Standalone); err != nil {
+		return err
+	}
 	// A required tool network confinement this host cannot give fails
 	// here, before a sensor without an identity pairs (resolveIdentity):
 	// otherwise the platform admits a sensor that then refuses to start.
@@ -773,6 +776,22 @@ func (k *Kit) resolveIdentityAndPolicy() error {
 		return err
 	}
 	return k.applyRequireLocalPolicy()
+}
+
+// checkSharedModeRuns refuses shared mode on a sensor that takes no platform
+// jobs: shared mode exists to isolate the jobs of many organizations, so with
+// commands off or in standalone mode it would only claim an isolation profile
+// nothing uses, and hide that the sensor is not a shared sensor at all.
+func checkSharedModeRuns(shared, commands, standalone bool) error {
+	switch {
+	case !shared:
+		return nil
+	case standalone:
+		return usageError(fmt.Errorf("%s=1 (shared mode) cannot run standalone: shared mode isolates platform jobs, and a standalone sensor takes none", EnvSharedMode))
+	case !commands:
+		return usageError(fmt.Errorf("%s=1 (shared mode) needs platform commands on: shared mode isolates platform jobs, and this sensor takes none", EnvSharedMode))
+	}
+	return nil
 }
 
 // checkSharedIdentity refuses a mode and an identity that do not belong
