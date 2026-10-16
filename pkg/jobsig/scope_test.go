@@ -81,3 +81,33 @@ func TestVerify_SharedSensorRequiresInstanceScopeAndOwnSensor(t *testing.T) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }
+
+// SECURITY: a zone (private ranges) is signed only for a shared sensor's
+// job: an organization's sensor refuses a statement that carries one, and
+// a shared sensor returns the signed zone.
+func TestVerify_ZoneOnlyForSharedSensors(t *testing.T) {
+	zone := &Zone{ID: "aaaaaaaa-0000-4000-8000-0000000000aa", Ranges: []string{"10.20.0.0/16"}}
+	f := newFixture(t, "")
+	st := f.statement()
+	st.Zone = zone
+	if _, err := f.ver.Verify(context.Background(), f.envelope(t, st), f.b); ReasonOf(err) != ReasonSensorScope {
+		t.Fatalf("organization sensor accepted a zone: %v", err)
+	}
+	f = newFixture(t, "")
+	st = f.statement()
+	st.SensorScope, st.TenantID, st.Zone = SensorScopeInstance, "aaaaaaaa-0000-4000-8000-0000000000ee", zone
+	b := f.b
+	b.Shared, b.TenantID = true, ""
+	got, err := f.ver.Verify(context.Background(), f.envelope(t, st), b)
+	if err != nil || got.Zone == nil || got.Zone.Ranges[0] != "10.20.0.0/16" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	f = newFixture(t, "")
+	st = f.statement()
+	st.SensorScope, st.TenantID, st.Zone = SensorScopeInstance, "aaaaaaaa-0000-4000-8000-0000000000ee", &Zone{ID: "x"}
+	b = f.b
+	b.Shared, b.TenantID = true, ""
+	if _, err := f.ver.Verify(context.Background(), f.envelope(t, st), b); ReasonOf(err) != ReasonSensorScope {
+		t.Fatalf("a zone without ranges was accepted: %v", err)
+	}
+}
