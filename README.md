@@ -310,7 +310,6 @@ it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
 | `pkg/connectors` | Deprecated SCM connector base (GitHub) |
 | `pkg/enrichers` | Deprecated EPSS and KEV enrichers (the platform enriches findings) |
 | `pkg/audit` | Structured audit logging for sensor operations |
-| `pkg/platform` | Credentials file and key renewal used by `sensorkit` |
 | `pkg/sensorproto/legacyv1` | Migration of pre-sensor settings and credentials (frozen) |
 | `pkg/ctis` | CTIS (CTEM Ingest Schema) types, re-exported from `github.com/openctemio/ctis` |
 

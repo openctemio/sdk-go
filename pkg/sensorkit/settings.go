@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/sdk-go/internal/sensorstate"
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
-	"github.com/openctemio/sdk-go/pkg/platform"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
@@ -46,6 +46,10 @@ const (
 	// EnvPairingCode is the code an administrator created with "expect a
 	// sensor": a sensor with no identity attaches to it on first start.
 	EnvPairingCode = "SENSOR_PAIRING_CODE"
+	// EnvInstanceEnrollmentToken is a single-use instance enrollment token
+	// (octe_…, api RFC-100 §7): a sensor with no identity enrolls with it as
+	// a shared sensor of the instance, without an administrator's approval.
+	EnvInstanceEnrollmentToken = "SENSOR_INSTANCE_ENROLLMENT_TOKEN"
 	// EnvPlatformKey pins the platform's pairing key (its thumbprint).
 	EnvPlatformKey  = "SENSOR_PLATFORM_KEY"
 	EnvKeyAutoRenew = "SENSOR_KEY_AUTORENEW" // true | false; unset: on when the state directory persists
@@ -378,9 +382,9 @@ func CheckDaemonCredentials(apiURL string, help CredentialsHelp) error {
 // renews, the tool cost history): explicit, else SENSOR_STATE_DIR, else
 // /var/lib/openctem/state when writable (the images create it; mount the
 // data volume at /var/lib/openctem), else ~/.openctem
-// (platform.ResolveStateDir).
+// (sensorstate.ResolveStateDir).
 func ResolveStateDir(explicit string) string {
-	return platform.ResolveStateDir(explicit)
+	return sensorstate.ResolveStateDir(explicit)
 }
 
 // ParseToolList splits a comma-separated tool list ("semgrep, trivy,,nuclei")

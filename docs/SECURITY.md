@@ -90,83 +90,7 @@ minutes. An identity refusal (the platform refused the key or certificate)
 never falls back: the client sends nothing but hello and the heartbeat until
 the identity is accepted again.
 
-### 3. Platform Sensor Security
-
-> `pkg/platform` requires the platform (SaaS) control plane: its
-> `/api/v1/platform/*` routes are not served by the open-source API.
-> Self-hosted sensors use `pkg/client` + `core.CommandPoller`, which carry
-> their own target validation and command-expiry checks. The job checks
-> below do not validate scan targets — a platform executor must do that
-> itself (e.g. with `core.ScanTargetPolicy`).
-
-Platform sensors include comprehensive security controls.
-
-#### Job Validation
-
-All jobs are validated before execution:
-
-```go
-import "github.com/openctemio/sdk-go/pkg/platform"
-
-config := &platform.PollerConfig{
-    // Restrict allowed job types
-    AllowedJobTypes: []string{"scan", "collect"},
-
-    // Limit payload size (default: 10MB)
-    MaxPayloadSize: 10 * 1024 * 1024,
-
-    // Require auth tokens on all jobs
-    RequireAuthToken: true,
-
-    // Validate JWT tenant claims match job tenant
-    ValidateTokenClaims: true,
-}
-```
-
-**Validation checks:**
-- Job ID, tenant ID, and type are required
-- Job type must be in whitelist (if configured)
-- Payload size limits enforced
-- Auth token validation with JWT claim matching
-- Timeout validation (max 1 hour)
-
-#### Lease Security
-
-Lease identities are now cryptographically secured to prevent hijacking:
-
-```go
-import "github.com/openctemio/sdk-go/pkg/platform"
-
-config := &platform.LeaseConfig{
-    // Secure identity enabled by default
-    // Format: prefix-hostname-pid-<32-char-random-hex>
-    UseSecureIdentity: nil,  // nil = true (default)
-
-    // Optional prefix for identification
-    IdentityPrefix: "scanner",
-}
-```
-
-**Security features:**
-- 16-byte cryptographic random nonce in identity
-- Cannot be guessed or forged by attackers
-- Automatic job cancellation on lease expiry
-
-#### Lease Expiry Handling
-
-Jobs are automatically cancelled when lease expires:
-
-```go
-poller := platform.NewJobPoller(client, executor, config)
-poller.SetLeaseManager(leaseManager)
-
-// When lease expires:
-// 1. All running jobs are cancelled via context
-// 2. Jobs report "canceled" status
-// 3. OnLeaseExpired callback is invoked
-```
-
-### 4. Template Security
+### 3. Template Security
 
 Custom scan templates are validated to prevent attacks.
 
@@ -268,7 +192,7 @@ template type to be on the allowlist (both become path components), checks
 that every written path stays inside the cache directory, and scopes cache
 hits per tenant and template type.
 
-### 5. Scan Target Validation (command path)
+### 4. Scan Target Validation (command path)
 
 `core.DefaultCommandExecutor` validates every server-supplied scan target
 with a `core.ScanTargetPolicy` before a scanner runs:
@@ -278,6 +202,16 @@ with a `core.ScanTargetPolicy` before a scanner runs:
   multicast, unspecified and reserved ranges are always blocked; RFC1918/ULA
   are blocked unless private targets are allowed. Hostnames are resolved and
   every address is checked (fail closed for dotted names).
+- The deny list is `github.com/openctemio/ctis/addrscope` (`IsInternal`,
+  `IsInternalPrefix`), the same definition the platform checks job targets
+  with, so the two never disagree. An IPv6 address that carries an IPv4
+  address (IPv4-mapped or -compatible, NAT64 `64:ff9b::/96` and
+  `64:ff9b:1::/48`, 6to4 `2002::/16`, Teredo `2001::/32`) is judged by that
+  IPv4 address: `64:ff9b::a00:1` is 10.0.0.1 and is refused even where
+  private targets are allowed (only private ranges written directly can be
+  allowed, and never the metadata addresses inside ULA). The SDK's own
+  outbound guard (`pkg/httpsec`) and the egress forwarder's public-only
+  check use the same list.
 - Filesystem targets: symlinks are resolved first; with allowed roots set the
   path must be inside one of them, otherwise `/`, system directories
   (`/etc`, `/proc`, ...) and home credential dirs (`~/.ssh`, `~/.aws`, ...)
@@ -606,7 +540,7 @@ queued through the outbox ahead of the command's result. Lines for a
 hand-back are sent directly before the release, because the platform does
 not take this sensor's lines after that.
 
-### 6. Scanner Process Environment
+### 5. Scanner Process Environment
 
 Scanner child processes no longer inherit the sensor's whole environment
 (which holds the API key). They get an allowlist: `PATH`, `HOME`, temp and
@@ -648,7 +582,7 @@ delivered in the run message. Names the operator allows explicitly
 (`OPENCTEM_SDK_SCANNER_ENV_ALLOW`) and variables the caller passes still
 reach any tool.
 
-### 7. Per-task tool sandbox (`pkg/sensorkit/executor`)
+### 6. Per-task tool sandbox (`pkg/sensorkit/executor`)
 
 Every tool run goes through one executor. A backend takes a generic task
 (argv, environment, working directory, writable paths, limits, network class)
@@ -745,7 +679,7 @@ policy refuses to start (before pairing): its targets come from many
 tenants, and the operator's own target, range, port and tool rules must
 bound them.
 
-### 8. Web scope of a job (`pkg/webscope`)
+### 7. Web scope of a job (`pkg/webscope`)
 
 A job can carry a web scope (`web_scope`): the hosts (`app.example.com`, or
 `*.example.com` for the domain and every name under it), the path prefixes
@@ -827,9 +761,9 @@ or the task does not start:
   `http.identity@1`; the platform gives identification-carrying jobs only to
   such a sensor.
 
-### 9. API Client Transport
+### 8. API Client Transport
 
-- API clients (`pkg/client`, `pkg/platform`) refuse HTTP redirects; the API
+- API clients (`pkg/client`, the key renewal client) refuse HTTP redirects; the API
   never issues them and following one would forward the bearer key.
 - They only ever talk to the operator-configured base URL, so they do not
   apply the scan-target IP blocklist: a platform on loopback, RFC1918, ULA
@@ -977,13 +911,6 @@ export SENSOR_API_KEY="<sensor key>"   # or pair the sensor and set no key at al
 - [ ] `SENSOR_API_URL` uses `https://` in production
 - [ ] A private CA is trusted with `SENSOR_CA_CERT_FILE`, never by skipping verification
 - [ ] The sensor reports `posture.platform_tls.pin: fingerprint` (paired by this SDK, or `SENSOR_CA_FINGERPRINT`)
-
-### Platform Sensors (`pkg/platform`, platform control plane only)
-- [ ] `AllowedJobTypes` configured (whitelist)
-- [ ] `RequireAuthToken` enabled
-- [ ] `ValidateTokenClaims` enabled
-- [ ] Secure lease identity enabled (default)
-- [ ] Lease expiry callback handles graceful shutdown
 
 ### Signed jobs
 

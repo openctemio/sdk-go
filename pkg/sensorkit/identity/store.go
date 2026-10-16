@@ -57,9 +57,13 @@ type Identity struct {
 	// PlatformURL is the API URL the sensor paired with.
 	PlatformURL string `json:"platform_url"`
 	SensorID    string `json:"sensor_id"`
-	TenantID    string `json:"tenant_id"`
-	TenantName  string `json:"tenant_name,omitempty"`
-	Name        string `json:"name"`
+	// TenantID is empty for a shared sensor (Scope "instance").
+	TenantID   string `json:"tenant_id"`
+	TenantName string `json:"tenant_name,omitempty"`
+	Name       string `json:"name"`
+	// Scope is "instance" for a shared sensor (api RFC-100); empty for a
+	// sensor of the organization TenantID.
+	Scope string `json:"scope,omitempty"`
 	// KeyID is the RFC 7638 thumbprint of the signing key; it must match
 	// signing.key.
 	KeyID string `json:"key_id"`

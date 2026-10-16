@@ -44,7 +44,7 @@ func TestMigrateFixture(t *testing.T) {
 		"-\t*core.BaseAgent", "+\t*core.BaseSensor",
 		"+\tm := &myAgent{BaseSensor: core.NewBaseSensor(cfg, nil), agentNote: \"n\"}",
 		"+\t_ = client.NewWithOptions(client.WithSensorID(\"s-1\"))",
-		"+func extraCredentials(c *platform.SensorCredentials) string { return c.SensorID }",
+		"+func extraSensorID(c *client.Config) string { return c.SensorID }",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("dry-run diff lacks %q:\n%s", want, out.String())

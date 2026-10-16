@@ -43,7 +43,13 @@ type fakePlatform struct {
 	// knobs
 	tamperSignature bool
 	grantKeyID      string // identity for another key
-	finalStatus     string // what the poll answers after the first poll
+	// instance grants a shared sensor identity (no tenant); refuseToken
+	// answers a start with an enrollment token 401; lastToken is the token
+	// the last start carried.
+	instance    bool
+	refuseToken bool
+	lastToken   string
+	finalStatus string // what the poll answers after the first poll
 	// signedJobs is what the hello lists after pairing; nil: an older
 	// platform (no hello route here).
 	signedJobs *protov2.SignedJobs
@@ -92,7 +98,12 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.commitment, _ = pairing.DecodeFixed(req.Commitment, 32)
 		f.nonceP, _ = pairing.NewNonce()
 		f.lastCode = req.Code
+		f.lastToken = req.EnrollmentToken
 		f.starts++
+		if req.EnrollmentToken != "" && f.refuseToken {
+			http.Error(w, "unauthenticated", http.StatusUnauthorized)
+			return
+		}
 		f.status = pairing.StatusPending
 		f.revealed = nil
 		exp := time.Now().Add(10 * time.Minute).Truncate(time.Second)
@@ -141,6 +152,9 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			st.Identity = &pairing.Identity{SensorID: "11111111-2222-3333-4444-555555555555", TenantID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 				TenantName: "Acme", Name: "dmz-01", KeyID: kid}
+			if f.instance {
+				st.Identity.TenantID, st.Identity.TenantName, st.Identity.Scope = "", "", pairing.ScopeInstance
+			}
 		}
 		_ = json.NewEncoder(w).Encode(st)
 	case r.Method == http.MethodPost && r.URL.Path == base+"/"+pid+"/complete":
@@ -148,7 +162,11 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var req pairing.ConfirmRequest
 		_ = json.Unmarshal(body, &req)
 		sig, _ := pairing.DecodeFixed(req.Signature, ed25519.SignatureSize)
-		msg := pairing.ConfirmTranscript(pid, req.SensorID, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", req.KeyID)
+		tenant := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		if f.instance {
+			tenant = ""
+		}
+		msg := pairing.ConfirmTranscript(pid, req.SensorID, tenant, req.KeyID)
 		if !ed25519.Verify(f.sensorPub, msg, sig) {
 			http.Error(w, "bad confirm", http.StatusBadRequest)
 			return

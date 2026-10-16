@@ -43,6 +43,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/ctis/addrscope"
 	"golang.org/x/time/rate"
 
 	"github.com/openctemio/sdk-go/pkg/adapt"
@@ -251,11 +252,14 @@ var metadataAddrs = []netip.Addr{
 	netip.MustParseAddr("168.63.129.16"),   // Azure host agent (wireserver)
 }
 
-// publicOnly refuses what a vendor host must never resolve to: besides
-// alwaysRefused, loopback and private ranges.
+// publicOnly refuses what a vendor host or an egress-proxy destination
+// must never resolve to: besides alwaysRefused, every internal address of
+// ctis addrscope (the deny list the platform uses too): loopback, private,
+// CGNAT, reserved ranges, and IPv6 addresses that carry an internal IPv4
+// address (NAT64, 6to4, Teredo).
 func publicOnly(a netip.Addr) bool {
 	a = a.Unmap()
-	return alwaysRefused(a) || a.IsLoopback() || a.IsPrivate() || !a.IsGlobalUnicast()
+	return alwaysRefused(a) || addrscope.IsInternal(a) || !a.IsGlobalUnicast()
 }
 
 func (f *Forwarder) portAllowed(port int) bool {

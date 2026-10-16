@@ -1,4 +1,4 @@
-package platform
+package sensorstate
 
 // The sensor's state directory and the API key kept in it (api RFC-032
 // Phase 0, "renewal that survives a restart").
