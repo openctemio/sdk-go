@@ -29,6 +29,7 @@ const (
 	ReasonSigner        = "signer"
 	ReasonTenant        = "tenant"
 	ReasonSensor        = "sensor"
+	ReasonSensorScope   = "sensor_scope"
 	ReasonCommand       = "command"
 	ReasonCommandType   = "command_type"
 	ReasonClockSkew     = "clock_skew"
@@ -70,7 +71,14 @@ func ReasonOf(err error) string {
 // Binding is what a statement must describe: this sensor and the command
 // as the claim response handed it over.
 type Binding struct {
-	TenantID    string
+	// TenantID is this sensor's organization. A shared sensor (Shared) has
+	// none: it accepts a job for any organization, signed for the instance
+	// scope, and binds the job's results to the statement's tenant.
+	TenantID string
+	// Shared: this sensor serves many organizations (api RFC-100). It
+	// accepts only statements with SensorScope "instance" and its own
+	// SensorID; an organization's sensor accepts none of them.
+	Shared      bool
 	SensorID    string
 	CommandID   string
 	CommandType string
@@ -319,7 +327,16 @@ func (v *Verifier) checkStatement(st *Statement, keyID string, b Binding) error 
 	if st.Signer == nil || st.Signer.KeyID != keyID {
 		return refusef(ReasonSigner, "the statement does not name the key that signed it")
 	}
-	if b.TenantID == "" || !strings.EqualFold(st.TenantID, b.TenantID) {
+	switch {
+	case b.Shared && st.SensorScope != SensorScopeInstance:
+		return refusef(ReasonSensorScope, "this shared sensor runs only jobs signed for the instance scope, not %q", st.SensorScope)
+	case !b.Shared && st.SensorScope != "":
+		return refusef(ReasonSensorScope, "statement is for a %q sensor, not an organization's sensor", st.SensorScope)
+	case st.Zone != nil && (!b.Shared || st.Zone.ID == "" || len(st.Zone.Ranges) == 0):
+		return refusef(ReasonSensorScope, "a zone is only for a shared sensor's job, with an id and ranges")
+	case b.Shared && st.TenantID == "":
+		return refusef(ReasonTenant, "statement names no organization to bind the job's results to")
+	case !b.Shared && (b.TenantID == "" || !strings.EqualFold(st.TenantID, b.TenantID)):
 		return refusef(ReasonTenant, "statement is for organization %q, not this sensor's", st.TenantID)
 	}
 	if b.SensorID == "" || !strings.EqualFold(st.SensorID, b.SensorID) {
