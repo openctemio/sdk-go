@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openctemio/sdk-go/internal/sensorstate"
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
-	"github.com/openctemio/sdk-go/pkg/platform"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
@@ -69,7 +69,7 @@ func TestControl_EverythingOnV2WithoutAgentHeader(t *testing.T) {
 	if _, err := c.PushFindings(ctx, report("semgrep", 1, 2)); err != nil {
 		t.Fatal(err)
 	}
-	pc := platform.NewPlatformClient(&platform.ClientConfig{BaseURL: f.URL(), APIKey: f.APIKey, SensorID: "sensor-1"})
+	pc := sensorstate.NewRenewClient(f.URL(), f.APIKey)
 	if k, err := pc.RenewKey(ctx); err != nil || !strings.HasPrefix(k.APIKey, "rda_rotated_") {
 		t.Fatalf("renew %+v %v", k, err)
 	}

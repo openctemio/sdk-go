@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/sdk-go/internal/sensorstate"
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
-	"github.com/openctemio/sdk-go/pkg/platform"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
 
@@ -378,9 +378,9 @@ func CheckDaemonCredentials(apiURL string, help CredentialsHelp) error {
 // renews, the tool cost history): explicit, else SENSOR_STATE_DIR, else
 // /var/lib/openctem/state when writable (the images create it; mount the
 // data volume at /var/lib/openctem), else ~/.openctem
-// (platform.ResolveStateDir).
+// (sensorstate.ResolveStateDir).
 func ResolveStateDir(explicit string) string {
-	return platform.ResolveStateDir(explicit)
+	return sensorstate.ResolveStateDir(explicit)
 }
 
 // ParseToolList splits a comma-separated tool list ("semgrep, trivy,,nuclei")

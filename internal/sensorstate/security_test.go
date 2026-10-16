@@ -1,4 +1,4 @@
-package platform
+package sensorstate
 
 import (
 	"context"
@@ -15,44 +15,19 @@ import (
 )
 
 func TestAPIURL(t *testing.T) {
-	got, err := apiURL("https://api.example.com/", "/api/v1/platform/jobs/%s/ack", "../../admin?x=1#f")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "https://api.example.com/api/v1/platform/jobs/..%2F..%2Fadmin%3Fx=1%23f/ack"
-	if got != want {
-		t.Errorf("apiURL = %q, want %q", got, want)
+	got, err := apiURL("https://api.example.com/", "/api/v2/sensor/keys")
+	if err != nil || got != "https://api.example.com/api/v2/sensor/keys" {
+		t.Fatalf("apiURL = %q, %v", got, err)
 	}
 	for _, bad := range []string{"", "ftp://x", "https://u:p@api.example.com", "api.example.com"} {
-		if _, err := apiURL(bad, "/api/v1/platform/poll"); err == nil {
+		if _, err := apiURL(bad, "/api/v2/sensor/keys"); err == nil {
 			t.Errorf("base URL %q accepted", bad)
 		}
 	}
-	if _, err := apiURL("https://api.example.com", "/api/v1/platform/jobs/%s/ack", ""); err == nil {
-		t.Error("empty job ID accepted")
-	}
 }
 
-// Job IDs from the server are escaped on the wire.
-func TestJobClient_EscapesJobID(t *testing.T) {
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.EscapedPath()
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	jc := NewHTTPJobClient(srv.URL, "k", "sensor-1", time.Second)
-	if err := jc.AcknowledgeJob(context.Background(), "x/../../lease"); err != nil {
-		t.Fatal(err)
-	}
-	if want := "/api/v1/platform/jobs/x%2F..%2F..%2Flease/ack"; gotPath != want {
-		t.Errorf("path = %q, want %q", gotPath, want)
-	}
-}
-
-// Platform clients carry the sensor key and must not follow redirects.
-func TestPlatformClient_RefusesRedirect(t *testing.T) {
+// The renew client carries the sensor key and must not follow redirects.
+func TestRenewClient_RefusesRedirect(t *testing.T) {
 	var leaked atomic.Bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "" {
@@ -66,7 +41,7 @@ func TestPlatformClient_RefusesRedirect(t *testing.T) {
 	}))
 	defer api.Close()
 
-	c := NewPlatformClient(&ClientConfig{BaseURL: api.URL, APIKey: "rda_secret", SensorID: "a"})
+	c := NewRenewClient(api.URL, "rda_secret")
 	if _, err := c.RenewKey(context.Background()); err == nil {
 		t.Fatal("redirect followed")
 	}

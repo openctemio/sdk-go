@@ -23,9 +23,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/openctemio/sdk-go/internal/sensorstate"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/netctx"
-	"github.com/openctemio/sdk-go/pkg/platform"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
@@ -248,7 +248,7 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "System trust store file override (read by the Go runtime and the scanners)."},
 		settingsreg.Setting{Name: EnvSSLCertDir, Type: settingsreg.Path, Group: "platform", Validate: readableDir,
 			Description: "System trust store directory override."},
-		settingsreg.Setting{Name: EnvStateDir, Type: settingsreg.Path, Default: platform.DefaultStateDir, Group: "identity",
+		settingsreg.Setting{Name: EnvStateDir, Type: settingsreg.Path, Default: sensorstate.DefaultStateDir, Group: "identity",
 			Description: "Local state: the paired identity and signing key (identity/), the renewed API key and the tool cost history. Mount a persistent volume."},
 		settingsreg.Setting{Name: EnvKeyAutoRenew, Type: settingsreg.Bool, Default: "auto", Group: "identity",
 			Description: "API key auto-renewal: true, false, or unset (on when the state directory persists)."},

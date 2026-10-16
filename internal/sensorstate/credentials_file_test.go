@@ -1,15 +1,11 @@
-package platform
+package sensorstate
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -188,40 +184,5 @@ func TestResolveCredentialsFile(t *testing.T) {
 	}
 	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
 		t.Fatal("the default legacy file must have been moved")
-	}
-}
-
-// An upgraded sensor keeps its identity: EnsureRegistered with the default
-// path loads the moved credentials and never calls the registration endpoint,
-// even with a bootstrap token configured.
-func TestEnsureRegisteredMigratesWithoutRegistering(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	writeLegacy(t, filepath.Join(home, ".openctem", "agent-credentials.json"), 0o600)
-
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls.Add(1)
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	cfg := &EnsureRegisteredConfig{
-		BaseURL:        srv.URL,
-		BootstrapToken: "bt_unused",
-		Registration:   &RegistrationRequest{Name: "s", Capabilities: []string{"dast"}},
-	}
-	creds, err := EnsureRegistered(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if creds.SensorID != "11111111-2222-3333-4444-555555555555" || creds.APIKey != "rda_legacy_key" {
-		t.Fatalf("identity not kept: %+v", creds)
-	}
-	if calls.Load() != 0 {
-		t.Fatalf("registration endpoint called %d times; an upgraded sensor must not re-register", calls.Load())
-	}
-	if want := filepath.Join(home, ".openctem", "sensor-credentials.json"); cfg.CredentialsFile != want {
-		t.Fatalf("CredentialsFile = %q, want %q", cfg.CredentialsFile, want)
 	}
 }
