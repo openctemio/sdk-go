@@ -29,6 +29,10 @@ var (
 	// ErrExpired: the pairing request expired before it was approved and
 	// confirmed (and PairOptions.Retry was off).
 	ErrExpired = errors.New("pairing: the request expired before it was approved")
+	// ErrEnrollmentRefused: the platform refused the instance enrollment
+	// token (malformed, unknown, expired or already used; it does not say
+	// which). Ask a super administrator for a new one.
+	ErrEnrollmentRefused = errors.New("pairing: the platform refused the instance enrollment token (unknown, expired or already used)")
 )
 
 // PairOptions configures Pair.
@@ -45,6 +49,12 @@ type PairOptions struct {
 	// variable); the instructions print it instead of the code, so a code
 	// from the configuration never reaches the logs.
 	CodeLabel string
+	// EnrollmentToken is a single-use instance enrollment token (api
+	// RFC-100 §7): the sensor is enrolled as a shared sensor (no
+	// organization) without an administrator's approval, and the identity
+	// must say so. Never with Code or RepairSensorID; Retry does not apply
+	// (the token is spent by the first request).
+	EnrollmentToken string
 	// RepairSensorID asks to re-pair this existing registration (lost or
 	// stolen key); NewKey makes a fresh key first.
 	RepairSensorID string
@@ -93,6 +103,9 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 	if o.sleep == nil {
 		o.sleep = sleepCtx
 	}
+	if o.EnrollmentToken != "" && (o.Code != "" || o.RepairSensorID != "") {
+		return nil, errors.New("pairing: an instance enrollment token cannot be combined with a pairing code or a re-pair")
+	}
 	if o.Code != "" {
 		c, err := pairing.NormalizeCode(o.Code)
 		if err != nil {
@@ -129,7 +142,7 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 
 	for {
 		id, err := pairOnce(ctx, pc, signer, o)
-		if errors.Is(err, ErrExpired) && o.Retry {
+		if errors.Is(err, ErrExpired) && o.Retry && o.EnrollmentToken == "" {
 			_, _ = fmt.Fprintln(o.Out, "The pairing request expired; starting a new one.")
 			continue
 		}
@@ -147,9 +160,14 @@ func pairOnce(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o P
 	}
 	commitment := pairing.Commit(nonce)
 	req := pairing.StartRequest{Protocol: pairing.Version, PublicKey: pairing.Encode(signer.PublicKey()),
-		Commitment: pairing.Encode(commitment), Code: o.Code, Host: o.Host, SensorID: o.RepairSensorID}
+		Commitment: pairing.Encode(commitment), Code: o.Code, Host: o.Host, SensorID: o.RepairSensorID,
+		EnrollmentToken: o.EnrollmentToken}
 	var start pairing.StartResponse
 	if err := pc.do(ctx, o, http.MethodPost, pairing.StartPath, req, http.StatusCreated, &start); err != nil {
+		var he *httpError
+		if o.EnrollmentToken != "" && errors.As(err, &he) && he.status == http.StatusUnauthorized {
+			return nil, ErrEnrollmentRefused
+		}
 		return nil, fmt.Errorf("pairing: start: %w", err)
 	}
 	platformPub, platformNonce, err := pairing.VerifyStart(&start, signer.PublicKey(), commitment, o.PlatformKeyPin, sensorsig.Thumbprint)
@@ -195,8 +213,17 @@ func pairOnce(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o P
 }
 
 func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o PairOptions, pairingID, path string, granted *pairing.Identity, platformPub ed25519.PublicKey) (*Identity, error) {
-	if granted.KeyID != signer.KeyID() || !validID(granted.SensorID) || !validID(granted.TenantID) {
+	if granted.KeyID != signer.KeyID() || !validID(granted.SensorID) {
 		return nil, errors.New("pairing: the platform granted an identity for another key")
+	}
+	// An instance enrollment yields a shared sensor (no tenant) and nothing
+	// else; any other pairing yields a sensor of one organization.
+	if o.EnrollmentToken != "" {
+		if granted.Scope != pairing.ScopeInstance || granted.TenantID != "" {
+			return nil, errors.New("pairing: the platform answered an instance enrollment with an organization identity")
+		}
+	} else if granted.Scope != "" || !validID(granted.TenantID) {
+		return nil, errors.New("pairing: the platform granted an identity without an organization")
 	}
 	if o.RepairSensorID != "" && granted.SensorID != o.RepairSensorID {
 		return nil, errors.New("pairing: the platform re-paired another sensor than the one asked for")
@@ -211,7 +238,7 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 		return nil, fmt.Errorf("pairing: confirm answered %q", done.Status)
 	}
 	id := &Identity{PlatformURL: o.BaseURL, SensorID: granted.SensorID, TenantID: granted.TenantID,
-		TenantName: granted.TenantName, Name: granted.Name, KeyID: granted.KeyID,
+		TenantName: granted.TenantName, Name: granted.Name, KeyID: granted.KeyID, Scope: granted.Scope,
 		PlatformKey: pairing.Encode(platformPub), PairedAt: time.Now().UTC(),
 		// A sensor paired from now on fails closed without a local policy.
 		RequireLocalPolicy: true}
@@ -220,11 +247,15 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 	if err := o.Store.Save(id); err != nil {
 		return nil, err
 	}
-	org := id.TenantName
-	if org == "" {
-		org = id.TenantID
+	if id.Scope == pairing.ScopeInstance {
+		_, _ = fmt.Fprintf(o.Out, "Enrolled: shared sensor %q (%s) of the instance. Identity saved in %s.\n", id.Name, id.SensorID, o.Store.Dir())
+	} else {
+		org := id.TenantName
+		if org == "" {
+			org = id.TenantID
+		}
+		_, _ = fmt.Fprintf(o.Out, "Paired: sensor %q (%s) in organization %s. Identity saved in %s.\n", id.Name, id.SensorID, org, o.Store.Dir())
 	}
-	_, _ = fmt.Fprintf(o.Out, "Paired: sensor %q (%s) in organization %s. Identity saved in %s.\n", id.Name, id.SensorID, org, o.Store.Dir())
 	if id.PlatformTLSPin != "" {
 		_, _ = fmt.Fprintf(o.Out, "Platform TLS pinned: %s (%s); a platform certificate from another CA is refused until the sensor is paired again.\n",
 			id.PlatformTLSPin, id.PlatformTLSPinElement)
@@ -300,6 +331,11 @@ func (c *pairClient) tlsPin() (element, pin string) {
 func printInstructions(o PairOptions, start pairing.StartResponse, sas pairing.SAS, keyID string) {
 	exp := start.ExpiresAt.Local().Format("15:04")
 	w := o.Out
+	if o.EnrollmentToken != "" {
+		_, _ = fmt.Fprintf(w, "\nEnrolling as a shared sensor with the instance enrollment token (expires %s).\n", exp)
+		_, _ = fmt.Fprintf(w, "  Key:         %s\n\n", pairing.KeyFingerprint(keyID))
+		return
+	}
 	if o.Code == "" {
 		_, _ = fmt.Fprintf(w, "\nPair this sensor in OpenCTEM: Sensors > Pair a sensor\n")
 		_, _ = fmt.Fprintf(w, "  Code:        %s\n", start.UserCode)

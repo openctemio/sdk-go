@@ -14,11 +14,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openctemio/sdk-go/internal/sensorstate"
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/netctx"
-	"github.com/openctemio/sdk-go/pkg/platform"
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
 	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
@@ -163,7 +163,7 @@ type Options struct {
 	OutboxOverrides OutboxOverrides
 	// StateDir keeps the sensor's local state: the API key it renews and the
 	// tool cost history (SENSOR_STATE_DIR; default /var/lib/openctem/state
-	// when writable, else ~/.openctem; platform.ResolveStateDir). It is
+	// when writable, else ~/.openctem; sensorstate.ResolveStateDir). It is
 	// created 0700 when missing. Mount a persistent volume at
 	// DefaultDataDir (or on the state directory itself).
 	StateDir string
@@ -994,7 +994,7 @@ func (k *Kit) Run(ctx context.Context) error {
 
 	// API-key auto-renewal: on schedule, and at once when the platform's
 	// heartbeat says rotate_key.
-	var renewal *platform.KeyRenewManager
+	var renewal *sensorstate.KeyRenewManager
 	if k.s.key.autoRenew && k.client != nil {
 		m, err := startKeyRenewal(ctx, &k.s, k.client, out)
 		k.keyRenewalCheck(err)
