@@ -425,7 +425,11 @@ before the local policy, the command gate or any executor sees it:
 3. only then is the statement parsed: one JSON object, no unknown field,
    `kind` `openctem.job/v1`, `signer.keyid` the key that verified;
 4. `tenant_id` and `sensor_id` are the sensor's own (from its identity),
-   `command_id` and `command_type` those of the command being run;
+   `command_id` and `command_type` those of the command being run. A
+   statement that carries `sensor_scope` is refused by an organization's
+   sensor. A shared sensor (shared mode) instead requires `sensor_scope`
+   `instance` and its own `sensor_id`, accepts any `tenant_id`, and binds
+   the job's results to it (below);
 5. `issued_at` within 2 minutes of the sensor's clock, `expires_at` in the
    future and at most 1 hour after `issued_at`;
 6. `lease_epoch` is the epoch of the claim answer;
@@ -632,6 +636,68 @@ user (Landlock signal scoping needs Linux 6.12), and a task that escapes its
 process group with `setsid` is bounded by its rlimits but not killed with the
 group. The sandbox never uses a Docker socket; future backends (a Kubernetes
 Pod per task, a rootless container) plug in behind the same interface.
+
+#### Shared mode (`SENSOR_SHARED_MODE=1`, `sensorkit.Options.Shared`)
+
+A sensor that runs jobs of many tenants (an instance's shared sensors, api
+RFC-100 §8) switches on one profile. The mechanisms are the SDK's; the
+sensor only sets the switch:
+
+| Control | Enforced by | What it stops |
+|---|---|---|
+| The tool sandbox in `required` mode and network confinement required; `SENSOR_SANDBOX` or `SENSOR_SANDBOX_NETWORK` set to anything else is a configuration error, and a host that cannot give both refuses to start (before pairing) | `sensorkit` (`sandboxModes`, `validateSandboxNetwork`), `executor.Config.Shared`, `toolhost.Host.Shared` (a tool on any other backend is refused) | a shared sensor degrading silently to unconfined tools |
+| A fresh private task directory per task, removed after it whatever the outcome; write paths and `HOME`, `TMPDIR`, `TMP`, `TEMP`, `XDG_*` given by the caller must lie beneath the task root | `executor.Config.Shared` (`Prepare` refuses the task) | a writable cache, output or configuration directory shared between jobs: one tenant's job poisoning or reading another's tool state. Read-only signed content packs stay shared |
+| Targets: the policy (the built-in deny list without one), then the job's zone rule. A private address (RFC 1918, ULA) passes only when the operator allows private targets (`SENSOR_ALLOW_PRIVATE_TARGETS=1`, and `targets.allow_private` in a local policy) **and** it lies in the job's zone ranges; loopback, link-local, metadata (169.254.169.254, fd00:ec2::254, ...), CGNAT, multicast and reserved addresses never pass | `core.ScanTargetPolicy.Shared`, `toolhost.Host.Shared` (admission, and again for every address pinned for the task's forwarder), `core.CheckSharedAddr` / `CheckSharedPrefix` | a tenant reaching the operator's network or a cloud metadata service through a shared sensor |
+| The capability `shared.isolation@1`, advertised from the runtime state only | `sensorkit` | the platform sending shared jobs to a sensor that does not enforce this profile |
+
+**Zone ranges.** A shared sensor's job zone (the instance scan zone
+assigned to the job's tenant) is taken only from the job's verified signed
+statement, never from an unsigned field of the delivered command: a
+compromised API or queue cannot widen the private ranges a shared sensor
+reaches. A `zone_ranges` field on a command is ignored. The signed
+statement does not carry zone ranges yet, so until it does every shared job
+has no zone and reaches public addresses only. When it does, the parsed
+ranges go on the job's context (`core.WithJobZone`); entries that are not
+wholly private are dropped (`core.ParseZoneRanges`), so the platform can
+only narrow what the operator allows.
+
+**DNS rebinding on a shared sensor.** Every address a confined task dials
+for a name was checked (policy and zone rule) when the task's scope was
+built; the forwarder never resolves an admitted name again, and its DNS
+answers with the pinned addresses. A tool cannot bypass the forwarder: its
+network namespace has no other way out. Residual risks: a vendor host or
+an `egress-proxy` tool resolves at connect time, public addresses only; a
+built-in Go probe that dials in the sensor's own process is outside the
+task sandbox, so a shared sensor must run its tools out of process.
+
+**Only TCP goes through the pinned-address check.** The forwarder relays
+TCP (HTTP CONNECT, absolute-form HTTP, SOCKS5 CONNECT) and answers DNS; it
+checks and pins each TCP destination. UDP other than the task's DNS, ICMP
+and raw sockets are not relayed at all: the task's network namespace has
+only loopback, so such traffic has no route and is dropped there. The
+network namespace is what stops them, not the address check, which is why
+shared mode refuses to start without network confinement.
+
+**Signed jobs and results bound to the job's organization.** A shared
+sensor runs only signed jobs (`core.NewSharedJobGuard`; it refuses to start
+without a pinned job-signing key or root) whose statement carries
+`sensor_scope: instance` and its own `sensor_id`; an unsigned job, or one
+signed for an organization's sensor, is refused before it starts. The
+poller holds each command in a `core.JobLedger` while it runs it, with the
+organization the verified statement names, and puts it on the job's
+context (`core.WithJobTenant`). The client (`Client.SetJobLedger`) asks the
+ledger before it stores or sends anything: a report must belong to a held
+command with a known organization and is tagged with it in the outbox
+(`outbox.Meta.TenantID`, next to `CommandID`); a command result or log
+batch must belong to a held command; an unsolicited push or a result for
+a command the sensor does not hold (never claimed, or already ended) is
+refused locally (`core.ErrJobNotHeld`). The platform still accepts a result
+only for a command the sensor holds under its lease.
+
+**A local policy is mandatory.** A shared sensor without a loaded local
+policy refuses to start (before pairing): its targets come from many
+tenants, and the operator's own target, range, port and tool rules must
+bound them.
 
 ### 7. Web scope of a job (`pkg/webscope`)
 

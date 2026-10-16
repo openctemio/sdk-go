@@ -80,6 +80,9 @@ type JobGuard struct {
 	required bool
 	tenantID string
 	sensorID string
+	// shared: this sensor serves many organizations; it runs only
+	// instance-scope jobs (NewSharedJobGuard).
+	shared bool
 
 	// cv follows the platform's config_version (SetConfigVersion); a
 	// pointer keeps JobGuard comparable.
@@ -136,6 +139,21 @@ func NewJobGuard(v *jobsig.Verifier, required bool, tenantID, sensorID string) (
 	return &JobGuard{v: v, required: required, tenantID: tenantID, sensorID: sensorID}, nil
 }
 
+// NewSharedJobGuard returns the guard of a shared sensor (api RFC-100 §8):
+// every command must carry a signed job that verifies against v, signed for
+// the instance scope and this sensor; it may belong to any organization,
+// and the command's results are bound to the one it names. A shared sensor
+// without a pinned job-signing key or root cannot start.
+func NewSharedJobGuard(v *jobsig.Verifier, sensorID string) (*JobGuard, error) {
+	if v == nil {
+		return nil, errors.New("a shared sensor runs only signed jobs, and no job-signing key or root is pinned: set SENSOR_JOB_SIGNING_ROOT or SENSOR_JOB_SIGNING_KEYS")
+	}
+	if sensorID == "" {
+		return nil, errors.New("a shared sensor verifies signed jobs against its own sensor id, and it has none: pair it first")
+	}
+	return &JobGuard{v: v, required: true, sensorID: sensorID, shared: true}, nil
+}
+
 // Posture is the guard's JobsSigned* posture.
 func (g *JobGuard) Posture() string {
 	switch {
@@ -167,7 +185,7 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 	}
 	g.refreshKeySet(ctx)
 	st, err := g.v.Verify(ctx, cmd.SignedJob, jobsig.Binding{
-		TenantID: g.tenantID, SensorID: g.sensorID, CommandID: cmd.ID, CommandType: cmd.Type,
+		TenantID: g.tenantID, Shared: g.shared, SensorID: g.sensorID, CommandID: cmd.ID, CommandType: cmd.Type,
 		LeaseEpoch: cmd.LeaseEpoch, Payload: cmd.Payload,
 	})
 	if err != nil {
@@ -179,6 +197,13 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 	// The statement binds the payload's custom templates (Verify checked
 	// they are the payload's): the executor trusts them through it.
 	cmd.jobVerified, cmd.signedTemplates, cmd.signedLimits = true, st.Templates, st.Limits
+	if g.shared {
+		cmd.jobTenant = st.TenantID
+		// The zone's private ranges come only from the verified statement.
+		if st.Zone != nil {
+			cmd.jobZone = ParseZoneRanges(st.Zone.Ranges)
+		}
+	}
 	return nil
 }
 

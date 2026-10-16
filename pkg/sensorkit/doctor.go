@@ -324,6 +324,8 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "How every tool run is confined: auto (what the host supports), required (refuse to start without every control), off."},
 		settingsreg.Setting{Name: EnvSandboxNetwork, Type: settingsreg.Enum, Enum: []string{"off", "auto", "required"}, Default: "auto", Group: "runtime",
 			Description: "Network confinement of tool runs: each task in its own network namespace whose only way out is its forwarder (needs user namespaces: a container seccomp profile that allows them). auto (where available), required (refuse to start without it; shared sensors), off."},
+		settingsreg.Setting{Name: EnvSharedMode, Type: settingsreg.Enum, Enum: []string{"0", "1"}, Default: "0", Group: "runtime",
+			Description: "1 for a sensor that runs jobs of many tenants: the tool sandbox, network confinement and a local policy are required (refuse to start without them), no writable state is shared between jobs, and a private target needs the private-range switch and the job's zone."},
 		settingsreg.Setting{Name: EnvOutbox, Type: settingsreg.Enum, Enum: []string{"on", "off", "true", "false"}, Group: "storage",
 			Description: "The durable results outbox (on for a daemon)."},
 		settingsreg.Setting{Name: EnvOutboxDir, Type: settingsreg.Path, Group: "storage",

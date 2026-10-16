@@ -61,12 +61,35 @@ const (
 	NonceBytes = 16
 )
 
+// SensorScopeInstance is Statement.SensorScope for a shared sensor's job.
+const SensorScopeInstance = "instance"
+
+// Zone is the instance scan zone a shared job's statement names.
+type Zone struct {
+	ID     string   `json:"id"`
+	Ranges []string `json:"ranges"`
+}
+
 // Statement is a signed job statement. A verifier never re-encodes it: it
 // verifies and parses the envelope's payload bytes.
 type Statement struct {
-	Kind        string `json:"kind"`
-	TenantID    string `json:"tenant_id"`
-	SensorID    string `json:"sensor_id"`
+	Kind     string `json:"kind"`
+	TenantID string `json:"tenant_id"`
+	SensorID string `json:"sensor_id"`
+	// SensorScope is "instance" for a job signed for a shared sensor (one
+	// that serves many organizations, api RFC-100): the sensor accepts any
+	// TenantID and binds the job's results to it. Absent for an
+	// organization's job; an organization's sensor refuses a statement that
+	// carries it.
+	SensorScope string `json:"sensor_scope,omitempty"`
+	// Zone is the instance scan zone of a shared job that may reach
+	// private addresses (api RFC-100 §6.1): the zone's id and ranges, as
+	// the signer checked them against its own zone ledger. Only with
+	// SensorScope "instance"; an organization's sensor refuses a statement
+	// that carries it. A shared sensor reaches a private address only
+	// inside these signed ranges (core.WithJobZone), never inside ranges an
+	// unsigned command field names.
+	Zone        *Zone  `json:"zone,omitempty"`
 	CommandID   string `json:"command_id"`
 	CommandType string `json:"command_type"`
 	// Tool is the payload's "scanner", else its "preferred_tool"; "" when

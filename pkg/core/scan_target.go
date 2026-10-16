@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -95,6 +96,12 @@ type ScanTargetPolicy struct {
 	// refused. Off, a target is read by its shape whatever the scanner
 	// (Validate). A sensor whose tools are known by name sets it.
 	ByScanner bool
+
+	// Shared is a shared sensor's job check (api RFC-100 §8): after every
+	// other rule passed, a private address or range passes only inside the
+	// job's zone (CheckSharedAddr, CheckSharedPrefix); other non-public
+	// addresses never do.
+	Shared bool
 
 	// Disabled turns validation off entirely. Only for callers that validate
 	// targets themselves before the executor sees the command.
@@ -331,6 +338,14 @@ func (p *ScanTargetPolicy) validateNetworkTarget(ctx context.Context, target str
 		if err := p.checkCIDR(ipNet); err != nil {
 			return err
 		}
+		if p.Shared {
+			if pfx, ok := netip.AddrFromSlice(ipNet.IP); ok {
+				ones, _ := ipNet.Mask.Size()
+				if err := CheckSharedPrefix(ctx, netip.PrefixFrom(pfx.Unmap(), ones)); err != nil {
+					return err
+				}
+			}
+		}
 		if p.Local.Present() {
 			return p.Local.checkCIDR(ipNet)
 		}
@@ -386,6 +401,9 @@ func (p *ScanTargetPolicy) checkHost(ctx context.Context, host string, failClose
 		if httpsec.IsIPBlockedWith(ip, p.AllowPrivate, p.AllowLoopback) {
 			return markTarget(RefusedTargetDenied, fmt.Errorf("scan target IP %s is in a blocked range", ip))
 		}
+		if err := p.checkShared(ctx, ip); err != nil {
+			return err
+		}
 		if p.Local.Present() {
 			_, err := p.Local.checkHost(ctx, lower, true)
 			return err
@@ -418,6 +436,9 @@ func (p *ScanTargetPolicy) checkHost(ctx context.Context, host string, failClose
 	for _, ip := range ips {
 		if httpsec.IsIPBlockedWith(ip, p.AllowPrivate, p.AllowLoopback) {
 			return markTarget(RefusedTargetDenied, fmt.Errorf("scan target host %q resolves to blocked address %s", host, ip))
+		}
+		if err := p.checkShared(ctx, ip); err != nil {
+			return err
 		}
 	}
 	if p.Local.Present() {
@@ -467,4 +488,17 @@ func mustCIDRs(cidrs ...string) []*net.IPNet {
 		out = append(out, n)
 	}
 	return out
+}
+
+// checkShared applies the shared sensor's zone rule to one address (no-op
+// unless Shared).
+func (p *ScanTargetPolicy) checkShared(ctx context.Context, ip net.IP) error {
+	if !p.Shared {
+		return nil
+	}
+	a, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return markTarget(RefusedTargetDenied, fmt.Errorf("scan target address %v is not valid", ip))
+	}
+	return CheckSharedAddr(ctx, a)
 }

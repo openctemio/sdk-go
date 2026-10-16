@@ -120,7 +120,9 @@ func (k *Kit) resolveJobSigning() error {
 	}
 	var v *jobsig.Verifier
 	if keys.Len() > 0 || trust != nil {
-		if tenantID == "" || sensorID == "" {
+		// A shared sensor belongs to no organization: it is verified against
+		// its own id only (the job statement names the organization).
+		if sensorID == "" || (tenantID == "" && !s.shared) {
 			return usageError(fmt.Errorf("%s / %s / %s: signed jobs are verified against the sensor's own organization and id, which only a paired (key-bound) sensor knows; pair the sensor or unset them",
 				EnvJobSigningRoot, EnvJobSigningKeys, core.EnvRequireSignedJobs))
 		}
@@ -149,7 +151,18 @@ func (k *Kit) resolveJobSigning() error {
 			return usageError(err)
 		}
 	}
-	g, err := core.NewJobGuard(v, required, tenantID, sensorID)
+	var g *core.JobGuard
+	if s.shared {
+		// A shared sensor runs only instance-scope signed jobs, of any
+		// organization, and binds each job's results to it: the poller
+		// holds each job in the ledger, and the client refuses results
+		// for any job the ledger does not hold.
+		g, err = core.NewSharedJobGuard(v, sensorID)
+		s.ledger = core.NewJobLedger()
+		cl.SetJobLedger(s.ledger)
+	} else {
+		g, err = core.NewJobGuard(v, required, tenantID, sensorID)
+	}
 	if err != nil {
 		return usageError(err)
 	}

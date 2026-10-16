@@ -342,20 +342,35 @@ func (h *Host) checkLimits(m tool.Manifest, task tool.Task) *tool.Error {
 // the policy's target check. An address that fails is dropped; a name
 // with none left is unreachable for the task. Without a policy (a CI run,
 // whose admission checks no target either) the name is pinned as it
-// resolves.
+// resolves. On a shared sensor every address must also pass the job's zone
+// rule.
 func (h *Host) admittedAddrs(ctx context.Context, host string) []netip.Addr {
+	if h.Shared {
+		return sharedAddrs(ctx, h.policyAddrs(ctx, host))
+	}
+	return h.policyAddrs(ctx, host)
+}
+
+// policyAddrs are the addresses the policy admits for host (see
+// admittedAddrs).
+func (h *Host) policyAddrs(ctx context.Context, host string) []netip.Addr {
 	if r, ok := h.Policy.(HostResolver); ok && r != nil {
 		addrs, _ := r.AdmittedAddrs(ctx, host)
 		return addrs
 	}
 	addrs, _ := lookupNetIP(ctx, "ip", absname.Of(host))
-	if h.Policy == nil {
-		return addrs
+	pol := h.Policy
+	if pol == nil {
+		if !h.Shared {
+			return addrs
+		}
+		// A shared sensor without a policy: the built-in deny list.
+		pol = sharedPolicy{}
 	}
 	out := make([]netip.Addr, 0, len(addrs))
 	for _, a := range addrs {
 		a = a.Unmap()
-		if h.Policy.CheckTarget(ctx, a.String()) == nil {
+		if pol.CheckTarget(ctx, a.String()) == nil {
 			out = append(out, a)
 		}
 	}

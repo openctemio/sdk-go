@@ -59,6 +59,7 @@ func (k *Kit) toolHost() *toolhost.Host {
 			RuntimeName:    firstNonEmpty(k.opts.ProductName, "openctem-sensor"),
 			RuntimeVersion: k.opts.Version,
 			Policy:         kitPolicy{k},
+			Shared:         k.s.shared,
 		}
 	})
 	return k.host

@@ -22,7 +22,10 @@ const EnvSandboxNetwork = "SENSOR_SANDBOX_NETWORK"
 
 // sandboxModes reads the tool sandbox mode (sandbox, else SENSOR_SANDBOX)
 // and SENSOR_SANDBOX_NETWORK.
-func sandboxModes(sandbox string) (mode, netMode executor.Mode, err error) {
+func sandboxModes(sandbox string, shared bool) (mode, netMode executor.Mode, err error) {
+	if shared {
+		return sharedSandboxModes(sandbox)
+	}
 	mode, ok := executor.ParseMode(strings.TrimSpace(envOr(sandbox, EnvSandbox)))
 	if !ok {
 		return "", "", usageError(fmt.Errorf("%s must be off, auto or required", EnvSandbox))
@@ -41,12 +44,26 @@ func sandboxModes(sandbox string) (mode, netMode executor.Mode, err error) {
 // installed. New calls it before pairing, and a pair command should too: a
 // host that can never run confined is refused before the platform admits
 // it and gives it an identity.
+//
+// With SENSOR_SHARED_MODE=1 both the sandbox and its network confinement
+// are required (see EnvSharedMode).
 func ValidateSandboxNetwork(sandbox string) error {
-	mode, netMode, err := sandboxModes(sandbox)
+	shared, err := SharedModeFromEnv()
+	if err != nil {
+		return err
+	}
+	return validateSandboxNetwork(sandbox, shared)
+}
+
+func validateSandboxNetwork(sandbox string, shared bool) error {
+	mode, netMode, err := sandboxModes(sandbox, shared)
 	if err != nil || netMode != executor.ModeRequired {
 		return err
 	}
-	if _, err := executor.NewProcessBackend(executor.Config{Mode: mode, ConfineNetwork: true, RequireNetwork: true}); err != nil {
+	if _, err := executor.NewProcessBackend(executor.Config{Mode: mode, ConfineNetwork: true, RequireNetwork: true, Shared: shared}); err != nil {
+		if shared {
+			return usageError(fmt.Errorf("%s=1: %w", EnvSharedMode, err))
+		}
 		return usageError(fmt.Errorf("%s=required: %w", EnvSandboxNetwork, err))
 	}
 	return nil
@@ -55,14 +72,17 @@ func ValidateSandboxNetwork(sandbox string) error {
 // setupSandbox installs the executor backend every tool run uses, with the
 // kit's protected paths, and logs what it enforces.
 func (k *Kit) setupSandbox() error {
-	mode, netMode, err := sandboxModes(k.opts.Sandbox)
+	mode, netMode, err := sandboxModes(k.opts.Sandbox, k.s.shared)
 	if err != nil {
 		return err
 	}
 	b, err := executor.NewProcessBackend(executor.Config{Mode: mode, ReadDeny: k.protectedPaths(),
-		ConfineNetwork: netMode != executor.ModeOff, RequireNetwork: netMode == executor.ModeRequired})
+		ConfineNetwork: netMode != executor.ModeOff, RequireNetwork: netMode == executor.ModeRequired, Shared: k.s.shared})
 	if err != nil {
 		return usageError(err)
+	}
+	if k.s.shared {
+		_, _ = fmt.Fprintf(k.out, "  Shared mode: every job sandboxed and network-confined in its own task directories; private targets only inside the job's zone\n")
 	}
 	executor.SetCurrent(b)
 	st := b.Status()
