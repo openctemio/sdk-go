@@ -177,3 +177,31 @@ func TestCheckSharedIdentity(t *testing.T) {
 		})
 	}
 }
+
+// SECURITY: shared mode needs platform commands and a connected sensor.
+func TestCheckSharedModeRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		shared, commands, standalone bool
+		wantErr                      string
+	}{
+		{"shared with commands", true, true, false, ""},
+		{"shared, commands off", true, false, false, "needs platform commands on"},
+		{"shared, standalone", true, true, true, "cannot run standalone"},
+		{"not shared, commands off", false, false, false, ""},
+		{"not shared, standalone", false, false, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkSharedModeRuns(tc.shared, tc.commands, tc.standalone)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected: %v", err)
+				}
+				return
+			}
+			if err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want a usage error with %q", err, tc.wantErr)
+			}
+		})
+	}
+}
