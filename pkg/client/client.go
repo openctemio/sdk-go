@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -34,6 +35,9 @@ import (
 // Client is the OpenCTEM API client.
 // It implements the core.Pusher interface.
 type Client struct {
+	// ledger: a shared sensor's held jobs (SetJobLedger).
+	ledger atomic.Pointer[jobLedgerHolder]
+
 	baseURL    string
 	apiKey     string
 	sensorID   string // Sensor ID for tracking which sensor is pushing
@@ -524,6 +528,9 @@ func (c *Client) PushAssets(ctx context.Context, report *ctis.Report) (*core.Pus
 // retries (MaxRetries) on transient failures. Retries reuse the report id,
 // so they never duplicate.
 func (c *Client) pushReportDirect(ctx context.Context, report *ctis.Report, assetsOnly bool) (*core.PushResult, error) {
+	if _, err := c.jobLedger().Report(core.CommandIDFromContext(ctx)); err != nil {
+		return nil, err
+	}
 	r := report
 	if assetsOnly {
 		cp := *report

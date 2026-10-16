@@ -425,7 +425,11 @@ before the local policy, the command gate or any executor sees it:
 3. only then is the statement parsed: one JSON object, no unknown field,
    `kind` `openctem.job/v1`, `signer.keyid` the key that verified;
 4. `tenant_id` and `sensor_id` are the sensor's own (from its identity),
-   `command_id` and `command_type` those of the command being run;
+   `command_id` and `command_type` those of the command being run. A
+   statement that carries `sensor_scope` is refused by an organization's
+   sensor. A shared sensor (shared mode) instead requires `sensor_scope`
+   `instance` and its own `sensor_id`, accepts any `tenant_id`, and binds
+   the job's results to it (below);
 5. `issued_at` within 2 minutes of the sensor's clock, `expires_at` in the
    future and at most 1 hour after `issued_at`;
 6. `lease_epoch` is the epoch of the claim answer;
@@ -673,6 +677,22 @@ and raw sockets are not relayed at all: the task's network namespace has
 only loopback, so such traffic has no route and is dropped there. The
 network namespace is what stops them, not the address check, which is why
 shared mode refuses to start without network confinement.
+
+**Signed jobs and results bound to the job's organization.** A shared
+sensor runs only signed jobs (`core.NewSharedJobGuard`; it refuses to start
+without a pinned job-signing key or root) whose statement carries
+`sensor_scope: instance` and its own `sensor_id`; an unsigned job, or one
+signed for an organization's sensor, is refused before it starts. The
+poller holds each command in a `core.JobLedger` while it runs it, with the
+organization the verified statement names, and puts it on the job's
+context (`core.WithJobTenant`). The client (`Client.SetJobLedger`) asks the
+ledger before it stores or sends anything: a report must belong to a held
+command with a known organization and is tagged with it in the outbox
+(`outbox.Meta.TenantID`, next to `CommandID`); a command result or log
+batch must belong to a held command; an unsolicited push or a result for
+a command the sensor does not hold (never claimed, or already ended) is
+refused locally (`core.ErrJobNotHeld`). The platform still accepts a result
+only for a command the sensor holds under its lease.
 
 **A local policy is mandatory.** A shared sensor without a loaded local
 policy refuses to start (before pairing): its targets come from many

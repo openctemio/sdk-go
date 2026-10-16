@@ -167,6 +167,11 @@ func (c *Client) enqueueReport(ctx context.Context, ob *outbox.Outbox, report *c
 		return nil, fmt.Errorf("marshal report: %w", err)
 	}
 	meta := outbox.Meta{Kind: outbox.KindReport, CommandID: core.CommandIDFromContext(ctx)}
+	tenant, err := c.jobLedger().Report(meta.CommandID)
+	if err != nil {
+		return nil, err
+	}
+	meta.TenantID = tenant
 	if assetsOnly {
 		meta.Attrs = map[string]string{outbox.AttrAssetsOnly: "true"}
 	}
@@ -244,7 +249,14 @@ func (c *Client) enqueueCommandResult(ob *outbox.Outbox, cmdID string, result *c
 	if err != nil {
 		return nil, err
 	}
-	return ob.Enqueue(outbox.Meta{Kind: outbox.KindCommandResult, CommandID: cmdID}, payload)
+	return ob.Enqueue(outbox.Meta{Kind: outbox.KindCommandResult, CommandID: cmdID, TenantID: c.jobTenantOf(cmdID)}, payload)
+}
+
+// jobTenantOf is the organization a held shared job belongs to ("" when
+// none is known or there is no ledger), for the outbox tag.
+func (c *Client) jobTenantOf(cmdID string) string {
+	t, _ := c.jobLedger().Report(cmdID)
+	return t
 }
 
 // awaitResultTicket waits for a stored command result to be delivered: up
