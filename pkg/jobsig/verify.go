@@ -332,6 +332,8 @@ func (v *Verifier) checkStatement(st *Statement, keyID string, b Binding) error 
 		return refusef(ReasonSensorScope, "this shared sensor runs only jobs signed for the instance scope, not %q", st.SensorScope)
 	case !b.Shared && st.SensorScope != "":
 		return refusef(ReasonSensorScope, "statement is for a %q sensor, not an organization's sensor", st.SensorScope)
+	case st.Zone != nil && (!b.Shared || st.Zone.ID == "" || len(st.Zone.Ranges) == 0):
+		return refusef(ReasonSensorScope, "a zone is only for a shared sensor's job, with an id and ranges")
 	case b.Shared && st.TenantID == "":
 		return refusef(ReasonTenant, "statement names no organization to bind the job's results to")
 	case !b.Shared && (b.TenantID == "" || !strings.EqualFold(st.TenantID, b.TenantID)):

@@ -199,6 +199,10 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 	cmd.jobVerified, cmd.signedTemplates, cmd.signedLimits = true, st.Templates, st.Limits
 	if g.shared {
 		cmd.jobTenant = st.TenantID
+		// The zone's private ranges come only from the verified statement.
+		if st.Zone != nil {
+			cmd.jobZone = ParseZoneRanges(st.Zone.Ranges)
+		}
 	}
 	return nil
 }
