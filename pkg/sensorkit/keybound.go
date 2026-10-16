@@ -48,13 +48,43 @@ func pairingCode() (string, error) {
 	return c, nil
 }
 
-// notePairingCodeIgnored tells the operator SENSOR_PAIRING_CODE had no
-// effect (the sensor already has credentials) so it can be removed.
+// notePairingCodeIgnored tells the operator SENSOR_PAIRING_CODE (or
+// SENSOR_INSTANCE_ENROLLMENT_TOKEN) had no effect (the sensor already has
+// credentials) so it can be removed.
 func (k *Kit) notePairingCodeIgnored(why string) {
-	if strings.TrimSpace(os.Getenv(EnvPairingCode)) == "" {
-		return
+	for _, env := range []string{EnvPairingCode, EnvInstanceEnrollmentToken} {
+		if strings.TrimSpace(os.Getenv(env)) == "" {
+			continue
+		}
+		_, _ = fmt.Fprintf(k.errw, "Note: %s is ignored: %s; it can be removed from the configuration\n", env, why)
 	}
-	_, _ = fmt.Fprintf(k.errw, "Note: %s is ignored: %s; it can be removed from the configuration\n", EnvPairingCode, why)
+}
+
+// instanceEnrollmentToken is SENSOR_INSTANCE_ENROLLMENT_TOKEN ("" when
+// unset). A value that is not octe_ and 49 letters or digits stops the
+// sensor; the error never carries the value.
+func instanceEnrollmentToken() (string, error) {
+	v := strings.TrimSpace(os.Getenv(EnvInstanceEnrollmentToken))
+	if v == "" {
+		return "", nil
+	}
+	if !wellFormedEnrollmentToken(v) {
+		return "", usageError(fmt.Errorf("%s is not an enrollment token (octe_ and 49 letters or digits)", EnvInstanceEnrollmentToken))
+	}
+	return v, nil
+}
+
+func wellFormedEnrollmentToken(v string) bool {
+	body, ok := strings.CutPrefix(v, "octe_")
+	if !ok || len(body) != 49 {
+		return false
+	}
+	for _, c := range body {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
 }
 
 // checkCAPinHost warns when SENSOR_CA_FINGERPRINT is set but SENSOR_API_URL names
@@ -126,6 +156,13 @@ func (k *Kit) resolveIdentity() error {
 	if err != nil {
 		return err
 	}
+	token, err := instanceEnrollmentToken()
+	if err != nil {
+		return err
+	}
+	if token != "" && code != "" {
+		return usageError(fmt.Errorf("set %s or %s, not both", EnvPairingCode, EnvInstanceEnrollmentToken))
+	}
 	if k.opts.NoAutoPair {
 		return usageError(fmt.Errorf("the sensor has no API key and is not paired: run `openctemio-sensor pair`, " +
 			"or set SENSOR_API_KEY"))
@@ -135,15 +172,17 @@ func (k *Kit) resolveIdentity() error {
 	name := firstNonEmpty(k.opts.Name, os.Getenv(EnvSensorName))
 	_, _ = fmt.Fprintf(k.errw, "This sensor has no identity yet; pairing with %s (identity in %s).\n", s.apiURL, store.Dir())
 	id, err = identity.Pair(ctx, identity.PairOptions{
-		BaseURL:        s.apiURL,
-		Store:          store,
-		Code:           code,
-		CodeLabel:      EnvPairingCode,
-		Host:           identity.DefaultHostFacts(k.opts.ProductName, k.opts.Version, name),
-		PlatformKeyPin: envOr(k.opts.PlatformKey, EnvPlatformKey),
-		Retry:          true,
-		Out:            k.errw,
-		UserAgent:      productToken(k.opts.ProductName, k.opts.Version),
+		BaseURL:         s.apiURL,
+		Store:           store,
+		Code:            code,
+		CodeLabel:       EnvPairingCode,
+		EnrollmentToken: token,
+		Host:            identity.DefaultHostFacts(k.opts.ProductName, k.opts.Version, name),
+		PlatformKeyPin:  envOr(k.opts.PlatformKey, EnvPlatformKey),
+		// A spent enrollment token cannot start another request.
+		Retry:     token == "",
+		Out:       k.errw,
+		UserAgent: productToken(k.opts.ProductName, k.opts.Version),
 	})
 	if err != nil {
 		return fmt.Errorf("pairing: %w", err)
