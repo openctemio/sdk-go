@@ -120,7 +120,9 @@ func (k *Kit) resolveJobSigning() error {
 	}
 	var v *jobsig.Verifier
 	if keys.Len() > 0 || trust != nil {
-		if tenantID == "" || sensorID == "" {
+		// A shared sensor belongs to no organization: it is verified against
+		// its own id only (the job statement names the organization).
+		if sensorID == "" || (tenantID == "" && !s.shared) {
 			return usageError(fmt.Errorf("%s / %s / %s: signed jobs are verified against the sensor's own organization and id, which only a paired (key-bound) sensor knows; pair the sensor or unset them",
 				EnvJobSigningRoot, EnvJobSigningKeys, core.EnvRequireSignedJobs))
 		}

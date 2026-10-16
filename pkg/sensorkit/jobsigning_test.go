@@ -204,3 +204,44 @@ func TestNew_TemplateKeysCheckWithSignedJobs(t *testing.T) {
 		})
 	}
 }
+
+// A shared sensor belongs to no organization, so its identity has no tenant
+// id: signed jobs are verified against its id alone. An organization sensor
+// without a tenant is still refused. The kit is built as an organization
+// sensor and switched, because shared mode itself needs a host that can
+// confine tools.
+func TestResolveJobSigning_SharedIdentityHasNoTenant(t *testing.T) {
+	key := jobsig.NewPublicKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{6}, 32)).Public().(ed25519.PublicKey))
+	for _, shared := range []bool{true, false} {
+		t.Run(map[bool]string{true: "shared", false: "organization"}[shared], func(t *testing.T) {
+			t.Cleanup(func() { core.SetJobsPosture("") })
+			f := conformance.NewFakePlatform(true)
+			t.Cleanup(f.Close)
+			opts, _, _ := baseOptions(t, f)
+			opts.APIKey = ""
+			pairedStore(t, opts.StateDir)
+			k, err := New(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k.closeClient)
+			k.s.shared = shared
+			k.s.identity.TenantID = ""
+			k.s.identity.JobSigningKeys = []jobsig.PublicKey{key}
+
+			err = k.resolveJobSigning()
+			if !shared {
+				if err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), "own organization and id") {
+					t.Fatalf("organization sensor without a tenant: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("a shared identity needs no tenant: %v", err)
+			}
+			if k.s.jobs == nil {
+				t.Fatal("no job guard")
+			}
+		})
+	}
+}
