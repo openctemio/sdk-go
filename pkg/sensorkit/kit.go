@@ -22,6 +22,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
 	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/pairing"
 	"github.com/openctemio/sdk-go/pkg/sensorsig"
 	"github.com/openctemio/sdk-go/pkg/tool/toolcompat"
 )
@@ -765,7 +766,30 @@ func (k *Kit) resolveIdentityAndPolicy() error {
 			return err
 		}
 	}
+	if err := checkSharedIdentity(s.shared, s.identity); err != nil {
+		return err
+	}
 	return k.applyRequireLocalPolicy()
+}
+
+// checkSharedIdentity refuses a mode and an identity that do not belong
+// together, before the sensor takes any job: an identity enrolled as a shared
+// sensor of the instance (scope "instance") runs only with shared mode on,
+// whose isolation is what makes jobs of many organizations safe on one host;
+// and shared mode never runs on an organization's own sensor identity (it
+// has a tenant), which would put other tenants' jobs on a sensor the
+// organization trusts with its own network.
+func checkSharedIdentity(shared bool, id *identity.Identity) error {
+	if id == nil {
+		return nil
+	}
+	switch {
+	case id.Scope == pairing.ScopeInstance && !shared:
+		return usageError(fmt.Errorf("this sensor is enrolled as a shared sensor of the instance; set %s=1 (or Options.Shared) so its jobs run under the shared isolation profile, or enroll an organization sensor", EnvSharedMode))
+	case shared && id.TenantID != "":
+		return usageError(fmt.Errorf("%s=1 needs a shared sensor of the instance, but this identity belongs to an organization; unset it, or enroll with an instance enrollment token", EnvSharedMode))
+	}
+	return nil
 }
 
 // applyRequireLocalPolicy applies ResolveRequireLocalPolicy to the loaded

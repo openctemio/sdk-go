@@ -11,6 +11,8 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/pairing"
 )
 
 // SECURITY: shared mode refuses to start with the sandbox or its network
@@ -141,5 +143,37 @@ func TestSharedScanTargetPolicyKeepsSettings(t *testing.T) {
 	}
 	if p := sharedScanTargetPolicy(nil); !p.Shared {
 		t.Fatal("default policy is not shared")
+	}
+}
+
+// SECURITY: an instance-scope (shared) identity never runs without shared
+// mode, and shared mode never runs on an organization sensor's identity.
+func TestCheckSharedIdentity(t *testing.T) {
+	instance := &identity.Identity{SensorID: "s", Scope: pairing.ScopeInstance}
+	org := &identity.Identity{SensorID: "s", TenantID: "t"}
+	for _, tc := range []struct {
+		name    string
+		shared  bool
+		id      *identity.Identity
+		wantErr string
+	}{
+		{"instance identity, shared mode off", false, instance, EnvSharedMode + "=1"},
+		{"organization identity, shared mode on", true, org, "belongs to an organization"},
+		{"instance identity, shared mode on", true, instance, ""},
+		{"organization identity, shared mode off", false, org, ""},
+		{"no identity (API key), either mode", true, nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkSharedIdentity(tc.shared, tc.id)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected: %v", err)
+				}
+				return
+			}
+			if err == nil || ExitCode(err) != ExitUsage || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want a usage error with %q", err, tc.wantErr)
+			}
+		})
 	}
 }
