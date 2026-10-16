@@ -61,7 +61,6 @@ without a tier fails the job.
 | `pkg/conformance` | Fake platform, the sensor conformance suite and the tool (adapter protocol) suite | Stable |
 | `pkg/useragent`, `pkg/sdk` | Build identity on the wire | Stable |
 | `pkg/outbox`, `pkg/resource`, `pkg/chunk`, `pkg/compress`, `pkg/retry`, `pkg/shared/*` | Runtime internals used by `client`, `core` and `sensorkit` | Internal-bound |
-| `pkg/platform` | Credentials file and key renewal (used by sensorkit); its bootstrap/lease client serves the removed platform mode | Internal-bound (credentials, key renewal); the bootstrap/lease client is a removal candidate |
 | `pkg/gitenv` | CI environment detection | Moves to the sensor (runner mode) |
 | `pkg/mocks` | Test doubles | Stable until `pkg/testkit` replaces it |
 

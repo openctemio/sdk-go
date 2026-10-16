@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openctemio/sdk-go/internal/sensorstate"
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/conformance"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
-	"github.com/openctemio/sdk-go/pkg/platform"
 )
 
 func clientOutbox(dir string) client.OutboxConfig { return client.OutboxConfig{Dir: dir} }
@@ -532,8 +532,8 @@ func TestNew_ReadsEnvironment(t *testing.T) {
 func persistentState(t *testing.T, persistent bool) {
 	t.Helper()
 	prev := statePersistence
-	statePersistence = func(string) platform.StatePersistence {
-		return platform.StatePersistence{Persistent: persistent, Reason: "test"}
+	statePersistence = func(string) sensorstate.StatePersistence {
+		return sensorstate.StatePersistence{Persistent: persistent, Reason: "test"}
 	}
 	t.Cleanup(func() { statePersistence = prev })
 }
@@ -556,9 +556,9 @@ func TestRun_RenewedKeySurvivesRestart(t *testing.T) {
 	}
 	stop := runKit(t, k)
 	waitFor(t, "a key renewal", func() bool { return len(f.RequestsTo("POST", "/api/v2/sensor/keys")) > 0 })
-	file := platform.StateCredentialsFile(opts.StateDir)
+	file := sensorstate.StateCredentialsFile(opts.StateDir)
 	waitFor(t, "the renewed key saved in the state directory", func() bool {
-		c, err := platform.NewFileCredentialStore(file).Load()
+		c, err := sensorstate.NewFileCredentialStore(file).Load()
 		return err == nil && c.APIKey == f.APIKey && c.APIKey != installed
 	})
 	if err := stop(); err != nil {
@@ -597,9 +597,9 @@ func TestNew_ChangedConfiguredKeyWins(t *testing.T) {
 	t.Cleanup(f.Close)
 	opts, _, _ := baseOptions(t, f)
 	persistentState(t, true)
-	store := platform.NewFileCredentialStore(platform.StateCredentialsFile(opts.StateDir))
+	store := sensorstate.NewFileCredentialStore(sensorstate.StateCredentialsFile(opts.StateDir))
 	exp := time.Now().Add(48 * time.Hour)
-	if err := platform.RotatedKeySaver(store, "rda_old_installed", "")("rda_renewed_from_old", &exp); err != nil {
+	if err := sensorstate.RotatedKeySaver(store, "rda_old_installed", "")("rda_renewed_from_old", &exp); err != nil {
 		t.Fatal(err)
 	}
 
@@ -665,10 +665,10 @@ func TestNew_KeyAutoRenewDecision(t *testing.T) {
 func TestKeyRenewer_SwapsEveryClient(t *testing.T) {
 	api := client.New(&client.Config{BaseURL: "https://api.example", APIKey: "old"})
 	r := &keyRenewer{
-		renew: platform.NewPlatformClient(&platform.ClientConfig{BaseURL: "https://api.example", APIKey: "old"}),
+		renew: sensorstate.NewRenewClient("https://api.example", "old"),
 		api:   api,
 	}
-	var _ platform.KeyRenewer = r
+	var _ sensorstate.KeyRenewer = r
 	r.SetAPIKey("new")
 	if api.APIKeyHint() == core.APIKeyHint("old") {
 		t.Fatal("the API client kept the old key")
@@ -691,7 +691,7 @@ func TestRun_KeyAutoRenew(t *testing.T) {
 	stop := runKit(t, k)
 	waitFor(t, "a key renewal", func() bool { return len(f.RequestsTo("POST", "/api/v2/sensor/keys")) > 0 })
 	waitFor(t, "the renewed key saved", func() bool {
-		c, err := platform.NewFileCredentialStore(opts.CredentialsFile).Load()
+		c, err := sensorstate.NewFileCredentialStore(opts.CredentialsFile).Load()
 		return err == nil && c.APIKey != "" && c.APIKey != opts.APIKey
 	})
 	if err := stop(); err != nil {
