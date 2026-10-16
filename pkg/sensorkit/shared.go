@@ -23,8 +23,9 @@ import (
 //     between jobs (executor Config.Shared);
 //   - a task reaches only the addresses checked for it, through its
 //     forwarder; a private address only when the operator allows private
-//     targets and the address lies in the job's zone ranges
-//     (Command.ZoneRanges); loopback, link-local, metadata and CGNAT
+//     targets and the address lies in the zone ranges of the job's
+//     verified signed statement (none yet: public only); loopback,
+//     link-local, metadata and CGNAT
 //     addresses never;
 //   - the sensor advertises CapabilitySharedIsolation, from its runtime
 //     state, so the platform can send shared jobs only to a sensor that
@@ -50,13 +51,21 @@ func SharedModeFromEnv() (bool, error) {
 	}
 }
 
-// resolveShared decides whether the kit runs in shared mode.
-func resolveShared(opts Options) (bool, error) {
+// resolveShared decides whether the kit runs in shared mode
+// (Options.Shared or SENSOR_SHARED_MODE=1). A shared sensor's targets come
+// from many tenants, so the operator's own local policy (targets, ranges,
+// ports, tools) is mandatory: without one it refuses to start, before it
+// pairs.
+func (k *Kit) resolveShared() error {
 	env, err := SharedModeFromEnv()
 	if err != nil {
-		return false, err
+		return err
 	}
-	return opts.Shared || env, nil
+	k.s.shared = k.opts.Shared || env
+	if k.s.shared && !k.s.local.Present() {
+		return usageError(fmt.Errorf("%s=1: a shared sensor needs a local policy (%s, or -local-policy); none is loaded", EnvSharedMode, core.EnvLocalPolicy))
+	}
+	return nil
 }
 
 // sharedSandboxModes are the sandbox modes of shared mode: both required.

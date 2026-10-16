@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/netip"
 	"testing"
@@ -101,23 +102,35 @@ func (e *zoneExecutor) Execute(ctx context.Context, _ *Command) (*CommandExecuti
 	return &CommandExecutionResult{}, nil
 }
 
-// The poller puts a command's zone ranges (the private ones only) on the
-// context its executor runs with.
-func TestCommandPollerCarriesJobZone(t *testing.T) {
+// SECURITY: zone ranges a command carries outside a signed statement are
+// never honored: a compromised platform or queue cannot widen the private
+// ranges a shared sensor reaches. The job runs with no zone, so a private
+// target is refused even where the operator allows private targets.
+func TestSharedMode_IgnoresUnsignedZoneRanges(t *testing.T) {
+	var cmd Command
+	raw := `{"id":"z1","type":"scan","payload":{},"zone_ranges":["10.0.0.0/8"]}`
+	if err := json.Unmarshal([]byte(raw), &cmd); err != nil {
+		t.Fatal(err)
+	}
 	cc := &countingCommandClient{cmds: make(chan *Command, 1)}
 	ex := &zoneExecutor{zone: make(chan []netip.Prefix, 1)}
 	p := NewCommandPoller(cc, ex, &CommandPollerConfig{PollInterval: 10 * time.Millisecond})
-	cc.cmds <- &Command{ID: "z1", Type: "scan", ZoneRanges: []string{"10.20.0.0/16", "203.0.113.0/24"}}
+	cc.cmds <- &cmd
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = p.Start(ctx); close(done) }()
 	defer func() { cancel(); <-done }()
+	var zone []netip.Prefix
 	select {
-	case z := <-ex.zone:
-		if len(z) != 1 || z[0] != netip.MustParsePrefix("10.20.0.0/16") {
-			t.Fatalf("zone %v", z)
-		}
+	case zone = <-ex.zone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the command did not run")
+	}
+	if zone != nil {
+		t.Fatalf("an unsigned zone reached the job: %v", zone)
+	}
+	pol := &ScanTargetPolicy{Shared: true, AllowPrivate: true}
+	if _, err := pol.Validate(WithJobZone(context.Background(), zone), "10.1.2.3"); err == nil {
+		t.Fatal("a private target passed on a shared sensor without a signed zone")
 	}
 }

@@ -15,17 +15,19 @@ import (
 // A job reaches a private address (RFC 1918, IPv6 ULA) only when three
 // things allow it: the operator's private-range switch
 // (SENSOR_ALLOW_PRIVATE_TARGETS=1, and targets.allow_private in a local
-// policy), the job's zone ranges (Command.ZoneRanges: the instance scan
-// zone the platform assigned to the job's tenant), and the address lying
-// inside one of them. The platform can only narrow what the operator
-// allows, never widen it. Loopback, link-local, metadata, CGNAT,
+// policy), the job's zone ranges (the instance scan zone assigned to the
+// job's tenant, taken only from the job's verified signed statement, never
+// from an unsigned command field), and the address lying inside one of
+// them. The platform can only narrow what the operator allows, never widen
+// it. Until signed statements carry zone ranges, a shared sensor's jobs
+// have none and reach public addresses only. Loopback, link-local, metadata, CGNAT,
 // multicast and reserved addresses are refused whatever the zone says.
 
 type jobZoneKey struct{}
 
 // WithJobZone returns a context that carries the zone ranges of the job
-// the work under it belongs to. The CommandPoller sets it from
-// Command.ZoneRanges around every command.
+// the work under it belongs to: the ranges of the job's verified signed
+// statement, never an unsigned command field.
 func WithJobZone(ctx context.Context, zone []netip.Prefix) context.Context {
 	if len(zone) == 0 {
 		return ctx
