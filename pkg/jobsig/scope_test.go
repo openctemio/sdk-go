@@ -53,3 +53,31 @@ func TestSensorScope(t *testing.T) {
 		})
 	}
 }
+
+// SECURITY: an organization's sensor refuses a statement that carries
+// sensor_scope, "instance" included.
+func TestVerify_OrganizationSensorRefusesInstanceScope(t *testing.T) {
+	for _, scope := range []string{SensorScopeInstance, "region", "x"} {
+		f := newFixture(t, "")
+		st := f.statement()
+		st.SensorScope = scope
+		if _, err := f.ver.Verify(context.Background(), f.envelope(t, st), f.b); ReasonOf(err) != ReasonSensorScope {
+			t.Errorf("scope %q: err %v, want reason %s", scope, err, ReasonSensorScope)
+		}
+	}
+}
+
+// SECURITY: a shared sensor accepts an instance job of any organization
+// only for its own sensor id, and returns the signed tenant to bind the
+// job's results to.
+func TestVerify_SharedSensorRequiresInstanceScopeAndOwnSensor(t *testing.T) {
+	f := newFixture(t, "")
+	st := f.statement()
+	st.SensorScope, st.TenantID = SensorScopeInstance, "aaaaaaaa-0000-4000-8000-0000000000ee"
+	b := f.b
+	b.Shared, b.TenantID = true, ""
+	got, err := f.ver.Verify(context.Background(), f.envelope(t, st), b)
+	if err != nil || got.TenantID != st.TenantID || got.CommandID != b.CommandID {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}

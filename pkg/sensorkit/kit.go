@@ -496,10 +496,6 @@ func New(opts Options) (*Kit, error) {
 			k.closeClient()
 			return nil, err
 		}
-		if s.shared {
-			s.ledger = core.NewJobLedger()
-			k.client.SetJobLedger(s.ledger)
-		}
 		// Durable outbox: results are on disk before the first send.
 		if err := EnableOutbox(k.client, s.outbox, s.verbose, k.out, k.errw); err != nil {
 			k.closeClient()
