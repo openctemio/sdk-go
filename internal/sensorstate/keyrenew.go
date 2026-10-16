@@ -1,4 +1,4 @@
-package platform
+package sensorstate
 
 import (
 	"context"
@@ -8,14 +8,12 @@ import (
 	"time"
 )
 
-// KeyRenewer is the subset of PlatformClient the renew manager needs: fetch a
-// fresh key and swap it in. *PlatformClient satisfies this.
+// KeyRenewer is the subset of RenewClient the renew manager needs: fetch a
+// fresh key and swap it in. *RenewClient satisfies this.
 type KeyRenewer interface {
 	RenewKey(ctx context.Context) (*RenewKeyResponse, error)
 	SetAPIKey(key string)
 }
-
-var _ KeyRenewer = (*PlatformClient)(nil)
 
 // Defaults for KeyRenewConfig.
 const (

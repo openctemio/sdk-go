@@ -92,7 +92,7 @@ github.com/openctemio/sdk-go
     ├── runtime/policy                 evaluation of L0..L4 (today core local_policy*)
     ├── runtime/content                managed content (templates, rules, databases)
     ├── runtime/creds                  credential broker
-    └── wire/…                         protocol clients (today pkg/client, pkg/platform, pkg/chunk, pkg/retry)
+    └── wire/…                         protocol clients (today pkg/client, pkg/chunk, pkg/retry)
 ```
 
 The language-neutral contracts live outside sdk-go, in a leaf module both the platform and the SDK import (decision S6):

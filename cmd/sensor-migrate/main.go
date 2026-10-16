@@ -1,6 +1,7 @@
 // Command sensor-migrate upgrades a Go module from the SDK's pre-sensor API
-// (sdk-go v0.6 and older: core.BaseAgent, client.WithAgentID,
-// platform.AgentCredentials, ...) to the sensor API (RFC-023 §9.5).
+// (sdk-go v0.6 and older: core.BaseAgent, client.WithAgentID, ...) to the
+// sensor API (RFC-023 §9.5). pkg/platform is removed (no OpenCTEM API served
+// its routes): code that used it has nothing to migrate to and must drop it.
 //
 // Run it in the root of your module while it still builds against the old
 // SDK:
