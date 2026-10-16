@@ -152,8 +152,12 @@ func (k *Kit) resolveJobSigning() error {
 	var g *core.JobGuard
 	if s.shared {
 		// A shared sensor runs only instance-scope signed jobs, of any
-		// organization, and binds each job's results to it.
+		// organization, and binds each job's results to it: the poller
+		// holds each job in the ledger, and the client refuses results
+		// for any job the ledger does not hold.
 		g, err = core.NewSharedJobGuard(v, sensorID)
+		s.ledger = core.NewJobLedger()
+		cl.SetJobLedger(s.ledger)
 	} else {
 		g, err = core.NewJobGuard(v, required, tenantID, sensorID)
 	}

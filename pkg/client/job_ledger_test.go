@@ -66,3 +66,23 @@ func TestJobLedgerGatesAndTagsResults(t *testing.T) {
 		}
 	}
 }
+
+// SECURITY: named for the reviewer: a shared sensor tags every outbox entry
+// of a job with the signed tenant and the command, and refuses results for
+// a job it does not hold (TestJobLedgerGatesAndTagsResults covers both in
+// detail).
+func TestSharedSensor_TagsResultsWithSignedTenantAndRefusesUnheldJobs(t *testing.T) {
+	c, l := ledgerClient(t)
+	ctx := context.Background()
+	if err := c.ReportCommandResult(ctx, "not-held", &core.CommandResult{Status: "completed"}); !errors.Is(err, core.ErrJobNotHeld) {
+		t.Fatalf("result for a job not held: %v", err)
+	}
+	l.Hold("held", ledgerTenant)
+	if _, err := c.PushAssets(core.WithCommandID(ctx, "held"), ctis.NewReport()); err != nil {
+		t.Fatal(err)
+	}
+	p := c.Outbox().Pending()
+	if len(p) != 1 || p[0].TenantID != ledgerTenant || p[0].CommandID != "held" {
+		t.Fatalf("pending %+v", p)
+	}
+}
