@@ -96,9 +96,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-w -s" -o /out/integration-test ./examples/integration-test && \
     go build -trimpath -ldflags="-w -s" -o /out/custom-scanner ./examples/custom-scanner && \
-    go build -trimpath -ldflags="-w -s" -o /out/custom-connector ./examples/custom-connector && \
-    go build -trimpath -ldflags="-w -s" -o /out/custom-adapter ./examples/custom-adapter && \
-    go build -trimpath -ldflags="-w -s" -o /out/custom-provider ./examples/custom-provider
+    go build -trimpath -ldflags="-w -s" -o /out/custom-adapter ./examples/custom-adapter
 
 # Final examples image
 FROM gcr.io/distroless/static-debian12:nonroot AS examples

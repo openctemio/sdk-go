@@ -61,7 +61,6 @@ sandbox-credentials:
   - pkg/sensorkit/toolhost/**
   - pkg/sensorkit/egress/**
   - pkg/core/scanner_env*.go
-  - pkg/credentials/**
   - internal/toolrt/**
 
 # Outbound HTTP: the SSRF guard.
