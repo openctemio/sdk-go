@@ -344,10 +344,11 @@ client.PushFindings(ctx, report)
 
 ## Transport
 
-The SDK speaks sensor protocol v2 over HTTPS (`pkg/client`). Protocol v1 is
-retired and refused. `pkg/transport/grpc` is deprecated: no platform serves
-it, and it is removed in a later minor release. Sensor protocol v3 (gRPC with
-mTLS and an HTTPS fallback) is planned.
+The SDK speaks sensor protocol v2 over HTTPS (`pkg/client`) and, for a
+key-bound sensor, sensor protocol v3 (`pkg/sensorproto/v3`: gRPC with mutual
+TLS when the platform advertises it, else the HTTPS binding, else v2).
+Protocol v1 is retired and refused; its gRPC transport and proto files are
+removed.
 
 ## Implementing Custom Components
 

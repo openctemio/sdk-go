@@ -51,7 +51,7 @@ without a tier fails the job.
 | `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries, the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | Stable; its runtime internals are Internal-bound and its overlapping tool interfaces are replaced by the tool contract (RFC) |
 | `pkg/client` | Platform protocol client (protocol v2; v1 is retired) | Stable; its protocol internals are Internal-bound |
 | `pkg/sensorproto/v2` | Protocol v2 wire types | Frozen once protocol v3 ships; Stable until then |
-| `pkg/sensorproto/legacyv1` | Pre-sensor names still read from existing installations (AGENT_* settings, credentials file) and the platform-sensor header | Frozen |
+| `pkg/sensorproto/legacyv1` | Pre-sensor names still read from existing installations (AGENT_* settings, credentials file) | Frozen |
 | `pkg/sensorproto/pairing` | Interactive pairing protocol (api RFC-052): wire types, commitment, SAS, codes, shared test vectors | Beta |
 | `pkg/jobsig` | Signed jobs (api RFC-040 §5.6): the DSSE envelope and statement of the platform's job signer, pinned keys, and the verifier (binding, validity, nonce and persisted sequence number) | Beta |
 | `pkg/sensorsig` | RFC 9421 request signatures of a key-bound sensor (api RFC-052 §4.3): signer, verifier, signing transport | Beta |
@@ -70,7 +70,6 @@ note in CHANGELOG.md):
 
 | Package | Replacement |
 |---|---|
-| `pkg/transport/grpc`, `proto/openctemio/v1` | none: no platform serves it. Removed in the next minor, which also drops the `google.golang.org/grpc` dependency. Sensor protocol v3 is generated from its own proto definitions. |
 | `pkg/pipeline`, `pkg/audit` | the outbox (through `sensorkit`) |
 | `pkg/credentials` | credentials by declaration in the tool contract |
 | `pkg/errors` | categorized tool errors in the tool contract |
