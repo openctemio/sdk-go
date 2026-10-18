@@ -40,10 +40,9 @@ signing:
   - pkg/core/template_signing.go
   - pkg/sensorkit/jobsigning.go
 
-# Sensor protocol: v2 messages, v3 gRPC transport with mTLS, binding selection.
+# Sensor protocol: v2 messages, v3 transport with mTLS, binding selection.
 sensor-protocol:
   - pkg/sensorproto/**
-  - pkg/transport/**
   - pkg/client/client.go
   - pkg/client/transport_v3*.go
 
