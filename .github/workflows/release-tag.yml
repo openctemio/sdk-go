@@ -4,11 +4,12 @@ name: Release Tag
 # release/vX.Y.Z PR merges into main, tag the merge commit vX.Y.Z (only if it
 # carries the release: the CHANGELOG section and pkg/sdk.Version). The tag
 # runs release.yml. Then, with RELEASE_TOKEN:
-#   - openctemio/sensor: "deps: sdk-go vX.Y.Z" (go get + go mod tidy);
-#   - openctemio/openctem: versions.yaml sdk.latest = vX.Y.Z.
+#   - openctemio/sensor: "deps: sdk-go vX.Y.Z" (go get + go mod tidy).
+# The platform learns the release from openctem's signed release feed
+# (RFC-037 §12), so no pull request is opened in openctemio/openctem.
 # Without RELEASE_TOKEN the tag is pushed with GITHUB_TOKEN, which starts no
-# workflow, so release.yml is dispatched on the tag; the cross-repo PRs are
-# skipped with a message.
+# workflow, so release.yml is dispatched on the tag; the sensor PR is skipped
+# with a message (Dependabot in openctemio/sensor proposes the bump weekly).
 
 on:
   pull_request:
@@ -93,7 +94,7 @@ jobs:
           done
 
   downstream:
-    name: Downstream PRs
+    name: Downstream PR
     needs: [tag]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -110,7 +111,7 @@ jobs:
         env:
           VERSION: ${{ needs.tag.outputs.version }}
         run: |
-          msg="Skipped the sensor and openctem PRs: they need the RELEASE_TOKEN secret. By hand: go get github.com/openctemio/sdk-go@${VERSION} in openctemio/sensor; versions.yaml sdk.latest = ${VERSION} in openctemio/openctem."
+          msg="Skipped the sensor PR: it needs the RELEASE_TOKEN secret. By hand: go get github.com/openctemio/sdk-go@${VERSION} in openctemio/sensor. Without the token, Dependabot in openctemio/sensor proposes the sdk-go bump weekly."
           echo "::warning::$msg"
           echo "$msg" >> "$GITHUB_STEP_SUMMARY"
 
@@ -145,29 +146,3 @@ jobs:
           url="$(gh pr create --repo openctemio/sensor --base main --head "$branch" --title "deps: sdk-go ${VERSION}" \
             --body "sdk-go ${VERSION} is tagged: https://github.com/openctemio/sdk-go/releases/tag/${VERSION}. Opened by Release Tag in openctemio/sdk-go. Build and test before merging; the SDK's CHANGELOG lists what changed.")"
           echo "sensor PR: $url" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: openctemio/openctem - versions.yaml sdk.latest
-        if: steps.token.outputs.has_release_token == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          VERSION: ${{ needs.tag.outputs.version }}
-        run: |
-          git clone --quiet --branch develop "https://x-access-token:${GH_TOKEN}@github.com/openctemio/openctem.git" "$RUNNER_TEMP/openctem"
-          cd "$RUNNER_TEMP/openctem"
-          sync=.github/scripts/release/sync-versions.sh
-          if [ ! -f versions.yaml ] || [ ! -f "$sync" ]; then echo "::warning::openctem has no versions.yaml yet; skipped"; exit 0; fi
-          branch="chore/sdk-latest-${VERSION}"
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then echo "$branch exists"; exit 0; fi
-          # shellcheck source=/dev/null
-          source .github/scripts/release/lib.sh
-          rel_yaml_set versions.yaml sdk.latest "$VERSION"
-          bash "$sync"
-          if git diff --quiet; then echo "openctem already says sdk ${VERSION}"; exit 0; fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -q -c "$branch"
-          git commit -qam "chore(versions): sdk.latest = ${VERSION}"
-          git push -q origin "$branch"
-          url="$(gh pr create --repo openctemio/openctem --base develop --head "$branch" --title "chore(versions): sdk.latest = ${VERSION}" \
-            --body "sdk-go ${VERSION} is tagged. versions.yaml sdk.latest follows (sensors built with an older SDK show as outdated). Opened by Release Tag in openctemio/sdk-go.")"
-          echo "openctem PR: $url" >> "$GITHUB_STEP_SUMMARY"
