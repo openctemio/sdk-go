@@ -71,12 +71,6 @@ note in CHANGELOG.md):
 | Package | Replacement |
 |---|---|
 | `pkg/transport/grpc`, `proto/openctemio/v1` | none: no platform serves it. Removed in the next minor, which also drops the `google.golang.org/grpc` dependency. Sensor protocol v3 is generated from its own proto definitions. |
-| `pkg/pipeline`, `pkg/audit` | the outbox (through `sensorkit`) |
-| `pkg/credentials` | credentials by declaration in the tool contract |
-| `pkg/errors` | categorized tool errors in the tool contract |
-| `pkg/health`, `pkg/metrics`, `pkg/options` | preflight checks, the config report and the settings registry in `sensorkit` |
-| `pkg/enrichers/{epss,kev}` | the platform enriches findings itself |
-| `pkg/connectors`, `pkg/connectors/github`, `pkg/providers/github` | the connectors module (api RFC-049) |
 
 **Moved to the sensor** (removed in v0.17.0, deprecated in v0.16.0): the
 tool wrappers `pkg/scanners` (the registry),

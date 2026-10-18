@@ -6,75 +6,12 @@ This document describes the security features and best practices for the OpenCTE
 
 ## Security Features
 
-### 1. Credential Storage Security
+### 1. Credentials
 
-The SDK provides secure credential storage with multiple protection layers.
-
-#### Key Validation
-
-All credential keys are validated to prevent path traversal and injection attacks:
-
-```go
-import "github.com/openctemio/sdk-go/pkg/credentials"
-
-// Keys are automatically validated
-err := credentials.ValidateKey("my.api.key")  // OK
-err := credentials.ValidateKey("../etc/passwd")  // Error: path traversal not allowed
-err := credentials.ValidateKey("key@#$")  // Error: invalid characters
-```
-
-**Validation rules:**
-- Keys must be 1-256 characters
-- Only alphanumeric characters, dots, underscores, and hyphens allowed
-- Cannot start with dot or hyphen
-- Path traversal sequences (`..`, `/`, `\`) are rejected
-
-#### Encrypted Storage
-
-For sensitive credentials, use `EncryptedFileStore` with AES-256-GCM encryption:
-
-```go
-import "github.com/openctemio/sdk-go/pkg/credentials"
-
-// Create encryption key (32 bytes for AES-256)
-key := make([]byte, 32)
-crypto_rand.Read(key)
-
-encryptor, err := credentials.NewAESEncryptor(key)
-if err != nil {
-    log.Fatal(err)
-}
-
-store, err := credentials.NewEncryptedFileStore("/secure/path/creds.enc", encryptor)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Credentials are encrypted at rest
-store.Set(ctx, "api.token", &credentials.Credential{
-    Type:  credentials.CredentialTypeAPIKey,
-    Value: "secret-token",
-})
-```
-
-**Features:**
-- AES-256-GCM authenticated encryption
-- Random nonce per encryption (prevents pattern analysis)
-- Automatic key validation on all operations
-- `SecureClear()` for zeroing credentials in memory
-
-#### Secure Comparison
-
-Use constant-time comparison for credential verification to prevent timing attacks:
-
-```go
-import "github.com/openctemio/sdk-go/pkg/credentials"
-
-// Timing-safe comparison
-if credentials.SecureCompare(providedToken, expectedToken) {
-    // Tokens match
-}
-```
+A tool declares the secrets it needs in its tool contract (`pkg/tool`). The
+runtime passes a tool only the settings the scanner environment allowlist
+names (`pkg/core/scanner_env*.go`) and never writes a secret into a task or a
+log. The SDK keeps no credential store of its own.
 
 ### 2. gRPC transport (deprecated)
 

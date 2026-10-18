@@ -289,8 +289,7 @@ Components are the building blocks that perform actual work:
 
 The scanner wrappers for specific tools (nuclei, semgrep, trivy, betterleaks,
 the recon tools) live in the sensor (`github.com/openctemio/sensor`), not in
-the SDK. `pkg/connectors`, `pkg/providers` and `pkg/enrichers` are deprecated
-(see [STABILITY.md](STABILITY.md)).
+the SDK.
 
 ## Data Flow
 

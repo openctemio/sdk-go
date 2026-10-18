@@ -301,16 +301,9 @@ it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
 | `pkg/tool` | The tool contract: manifest, run function, emitter, `Define` builder |
 | `pkg/testkit` | Run a tool in-process with the runtime's rules |
 | `pkg/conformance` | Fake platform and the sensor and tool conformance suites |
-| `pkg/errors` | Error types and handling |
 | `pkg/retry` | Retry utilities |
-| `pkg/metrics` | Prometheus metrics |
-| `pkg/health` | Health check utilities |
 | `pkg/transport/grpc` | Deprecated gRPC transport (no platform serves it; removal planned) |
 | `pkg/httpsec` | Hardened HTTP client (SafeHTTPClient) with SSRF protection |
-| `pkg/credentials` | Credential management |
-| `pkg/connectors` | Deprecated SCM connector base (GitHub) |
-| `pkg/enrichers` | Deprecated EPSS and KEV enrichers (the platform enriches findings) |
-| `pkg/audit` | Structured audit logging for sensor operations |
 | `pkg/sensorproto/legacyv1` | Migration of pre-sensor settings and credentials (frozen) |
 | `pkg/ctis` | CTIS (CTEM Ingest Schema) types, re-exported from `github.com/openctemio/ctis` |
 
@@ -319,7 +312,7 @@ it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
 See [examples/](examples/) for complete examples:
 - A tool in Python with no SDK, and how to check it with the conformance kit ([python-adapter](examples/python-adapter), [docs/adapter-protocol.md](docs/adapter-protocol.md))
 - A complete sensor on `pkg/sensorkit` ([minimal-sensor](examples/minimal-sensor))
-- A custom scanner, adapter, connector and provider ([custom-scanner](examples/custom-scanner), [custom-adapter](examples/custom-adapter), [custom-connector](examples/custom-connector), [custom-provider](examples/custom-provider))
+- A custom scanner and adapter ([custom-scanner](examples/custom-scanner), [custom-adapter](examples/custom-adapter))
 - An integration test against a platform ([integration-test](examples/integration-test))
 - CI scanning that reports to OpenCTEM lives in [openctemio/ci](https://github.com/openctemio/ci) (GitHub Action, GitLab templates, `openctem-ci`)
 

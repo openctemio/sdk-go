@@ -34,7 +34,6 @@
 /pkg/sensorkit/toolhost/** @0xmanhnv
 /pkg/sensorkit/egress/** @0xmanhnv
 /pkg/core/scanner_env*.go @0xmanhnv
-/pkg/credentials/** @0xmanhnv
 /internal/toolrt/** @0xmanhnv
 # outbound-ssrf
 /pkg/httpsec/** @0xmanhnv
