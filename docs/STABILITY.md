@@ -15,7 +15,7 @@ holds today.
 
 | Tier | Promise |
 |---|---|
-| **Stable** | No incompatible change within the major version (before v1.0.0: removal only after a released `Deprecated:` period, section 5). |
+| **Stable** | No incompatible change within the major version (before v1.0.0: removal only after a released `Deprecated:` period, section 4). |
 | **Beta** | May change in a minor release, after one minor with a `Deprecated:` notice and an upgrade note. |
 | **Frozen** | No additions; removed when the protocol it serves is sunset. |
 | **Internal-bound** | Public today because other public packages use it; it moves under `internal/` before v1.0.0 (deprecated aliases for one minor). Do not import it from a sensor. |
@@ -48,7 +48,7 @@ without a tier fails the job.
 | `pkg/netctx` | The sensor's network self-description: declared and detected facts (interfaces, routes, resolvers, egress echo), fingerprint, a bounded report never wider than the local policy, sent in the manifest (api RFC-089) | Experimental |
 | `pkg/sensorkit/contentcache` | The sensor cache of content packs: digest, pinned-key statement and canonical archive verified before storing; read-only packs per task; desired-set sync, revocation and budget (api RFC-061) | Experimental |
 | `pkg/sensorkit/executor` | Per-task tool sandbox behind a small backend interface (`Backend`, `TaskSpec`, `Status`) | Beta |
-| `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries, the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 6), `ScanTargetPolicy` | Stable; its runtime internals are Internal-bound and its overlapping tool interfaces are replaced by the tool contract (RFC) |
+| `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries, the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | Stable; its runtime internals are Internal-bound and its overlapping tool interfaces are replaced by the tool contract (RFC) |
 | `pkg/client` | Platform protocol client (protocol v2; v1 is retired) | Stable; its protocol internals are Internal-bound |
 | `pkg/sensorproto/v2` | Protocol v2 wire types | Frozen once protocol v3 ships; Stable until then |
 | `pkg/sensorproto/legacyv1` | Pre-sensor names still read from existing installations (AGENT_* settings, credentials file) | Frozen |
@@ -66,16 +66,7 @@ without a tier fails the job.
 
 **Deprecated** (no importer in the sensor, the platform or the asset
 collector; removal is planned for a later minor release, with an upgrade
-note in CHANGELOG.md):
-
-| Package | Replacement |
-|---|---|
-| `pkg/pipeline`, `pkg/audit` | the outbox (through `sensorkit`) |
-| `pkg/credentials` | credentials by declaration in the tool contract |
-| `pkg/errors` | categorized tool errors in the tool contract |
-| `pkg/health`, `pkg/metrics`, `pkg/options` | preflight checks, the config report and the settings registry in `sensorkit` |
-| `pkg/enrichers/{epss,kev}` | the platform enriches findings itself |
-| `pkg/connectors`, `pkg/connectors/github`, `pkg/providers/github` | the connectors module (api RFC-049) |
+note in CHANGELOG.md): none at present.
 
 **Moved to the sensor** (removed in v0.17.0, deprecated in v0.16.0): the
 tool wrappers `pkg/scanners` (the registry),
@@ -164,17 +155,7 @@ below it means no protocol v2. A protocol is retired with a `deprecations`
 entry on hello before the platform drops it. `SENSOR_PROTOCOL` takes `auto`
 (default) or `v2`, which are the same; `v1` is refused.
 
-## 4. Compatibility with the platform
-
-For authors of first-party and third-party (tenant) sensors built on sdk-go.
-
-- The platform judges a sensor only by what it declares: the protocol it speaks, the SDK name and version (`openctem-sdk-go/<version>` in the User-Agent and the heartbeat), and the capabilities and tools it advertises. Jobs are routed only by advertised capabilities and tools. The product name and version are for display only.
-- The platform owns two SDK settings. `sdk.min`: a sensor built with an older sdk-go shows as degraded with the reason `sdk_unsupported`. It is raised only when a protocol change requires it, and this CHANGELOG announces it. SDK security advisories: the reason is `sdk_advisory`. A newer SDK release never requires a platform change.
-- The platform learns the newest SDK release from its signed release feed. A sensor built with an older one shows "outdated", with no effect on its health.
-- Product names starting with `openctemio-` are reserved for first-party sensors. Pick your own product name (`BaseSensorConfig.ProductName` or `useragent.SetProduct`). An organization can record the latest and minimum release of its own product in the console (Sensors > custom products) to get "update available" and "unsupported" verdicts for it. Without that, the platform shows only the compatibility verdicts above.
-- The platform does not need an update when you release your sensor.
-
-## 5. Versioning
+## 4. Versioning
 
 - Semantic versioning. Before v1.0.0 a minor release may remove only what
   a previous minor deprecated; patch releases fix bugs only.
@@ -190,7 +171,7 @@ For authors of first-party and third-party (tenant) sensors built on sdk-go.
   (c) one further minor release has shipped with no breaking change and no
   `breaking-change` label. From v1.0.0 on, removals wait for v2.
 
-## 6. Safety every sensor gets for free
+## 5. Safety every sensor gets for free
 
 A tool wrapper only builds arguments and parses output; the SDK applies
 these to every scanner it runs:
@@ -212,7 +193,7 @@ these to every scanner it runs:
 A wrapper that starts processes without these helpers must call
 `ConfigureScannerProcess`, `ScannerEnviron` and `ValidateExtraArgs` itself.
 
-## 7. Conformance
+## 6. Conformance
 
 `pkg/conformance` has these parts:
 
