@@ -19,7 +19,6 @@
 /pkg/sensorkit/jobsigning.go @0xmanhnv
 # sensor-protocol
 /pkg/sensorproto/** @0xmanhnv
-/pkg/transport/** @0xmanhnv
 /pkg/client/client.go @0xmanhnv
 /pkg/client/transport_v3*.go @0xmanhnv
 # local-policy

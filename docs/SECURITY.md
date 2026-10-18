@@ -13,12 +13,10 @@ runtime passes a tool only the settings the scanner environment allowlist
 names (`pkg/core/scanner_env*.go`) and never writes a secret into a task or a
 log. The SDK keeps no credential store of its own.
 
-### 2. gRPC transport (deprecated)
+### 2. Transport
 
-`pkg/transport/grpc` is deprecated: no OpenCTEM platform serves it and it is
-removed in a later minor release (see [STABILITY.md](STABILITY.md)). Use
-`pkg/client`, which speaks sensor protocol v2 over HTTPS and, for a
-key-bound sensor, sensor protocol v3 (`pkg/sensorproto/v3`, api RFC-059):
+`pkg/client` speaks sensor protocol v2 over HTTPS and, for a key-bound
+sensor, sensor protocol v3 (`pkg/sensorproto/v3`, api RFC-059):
 gRPC with mutual TLS when the platform advertises it, else the HTTPS binding,
 else v2. A network failure of the gRPC binding is remembered in the
 certificate directory and retried after a backoff (from 30 minutes, doubling,

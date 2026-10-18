@@ -302,7 +302,6 @@ it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
 | `pkg/testkit` | Run a tool in-process with the runtime's rules |
 | `pkg/conformance` | Fake platform and the sensor and tool conformance suites |
 | `pkg/retry` | Retry utilities |
-| `pkg/transport/grpc` | Deprecated gRPC transport (no platform serves it; removal planned) |
 | `pkg/httpsec` | Hardened HTTP client (SafeHTTPClient) with SSRF protection |
 | `pkg/sensorproto/legacyv1` | Migration of pre-sensor settings and credentials (frozen) |
 | `pkg/ctis` | CTIS (CTEM Ingest Schema) types, re-exported from `github.com/openctemio/ctis` |
