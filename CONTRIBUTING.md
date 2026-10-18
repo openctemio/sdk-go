@@ -56,7 +56,7 @@ Versioning follows the project rule (openctemio/openctem RFC-037): the version i
 
 1. Every PR that changes behaviour adds one file `changelog.d/<short-slug>.md` (see [`changelog.d/README.md`](changelog.d/README.md)); never edit the Unreleased section of `CHANGELOG.md`.
 2. **Actions › Release Prepare › Run.** Start with `dry_run` (the default) to see the proposed version and changelog preview. Run it again with `dry_run` off to open `release/vX.Y.Z → main`: the `changelog.d/` fragments are folded into `CHANGELOG.md` as `vX.Y.Z` and `pkg/sdk.Version` is set. Fill `version` to override the proposal.
-3. Merge the release PR. **Release Tag** tags the merge commit, and the tag runs the release workflows. It then opens `deps: sdk-go vX.Y.Z` in openctemio/sensor and bumps `sdk.latest` in openctemio/openctem's `versions.yaml`.
+3. Merge the release PR. **Release Tag** tags the merge commit, and the tag runs the release workflows. It then opens `deps: sdk-go vX.Y.Z` in openctemio/sensor. The platform learns the release from openctem's signed release feed (openctemio/openctem RFC-037 §12), so nothing is opened there.
 
 ### Nested modules
 
