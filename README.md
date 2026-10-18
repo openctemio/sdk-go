@@ -305,7 +305,6 @@ it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
 | `pkg/retry` | Retry utilities |
 | `pkg/metrics` | Prometheus metrics |
 | `pkg/health` | Health check utilities |
-| `pkg/transport/grpc` | Deprecated gRPC transport (no platform serves it; removal planned) |
 | `pkg/httpsec` | Hardened HTTP client (SafeHTTPClient) with SSRF protection |
 | `pkg/credentials` | Credential management |
 | `pkg/connectors` | Deprecated SCM connector base (GitHub) |
