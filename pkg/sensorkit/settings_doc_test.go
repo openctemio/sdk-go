@@ -39,7 +39,7 @@ func TestSettingsDocUpToDate(t *testing.T) {
 func TestRegisterSDKSettings_KitEnvVars(t *testing.T) {
 	r := settingsreg.New()
 	RegisterSDKSettings(r)
-	for _, name := range []string{EnvJobID, EnvMaxJobs, EnvDrainGrace, EnvStateDir} {
+	for _, name := range []string{EnvJobID, EnvMaxJobs, EnvDrainGrace, EnvStateDir, EnvInstanceEnrollmentToken} {
 		if !r.Has(name) {
 			t.Errorf("%s is not in the SDK settings registry", name)
 		}

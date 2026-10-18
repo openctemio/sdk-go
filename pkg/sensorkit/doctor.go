@@ -242,6 +242,8 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "SHA-256 fingerprint of the platform's CA certificate (from the install snippet); pins platform TLS to it. SENSOR_API_URL must then use a host name, not an IP address."},
 		settingsreg.Setting{Name: EnvPairingCode, Type: settingsreg.String, Secret: true, Group: "identity", Validate: validPairingCode,
 			Description: "Pairing code an administrator created with \"expect a sensor\" (XXXX-XXXX); the sensor attaches to it on its first start. Ignored once the sensor has an identity."},
+		settingsreg.Setting{Name: EnvInstanceEnrollmentToken, Type: settingsreg.String, Secret: true, Group: "identity",
+			Description: "Single-use instance enrollment token (octe_..., issued by a super administrator): a sensor with no identity enrolls with it as a shared sensor of the instance, without an administrator's approval. Cannot be combined with SENSOR_PAIRING_CODE. Ignored once the sensor has an identity."},
 		settingsreg.Setting{Name: EnvPlatformKey, Type: settingsreg.String, Group: "identity",
 			Description: "Thumbprint of the platform's pairing key (from the install snippet); pairing refuses another key."},
 		settingsreg.Setting{Name: EnvSSLCertFile, Type: settingsreg.Path, Group: "platform", Validate: readableFile,

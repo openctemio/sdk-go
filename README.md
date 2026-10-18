@@ -149,6 +149,7 @@ one, the new key wins. Every heartbeat also carries the process's
 |---|---|---|
 | Platform | `SENSOR_API_URL`, `SENSOR_API_KEY`, `SENSOR_ID` | required to run commands (exit 2 with what is missing) |
 | Pairing code | `SENSOR_PAIRING_CODE` (`XXXX-XXXX`, from "expect a sensor"): a sensor with no identity attaches to it on first start; ignored once paired; never logged | none: the sensor prints a code to enter in the console |
+| Instance enrollment token | `SENSOR_INSTANCE_ENROLLMENT_TOKEN` (`octe_...`, a single-use token a super administrator issued): a sensor with no identity enrolls with it as a shared sensor of the instance; not combinable with `SENSOR_PAIRING_CODE`; never logged | none |
 | Name | `SENSOR_NAME` | `sensor-<hostname>` |
 | Protocol | `SENSOR_PROTOCOL` = `auto`, `v2` (same; `v1` is retired and refused) | `auto` |
 | Transport (protocol v3) | `SENSOR_TRANSPORT` = `auto` (gRPC over mutual TLS, then HTTPS, then protocol v2), `grpc`, `https`, `v2` | `auto` |
