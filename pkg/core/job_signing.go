@@ -108,7 +108,8 @@ type JobGuard struct {
 	shared bool
 	// unsignedWarn is set by AllowUnsignedJobs: it is called for every
 	// unsigned command the guard lets through on a pinned sensor.
-	unsignedWarn func(cmd *Command)
+	// A pointer keeps JobGuard comparable.
+	unsignedWarn *func(cmd *Command)
 
 	// cv follows the platform's config_version (SetConfigVersion); a
 	// pointer keeps JobGuard comparable.
@@ -185,7 +186,7 @@ func NewSharedJobGuard(v *jobsig.Verifier, sensorID string) (*JobGuard, error) {
 // EnvDangerousAllowUnsignedJobs; it never applies to a required guard.
 func (g *JobGuard) AllowUnsignedJobs(warn func(cmd *Command)) {
 	if g != nil && g.v != nil && !g.required && warn != nil {
-		g.unsignedWarn = warn
+		g.unsignedWarn = &warn
 	}
 }
 
@@ -217,7 +218,7 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 		// Legacy: unsigned commands run; without a pinned key a signature
 		// cannot be checked.
 		if unsigned && g.unsignedWarn != nil {
-			g.unsignedWarn(cmd)
+			(*g.unsignedWarn)(cmd)
 		}
 		return nil
 	}
