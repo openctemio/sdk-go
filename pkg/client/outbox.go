@@ -12,6 +12,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
+	"github.com/openctemio/sdk-go/pkg/localstore"
 	"github.com/openctemio/sdk-go/pkg/outbox"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
@@ -45,6 +46,10 @@ type OutboxConfig struct {
 	Logf func(format string, args ...any)
 	// OnEvict is told when the caps dropped results (turn it into an alert).
 	OnEvict func(evicted []outbox.Meta, reason string)
+	// Store seals each result under its organization's data key
+	// (outbox.Config.Store): required for crypto-erasure per organization
+	// on a shared sensor.
+	Store *localstore.Store
 }
 
 // DefaultOutboxSyncWait is OutboxConfig.SyncWait's default.
@@ -71,6 +76,7 @@ func (c *Client) EnableOutbox(cfg OutboxConfig) error {
 		Concurrency: cfg.Concurrency,
 		Logf:        cfg.Logf,
 		OnEvict:     cfg.OnEvict,
+		Store:       cfg.Store,
 	})
 	if err != nil {
 		return err

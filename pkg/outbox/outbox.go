@@ -54,6 +54,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/openctemio/sdk-go/pkg/localstore"
 )
 
 // Defaults.
@@ -202,6 +204,12 @@ type Config struct {
 	// OnDeadLetter is called (without locks held) when an item is
 	// dead-lettered.
 	OnDeadLetter func(DeadLetter)
+	// Store, when set, seals every new item under its tenant's data key
+	// (file format version 2, tenantseal.go): an organization's results on
+	// a shared sensor can then be dropped and crypto-erased. Version 1
+	// items are still read with the outbox key, which becomes the
+	// organization sensor's data key when the store has none.
+	Store *localstore.Store
 
 	// now is the clock (tests).
 	now func() time.Time
@@ -289,7 +297,7 @@ func (t *Ticket) Done() <-chan Result { return t.done }
 // Outbox is a durable queue. Safe for concurrent use.
 type Outbox struct {
 	cfg    Config
-	seal   *sealer
+	seal   fileSealer
 	unlock func()
 
 	pendingDir, deadDir, corruptDir, tmpDir string
@@ -371,15 +379,29 @@ func Open(cfg Config) (*Outbox, error) {
 			_ = os.Remove(filepath.Join(o.tmpDir, n.Name()))
 		}
 	}
-	if err := CheckKey(c.Dir, c.KeyFile); err != nil {
-		return nil, err
+	if c.Store == nil {
+		if err := CheckKey(c.Dir, c.KeyFile); err != nil {
+			return nil, err
+		}
+	} else if _, err := os.Stat(c.KeyFile); errors.Is(err, fs.ErrNotExist) && legacyItems(c.Dir) > 0 {
+		return nil, fmt.Errorf("%w: %s does not exist and %s holds version 1 items only that key can read", ErrKeyMissing, c.KeyFile, c.Dir)
 	}
 	key, created, err := loadOrCreateKey(c.KeyFile, o.tmpDir)
 	if err != nil {
 		return nil, err
 	}
-	if o.seal, err = newSealer(key); err != nil {
+	legacy, err := newSealer(key)
+	if err != nil {
 		return nil, err
+	}
+	o.seal = legacySealer{s: legacy}
+	if c.Store != nil {
+		// The outbox key becomes the organization sensor's data key when the
+		// store has none yet: nothing is re-encrypted.
+		if aerr := c.Store.AdoptTenantKey(localstore.SensorTenant, key); aerr != nil && !errors.Is(aerr, localstore.ErrKeyExists) {
+			return nil, aerr
+		}
+		o.seal = tenantSealer{legacy: legacy, store: c.Store}
 	}
 	if err := o.load(); err != nil {
 		return nil, err
@@ -560,7 +582,7 @@ func (o *Outbox) writeState(dir string, e *entry) error {
 	if err != nil {
 		return err
 	}
-	data, err := o.seal.seal(typeState, e.meta.ID, pt)
+	data, err := o.seal.seal(typeState, e.meta.ID, e.meta.TenantID, pt)
 	if err != nil {
 		return err
 	}
@@ -596,7 +618,7 @@ func (o *Outbox) Enqueue(m Meta, payload []byte) (*Ticket, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := o.seal.seal(typeItem, m.ID, pt)
+	data, err := o.seal.seal(typeItem, m.ID, m.TenantID, pt)
 	if err != nil {
 		return nil, err
 	}
