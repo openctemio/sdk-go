@@ -274,7 +274,7 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 		settingsreg.Setting{Name: EnvJobSigningKeys, Type: settingsreg.List, Group: "policy",
 			Description: "The platform job signer's keys (SHA256:<hex> key ids or base64 Ed25519 keys), in addition to those pinned at pairing; every signed job is verified with them before it runs."},
 		settingsreg.Setting{Name: EnvJobSigningRoot, Type: settingsreg.String, Group: "policy",
-			Description: "The installation's offline job-signing root (SHA256:<hex> key id or base64 Ed25519 key); signed jobs are accepted from the keys of its current key set. Overrides the root pinned at pairing."},
+			Description: "The installation's offline job-signing root (SHA256:<hex> key id or base64 Ed25519 key); signed jobs are accepted from the keys of its current key set. Overrides the root pinned at pairing. Set at pairing (from the console install snippet), it is pinned only when the key set the platform serves is signed by it; otherwise pairing fails."},
 		settingsreg.Setting{Name: core.EnvRequireSignedJobs, Type: settingsreg.Bool, Default: "auto", Group: "policy",
 			Description: "true: refuse every job without a valid signature from a pinned job signer; false: run unsigned jobs (signed ones are still verified), refused on a sensor that pinned the signer's keys or root at pairing (it may only raise the requirement). Unset: true for a sensor that pinned the signer's keys or root at pairing, false otherwise."},
 		settingsreg.Setting{Name: core.EnvDangerousAllowUnsignedJobs, Type: settingsreg.Bool, Group: "policy",
