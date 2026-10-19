@@ -194,3 +194,61 @@ func TestBytesCountsAllJobs(t *testing.T) {
 		t.Fatalf("bytes %d", got)
 	}
 }
+
+// A task can swap a directory for a symbolic link while the workspace is
+// being removed; nothing outside the workspace may be changed or removed.
+func TestRemoveAllNeverFollowsALinkSwappedInMidWalk(t *testing.T) {
+	m, _ := Open(filepath.Join(t.TempDir(), "work"))
+	w, _ := m.Create("tenant-a", "cmd-1", Limits{})
+	sub := filepath.Join(w.Dir(), "sub")
+	_ = os.Mkdir(sub, 0o700)
+	_ = os.WriteFile(filepath.Join(sub, "f"), []byte("x"), 0o600)
+	_ = os.Chmod(sub, 0o500)
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "victim")
+	_ = os.Mkdir(victim, 0o755) //nolint:gosec // the test's stand-in for a directory of someone else
+	_ = os.WriteFile(filepath.Join(victim, "keep"), []byte("x"), 0o600)
+	beforeChmod = func(p string) {
+		if p == sub {
+			_ = os.Chmod(sub, 0o700)
+			_ = os.RemoveAll(sub)
+			_ = os.Symlink(victim, sub)
+		}
+	}
+	t.Cleanup(func() { beforeChmod = nil })
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if st, err := os.Stat(victim); err != nil || st.Mode().Perm() != 0o755 {
+		t.Fatalf("a directory outside the workspace was changed: %v %v", st, err)
+	}
+	if _, err := os.Stat(filepath.Join(victim, "keep")); err != nil {
+		t.Fatalf("a file outside the workspace was removed: %v", err)
+	}
+	if _, err := os.Lstat(w.Dir()); !os.IsNotExist(err) {
+		t.Fatal("workspace kept")
+	}
+}
+
+func TestRemoveAllReadOnlyTreeAndLinkRoot(t *testing.T) {
+	m, _ := Open(filepath.Join(t.TempDir(), "work"))
+	w, _ := m.Create("tenant-a", "cmd-1", Limits{})
+	deep := filepath.Join(w.Dir(), "a", "b")
+	_ = os.MkdirAll(deep, 0o700)
+	_ = os.WriteFile(filepath.Join(deep, "f"), []byte("x"), 0o400)
+	_ = os.Chmod(deep, 0o500)
+	_ = os.Chmod(filepath.Dir(deep), 0o500)
+	if err := w.Close(); err != nil {
+		t.Fatalf("read-only tree: %v", err)
+	}
+	outside := t.TempDir()
+	_ = os.WriteFile(filepath.Join(outside, "keep"), []byte("x"), 0o600)
+	link := filepath.Join(t.TempDir(), "link")
+	_ = os.Symlink(outside, link)
+	if err := removeAll(link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "keep")); err != nil {
+		t.Fatal("a link root was followed")
+	}
+}

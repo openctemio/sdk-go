@@ -97,3 +97,29 @@ func TestDeadLettersPurgedAfterTheirAge(t *testing.T) {
 		t.Fatalf("dead files left: %v", files)
 	}
 }
+
+func TestDropTenantReportsInFlightItems(t *testing.T) {
+	st := openStore(t, t.TempDir())
+	o := openTest(t, t.TempDir(), func(c *Config) { c.Store = st })
+	started, release := make(chan struct{}), make(chan struct{})
+	d := DelivererFunc(func(_ context.Context, dl *Delivery) (any, error) {
+		if dl.Meta.TenantID == "tenant-a" {
+			close(started)
+			<-release
+		}
+		return nil, nil
+	})
+	ta, _ := o.Enqueue(Meta{Kind: KindReport, TenantID: "tenant-a"}, []byte("a"))
+	stop := runFor(t, o, d)
+	defer stop()
+	<-started
+	_, _ = o.Enqueue(Meta{Kind: KindReport, TenantID: "tenant-a", CommandID: "later"}, []byte("a2"))
+	n, inflight, err := o.DropTenant("tenant-a")
+	if err != nil || inflight != 1 || n != 1 {
+		t.Fatalf("dropped %d, in flight %d, %v", n, inflight, err)
+	}
+	close(release)
+	if !waitResult(t, ta).Delivered {
+		t.Fatal("the in-flight item was not left to finish")
+	}
+}

@@ -93,9 +93,9 @@ func TestDropTenantAndCryptoErase(t *testing.T) {
 	_, _ = o.Enqueue(Meta{Kind: KindReport, TenantID: "tenant-a"}, []byte("a2"))
 	tb, _ := o.Enqueue(Meta{Kind: KindReport, TenantID: "tenant-b"}, []byte("b"))
 	snapshot, _ := os.ReadFile(itemFile(o, ta.Meta.ID))
-	n, err := o.DropTenant("tenant-a")
-	if err != nil || n != 2 {
-		t.Fatalf("dropped %d %v", n, err)
+	n, inflight, err := o.DropTenant("tenant-a")
+	if err != nil || n != 2 || inflight != 0 {
+		t.Fatalf("dropped %d (in flight %d) %v", n, inflight, err)
 	}
 	if res := waitResult(t, ta); !res.Evicted {
 		t.Fatalf("ticket of a dropped item: %+v", res)

@@ -10,12 +10,13 @@ import (
 )
 
 type fakeOutbox struct {
-	mu      sync.Mutex
-	pending int64
-	dead    []time.Time // DeadAt of each dead letter
-	dropped []string
-	dropErr error
-	purged  int
+	mu       sync.Mutex
+	pending  int64
+	dead     []time.Time // DeadAt of each dead letter
+	dropped  []string
+	dropErr  error
+	inFlight int
+	purged   int
 }
 
 func (f *fakeOutbox) Bytes() (int64, int64) {
@@ -41,14 +42,14 @@ func (f *fakeOutbox) PurgeDead(_ context.Context, maxAge time.Duration, limit in
 	return n, int64(n) * 100
 }
 
-func (f *fakeOutbox) DropTenant(t string) (int, error) {
+func (f *fakeOutbox) DropTenant(t string) (int, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.dropErr != nil {
-		return 0, f.dropErr
+		return 0, 0, f.dropErr
 	}
 	f.dropped = append(f.dropped, t)
-	return 1, nil
+	return 1, f.inFlight, nil
 }
 
 type fakePacks struct {
@@ -435,5 +436,26 @@ func finishedJob(t *testing.T, j *Journal, id string) {
 	}
 	if err := j.Finish(id); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The key of a tenant with an item in flight is not erased: that item
+// would stay queued but unreadable.
+func TestUnassignWaitsForInFlightItems(t *testing.T) {
+	s := openT(t, t.TempDir(), okSpace)
+	_ = kvT(t, s, "org-a", "policy").Put("p", []byte("x"))
+	ob := &fakeOutbox{inFlight: 1}
+	jan := janitorT(t, s, func(c *JanitorConfig) { c.Outbox = ob })
+	_ = jan.Unassign("org-a")
+	rep, _ := jan.Sweep(context.Background())
+	if len(rep.Errors) == 0 || !s.HasTenant("org-a") {
+		t.Fatalf("erased with an item in flight: %+v", rep)
+	}
+	ob.mu.Lock()
+	ob.inFlight = 0
+	ob.mu.Unlock()
+	_, _ = jan.Sweep(context.Background())
+	if s.HasTenant("org-a") {
+		t.Fatal("not erased once nothing is in flight")
 	}
 }

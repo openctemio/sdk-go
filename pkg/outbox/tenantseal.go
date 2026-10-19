@@ -164,18 +164,25 @@ func countItems(dir string, version byte) int {
 }
 
 // DropTenant removes every pending item and dead letter of a tenant (on a
-// shared sensor, an organization that left) and returns how many went.
-// Call localstore.Store.EraseTenant afterwards to crypto-erase what a copy
-// of the files may still hold.
-func (o *Outbox) DropTenant(tenant string) (int, error) {
+// shared sensor, an organization that left) and returns how many went and
+// how many items of the tenant are in flight (being delivered right now)
+// and were kept. Call it again once inFlight is 0, then
+// localstore.Store.EraseTenant to crypto-erase what a copy of the files may
+// still hold: erasing the key while an item is in flight would leave that
+// item unreadable but still queued.
+func (o *Outbox) DropTenant(tenant string) (dropped, inFlight int, err error) {
 	if tenant == "" {
-		return 0, errors.New("outbox: tenant required")
+		return 0, 0, errors.New("outbox: tenant required")
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	n := 0
 	for id, e := range o.entries {
-		if e.meta.TenantID != tenant || e.inflight {
+		if e.meta.TenantID != tenant {
+			continue
+		}
+		if e.inflight {
+			inFlight++
 			continue
 		}
 		dir := o.pendingDir
@@ -195,5 +202,5 @@ func (o *Outbox) DropTenant(tenant string) (int, error) {
 		o.cfg.Logf("dropped %d item(s) of tenant %s", n, tenant)
 		o.signalLocked()
 	}
-	return n, nil
+	return n, inFlight, nil
 }

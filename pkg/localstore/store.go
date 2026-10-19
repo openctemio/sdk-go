@@ -74,6 +74,9 @@ var (
 	ErrInvalidName = errors.New("localstore: invalid name")
 	// ErrKeyExists: AdoptTenantKey for a tenant that already has a key.
 	ErrKeyExists = errors.New("localstore: tenant already has a data key")
+	// ErrTenantErased: the tenant was erased after this handle was made;
+	// get a new handle (which starts the tenant over with a new key).
+	ErrTenantErased = errors.New("localstore: tenant was erased")
 )
 
 // nameRE is the form of tenant, namespace and record names: a file name on
@@ -149,7 +152,11 @@ type Store struct {
 	mu      sync.Mutex
 	closed  bool
 	tenants map[string]cipher.AEAD
-	stats   Stats
+	// gen counts the erasures of each tenant: a Sealer or KV handle made
+	// before an erasure is refused afterwards (ErrTenantErased) instead of
+	// silently creating a new key.
+	gen   map[string]uint64
+	stats Stats
 }
 
 // Open opens (creating if needed) the store directory, takes its lock,
@@ -172,7 +179,7 @@ func Open(opts Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{opts: o, dir: dir, unlock: unlock, tenants: map[string]cipher.AEAD{}}
+	s := &Store{opts: o, dir: dir, unlock: unlock, tenants: map[string]cipher.AEAD{}, gen: map[string]uint64{}}
 	if err := s.init(); err != nil {
 		unlock()
 		return nil, err
@@ -409,10 +416,24 @@ func (s *Store) keyPath(tenant string) string {
 
 // tenantAEAD returns the tenant's data key, creating it on first use.
 func (s *Store) tenantAEAD(tenant string) (cipher.AEAD, error) {
+	return s.tenantAEADGen(tenant, nil)
+}
+
+// tenantGen is the tenant's erasure count, which a handle remembers.
+func (s *Store) tenantGen(tenant string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.gen[tenant]
+}
+
+// tenantAEADGen is tenantAEAD for a handle made at erasure count *gen: it
+// refuses (ErrTenantErased) when the tenant was erased since. nil gen is an
+// explicit request that may create the key.
+func (s *Store) tenantAEADGen(tenant string, gen *uint64) (cipher.AEAD, error) {
 	if err := validName(tenant); err != nil {
 		return nil, err
 	}
-	a, err := s.tenantAEADLocked(tenant)
+	a, err := s.tenantAEADLocked(tenant, gen)
 	if errors.Is(err, errAuth) {
 		// A wrapped key that does not open under this master key is never
 		// replaced silently: that would orphan the tenant's records.
@@ -422,11 +443,14 @@ func (s *Store) tenantAEAD(tenant string) (cipher.AEAD, error) {
 	return a, err
 }
 
-func (s *Store) tenantAEADLocked(tenant string) (cipher.AEAD, error) {
+func (s *Store) tenantAEADLocked(tenant string, gen *uint64) (cipher.AEAD, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil, ErrClosed
+	}
+	if gen != nil && s.gen[tenant] != *gen {
+		return nil, ErrTenantErased
 	}
 	if a, ok := s.tenants[tenant]; ok {
 		return a, nil
@@ -542,6 +566,7 @@ func (s *Store) EraseTenant(tenant string) error {
 		return ErrClosed
 	}
 	delete(s.tenants, tenant)
+	s.gen[tenant]++
 	if err := os.Remove(s.keyPath(tenant)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("localstore: erase key of %s: %w", tenant, err)
 	}

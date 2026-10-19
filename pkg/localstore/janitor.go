@@ -134,8 +134,9 @@ type OutboxCleaner interface {
 	Bytes() (pending, dead int64)
 	// PurgeDead deletes dead letters older than maxAge (at most limit).
 	PurgeDead(ctx context.Context, maxAge time.Duration, limit int) (int, int64)
-	// DropTenant removes a tenant's items.
-	DropTenant(tenant string) (int, error)
+	// DropTenant removes a tenant's items and reports how many are in
+	// flight (kept; try again once they are done).
+	DropTenant(tenant string) (dropped, inFlight int, err error)
 }
 
 // PackCache is the content pack cache as the janitor sees it.
@@ -529,8 +530,13 @@ func (j *Janitor) eraseTenant(t string) error {
 		}
 	}
 	if j.cfg.Outbox != nil {
-		if _, err := j.cfg.Outbox.DropTenant(t); err != nil {
+		_, inflight, err := j.cfg.Outbox.DropTenant(t)
+		if err != nil {
 			return err
+		}
+		if inflight > 0 {
+			// Erasing the key now would strand those items: wait.
+			return fmt.Errorf("%d item(s) in flight", inflight)
 		}
 	}
 	return j.cfg.Store.EraseTenant(t)

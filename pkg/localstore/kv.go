@@ -21,6 +21,7 @@ type KV struct {
 	tenant    string
 	namespace string
 	dir       string
+	gen       uint64
 }
 
 // KV returns the tenant's namespace (creating the tenant's data key on
@@ -39,7 +40,7 @@ func (s *Store) KV(tenant, namespace string) (*KV, error) {
 	if err := mkdirSynced(dir); err != nil {
 		return nil, fmt.Errorf("localstore: %w", err)
 	}
-	return &KV{s: s, tenant: tenant, namespace: namespace, dir: dir}, nil
+	return &KV{s: s, tenant: tenant, namespace: namespace, dir: dir, gen: s.tenantGen(tenant)}, nil
 }
 
 // recordMeta is the plaintext header of a KV record.
@@ -99,7 +100,7 @@ func (kv *KV) Put(name string, data []byte, opts ...PutOption) error {
 	if !po.critical && kv.s.Disk().Level == DiskCritical {
 		return ErrDiskFull
 	}
-	aead, err := kv.s.tenantAEAD(kv.tenant)
+	aead, err := kv.s.tenantAEADGen(kv.tenant, &kv.gen)
 	if err != nil {
 		return err
 	}
@@ -147,7 +148,7 @@ func (kv *KV) read(name string, wantData bool) (recordMeta, []byte, error) {
 	if err := validName(name); err != nil {
 		return recordMeta{}, nil, err
 	}
-	aead, err := kv.s.tenantAEAD(kv.tenant)
+	aead, err := kv.s.tenantAEADGen(kv.tenant, &kv.gen)
 	if err != nil {
 		return recordMeta{}, nil, err
 	}

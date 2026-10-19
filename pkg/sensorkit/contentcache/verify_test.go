@@ -386,3 +386,24 @@ func TestRemovedRevocationsFailClosed(t *testing.T) {
 		t.Fatalf("Acquire with the revocation record removed: %v", err)
 	}
 }
+
+// A key rotation takes effect at the next load, not after the re-check
+// interval.
+func TestSetPinnedKeysForgetsEarlierVerification(t *testing.T) {
+	f := newFixture(t)
+	p, _ := installT(t, f, map[string]string{"a.yaml": "id: good"})
+	_, rel, err := f.cache.Acquire(p.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel()
+	if _, rel, err = f.cache.Acquire(p.Digest); err != nil { // served from the verified cache
+		t.Fatal(err)
+	}
+	rel()
+	_, newK, _ := ed25519.GenerateKey(nil)
+	f.cache.SetPinnedKeys([]ed25519.PublicKey{newK.Public().(ed25519.PublicKey)}, nil)
+	if _, _, err := f.cache.Acquire(p.Digest); !errors.Is(err, ErrVerify) {
+		t.Fatalf("Acquire after the key was unpinned: %v", err)
+	}
+}
