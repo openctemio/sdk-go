@@ -25,6 +25,7 @@ import (
 
 	"github.com/openctemio/sdk-go/internal/sensorstate"
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/netctx"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
@@ -275,7 +276,9 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 		settingsreg.Setting{Name: EnvJobSigningRoot, Type: settingsreg.String, Group: "policy",
 			Description: "The installation's offline job-signing root (SHA256:<hex> key id or base64 Ed25519 key); signed jobs are accepted from the keys of its current key set. Overrides the root pinned at pairing."},
 		settingsreg.Setting{Name: core.EnvRequireSignedJobs, Type: settingsreg.Bool, Default: "auto", Group: "policy",
-			Description: "true: refuse every job without a valid signature from a pinned job signer; false: run unsigned jobs (signed ones are still verified). Unset: true for a sensor that pinned the signer's keys or root at pairing, false otherwise."},
+			Description: "true: refuse every job without a valid signature from a pinned job signer; false: run unsigned jobs (signed ones are still verified), refused on a sensor that pinned the signer's keys or root at pairing (it may only raise the requirement). Unset: true for a sensor that pinned the signer's keys or root at pairing, false otherwise."},
+		settingsreg.Setting{Name: core.EnvDangerousAllowUnsignedJobs, Type: settingsreg.Bool, Group: "policy",
+			Description: "Development only: accept unsigned jobs although job-signing keys or a root are pinned; logs a warning at start and for every unsigned job."},
 		settingsreg.Setting{Name: core.EnvLocalPolicy, Type: settingsreg.Path, Default: core.DefaultLocalPolicyPath, Group: "policy",
 			Description: "The sensor-local policy file the network owner installs."},
 		settingsreg.Setting{Name: core.EnvAllowedRanges, Type: settingsreg.List, Group: "policy",
@@ -311,7 +314,9 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 		settingsreg.Setting{Name: "OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE", Type: settingsreg.Bool, Group: "network",
 			Description: "Lets SDK HTTP clients reach private addresses (not scan targets: SENSOR_ALLOW_PRIVATE_TARGETS)."},
 		settingsreg.Setting{Name: "OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK", Type: settingsreg.Bool, Group: "network",
-			Description: "Lets SDK HTTP clients reach loopback addresses."},
+			Description: "Test switch: lets SDK HTTP clients and target checks reach loopback addresses. The sensor warns at start when it is on; never set it in production."},
+		settingsreg.Setting{Name: httpsec.EnvAllowInsecureHTTP, Type: settingsreg.Bool, Group: "network",
+			Description: "Development only: allow a plain-http platform URL to a host that is not loopback (refused otherwise: the API key and jobs would cross the network in clear text)."},
 		settingsreg.Setting{Name: netctx.EnvSite, Type: settingsreg.String, Group: "network",
 			Description: "Site label of this host (1 to 64 of A-Z a-z 0-9 . _ -), sent in the network report; the platform only suggests a network from it."},
 		settingsreg.Setting{Name: netctx.EnvReach, Type: settingsreg.List, Group: "network",
