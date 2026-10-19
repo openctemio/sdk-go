@@ -36,15 +36,15 @@ func newParties(t *testing.T) parties {
 	return parties{sensorKey: sk, ingestKey: ik, respPub: pub, respPriv: priv, route: Route{Realm: "realm-1", SensorID: "sensor-1"}}
 }
 
-func sampleRequest() *Request {
-	return &Request{RequestMeta: RequestMeta{Method: "POST", Path: "/api/v2/sensor/heartbeat?x=1",
+func sampleRequest(p parties) *Request {
+	return &Request{RequestMeta: RequestMeta{Method: "POST", Path: "/api/v2/sensor/heartbeat?x=1", ReplyKey: p.sensorKey.Public().Bytes(),
 		Header: http.Header{"Signature": {"sig1=:abc:"}, "Signature-Input": {`sig1=("@method")`}, "Content-Type": {"application/json"},
 			"Connection": {"close"}, "Host": {"relay.example"}}}, Body: []byte(`{"status":"secret-findings"}`)}
 }
 
 func TestRequestRoundTrip(t *testing.T) {
 	p := newParties(t)
-	req := sampleRequest()
+	req := sampleRequest(p)
 	env, err := SealRequest(p.ingestKey.Public(), p.route, req)
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +60,9 @@ func TestRequestRoundTrip(t *testing.T) {
 		got.Header.Get("Signature") != "sig1=:abc:" || got.ID == "" {
 		t.Fatalf("request %+v", got)
 	}
+	if rt, err := got.ReplyTo(); err != nil || rt.KeyID() != p.sensorKey.KeyID() {
+		t.Fatalf("reply key: %v", err)
+	}
 	if got.Header.Get("Connection") != "" || got.Header.Get("Host") != "" {
 		t.Fatal("connection-level headers carried")
 	}
@@ -67,7 +70,7 @@ func TestRequestRoundTrip(t *testing.T) {
 
 func TestRequestRefusals(t *testing.T) {
 	p := newParties(t)
-	env, err := SealRequest(p.ingestKey.Public(), p.route, sampleRequest())
+	env, err := SealRequest(p.ingestKey.Public(), p.route, sampleRequest(p))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +107,8 @@ func TestRequestRefusals(t *testing.T) {
 func TestKeyRotation(t *testing.T) {
 	p := newParties(t)
 	next, _ := GenerateKey()
-	envOld, _ := SealRequest(p.ingestKey.Public(), p.route, sampleRequest())
-	envNew, _ := SealRequest(next.Public(), p.route, sampleRequest())
+	envOld, _ := SealRequest(p.ingestKey.Public(), p.route, sampleRequest(p))
+	envNew, _ := SealRequest(next.Public(), p.route, sampleRequest(p))
 	keys := []*PrivateKey{p.ingestKey, next}
 	for _, e := range [][]byte{envOld, envNew} {
 		if _, err := OpenRequest(keys, p.route, e); err != nil {
@@ -120,7 +123,7 @@ func TestKeyRotation(t *testing.T) {
 
 func TestResponseBinding(t *testing.T) {
 	p := newParties(t)
-	reqEnv, _ := SealRequest(p.ingestKey.Public(), p.route, sampleRequest())
+	reqEnv, _ := SealRequest(p.ingestKey.Public(), p.route, sampleRequest(p))
 	d := Digest(reqEnv)
 	now := time.Now()
 	resp := &Response{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"jobs":["secret-job"]}`)}
@@ -146,7 +149,7 @@ func TestResponseBinding(t *testing.T) {
 	}
 
 	// The relay swaps the response onto another request.
-	other, _ := SealRequest(p.ingestKey.Public(), p.route, sampleRequest())
+	other, _ := SealRequest(p.ingestKey.Public(), p.route, sampleRequest(p))
 	if _, err := OpenResponse(p.sensorKey, []ed25519.PublicKey{p.respPub}, p.route, Digest(other), env, now); !errors.Is(err, ErrBinding) {
 		t.Fatalf("swapped response: %v", err)
 	}
@@ -176,12 +179,15 @@ func TestResponseBinding(t *testing.T) {
 
 func TestHeaderInjectionAndLimits(t *testing.T) {
 	p := newParties(t)
+	rk := p.sensorKey.Public().Bytes()
 	for _, req := range []*Request{
-		{RequestMeta: RequestMeta{Method: "GET", Path: "/x", Header: http.Header{"X-A": {"a\r\nX-Evil: 1"}}}},
-		{RequestMeta: RequestMeta{Method: "GET", Path: "no-slash"}},
-		{RequestMeta: RequestMeta{Method: "GET /x HTTP/1.1", Path: "/x"}},
-		{RequestMeta: RequestMeta{Method: "GET", Path: "/x y"}},
-		{RequestMeta: RequestMeta{Method: "GET", Path: "/x"}, Body: make([]byte, MaxBody+1)},
+		{RequestMeta: RequestMeta{Method: "GET", Path: "/x", ReplyKey: rk, Header: http.Header{"X-A": {"a\r\nX-Evil: 1"}}}},
+		{RequestMeta: RequestMeta{Method: "GET", Path: "no-slash", ReplyKey: rk}},
+		{RequestMeta: RequestMeta{Method: "GET /x HTTP/1.1", Path: "/x", ReplyKey: rk}},
+		{RequestMeta: RequestMeta{Method: "GET", Path: "/x y", ReplyKey: rk}},
+		{RequestMeta: RequestMeta{Method: "GET", Path: "/x", ReplyKey: rk}, Body: make([]byte, MaxBody+1)},
+		{RequestMeta: RequestMeta{Method: "GET", Path: "/x"}},
+		{RequestMeta: RequestMeta{Method: "GET", Path: "/x", ReplyKey: []byte("short")}},
 	} {
 		if _, err := SealRequest(p.ingestKey.Public(), p.route, req); !errors.Is(err, ErrMalformed) {
 			t.Errorf("accepted %+v: %v", req.RequestMeta, err)
@@ -191,10 +197,10 @@ func TestHeaderInjectionAndLimits(t *testing.T) {
 	for i := range MaxHeaders + 1 {
 		many.Add("X-H", string(rune('a'+i%26)))
 	}
-	if _, err := SealRequest(p.ingestKey.Public(), p.route, &Request{RequestMeta: RequestMeta{Method: "GET", Path: "/", Header: many}}); !errors.Is(err, ErrMalformed) {
+	if _, err := SealRequest(p.ingestKey.Public(), p.route, &Request{RequestMeta: RequestMeta{Method: "GET", Path: "/", Header: many, ReplyKey: rk}}); !errors.Is(err, ErrMalformed) {
 		t.Fatalf("too many headers: %v", err)
 	}
-	if _, err := SealRequest(p.ingestKey.Public(), Route{}, sampleRequest()); !errors.Is(err, ErrMalformed) {
+	if _, err := SealRequest(p.ingestKey.Public(), Route{}, sampleRequest(p)); !errors.Is(err, ErrMalformed) {
 		t.Fatalf("empty route: %v", err)
 	}
 }
@@ -239,7 +245,7 @@ func TestVector(t *testing.T) {
 	const path = "testdata/vector-v1.json"
 	if *update {
 		p := newParties(t)
-		req := sampleRequest()
+		req := sampleRequest(p)
 		reqEnv, _ := SealRequest(p.ingestKey.Public(), p.route, req)
 		issued := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 		respEnv, _ := SealResponse(p.sensorKey.Public(), p.respPriv, p.route, Digest(reqEnv), &Response{Status: 200, Body: []byte(`{"ok":true}`), IssuedAt: issued})

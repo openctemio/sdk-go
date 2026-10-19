@@ -278,6 +278,11 @@ type RequestMeta struct {
 	// Created is when the sensor built the request (store-and-forward
 	// windows are checked by the platform).
 	Created time.Time `json:"created"`
+	// ReplyKey is the sensor's encryption public key (PublicKey.Bytes):
+	// the platform seals its answer to it. It travels inside the sealed
+	// envelope, so only the sender chose it; the platform answers with
+	// data only after the inner request's signature verified.
+	ReplyKey []byte `json:"reply_key"`
 }
 
 // Request is an inner request.
@@ -353,6 +358,9 @@ func validRequestMeta(m RequestMeta) error {
 		strings.ContainsAny(m.Method, " \r\n\x00") {
 		return fmt.Errorf("%w: request line", ErrMalformed)
 	}
+	if _, err := ParsePublicKey(m.ReplyKey); err != nil {
+		return fmt.Errorf("%w: reply key", ErrMalformed)
+	}
 	return nil
 }
 
@@ -408,6 +416,9 @@ func OpenRequest(keys []*PrivateKey, r Route, env []byte) (*Request, error) {
 	req.Header, req.Body = h, body
 	return &req, nil
 }
+
+// ReplyTo is the key the answer to this request is sealed to.
+func (r *Request) ReplyTo() (*PublicKey, error) { return ParsePublicKey(r.ReplyKey) }
 
 // ResponseMeta is the inner response without its body.
 type ResponseMeta struct {
