@@ -22,10 +22,15 @@
 // AES-256-GCM, which also detects a torn or corrupted file: it is moved to
 // corrupt/ and never crashes the process or blocks the queue.
 //
-// The outbox never fills the disk: a byte cap (default 1 GiB, and never more
-// than a fraction of the free space) and an age cap (default 7 days) evict the
-// oldest entries first (dead letters before pending results), with a log line,
-// a counter and a callback the caller turns into a heartbeat warning.
+// The outbox never fills the disk, and never drops a result the platform has
+// not acknowledged: a byte cap (default 1 GiB, and never more than a fraction
+// of the free space) first evicts dead letters and command log batches
+// (oldest first, with a log line, a counter and OnEvict); when pending
+// results alone fill it, Enqueue refuses new items with ErrFull and
+// AcceptsWork tells the sensor to stop claiming jobs until deliveries make
+// room (results beat new work). A small reserve keeps room for command
+// results, so running commands can still finish. An age cap (default 7
+// days) deletes old dead letters only.
 //
 // Delivery is the caller's: Run hands each item, oldest first, to a
 // Deliverer, which classifies the outcome by the error it returns (see
@@ -96,6 +101,10 @@ var (
 	ErrClosed = errors.New("outbox: closed")
 	// ErrTooLarge: one item is larger than the outbox may ever hold.
 	ErrTooLarge = errors.New("outbox: item larger than the outbox byte cap")
+	// ErrFull: unacknowledged results fill the outbox. Nothing was written
+	// and nothing queued was dropped; stop claiming new jobs (AcceptsWork)
+	// until deliveries make room.
+	ErrFull = errors.New("outbox: full of results the platform has not acknowledged")
 	// ErrKeyMissing: the key file is missing while the outbox holds items
 	// sealed with a key. Open refuses rather than create a new key, which
 	// would make every one of those items unreadable (see CheckKey).
@@ -187,8 +196,8 @@ type Config struct {
 	// MaxDiskFraction caps the outbox at this fraction of (its own bytes +
 	// the free space). Default 0.5. Negative disables the free-space cap.
 	MaxDiskFraction float64
-	// MaxAge evicts pending items and dead letters older than this. Default
-	// 7 days.
+	// MaxAge deletes dead letters older than this. Default 7 days. Pending
+	// items are never deleted before the platform acknowledges them.
 	MaxAge time.Duration
 	// Concurrency is how many items are delivered at once (1 or 2). Default 1.
 	Concurrency int
@@ -331,7 +340,20 @@ type Outbox struct {
 	deadLetters int64
 	attempts    int64
 	lastEvictAt time.Time
+	refused     int64
+	lastRefusal time.Time
+	// refusedNeed is the room the last refused item needed; AcceptsWork
+	// stays false until it would fit (0: no refusal outstanding).
+	refusedNeed int64
 }
+
+// highWaterFraction: at this share of the byte cap held by unacknowledged
+// results, AcceptsWork stops new claims.
+const highWaterFraction = 0.85
+
+// resultReserve is the part of the cap only command results may use, so a
+// full outbox still lets running commands report their end.
+func resultReserve(limit int64) int64 { return limit / 50 }
 
 // Open opens (creating if needed) the outbox directory, takes its lock,
 // loads the key and indexes the items. Items that fail authentication are
@@ -658,13 +680,33 @@ func (o *Outbox) Enqueue(m Meta, payload []byte) (*Ticket, error) {
 		}
 	}
 	limit := o.capBytesLocked()
-	if e.itemSize > limit {
-		o.mu.Unlock()
-		return nil, fmt.Errorf("%w (%d bytes > %d)", ErrTooLarge, e.itemSize, limit)
+	reserve := int64(0)
+	if m.Kind != KindCommandResult {
+		reserve = resultReserve(limit)
 	}
-	// Make room first (oldest out), then write. The state file is small; the
-	// item size is what counts.
-	evicted, reason := o.enforceCapsLocked(e.itemSize + 512)
+	if e.itemSize > limit-reserve {
+		o.mu.Unlock()
+		return nil, fmt.Errorf("%w (%d bytes > %d)", ErrTooLarge, e.itemSize, limit-reserve)
+	}
+	// Make room first (old dead letters and log batches out), then write.
+	// The state file is small; the item size is what counts. Pending
+	// results are never evicted: when they fill the cap the item is refused.
+	need := e.itemSize + 512 + reserve
+	evicted, reason := o.enforceCapsLocked(need)
+	if used := o.usedBytesLocked(); used+need > limit {
+		o.refused++
+		o.refusedNeed = need
+		now := o.cfg.now()
+		logIt := now.Sub(o.lastRefusal) >= time.Minute
+		o.lastRefusal = now
+		o.mu.Unlock()
+		o.notifyEvicted(evicted, reason)
+		if logIt {
+			o.cfg.Logf("WARNING: the outbox is full of results the platform has not acknowledged (%d of %d bytes); new items are refused and the sensor should stop claiming jobs until deliveries make room. Nothing queued was dropped",
+				used, limit)
+		}
+		return nil, fmt.Errorf("%w (%d of %d bytes held)", ErrFull, used, limit)
+	}
 	if err := writeAtomic(o.tmpDir, o.pendingDir, m.ID+itemExt, data); err != nil {
 		o.mu.Unlock()
 		o.notifyEvicted(evicted, reason)
@@ -675,6 +717,7 @@ func (o *Outbox) Enqueue(m Meta, payload []byte) (*Ticket, error) {
 		o.cfg.Logf("item %s: state not written (%v); it will be rebuilt", m.ID, err)
 	}
 	t := &Ticket{Meta: m, done: make(chan Result, 1)}
+	o.refusedNeed = 0
 	o.entries[m.ID] = e
 	o.watchers[m.ID] = t.done
 	o.signalLocked()
@@ -707,14 +750,18 @@ func (o *Outbox) usedBytesLocked() int64 {
 	return n
 }
 
-// enforceCapsLocked evicts by age, then oldest-first until extra more bytes
-// fit under the cap. Dead letters go before pending items, command results
-// last; items being delivered are skipped. It returns what was evicted for notifyEvicted.
+// enforceCapsLocked deletes dead letters older than MaxAge, then evicts
+// dead letters and then pending command log batches, oldest first, until
+// extra more bytes fit under the cap (or nothing evictable is left). A
+// pending report or command result is never evicted: it waits for the
+// platform's acknowledgement (Enqueue refuses new items instead). Items
+// being delivered are skipped. It returns what was evicted for
+// notifyEvicted.
 func (o *Outbox) enforceCapsLocked(extra int64) ([]Meta, string) {
 	var evicted []Meta
 	reasons := map[string]bool{}
 	cutoff := o.cfg.now().Add(-o.cfg.MaxAge)
-	for _, e := range o.sortedLocked(nil) {
+	for _, e := range o.sortedLocked(func(e *entry) bool { return e.dead != nil }) {
 		if e.inflight || !e.meta.CreatedAt.Before(cutoff) {
 			continue
 		}
@@ -725,17 +772,10 @@ func (o *Outbox) enforceCapsLocked(extra int64) ([]Meta, string) {
 	limit := o.capBytesLocked()
 	used := o.usedBytesLocked()
 	if used+extra > limit {
-		// Dead letters first, then logs, then pending results, then command
-		// results;
-		// each oldest first. A command result is a few hundred bytes:
-		// evicting it frees almost nothing and leaves its command running
-		// on the platform until it times out.
+		// Dead letters first, then log batches (best effort by design),
+		// each oldest first.
 		order := o.sortedLocked(func(e *entry) bool { return e.dead != nil })
 		order = append(order, o.sortedLocked(func(e *entry) bool { return e.dead == nil && e.meta.Kind == KindCommandLog })...)
-		order = append(order, o.sortedLocked(func(e *entry) bool {
-			return e.dead == nil && e.meta.Kind != KindCommandResult && e.meta.Kind != KindCommandLog
-		})...)
-		order = append(order, o.sortedLocked(func(e *entry) bool { return e.dead == nil && e.meta.Kind == KindCommandResult })...)
 		for _, e := range order {
 			if used+extra <= limit {
 				break
@@ -867,6 +907,10 @@ type Stats struct {
 	DeadLetters int64
 	Attempts    int64
 	LastEvictAt time.Time
+	// Refused counts items Enqueue refused because unacknowledged results
+	// filled the outbox (ErrFull).
+	Refused       int64
+	LastRefusalAt time.Time
 	// Delivery control.
 	AuthPaused   bool
 	CircuitOpen  bool
@@ -902,6 +946,7 @@ func (o *Outbox) Stats() Stats {
 	now := o.cfg.now()
 	s.Evicted, s.Corrupt, s.Delivered, s.DeadLetters, s.Attempts = o.evicted, o.corrupt, o.delivered, o.deadLetters, o.attempts
 	s.LastEvictAt = o.lastEvictAt
+	s.Refused, s.LastRefusalAt = o.refused, o.lastRefusal
 	s.AuthPaused = o.authPaused
 	s.CircuitOpen = now.Before(o.circuitUntil)
 	s.CircuitUntil = o.circuitUntil
@@ -1085,3 +1130,25 @@ func (o *Outbox) PurgeDead(ctx context.Context, maxAge time.Duration, limit int)
 
 // The janitor cleans the outbox through this interface.
 var _ localstore.OutboxCleaner = (*Outbox)(nil)
+
+// AcceptsWork reports whether the sensor may claim new jobs as far as the
+// outbox is concerned: not while results the platform has not acknowledged
+// hold 85 % of the byte cap or more, nor while the last item Enqueue
+// refused (ErrFull) would still not fit (each new job adds results, and
+// queued ones are never dropped to make room). Point the claim loop, or
+// localstore.Janitor, at it.
+func (o *Outbox) AcceptsWork() (bool, string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	limit := o.capBytesLocked()
+	var held int64
+	for _, e := range o.entries {
+		if e.dead == nil && e.meta.Kind != KindCommandLog {
+			held += e.size()
+		}
+	}
+	if float64(held) >= highWaterFraction*float64(limit) || (o.refusedNeed > 0 && o.usedBytesLocked()+o.refusedNeed > limit) {
+		return false, fmt.Sprintf("the outbox holds %d MiB of unacknowledged results, %d MiB cap", held>>20, limit>>20)
+	}
+	return true, ""
+}

@@ -17,6 +17,16 @@ type fakeOutbox struct {
 	dropErr  error
 	inFlight int
 	purged   int
+	full     bool
+}
+
+func (f *fakeOutbox) AcceptsWork() (bool, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.full {
+		return false, "outbox full"
+	}
+	return true, ""
 }
 
 func (f *fakeOutbox) Bytes() (int64, int64) {
@@ -457,5 +467,31 @@ func TestUnassignWaitsForInFlightItems(t *testing.T) {
 	_, _ = jan.Sweep(context.Background())
 	if s.HasTenant("org-a") {
 		t.Fatal("not erased once nothing is in flight")
+	}
+}
+
+// A full outbox (unacknowledged results are never evicted) stops new
+// claims at once and in the status the heartbeat reports.
+func TestFullOutboxStopsClaiming(t *testing.T) {
+	ob := &fakeOutbox{full: true}
+	st := openT(t, t.TempDir(), okSpace)
+	j := janitorT(t, st, func(c *JanitorConfig) { c.Outbox = ob })
+	if ok, why := j.AcceptsWork(); ok || why != "outbox full" {
+		t.Fatalf("before a sweep: %v %q", ok, why)
+	}
+	if _, err := j.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s := j.Status(); !s.StopClaiming || s.Level == WatermarkOK {
+		t.Fatalf("status: %+v", s)
+	}
+	ob.mu.Lock()
+	ob.full = false
+	ob.mu.Unlock()
+	if _, err := j.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if ok, why := j.AcceptsWork(); !ok {
+		t.Fatalf("after deliveries made room: %q", why)
 	}
 }

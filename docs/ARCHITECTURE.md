@@ -172,11 +172,16 @@ does it by default in daemon mode) makes delivery durable (`pkg/outbox`):
   `KeyFile` can point at a mounted secret instead). A torn or corrupted file
   fails authentication and is moved to `corrupt/`; it never crashes the
   process.
-- Never fills the disk: a byte cap (default 1 GiB, and at most half of the
-  space the outbox could use) and an age cap (default 7 days) evict the
-  oldest entries first, dead letters before pending results, with a log
-  line, the `openctem_sensor_outbox_evicted_total` metric
-  (`outbox.NewCollector`) and `evicted_count` on the heartbeat.
+- Never fills the disk and never drops an unacknowledged result: a byte cap
+  (default 1 GiB, and at most half of the space the outbox could use) evicts
+  dead letters and then command log batches, oldest first, with a log line,
+  the `openctem_sensor_outbox_evicted_total` metric (`outbox.NewCollector`)
+  and `evicted_count` on the heartbeat. When pending results alone fill it,
+  `Enqueue` refuses new items (`ErrFull`; the client then tries a direct
+  send) and `Outbox.AcceptsWork` (also through `localstore.Janitor`) tells
+  the sensor to stop claiming jobs until deliveries make room; a small
+  reserve keeps room for command results. The age cap (default 7 days)
+  deletes dead letters only.
 - Refusals (400, 409, 413 that splitting cannot fix, 415, 422, ...) go to
   `dead/` with `<id>.reason.json` (the problem document); they are never
   retried by themselves (`Outbox.RequeueDead` after fixing the cause).

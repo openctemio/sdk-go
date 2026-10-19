@@ -9,3 +9,10 @@
 ### Changed: the version 1 outbox key is retired
 
 - With a store, once no version 1 item is left the outbox records that in the store and then deletes the old `outbox.key` (only the default file inside the outbox directory). A fresh outbox with a store no longer creates one. A version 1 item that appears after retirement is quarantined as unreadable.
+
+### Changed: a full outbox refuses new results instead of evicting queued ones
+
+- The byte cap no longer evicts pending reports or command results: it evicts dead letters, then command log batches (best effort by design). When unacknowledged results alone fill the outbox, `Enqueue` returns the new `outbox.ErrFull` without writing (the client then tries to send directly, as for any disk refusal), `Stats.Refused` counts it and a warning is logged at most once a minute. A reserve of 1/50 of the cap is kept for command results, so running commands can still report their end.
+- New `Outbox.AcceptsWork`: false while unacknowledged results hold 85 % of the cap or the last refused item would still not fit. `localstore.OutboxCleaner` gains `AcceptsWork`, and `Janitor.AcceptsWork` and `Status.StopClaiming` follow it: results beat new work.
+- **Behaviour change:** `MaxAge` (`SENSOR_OUTBOX_MAX_AGE`) now deletes dead letters only; a pending item is kept until the platform acknowledges or refuses it.
+- A janitor sweep can no longer remove a workspace that is being created (it is live before its directory exists).
