@@ -217,6 +217,10 @@ type Config struct {
 	// OnDeadLetter is called (without locks held) when an item is
 	// dead-lettered.
 	OnDeadLetter func(DeadLetter)
+	// OnDelivered is called (without locks held) after the platform
+	// acknowledged an item and the outbox deleted it. Point it at
+	// localstore.Janitor.NoteAcks.
+	OnDelivered func(Meta)
 	// Store, when set, seals every new item under its tenant's data key
 	// (file format version 2, tenantseal.go): an organization's results on
 	// a shared sensor can then be dropped and crypto-erased. Version 1
@@ -1043,3 +1047,46 @@ func (o *Outbox) Wait(ctx context.Context) error {
 }
 
 var _ = fs.ErrNotExist
+
+// Bytes is the bytes on disk of the pending items and of the dead letters.
+func (o *Outbox) Bytes() (pending, dead int64) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, e := range o.entries {
+		if e.dead != nil {
+			dead += e.size()
+		} else {
+			pending += e.size()
+		}
+	}
+	return pending, dead
+}
+
+// PurgeDead deletes the dead letters that died more than maxAge ago, at
+// most limit of them (0: no limit), and returns how many went and the
+// bytes freed. Pending items are never touched.
+func (o *Outbox) PurgeDead(ctx context.Context, maxAge time.Duration, limit int) (int, int64) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	cutoff := o.cfg.now().Add(-maxAge)
+	n := 0
+	var freed int64
+	for _, e := range o.sortedLocked(func(e *entry) bool { return e.dead != nil }) {
+		if ctx.Err() != nil || (limit > 0 && n >= limit) {
+			break
+		}
+		if e.inflight || !e.dead.DeadAt.Before(cutoff) {
+			continue
+		}
+		freed += e.size()
+		o.evictLocked(e)
+		n++
+	}
+	if n > 0 {
+		_ = syncDir(o.deadDir)
+	}
+	return n, freed
+}
+
+// The janitor cleans the outbox through this interface.
+var _ localstore.OutboxCleaner = (*Outbox)(nil)

@@ -134,8 +134,10 @@ type Cache struct {
 	// it fails closed until the next Sync.
 	revocationsPersisted bool
 	verified             map[string]verified
-	now                  func() time.Time
-	stats                statsBox
+	// desired is the digest set of the last Sync (nil before the first).
+	desired map[string]bool
+	now     func() time.Time
+	stats   statsBox
 }
 
 // Open opens (creating) a cache rooted at root, private to the sensor.
@@ -244,8 +246,10 @@ func (c *Cache) Acquire(digest string) (string, func(), error) {
 	if _, ok := c.Path(digest); !ok {
 		return "", nil, fmt.Errorf("%w: %s", ErrNotHeld, digest)
 	}
+	at := c.now()
 	c.inUse[digest]++
-	c.used[digest] = c.now()
+	c.used[digest] = at
+	touch(p, at)
 	var once sync.Once
 	return p, func() {
 		once.Do(func() {
@@ -408,9 +412,11 @@ func (c *Cache) store(digest string, files []file, statement []byte) (string, er
 		}
 		return "", err
 	}
+	at := c.now()
 	c.mu.Lock()
-	c.used[digest] = c.now()
+	c.used[digest] = at
 	c.mu.Unlock()
+	touch(dst, at)
 	return dst, nil
 }
 
@@ -505,27 +511,32 @@ func (c *Cache) Sync(ctx context.Context, desired []Pack, revoked []string) Sync
 		}(p)
 	}
 	wg.Wait()
+	c.mu.Lock()
+	c.desired = want
+	c.mu.Unlock()
 	rep.Removed = append(rep.Removed, c.collect(want)...)
 	sort.Strings(rep.Installed)
 	return rep
 }
 
-// remove deletes a pack that is not in use.
+// remove deletes a pack that is not in use. The check and the removal
+// happen under the lock Acquire takes, so a pack acquired meanwhile is
+// never removed (Acquire then finds it missing).
 func (c *Cache) remove(digest string) bool {
 	c.mu.Lock()
-	inUse := c.inUse[digest] > 0
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	if c.inUse[digest] > 0 {
+		return false
+	}
 	d, ok := c.Path(digest)
-	if !ok || inUse {
+	if !ok {
 		return false
 	}
 	if removeTree(d) != nil {
 		return false
 	}
-	c.mu.Lock()
 	delete(c.used, digest)
 	delete(c.verified, digest)
-	c.mu.Unlock()
 	return true
 }
 

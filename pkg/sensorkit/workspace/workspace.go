@@ -30,6 +30,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/localstore"
 )
 
 // DefaultMaxBytes caps one job's workspace.
@@ -220,12 +222,22 @@ func removeAll(dir string) error {
 // nothing), and any stray file in the root. Run it at start, after the
 // journal's recovery, so a crash leaves nothing behind.
 func (m *Manager) Sweep(keep func(tenant, job string) bool) (int, error) {
+	return m.SweepBounded(context.Background(), keep, 0)
+}
+
+// SweepBounded is Sweep that stops when ctx ends or after limit removals
+// (0: no limit); what is left is removed by the next call.
+func (m *Manager) SweepBounded(ctx context.Context, keep func(tenant, job string) bool, limit int) (int, error) {
 	tenants, err := os.ReadDir(m.root)
 	if err != nil {
 		return 0, err
 	}
 	removed := 0
+	stop := func() bool { return ctx.Err() != nil || (limit > 0 && removed >= limit) }
 	for _, t := range tenants {
+		if stop() {
+			return removed, ctx.Err()
+		}
 		tdir := filepath.Join(m.root, t.Name())
 		if !t.IsDir() || validName(t.Name()) != nil {
 			if removeAll(tdir) == nil {
@@ -238,6 +250,9 @@ func (m *Manager) Sweep(keep func(tenant, job string) bool) (int, error) {
 			continue
 		}
 		for _, j := range jobs {
+			if stop() {
+				return removed, ctx.Err()
+			}
 			dir := filepath.Join(tdir, j.Name())
 			m.mu.Lock()
 			_, live := m.live[dir]
@@ -260,6 +275,9 @@ func (m *Manager) Sweep(keep func(tenant, job string) bool) (int, error) {
 	return removed, nil
 }
 
+// Bytes is what every job directory holds now (links are not followed).
+func (m *Manager) Bytes() int64 { return usage(m.root) }
+
 // EraseTenant removes every directory of a tenant, including those in use
 // (the caller stops the tenant's jobs first).
 func (m *Manager) EraseTenant(tenant string) error {
@@ -276,3 +294,6 @@ func (m *Manager) EraseTenant(tenant string) error {
 	m.mu.Unlock()
 	return removeAll(tdir)
 }
+
+// The janitor sweeps the workspaces through this interface.
+var _ localstore.Workspaces = (*Manager)(nil)
