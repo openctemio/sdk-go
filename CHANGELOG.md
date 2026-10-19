@@ -8,6 +8,23 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.37.0 — 2026-10-19
+
+### Security: custom template check covers request-level self-contained and include directives
+
+- `core.CheckCustomTemplate` now refuses a nuclei template whose request (not only the template) sets `self-contained` to anything but false, at any depth: such a request is sent to the URL in the template instead of the scan's target.
+- It also refuses nuclei's `# !include:` preprocessor directive, which inlines a file from the sensor's disk that the check never reads.
+
+### Security: custom templates are checked on the sensor before they are written
+
+- After the signature check, every nuclei custom template is refused when it has a `code`, `javascript`, `flow`, `file` or `headless` block, a self-contained request, `workflows`, a payload file or a second YAML document (`core.CheckCustomTemplate`). The command fails before any template is written or any scanner runs, whatever the platform signed.
+
+### Added: rule sources for scan commands
+
+- A scan command may carry `rule_sources` (`both`, the default; `platform`; `tenant`). The executor refuses a command that contradicts itself (platform-only with custom templates, tenant-only without any, an unknown value) and passes the choice to the scanner as `ScanOptions.RuleSources`, also to scanners that run out of process.
+- `core.CapabilityRuleSources` (`rule.sources@1`): a sensor whose scanners honor the choice reports it; the platform sends tenant-only jobs only to such sensors.
+- `core.TenantRulePrefix`, `core.TenantRuleID`: findings of an organization's own rules carry `tenant:`-prefixed rule ids.
+
 ## v0.36.0 — 2026-10-19
 
 ### Added: sensorkit wires the local store, job recovery and the janitor
