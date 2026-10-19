@@ -80,6 +80,29 @@ Either way the local policy's `allow_custom_templates` gate and the
 template validation above still apply: a signature never lets a template
 the sensor's owner refused, or a dangerous protocol, through.
 
+After the signature check, every custom template's content is checked on
+the sensor (`core.CheckCustomTemplate`): a nuclei template with a `code`,
+`javascript`, `flow`, `file` or `headless` block (keys compared without
+regard to case), a self-contained request, `workflows`, a payload list
+loaded from a file, or a second YAML document is refused and the command
+fails before anything is written. Because every custom template passes
+this check, a scanner may load custom templates together with its own in
+one run.
+
+#### Rule sources
+
+A scan command says which detection rules run (`rule_sources`): `both`
+(the default, also when absent), `platform` (the sensor's own rules only)
+or `tenant` (the organization's custom templates only). The executor
+refuses a command that contradicts itself (`platform` with custom
+templates, `tenant` without any, or an unknown value) and hands the choice
+to the scanner as `ScanOptions.RuleSources`. A sensor whose scanners honor
+it reports `core.CapabilityRuleSources` (`rule.sources@1`); the platform
+sends `tenant` jobs only to such sensors, so an older sensor never runs
+platform rules for a tenant-only scan. Findings of an organization's own
+rules carry rule ids prefixed with `core.TenantRulePrefix` (`tenant:`), so
+they never collide with platform rule ids.
+
 The
 manifest (`core.TemplateManifest`, kind `openctem.template-manifest/v1`)
 names the tenant, the sensor and the command it is for, when it was issued

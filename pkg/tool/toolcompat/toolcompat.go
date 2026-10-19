@@ -96,6 +96,7 @@ type scanLocal struct {
 	ExtraArgs         []string          `json:"extra_args,omitempty"`
 	Env               map[string]string `json:"env,omitempty"`
 	CustomTemplateDir string            `json:"custom_template_dir,omitempty"`
+	RuleSources       core.RuleSources  `json:"rule_sources,omitempty"`
 	AllowInteractsh   bool              `json:"allow_interactsh,omitempty"`
 	RateLimit         int               `json:"rate_limit,omitempty"`
 	BulkSize          int               `json:"bulk_size,omitempty"`
@@ -111,14 +112,14 @@ func scanLocalOf(o *core.ScanOptions) scanLocal {
 		return scanLocal{}
 	}
 	return scanLocal{TargetDir: o.TargetDir, Include: o.Include, Exclude: o.Exclude, ConfigFile: o.ConfigFile,
-		ExtraArgs: o.ExtraArgs, Env: o.Env, CustomTemplateDir: o.CustomTemplateDir, AllowInteractsh: o.AllowInteractsh,
+		ExtraArgs: o.ExtraArgs, Env: o.Env, CustomTemplateDir: o.CustomTemplateDir, RuleSources: o.RuleSources, AllowInteractsh: o.AllowInteractsh,
 		RateLimit: o.RateLimit, BulkSize: o.BulkSize, Concurrency: o.Concurrency, RepoURL: o.RepoURL,
 		Branch: o.Branch, CommitSHA: o.CommitSHA, Verbose: o.Verbose}
 }
 
 func (l scanLocal) options() *core.ScanOptions {
 	return &core.ScanOptions{TargetDir: l.TargetDir, Include: l.Include, Exclude: l.Exclude, ConfigFile: l.ConfigFile,
-		ExtraArgs: l.ExtraArgs, Env: l.Env, CustomTemplateDir: l.CustomTemplateDir, AllowInteractsh: l.AllowInteractsh,
+		ExtraArgs: l.ExtraArgs, Env: l.Env, CustomTemplateDir: l.CustomTemplateDir, RuleSources: l.RuleSources, AllowInteractsh: l.AllowInteractsh,
 		RateLimit: l.RateLimit, BulkSize: l.BulkSize, Concurrency: l.Concurrency, RepoURL: l.RepoURL,
 		Branch: l.Branch, CommitSHA: l.CommitSHA, Verbose: l.Verbose}
 }
