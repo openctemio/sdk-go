@@ -247,9 +247,16 @@ func OutboxCommand(p OutboxPlan, requeueDead bool, w, errw io.Writer) int {
 	// store's keys: open it (the status command never creates one).
 	var lst *localstore.Store
 	storeDir, _ := resolveStorePaths(p.Config.Dir)
-	if fi, serr := os.Stat(storeDir); serr == nil && fi.IsDir() {
+	storeKey := strings.TrimSpace(os.Getenv(EnvStoreKeyFile))
+	storeKeyPath := firstNonEmpty(storeKey, filepath.Join(storeDir, "master.key"))
+	// Opening the store without its key would create one (the default file
+	// always is): with no key there is nothing the store can read, so the
+	// outbox is reported without it (items sealed with the store then make
+	// it fail with ErrStoreRequired instead of a new key being written).
+	_, kerr := os.Stat(storeKeyPath)
+	if fi, serr := os.Stat(storeDir); serr == nil && fi.IsDir() && kerr == nil {
 		var err error
-		lst, err = localstore.Open(localstore.Options{Dir: storeDir, KeyFile: strings.TrimSpace(os.Getenv(EnvStoreKeyFile)), Logf: func(string, ...any) {}})
+		lst, err = localstore.Open(localstore.Options{Dir: storeDir, KeyFile: storeKey, Logf: func(string, ...any) {}})
 		if errors.Is(err, localstore.ErrLocked) {
 			_, _ = fmt.Fprintf(errw, "Error: %v.\nA running sensor holds the store: stop it first, or read its outbox state on the platform (the sensor's heartbeat reports it).\n", err)
 			return ExitError

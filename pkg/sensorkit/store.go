@@ -152,6 +152,34 @@ func (k *Kit) recoverJobs() {
 	}
 }
 
+// jobJournal is the poller's job journal on the local store: one sealed
+// record per running job, under the job's organization (the sensor's own on
+// an organization sensor).
+type jobJournal struct{ st *localstore.Store }
+
+func journalTenant(tenant string) string {
+	if tenant == "" {
+		return localstore.SensorTenant
+	}
+	return tenant
+}
+
+func (j jobJournal) JobStarted(cmdID, tenant string, leaseEpoch int) error {
+	jr, err := j.st.Journal(journalTenant(tenant))
+	if err != nil {
+		return err
+	}
+	return jr.Begin(localstore.JobRecord{CommandID: cmdID, LeaseEpoch: leaseEpoch})
+}
+
+func (j jobJournal) JobFinished(cmdID, tenant string) error {
+	jr, err := j.st.Journal(journalTenant(tenant))
+	if err != nil {
+		return err
+	}
+	return jr.Finish(cmdID)
+}
+
 // startJanitor starts the janitor (a sweep at start, after acknowledgement
 // bursts and every 10 minutes) and returns the function that stops it and
 // waits. Without a store it does nothing.

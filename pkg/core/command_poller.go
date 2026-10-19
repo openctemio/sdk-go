@@ -365,6 +365,10 @@ type CommandPoller struct {
 	claimGate    atomic.Pointer[func() (bool, string)]
 	claimBlocked atomic.Bool
 
+	// journal records every job from its start to its result
+	// (SetJobJournal), so the next start reports the ones a crash cut short.
+	journal atomic.Pointer[JobJournal]
+
 	// local is the sensor-local policy (SetLocalPolicy): admission before
 	// every command and the kill switch. killed is true while its kill
 	// switch is engaged.
@@ -810,6 +814,28 @@ func (p *CommandPoller) SetClaimGate(f func() (ok bool, reason string)) {
 	p.claimGate.Store(&f)
 }
 
+// JobJournal records the jobs the sensor runs, so the next start can report
+// the ones a crash or a kill cut short (localstore's job journal through
+// sensorkit). JobStarted is called once the platform accepted the start and
+// before anything runs; JobFinished once the job's result was handed to the
+// client (queued in the outbox), or the job was handed back. tenant is the
+// organization of a verified shared job ("" on an organization sensor).
+type JobJournal interface {
+	JobStarted(cmdID, tenant string, leaseEpoch int) error
+	JobFinished(cmdID, tenant string) error
+}
+
+// SetJobJournal makes the poller journal every job it runs. A journal that
+// cannot write is logged and the job still runs (only its crash report is
+// lost). nil removes it. Call before Start.
+func (p *CommandPoller) SetJobJournal(j JobJournal) {
+	if j == nil {
+		p.journal.Store(nil)
+		return
+	}
+	p.journal.Store(&j)
+}
+
 // claimAllowed applies the claim gate and logs a change of state once.
 func (p *CommandPoller) claimAllowed() bool {
 	g := p.claimGate.Load()
@@ -1229,6 +1255,20 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		return
 	}
 	p.queue.markStarted(cmd.ID)
+	// The journal knows the job before anything of it runs; the record goes
+	// when this function returns: the result is queued (or the job handed
+	// back) by then.
+	if jp := p.journal.Load(); jp != nil {
+		j := *jp
+		if jerr := j.JobStarted(cmd.ID, cmd.jobTenant, cmd.LeaseEpoch); jerr != nil {
+			fmt.Printf("[command-poller] Warning: command %s is not journaled (a crash would not be reported): %v\n", cmd.ID, jerr)
+		}
+		defer func() {
+			if jerr := j.JobFinished(cmd.ID, cmd.jobTenant); jerr != nil {
+				fmt.Printf("[command-poller] Warning: closing the journal record of command %s: %v\n", cmd.ID, jerr)
+			}
+		}()
+	}
 	p.clog(ctx, cmd.ID, "info", "Received by the sensor", map[string]any{"type": cmd.Type})
 
 	// The sensor-local policy first: nothing the platform says (its tool

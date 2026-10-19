@@ -141,7 +141,9 @@ directory) and passes it to the outbox, which then seals every item under the
 data key of the item's organization (file format 2). At start, before any job
 is claimed, the kit:
 
-1. reports each job the journal shows as unfinished (`Store.Recover`) through
+1. reports each job the journal shows as unfinished (`Store.Recover`; the poller journals
+   every job from the platform's start until its result is queued,
+   `CommandPoller.SetJobJournal`) through
    the outbox as a failed command result naming the step that was running, so
    the platform hands the work to another sensor instead of waiting for a
    lease to expire;

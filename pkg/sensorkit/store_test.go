@@ -378,3 +378,82 @@ func TestOutboxCommand_ReadsStoreSealedItems(t *testing.T) {
 		t.Errorf("locked: %d %q", code, errw.String())
 	}
 }
+
+// Every job the kit runs is in the journal while it runs and gone once its
+// result is queued: a crash mid-job is what the next start reports.
+func TestRun_JournalsRunningJobs(t *testing.T) {
+	f := conformance.NewFakePlatform(true)
+	f.SetControl(true)
+	t.Cleanup(f.Close)
+	const cmdID = "0192a3b4-0000-7000-8000-0000000000bb"
+	f.QueueCommandPayload(cmdID, "journal_probe", json.RawMessage(`{}`))
+	opts, _, _ := baseOptions(t, f)
+	k, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inJournal := make(chan error, 1)
+	k.UseCommandMiddleware(func(next core.CommandExecutor) core.CommandExecutor {
+		return execFunc(func(ctx context.Context, cmd *core.Command) (*core.CommandExecutionResult, error) {
+			if cmd.Type != "journal_probe" {
+				return next.Execute(ctx, cmd)
+			}
+			j, err := k.ls.store.Journal(localstore.SensorTenant)
+			if err == nil {
+				_, err = j.Get(cmd.ID)
+			}
+			inJournal <- err
+			return &core.CommandExecutionResult{}, nil
+		})
+	}, "journal_probe")
+	stop := runKit(t, k)
+	select {
+	case err := <-inJournal:
+		if err != nil {
+			t.Fatalf("the running job is not journaled: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the command never ran")
+	}
+	waitFor(t, "the command to complete", func() bool {
+		s, _ := f.CommandState(cmdID)
+		return s == "completed"
+	})
+	j, err := k.ls.store.Journal(localstore.SensorTenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the journal record to go", func() bool {
+		_, err := j.Get(cmdID)
+		return err != nil
+	})
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The status command never writes a store key: with the store directory
+// present and no key, it reports without the store.
+func TestOutboxCommand_DoesNotCreateStoreKey(t *testing.T) {
+	clearEnv(t)
+	dir := filepath.Join(t.TempDir(), "outbox")
+	storeDir, _ := resolveStorePaths(dir)
+	if err := os.MkdirAll(storeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out, errw bytes.Buffer
+	if code := OutboxCommand(OutboxPlan{Enabled: true, Config: clientOutbox(dir)}, false, &out, &errw); code != 0 {
+		t.Fatalf("status: %d %s", code, errw.String())
+	}
+	if _, err := os.Stat(filepath.Join(storeDir, "master.key")); !os.IsNotExist(err) {
+		t.Fatalf("the status command created a store key: %v", err)
+	}
+	// A key file named by the setting that does not exist: not created
+	// either.
+	keyFile := filepath.Join(t.TempDir(), "store.key")
+	t.Setenv(EnvStoreKeyFile, keyFile)
+	_ = OutboxCommand(OutboxPlan{Enabled: true, Config: clientOutbox(dir)}, false, &out, &errw)
+	if _, err := os.Stat(keyFile); !os.IsNotExist(err) {
+		t.Fatalf("the status command created %s: %v", keyFile, err)
+	}
+}

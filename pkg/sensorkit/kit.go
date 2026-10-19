@@ -1391,8 +1391,10 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// doorbell); polling resumes with the first accepted heartbeat.
 	poller.SetAuthGate(k.sensor.AuthGate())
 	// Results beat new work: claim nothing while the storage is full.
-	if k.ls != nil {
+	if k.ls != nil && k.ls.store != nil {
 		poller.SetClaimGate(k.acceptsWork)
+		// Every job is journaled, so a crash is reported at the next start.
+		poller.SetJobJournal(jobJournal{st: k.ls.store})
 	}
 	// Heartbeats report the commands running now and the slot count.
 	k.sensor.SetLoadReporter(poller)
