@@ -42,9 +42,12 @@ import (
 //
 // Revocations are persisted (Options.State) and only ever grow, so a
 // revoked pack stays refused across restarts and while the platform cannot
-// be reached. A revocation record that fails authentication makes every
-// load fail (ErrRevocationsUnknown) until the next Sync from the platform:
-// the cache cannot tell what was revoked, so it fails closed.
+// be reached. A revocation record that fails authentication, or a missing
+// record while packs are held (the first Sync always writes one), makes
+// every load fail (ErrRevocationsUnknown) until the next Sync from the
+// platform: the cache cannot tell what was revoked, so it fails closed.
+// An older copy of the record put back in place is not detected here; the
+// next Sync re-adds what it lacks.
 
 // IndexSealer seals the file index of an installed pack (a
 // *localstore.Sealer).
@@ -101,6 +104,7 @@ func (c *Cache) loadRevocations() {
 			c.banned[d] = true
 		}
 	}
+	c.revocationsPersisted = true
 }
 
 // saveRevocations persists the revocation set (c.mu held). Failing to

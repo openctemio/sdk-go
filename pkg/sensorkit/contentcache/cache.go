@@ -129,6 +129,10 @@ type Cache struct {
 	// revocationsUnknown: the persisted revocation set failed
 	// authentication; every load fails until the next Sync.
 	revocationsUnknown bool
+	// revocationsPersisted: the revocation record exists (read at Open or
+	// written since). A cache that holds packs but has no record lost it:
+	// it fails closed until the next Sync.
+	revocationsPersisted bool
 	verified           map[string]verified
 	now                func() time.Time
 	stats              statsBox
@@ -162,6 +166,12 @@ func Open(root string, opts Options) (*Cache, error) {
 		if strings.HasPrefix(e.Name(), ".staging-") {
 			_ = removeTree(filepath.Join(root, "packs", e.Name()))
 		}
+	}
+	// Packs held without a revocation record: the record was removed (or a
+	// snapshot of the packs restored next to an empty store). What was
+	// revoked is unknown until the next Sync.
+	if opts.State != nil && !c.revocationsPersisted && !c.revocationsUnknown && len(c.Held()) > 0 {
+		c.revocationsUnknown = true
 	}
 	// Packs revoked while the sensor was stopped go now.
 	for _, d := range c.Held() {
@@ -455,9 +465,11 @@ func (c *Cache) Sync(ctx context.Context, desired []Pack, revoked []string) Sync
 	}
 	// A sync is the platform's current list: the cache knows again what
 	// is revoked (and keeps every earlier revocation: the set only grows).
-	if added || c.revocationsUnknown {
+	if added || c.revocationsUnknown || (c.opts.State != nil && !c.revocationsPersisted) {
 		if err := c.saveRevocations(); err != nil {
 			rep.RevocationsError = err.Error()
+		} else {
+			c.revocationsPersisted = true
 		}
 	}
 	c.revocationsUnknown = false

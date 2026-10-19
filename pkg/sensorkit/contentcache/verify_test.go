@@ -356,3 +356,33 @@ func TestTamperedRevocationsFailClosed(t *testing.T) {
 		t.Fatalf("a after sync: %v", err)
 	}
 }
+
+// TestRemovedRevocationsFailClosed: deleting the revocation record (to
+// resurrect a revoked pack restored from a snapshot) does not make the
+// cache forget: with packs held and no record, nothing loads until the
+// next Sync. A cache that synced without revocations keeps working
+// offline after a restart.
+func TestRemovedRevocationsFailClosed(t *testing.T) {
+	f := newFixture(t)
+	storeDir := t.TempDir()
+	st := openStore(t, storeDir)
+	c := storeFixture(t, f, st)
+	ctx := context.Background()
+	a := f.pack(t, ScopeTenant, f.tenantK, "tenant-a", map[string]string{"a.yaml": "id: a"})
+	if rep := c.Sync(ctx, []Pack{a}, nil); len(rep.Installed) != 1 || rep.RevocationsError != "" {
+		t.Fatalf("sync %+v", rep)
+	}
+	c2 := storeFixture(t, f, st)
+	if _, rel, err := c2.Acquire(a.Digest); err != nil {
+		t.Fatalf("restart after a sync without revocations: %v", err)
+	} else {
+		rel()
+	}
+	if err := os.Remove(filepath.Join(storeDir, "kv", "tenant-a", "content", "revoked.rec")); err != nil {
+		t.Fatal(err)
+	}
+	c3 := storeFixture(t, f, st)
+	if _, _, err := c3.Acquire(a.Digest); !errors.Is(err, ErrRevocationsUnknown) {
+		t.Fatalf("Acquire with the revocation record removed: %v", err)
+	}
+}
