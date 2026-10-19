@@ -119,6 +119,22 @@ func TestIsIPBlockedWith_ExtraRanges(t *testing.T) {
 	}
 }
 
+func TestCheckAPIBaseURL_InsecureHTTPDevFlag(t *testing.T) {
+	t.Setenv(EnvAllowInsecureHTTP, "1")
+	warn, err := CheckAPIBaseURL("http://10.0.0.5:8080")
+	if err != nil || warn == "" || !strings.Contains(warn, EnvAllowInsecureHTTP) {
+		t.Fatalf("dev flag: warn=%q err=%v, want a loud warning and no error", warn, err)
+	}
+	// The flag never admits other bad URLs.
+	if _, err := CheckAPIBaseURL("ftp://10.0.0.5"); err == nil {
+		t.Fatal("dev flag must not allow a non-http scheme")
+	}
+	t.Setenv(EnvAllowInsecureHTTP, "true")
+	if _, err := CheckAPIBaseURL("http://10.0.0.5"); err == nil {
+		t.Fatal("only 1 enables the flag")
+	}
+}
+
 func TestCheckAPIBaseURL(t *testing.T) {
 	cases := []struct {
 		raw         string
@@ -130,8 +146,9 @@ func TestCheckAPIBaseURL(t *testing.T) {
 		{"http://localhost:8080", false, false},
 		{"http://127.0.0.1:8080", false, false},
 		{"http://[::1]:8080", false, false},
-		{"http://api.internal:8080", false, true},
-		{"http://203.0.113.10", false, true},
+		{"http://api.internal:8080", true, false},
+		{"http://203.0.113.10", true, false},
+		{"http://10.0.0.5", true, false},
 		{"", true, false},
 		{"ftp://api.example.com", true, false},
 		{"file:///etc/passwd", true, false},
