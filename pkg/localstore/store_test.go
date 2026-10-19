@@ -305,6 +305,9 @@ func TestEraseTenant(t *testing.T) {
 	if s.Stats().Erased != 1 {
 		t.Fatalf("erased = %d", s.Stats().Erased)
 	}
+	if !s.HasTenant("tenant-b") || s.HasTenant("never-seen") || s.HasTenant("../x") {
+		t.Fatal("HasTenant")
+	}
 	if got := s.Tenants(); len(got) != 2 {
 		t.Fatalf("tenants = %v", got)
 	}

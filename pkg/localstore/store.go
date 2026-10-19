@@ -499,6 +499,17 @@ func (s *Store) AdoptTenantKey(tenant string, key []byte) error {
 	return nil
 }
 
+// HasTenant reports whether the tenant has a data key, without creating
+// one (for readers of files that name their tenant: a crafted name never
+// makes the store create a key).
+func (s *Store) HasTenant(tenant string) bool {
+	if validName(tenant) != nil {
+		return false
+	}
+	_, err := os.Stat(s.keyPath(tenant))
+	return err == nil
+}
+
 // Tenants lists the tenants that have a data key, sorted.
 func (s *Store) Tenants() []string {
 	entries, _ := os.ReadDir(filepath.Join(s.dir, dirKeys))
