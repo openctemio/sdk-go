@@ -18,6 +18,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/localstore"
 	"github.com/openctemio/sdk-go/pkg/netctx"
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
@@ -370,6 +371,11 @@ type Kit struct {
 	// poller sends a command's last lines before its result.
 	logs atomic.Pointer[logShipper]
 
+	// ls is the local store and what runs on it (nil with the outbox off);
+	// janitorRef is its janitor while Run runs.
+	ls         *localStore
+	janitorRef atomic.Pointer[localstore.Janitor]
+
 	// network is the host owner's network declaration; controlViaProxy:
 	// platform requests go through a proxy. netWatch keeps the network
 	// report (set by Run).
@@ -505,11 +511,18 @@ func New(opts Options) (*Kit, error) {
 			k.closeClient()
 			return nil, err
 		}
+		// The local store seals the outbox per organization; the janitor and
+		// the job journal use it too.
+		if err := k.openLocalStore(); err != nil {
+			k.closeClient()
+			return nil, err
+		}
 		// Durable outbox: results are on disk before the first send.
 		if err := EnableOutbox(k.client, s.outbox, s.verbose, k.out, k.errw); err != nil {
 			k.closeClient()
 			return nil, fmt.Errorf("outbox: %w", err)
 		}
+		k.recoverJobs()
 		if s.verbose {
 			_, _ = fmt.Fprintf(k.out, "  Sensor protocol: %s\n", protocol)
 		}
@@ -858,6 +871,7 @@ func (k *Kit) closeClient() {
 	if k.client != nil {
 		_ = k.client.Close()
 	}
+	k.closeLocalStore()
 }
 
 // ScannerOption configures an added scanner.
@@ -1000,6 +1014,8 @@ func (k *Kit) Run(ctx context.Context) error {
 		defer stop()
 	}
 	defer k.closeClient()
+	stopJanitor := k.startJanitor(ctx)
+	defer stopJanitor()
 
 	s, out, errw := k.sensor, k.out, k.errw
 	for _, p := range k.parsers {
@@ -1094,6 +1110,9 @@ func (k *Kit) Run(ctx context.Context) error {
 		// The config report goes to a platform that takes it, with its
 		// digest on every heartbeat.
 		s.SetConfigReporter(core.ConfigReporterFunc(k.ConfigReport))
+		if k.ls != nil {
+			s.SetLocalStoreReporter(k.localStoreReport)
+		}
 	}
 
 	var poller *core.CommandPoller
@@ -1161,6 +1180,9 @@ func (k *Kit) Run(ctx context.Context) error {
 		}
 	}
 	<-pollerDone
+
+	// The janitor stops before the outbox closes.
+	stopJanitor()
 
 	// Undelivered results stay in the outbox for the next start.
 	if k.client != nil {
@@ -1368,6 +1390,10 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// No polling while the platform rejects the key (also without the
 	// doorbell); polling resumes with the first accepted heartbeat.
 	poller.SetAuthGate(k.sensor.AuthGate())
+	// Results beat new work: claim nothing while the storage is full.
+	if k.ls != nil {
+		poller.SetClaimGate(k.acceptsWork)
+	}
 	// Heartbeats report the commands running now and the slot count.
 	k.sensor.SetLoadReporter(poller)
 	// Commands for tools outside the platform's policy fail instead of

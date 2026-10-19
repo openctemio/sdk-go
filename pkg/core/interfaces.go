@@ -579,6 +579,45 @@ type SensorStatus struct {
 	// nothing; the API client sends it only to a platform that lists the
 	// "config_report" feature.
 	ConfigReport *ConfigReportSummary `json:"config_report,omitempty"`
+
+	// LocalStore is the sensor's local data: bytes per class, the
+	// watermark, whether it claims jobs, the last cleanup sweep and the
+	// store's boot generation (BaseSensor.SetLocalStoreReporter). nil
+	// reports nothing; the API client sends it only to a platform that
+	// lists the "local_store" feature.
+	LocalStore *LocalStoreReport `json:"local_store,omitempty"`
+}
+
+// LocalStoreReport is what the heartbeat says about the sensor's local data.
+// It carries sizes and states only: no tenant names, paths or record names.
+type LocalStoreReport struct {
+	// Level is the watermark: "ok", "high" or "critical".
+	Level string `json:"level"`
+	// StopClaiming: the sensor claims no new jobs (storage is high, the
+	// disk is low, or the outbox is full of unacknowledged results).
+	StopClaiming bool   `json:"stop_claiming"`
+	Reason       string `json:"reason,omitempty"`
+	// BytesByClass is the bytes held per class (outbox, dead_letter,
+	// journal, workspace, content_pack, log, state); TotalBytes their sum.
+	BytesByClass map[string]int64 `json:"bytes_by_class,omitempty"`
+	TotalBytes   int64            `json:"total_bytes"`
+	QuotaBytes   int64            `json:"quota_bytes,omitempty"`
+	// DiskLevel is the store volume's state: "ok", "low", "critical" or
+	// "unknown".
+	DiskLevel string `json:"disk_level,omitempty"`
+	// Sweeps counts cleanup sweeps since start; LastSweepAt and
+	// LastSweepRemoved describe the latest (items removed, all classes).
+	Sweeps           int64     `json:"sweeps"`
+	LastSweepAt      time.Time `json:"last_sweep_at,omitzero"`
+	LastSweepRemoved int       `json:"last_sweep_removed,omitempty"`
+	// Boot is the store's boot generation. BootReset is true when the boot
+	// record was lost or went back at this start: an old copy of the store
+	// may have been restored, so the platform must not trust the counter
+	// this time.
+	Boot      uint64 `json:"boot,omitempty"`
+	BootReset bool   `json:"boot_reset,omitempty"`
+	// Tampered counts records that failed authentication since start.
+	Tampered int64 `json:"tampered,omitempty"`
 }
 
 // =============================================================================

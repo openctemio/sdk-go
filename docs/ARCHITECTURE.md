@@ -133,6 +133,38 @@ then the executor and the tool. A refusal at any step fails the command
 with its layer and rule (`job_signature`, `targets.allow`, …) and nothing
 after it runs.
 
+### The local store and the janitor
+
+A daemon opens `pkg/localstore` beside its outbox (`SENSOR_STORE_DIR`; the
+master key is `SENSOR_STORE_KEY_FILE` or a 0600 `master.key` in that
+directory) and passes it to the outbox, which then seals every item under the
+data key of the item's organization (file format 2). At start, before any job
+is claimed, the kit:
+
+1. reports each job the journal shows as unfinished (`Store.Recover`) through
+   the outbox as a failed command result naming the step that was running, so
+   the platform hands the work to another sensor instead of waiting for a
+   lease to expire;
+2. sweeps the job workspaces a crash left (`SENSOR_WORKSPACE_DIR`);
+3. starts the `localstore.Janitor`: a sweep at start, after a burst of
+   acknowledged results (`outbox.Config.OnDelivered`) and every 10 minutes.
+   `Kit.SetStorePolicy` tunes its caps; every field is clamped, so a policy
+   can never switch cleanup off.
+
+The command poller claims nothing while `Janitor.AcceptsWork` is false: the
+outbox holds 85 % of its cap in unacknowledged results (or the last refused
+item would not fit), storage is at the high watermark after the cold cache
+was evicted, or the volume is low. It resumes when that clears and logs each
+change once. Unacknowledged results are never deleted for space; results beat
+new work. Tools cannot read the store: its directory and key file are in the
+sandbox's protected paths. The heartbeat carries `local_store` (bytes per
+class, watermark, whether claiming is stopped, the last sweep, the boot
+generation and whether it was reset), only to a platform that lists the
+`local_store` feature. Keep `store/` on the same persistent volume as `outbox/`: it holds the keys
+of the sealed items, and an outbox that survives without it cannot be read.
+`doctor` reports the store directory's privacy, the key
+file's mode and where the key lives, and the volume's free space.
+
 ### Results delivery: protocol v2 and the durable outbox
 
 **Protocol.** Protocol v2 is the only sensor protocol (the platform retired

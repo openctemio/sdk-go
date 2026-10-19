@@ -343,6 +343,12 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "Age after which dead letters are deleted; unacknowledged results are kept until the platform acknowledges them."},
 		settingsreg.Setting{Name: EnvOutboxKeyFile, Type: settingsreg.Path, Group: "storage",
 			Description: "Outbox encryption key file (default <outbox dir>/outbox.key)."},
+		settingsreg.Setting{Name: EnvStoreDir, Type: settingsreg.Path, Group: "storage",
+			Description: "Directory of the encrypted local store (sealed outbox items, job journal, policy cache). Default: store/ next to the outbox directory; mount a persistent volume."},
+		settingsreg.Setting{Name: EnvStoreKeyFile, Type: settingsreg.Path, Group: "storage",
+			Description: "The local store's master key file (mode 0600), for example a mounted secret kept off the data volume. Default: master.key in the store directory, created on first start."},
+		settingsreg.Setting{Name: EnvWorkspaceDir, Type: settingsreg.Path, Group: "storage",
+			Description: "Directory of the per-job workspaces (0700, one directory per job, removed when the job ends and swept at start). Default: workspaces/ next to the outbox directory."},
 	)
 }
 

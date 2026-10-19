@@ -359,6 +359,12 @@ type CommandPoller struct {
 	draining   atomic.Bool
 	drainGrace time.Duration
 
+	// claimGate says whether the sensor may claim new jobs now (storage
+	// and outbox limits; SetClaimGate). claimBlocked remembers the last
+	// answer so a change is logged once.
+	claimGate    atomic.Pointer[func() (bool, string)]
+	claimBlocked atomic.Bool
+
 	// local is the sensor-local policy (SetLocalPolicy): admission before
 	// every command and the kill switch. killed is true while its kill
 	// switch is engaged.
@@ -791,6 +797,38 @@ func (p *CommandPoller) keyHint() string {
 	return "(unknown)"
 }
 
+// SetClaimGate makes the poller claim nothing while f reports false (with
+// the reason): the sensor's storage is full, so results beat new work.
+// Running commands finish, and polling resumes as soon as f reports true.
+// The change of state is logged once each way. Safe while the poller runs;
+// nil removes the gate.
+func (p *CommandPoller) SetClaimGate(f func() (ok bool, reason string)) {
+	if f == nil {
+		p.claimGate.Store(nil)
+		return
+	}
+	p.claimGate.Store(&f)
+}
+
+// claimAllowed applies the claim gate and logs a change of state once.
+func (p *CommandPoller) claimAllowed() bool {
+	g := p.claimGate.Load()
+	if g == nil {
+		return true
+	}
+	ok, why := (*g)()
+	if !ok {
+		if p.claimBlocked.CompareAndSwap(false, true) {
+			fmt.Printf("[command-poller] Not claiming new jobs: %s\n", why)
+		}
+		return false
+	}
+	if p.claimBlocked.CompareAndSwap(true, false) {
+		fmt.Printf("[command-poller] Claiming new jobs again\n")
+	}
+	return true
+}
+
 // paused reports whether the platform paused or drained this sensor.
 func (p *CommandPoller) paused() bool {
 	return p.doorbell != nil && p.doorbell.Paused()
@@ -871,6 +909,10 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Not polling: %s\n", p.doorbell.State())
 		}
+		return
+	}
+	// Storage or the outbox is full: results beat new work.
+	if !p.claimAllowed() {
 		return
 	}
 	// The platform rejects the key: polling would only collect more 401s.

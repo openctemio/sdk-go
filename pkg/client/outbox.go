@@ -51,6 +51,10 @@ type OutboxConfig struct {
 	// (outbox.Config.Store): required for crypto-erasure per organization
 	// on a shared sensor.
 	Store *localstore.Store
+	// OnDelivered is called after the platform acknowledged an item and the
+	// outbox deleted it (outbox.Config.OnDelivered): point it at the
+	// janitor's NoteAcks.
+	OnDelivered func(outbox.Meta)
 }
 
 // DefaultOutboxSyncWait is OutboxConfig.SyncWait's default.
@@ -78,6 +82,7 @@ func (c *Client) EnableOutbox(cfg OutboxConfig) error {
 		Logf:        cfg.Logf,
 		OnEvict:     cfg.OnEvict,
 		Store:       cfg.Store,
+		OnDelivered: cfg.OnDelivered,
 	})
 	if err != nil {
 		return err
@@ -111,6 +116,33 @@ func (c *Client) EnableOutbox(cfg OutboxConfig) error {
 		_ = ob.Run(ctx, c)
 	}()
 	return nil
+}
+
+// ReportInterruptedCommand stores the result of a command that an earlier
+// run of this sensor held and never finished (localstore.Store.Recover) in
+// the outbox, as a failed result. It does not need the command to be held:
+// the journal that names it is sealed with the sensor's own keys. tenant is
+// the journal record's tenant (localstore.SensorTenant for an organization
+// sensor). It needs the outbox and does not wait for the delivery.
+func (c *Client) ReportInterruptedCommand(cmdID, tenant, reason string) error {
+	ob := c.Outbox()
+	if ob == nil {
+		return errors.New("client: the outbox is not enabled")
+	}
+	if tenant == localstore.SensorTenant {
+		tenant = ""
+	}
+	payload, err := json.Marshal(commandResultItem{CommandID: cmdID, Result: core.CommandResult{
+		Status:      "failed",
+		CompletedAt: time.Now().UTC(),
+		ExitCode:    -1,
+		Error:       reason,
+	}})
+	if err != nil {
+		return err
+	}
+	_, err = ob.Enqueue(outbox.Meta{Kind: outbox.KindCommandResult, CommandID: cmdID, TenantID: tenant}, payload)
+	return err
 }
 
 func (c *Client) logOutbox(logf func(string, ...any), format string, args ...any) {
