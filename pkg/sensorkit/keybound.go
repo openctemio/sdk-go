@@ -170,6 +170,10 @@ func (k *Kit) resolveIdentity() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	name := firstNonEmpty(k.opts.Name, os.Getenv(EnvSensorName))
+	allowUnsigned, err := core.DangerousAllowUnsignedJobsFromEnv(nil)
+	if err != nil {
+		return usageError(err)
+	}
 	_, _ = fmt.Fprintf(k.errw, "This sensor has no identity yet; pairing with %s (identity in %s).\n", s.apiURL, store.Dir())
 	id, err = identity.Pair(ctx, identity.PairOptions{
 		BaseURL:         s.apiURL,
@@ -179,6 +183,10 @@ func (k *Kit) resolveIdentity() error {
 		EnrollmentToken: token,
 		Host:            identity.DefaultHostFacts(k.opts.ProductName, k.opts.Version, name),
 		PlatformKeyPin:  envOr(k.opts.PlatformKey, EnvPlatformKey),
+		// The job-signing root from the install snippet (out of band),
+		// checked against what the platform serves before it is pinned.
+		JobSigningRoot:    envOr(k.opts.JobSigningRoot, EnvJobSigningRoot),
+		AllowUnsignedJobs: allowUnsigned,
 		// A spent enrollment token cannot start another request.
 		Retry:     token == "",
 		Out:       k.errw,
