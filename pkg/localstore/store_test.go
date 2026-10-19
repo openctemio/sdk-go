@@ -305,6 +305,9 @@ func TestEraseTenant(t *testing.T) {
 	if s.Stats().Erased != 1 {
 		t.Fatalf("erased = %d", s.Stats().Erased)
 	}
+	if !s.HasTenant("tenant-b") || s.HasTenant("never-seen") || s.HasTenant("../x") {
+		t.Fatal("HasTenant")
+	}
 	if got := s.Tenants(); len(got) != 2 {
 		t.Fatalf("tenants = %v", got)
 	}
@@ -405,8 +408,8 @@ func TestAdoptTenantKey(t *testing.T) {
 	if err := s.AdoptTenantKey(SensorTenant, key); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AdoptTenantKey(SensorTenant, key); err == nil {
-		t.Fatal("a second adoption replaced the key")
+	if err := s.AdoptTenantKey(SensorTenant, key); !errors.Is(err, ErrKeyExists) {
+		t.Fatalf("a second adoption: %v, want ErrKeyExists", err)
 	}
 	z, err := s.Sealer(SensorTenant, "outbox")
 	if err != nil {

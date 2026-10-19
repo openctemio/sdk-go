@@ -72,6 +72,8 @@ var (
 	// ErrInvalidName: a tenant, namespace or record name outside the
 	// allowed form.
 	ErrInvalidName = errors.New("localstore: invalid name")
+	// ErrKeyExists: AdoptTenantKey for a tenant that already has a key.
+	ErrKeyExists = errors.New("localstore: tenant already has a data key")
 )
 
 // nameRE is the form of tenant, namespace and record names: a file name on
@@ -303,15 +305,20 @@ func createKey(path, tmpDir string) ([]byte, error) {
 		return nil, fmt.Errorf("localstore: generate key: %w", err)
 	}
 	content, _ := FormatKey(key)
-	if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
+	if err := mkdirSynced(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("localstore: key dir: %w", err)
 	}
 	// O_EXCL through a link: two processes creating a shared key file at
-	// once must not end up with different keys.
+	// once must not end up with different keys. The temporary file sits
+	// next to the key (a KeyFile on another volume, the recommended setup,
+	// cannot be linked or renamed across devices) and is fsynced before it
+	// is linked: wrapped keys written right after must never outlive an
+	// empty key file after a crash.
 	var rnd [8]byte
 	_, _ = rand.Read(rnd[:])
-	tmp := filepath.Join(tmpDir, "key."+hex.EncodeToString(rnd[:])+".tmp")
-	if err := os.WriteFile(tmp, content, fileMode); err != nil {
+	tmp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+"."+hex.EncodeToString(rnd[:])+".tmp")
+	if err := writeSynced(tmp, content); err != nil {
+		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("localstore: write key: %w", err)
 	}
 	defer func() { _ = os.Remove(tmp) }()
@@ -319,11 +326,11 @@ func createKey(path, tmpDir string) ([]byte, error) {
 		if errors.Is(err, fs.ErrExist) {
 			return loadKey(path)
 		}
-		if err := os.Rename(tmp, path); err != nil {
-			return nil, fmt.Errorf("localstore: install key: %w", err)
-		}
+		return nil, fmt.Errorf("localstore: install key: %w", err)
 	}
-	_ = syncDir(filepath.Dir(path))
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("localstore: install key: %w", err)
+	}
 	return key, nil
 }
 
@@ -484,7 +491,7 @@ func (s *Store) AdoptTenantKey(tenant string, key []byte) error {
 		return ErrClosed
 	}
 	if _, err := os.Stat(s.keyPath(tenant)); err == nil {
-		return fmt.Errorf("localstore: tenant %s already has a key", tenant)
+		return fmt.Errorf("%w: %s", ErrKeyExists, tenant)
 	}
 	if err := s.writeTenantKey(tenant, key); err != nil {
 		return err
@@ -495,6 +502,17 @@ func (s *Store) AdoptTenantKey(tenant string, key []byte) error {
 	}
 	s.tenants[tenant] = a
 	return nil
+}
+
+// HasTenant reports whether the tenant has a data key, without creating
+// one (for readers of files that name their tenant: a crafted name never
+// makes the store create a key).
+func (s *Store) HasTenant(tenant string) bool {
+	if validName(tenant) != nil {
+		return false
+	}
+	_, err := os.Stat(s.keyPath(tenant))
+	return err == nil
 }
 
 // Tenants lists the tenants that have a data key, sorted.

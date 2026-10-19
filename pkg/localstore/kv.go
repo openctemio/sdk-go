@@ -36,7 +36,7 @@ func (s *Store) KV(tenant, namespace string) (*KV, error) {
 		return nil, err
 	}
 	dir := filepath.Join(s.dir, dirKV, tenant, namespace)
-	if err := os.MkdirAll(dir, dirMode); err != nil {
+	if err := mkdirSynced(dir); err != nil {
 		return nil, fmt.Errorf("localstore: %w", err)
 	}
 	return &KV{s: s, tenant: tenant, namespace: namespace, dir: dir}, nil
