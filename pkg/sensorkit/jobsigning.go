@@ -31,13 +31,27 @@ const KeySetWarnBefore = 7 * 24 * time.Hour
 const keySetStartTimeout = 10 * time.Second
 
 // ResolveRequireSignedJobs decides whether the sensor refuses commands
-// without a valid job signature: SENSOR_REQUIRE_SIGNED_JOBS when set, else
-// true when the identity pinned job-signing keys or a root at pairing (a
-// sensor paired by this SDK with a platform that signs jobs), else false.
+// without a valid job signature: true when the identity pinned job-signing
+// keys or a root at pairing (a sensor paired by this SDK with a platform
+// that signs jobs); SENSOR_REQUIRE_SIGNED_JOBS may then only confirm it,
+// never turn it off (a usage error), so one env var cannot undo the pin. The
+// only escape is SENSOR_DANGEROUS_ALLOW_UNSIGNED_JOBS (from
+// "env-dangerous"). Without a pin the variable decides; unset, false.
 func ResolveRequireSignedJobs(pinnedAtPairing int) (required bool, from string, err error) {
 	v, set, err := core.RequireSignedJobsFromEnv(nil)
 	if err != nil {
 		return false, "", usageError(err)
+	}
+	if set && !v && pinnedAtPairing > 0 {
+		danger, err := core.DangerousAllowUnsignedJobsFromEnv(nil)
+		if err != nil {
+			return false, "", usageError(err)
+		}
+		if danger {
+			return false, requireFromDangerous, nil
+		}
+		return false, "", usageError(fmt.Errorf("%s=false is refused: this sensor pinned job-signing keys or a root, and an environment variable must not turn signature checks off (it may only raise the requirement); unset it, or for development only set %s=1",
+			core.EnvRequireSignedJobs, core.EnvDangerousAllowUnsignedJobs))
 	}
 	if set {
 		return v, requireFromEnv, nil
@@ -166,6 +180,14 @@ func (k *Kit) resolveJobSigning() error {
 	if err != nil {
 		return usageError(err)
 	}
+	if from == requireFromDangerous {
+		g.AllowUnsignedJobs(func(cmd *core.Command) {
+			_, _ = fmt.Fprintf(k.errw, "WARNING: %s is set: accepted UNSIGNED command %s (%s) although job-signing keys are pinned\n",
+				core.EnvDangerousAllowUnsignedJobs, cmd.ID, cmd.Type)
+		})
+		_, _ = fmt.Fprintf(k.errw, "WARNING: %s is set: unsigned jobs are accepted although job-signing keys are pinned; use it for development only\n",
+			core.EnvDangerousAllowUnsignedJobs)
+	}
 	s.jobs = g
 	core.SetJobsPosture(g.Posture())
 	core.SetJobsKeySet(trust)
@@ -192,9 +214,8 @@ func (k *Kit) resolveJobSigning() error {
 		_, _ = fmt.Fprintf(k.errw, "Warning: signed jobs: verified when present, unsigned jobs still run (signer keys from %s); set %s=true to refuse them\n",
 			signers, core.EnvRequireSignedJobs)
 	default:
-		if s.verbose {
-			_, _ = fmt.Fprintf(k.out, "  Signed jobs: off (no job-signing key or root pinned; set %s or pair again)\n", EnvJobSigningRoot)
-		}
+		_, _ = fmt.Fprintf(k.errw, "Warning: signed jobs: off, no job-signing key or root is pinned so jobs are not verified (posture %q is reported to the platform); set %s or pair again\n",
+			core.JobsSignedOff, EnvJobSigningRoot)
 	}
 	if trust != nil {
 		k.startKeySet(trust)

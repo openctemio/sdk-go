@@ -35,13 +35,16 @@ func TestNew_JobSigningPosture(t *testing.T) {
 		pinned  bool
 		envKeys string
 		require string
+		danger  string
 		want    string
 		log     string
 		failure string
 	}{
 		{name: "new identity", pinned: true, want: core.JobsSignedRequired, log: "Signed jobs: required (paired by this SDK)"},
-		{name: "env false", pinned: true, require: "false", want: core.JobsSignedVerifiedWhenPresent, log: "verified when present"},
-		{name: "legacy identity", want: core.JobsSignedOff},
+		{name: "env false is refused when keys are pinned", pinned: true, require: "false", failure: core.EnvDangerousAllowUnsignedJobs},
+		{name: "env false with the dangerous dev flag", pinned: true, require: "false", danger: "1", want: core.JobsSignedVerifiedWhenPresent,
+			log: "WARNING: " + core.EnvDangerousAllowUnsignedJobs + " is set"},
+		{name: "legacy identity", want: core.JobsSignedOff, log: "signed jobs: off"},
 		{name: "legacy identity, env keys", envKeys: key.KeyID, want: core.JobsSignedVerifiedWhenPresent, log: key.KeyID},
 		{name: "legacy identity, env keys, required", envKeys: key.PublicKey, require: "true", want: core.JobsSignedRequired,
 			log: "required (" + core.EnvRequireSignedJobs + "=true)"},
@@ -64,6 +67,9 @@ func TestNew_JobSigningPosture(t *testing.T) {
 			}
 			if tc.require != "" {
 				t.Setenv(core.EnvRequireSignedJobs, tc.require)
+			}
+			if tc.danger != "" {
+				t.Setenv(core.EnvDangerousAllowUnsignedJobs, tc.danger)
 			}
 			k, err := New(opts)
 			if tc.failure != "" {
@@ -179,7 +185,7 @@ func TestNew_TemplateKeysCheckWithSignedJobs(t *testing.T) {
 		want    string
 	}{
 		{name: "signed jobs required", want: "not_needed"},
-		{name: "verified when present", require: "false", want: "missing"},
+		{name: "verified when present (dev flag)", require: "false", want: "missing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Cleanup(func() { core.SetJobsPosture("") })
@@ -192,6 +198,7 @@ func TestNew_TemplateKeysCheckWithSignedJobs(t *testing.T) {
 			pinJobKeysOnIdentity(t, opts.StateDir, key)
 			if tc.require != "" {
 				t.Setenv(core.EnvRequireSignedJobs, tc.require)
+				t.Setenv(core.EnvDangerousAllowUnsignedJobs, "1")
 			}
 			k, err := New(opts)
 			if err != nil {
