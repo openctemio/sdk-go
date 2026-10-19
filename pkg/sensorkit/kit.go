@@ -380,6 +380,13 @@ type Kit struct {
 	kitTools
 }
 
+// warnLoopback tells the operator the loopback test switch is on.
+func (k *Kit) warnLoopback() {
+	if httpsec.AllowLoopback {
+		_, _ = fmt.Fprintf(k.errw, "WARNING: OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK is on: the SDK's HTTP clients and scan target checks accept loopback addresses; it is a test switch, never set it on a production sensor\n")
+	}
+}
+
 // New resolves the settings, checks them, connects the platform client and
 // opens the outbox. It prints what an operator needs to know (the outbox,
 // a renewed key in use). An error carries the exit code (ExitCode).
@@ -406,9 +413,7 @@ func New(opts Options) (*Kit, error) {
 	if err := core.CheckEnv(); err != nil {
 		return nil, err
 	}
-	if httpsec.AllowLoopback {
-		_, _ = fmt.Fprintf(k.errw, "WARNING: OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK is on: the SDK's HTTP clients and scan target checks accept loopback addresses; it is a test switch, never set it on a production sensor\n")
-	}
+	k.warnLoopback()
 	// The sensor-local policy: a policy that cannot be loaded stops the
 	// sensor (fail closed). Whether a sensor without one refuses network
 	// jobs is decided once the identity is known (applyRequireLocalPolicy).
