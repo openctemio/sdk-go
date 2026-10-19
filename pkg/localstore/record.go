@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -128,7 +129,7 @@ func writeAtomic(tmpDir, path string, data []byte) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
+	if err := mkdirSynced(filepath.Dir(path)); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
@@ -137,6 +138,48 @@ func writeAtomic(tmpDir, path string, data []byte) error {
 		return err
 	}
 	return syncDir(filepath.Dir(path))
+}
+
+// writeSynced creates path (O_EXCL, 0600), writes data and fsyncs it.
+func writeSynced(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fileMode) //nolint:gosec // our own path
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(data)
+	serr := f.Sync()
+	return errors.Join(werr, serr, f.Close())
+}
+
+// mkdirSynced creates dir and any missing parents (0700) and fsyncs the
+// parent of every directory it created, so a record renamed into a new
+// directory survives a crash together with the directory entry.
+func mkdirSynced(dir string) error {
+	dir = filepath.Clean(dir)
+	var created []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(d); err == nil {
+			break
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		created = append(created, d)
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	if len(created) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(dir, dirMode); err != nil {
+		return err
+	}
+	for i := len(created) - 1; i >= 0; i-- {
+		if err := syncDir(filepath.Dir(created[i])); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // readBounded reads at most limit bytes of path; a larger file is errAuth
