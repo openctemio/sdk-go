@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -26,9 +27,17 @@ import (
 // keys match any case. No setting enables them.
 var nucleiForbiddenKeys = []string{"code", "javascript", "flow", "file", "headless"}
 
+// nucleiIncludeDirective is nuclei's include preprocessor directive
+// ("# !include:<file>.yaml"): a comment to a YAML parser, but nuclei
+// inlines the named file from the sensor's disk before it parses the
+// template, so this check would never see what runs.
+var nucleiIncludeDirective = regexp.MustCompile(`(?i)#\s*!include:`)
+
 // CheckCustomTemplate checks one custom template's content for its type:
 // a nuclei template must be a single YAML document without a forbidden
-// block (nucleiForbiddenKeys), self-contained requests, workflows (they
+// block (nucleiForbiddenKeys), an include directive
+// (nucleiIncludeDirective), self-contained requests (the template's or
+// any one request's), workflows (they
 // resolve other templates from the sensor's disk, outside the signed set)
 // or payload lists loaded from files. Other types are not inspected here
 // (their scanners run no code from rules).
@@ -41,6 +50,9 @@ func CheckCustomTemplate(templateType string, raw []byte) error {
 
 // CheckNucleiCustomTemplate is CheckCustomTemplate for a nuclei template.
 func CheckNucleiCustomTemplate(raw []byte) error {
+	if nucleiIncludeDirective.Match(raw) {
+		return errors.New("custom templates may not include files from the sensor's disk (# !include)")
+	}
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	var doc map[string]any
 	if err := dec.Decode(&doc); err != nil {
@@ -52,26 +64,60 @@ func CheckNucleiCustomTemplate(raw []byte) error {
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return errors.New("a template must be one YAML document")
 	}
-	for key, v := range doc {
+	for key := range doc {
 		k := strings.TrimSpace(key)
 		for _, bad := range nucleiForbiddenKeys {
 			if strings.EqualFold(k, bad) {
 				return fmt.Errorf("the %s block is never run for custom templates", bad)
 			}
 		}
-		switch {
-		case strings.EqualFold(k, "self-contained"):
-			if b, ok := v.(bool); !ok || b {
-				return errors.New("self-contained templates are never run for custom templates")
-			}
-		case strings.EqualFold(k, "workflows"):
+		if strings.EqualFold(k, "workflows") {
 			return errors.New("custom templates may not run other templates (workflows)")
 		}
+	}
+	// self-contained is a template key and also a key of each request
+	// (an http request's own "self-contained: true" sends it to the URL in
+	// the template instead of the scan's target): refused at any depth.
+	if selfContained(doc, 0) {
+		return errors.New("self-contained templates are never run for custom templates")
 	}
 	if ref, ok := nucleiPayloadFile(doc); ok {
 		return fmt.Errorf("custom templates may not load payload files from the sensor's disk (%q)", ref)
 	}
 	return nil
+}
+
+// maxTemplateDepth bounds the walk of a template's tree (selfContained);
+// a template nested deeper is refused.
+const maxTemplateDepth = 64
+
+// selfContained reports whether v has a "self-contained" key (any case) at
+// any depth whose value is not false, or nests deeper than
+// maxTemplateDepth.
+func selfContained(v any, depth int) bool {
+	if depth > maxTemplateDepth {
+		return true
+	}
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if strings.EqualFold(strings.TrimSpace(k), "self-contained") {
+				if b, ok := val.(bool); !ok || b {
+					return true
+				}
+			}
+			if selfContained(val, depth+1) {
+				return true
+			}
+		}
+	case []any:
+		for _, val := range t {
+			if selfContained(val, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // nucleiPayloadFile finds a payload list loaded from a file (a string value

@@ -120,16 +120,20 @@ func TestRuleSourcesContradictionsAreRefused(t *testing.T) {
 func TestDangerousCustomTemplatesAreRefusedAtVerify(t *testing.T) {
 	base := "id: x\ninfo:\n  name: x\n  severity: info\n"
 	for name, body := range map[string]string{
-		"code":            base + "code:\n  - engine: [sh]\n    source: id\n",
-		"javascript":      base + "javascript:\n  - code: 'x'\n",
-		"flow":            base + "flow: http(1)\nhttp:\n  - path: ['{{BaseURL}}']\n",
-		"flow upper case": base + "Flow: http(1)\n",
-		"file":            base + "file:\n  - extensions: [all]\n",
-		"headless":        base + "headless:\n  - steps: []\n",
-		"self-contained":  base + "self-contained: true\nhttp:\n  - path: ['{{BaseURL}}']\n",
-		"workflows":       base + "workflows:\n  - template: http/x.yaml\n",
-		"payload file":    base + "http:\n  - payloads:\n      p: /etc/passwd\n    path: ['{{BaseURL}}/{{p}}']\n",
-		"two documents":   base + "---\ncode: []\n",
+		"code":                        base + "code:\n  - engine: [sh]\n    source: id\n",
+		"javascript":                  base + "javascript:\n  - code: 'x'\n",
+		"flow":                        base + "flow: http(1)\nhttp:\n  - path: ['{{BaseURL}}']\n",
+		"flow upper case":             base + "Flow: http(1)\n",
+		"file":                        base + "file:\n  - extensions: [all]\n",
+		"headless":                    base + "headless:\n  - steps: []\n",
+		"self-contained":              base + "self-contained: true\nhttp:\n  - path: ['{{BaseURL}}']\n",
+		"workflows":                   base + "workflows:\n  - template: http/x.yaml\n",
+		"payload file":                base + "http:\n  - payloads:\n      p: /etc/passwd\n    path: ['{{BaseURL}}/{{p}}']\n",
+		"two documents":               base + "---\ncode: []\n",
+		"request self-contained":      base + "http:\n  - self-contained: true\n    raw: ['GET http://169.254.169.254/ HTTP/1.1']\n",
+		"request self-contained case": base + "http:\n  - Self-Contained: yes\n    path: ['{{BaseURL}}']\n",
+		"include directive":           base + "# !include:/home/openctem/nuclei-templates/code/x.yaml\nhttp:\n  - path: ['{{BaseURL}}']\n",
+		"include directive spaced":    base + "#  !INCLUDE:x.yaml\nhttp:\n  - path: ['{{BaseURL}}']\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			tpl := encodedTemplate("t1", "bad.yaml", body)
@@ -148,6 +152,10 @@ func TestCheckCustomTemplateAcceptsPlainTemplatesAndOtherTypes(t *testing.T) {
 	inline := "id: x\ninfo:\n  name: x\n  severity: info\nhttp:\n  - payloads:\n      p: [a, b]\n    path: ['{{BaseURL}}/{{p}}']\n"
 	if err := CheckCustomTemplate("nuclei", []byte(inline)); err != nil {
 		t.Fatalf("inline payloads refused: %v", err)
+	}
+	explicitOff := "id: x\ninfo:\n  name: x\n  severity: info\nself-contained: false\nhttp:\n  - self-contained: false\n    path: ['{{BaseURL}}']\n"
+	if err := CheckCustomTemplate("nuclei", []byte(explicitOff)); err != nil {
+		t.Fatalf("self-contained: false refused: %v", err)
 	}
 	if err := CheckCustomTemplate("semgrep", []byte("rules: []\n")); err != nil {
 		t.Fatalf("semgrep rules inspected as nuclei: %v", err)
