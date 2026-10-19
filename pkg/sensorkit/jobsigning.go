@@ -102,9 +102,20 @@ func (k *Kit) resolveJobSigning() error {
 		}
 	}
 	keys := envKeys.Merge(idKeys)
-	required, from, err := ResolveRequireSignedJobs(pinned)
+	requirement := pinned
+	if s.identity != nil && s.identity.RequireSignedJobs {
+		// Paired to require signed jobs whatever it pinned: the same
+		// requirement as a pin (an environment variable cannot lower it).
+		requirement = max(requirement, 1)
+	}
+	required, from, err := ResolveRequireSignedJobs(requirement)
 	if err != nil {
 		return err
+	}
+	if required && keys.Len() == 0 && root == "" {
+		return usageError(fmt.Errorf("this sensor requires signed jobs (it was paired to require them), but no job-signing key or root is pinned: the platform served none at pairing. "+
+			"Set %s to the job-signing root shown in the console (Sensors > Install), or run the platform's job signer and pair again; for development only, %s=false with %s=1",
+			EnvJobSigningRoot, core.EnvRequireSignedJobs, core.EnvDangerousAllowUnsignedJobs))
 	}
 
 	var tenantID, sensorID string

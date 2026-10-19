@@ -65,6 +65,17 @@ type PairOptions struct {
 	// install snippet (SENSOR_PLATFORM_KEY); a platform with another key is
 	// refused. Empty: not pinned (the TLS pin and the SAS still apply).
 	PlatformKeyPin string
+	// JobSigningRoot is the job-signing root the console's install snippet
+	// gives out of band (SENSOR_JOB_SIGNING_ROOT: "SHA256:<hex>" or the
+	// base64 key). Set, the key set the platform serves must be signed by
+	// it, or pairing fails before the identity is saved: the root then
+	// comes from a channel the platform does not control. Empty: the root
+	// the platform's key set names is pinned on first use.
+	JobSigningRoot string
+	// AllowUnsignedJobs is SENSOR_DANGEROUS_ALLOW_UNSIGNED_JOBS at pairing
+	// (development only): the identity does not require signed jobs.
+	// Without it, a new identity always requires them (RequireSignedJobs).
+	AllowUnsignedJobs bool
 	// Retry starts a new request when one expires (the daemon waits for an
 	// administrator indefinitely); off, Pair returns ErrExpired.
 	Retry bool
@@ -139,6 +150,9 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 	hc := *base
 	hc.Transport = &sensorsig.Transport{Signer: signer, Base: base.Transport, MaxBody: 64 << 10}
 	pc := &pairClient{base: strings.TrimRight(o.BaseURL, "/") + protov2.PathPrefix, hc: &hc, ua: o.UserAgent, rec: rec}
+	if _, err := jobsig.ParseRoot(o.JobSigningRoot); err != nil {
+		return nil, fmt.Errorf("pairing: SENSOR_JOB_SIGNING_ROOT: %w", err)
+	}
 
 	for {
 		id, err := pairOnce(ctx, pc, signer, o)
@@ -240,10 +254,14 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 	id := &Identity{PlatformURL: o.BaseURL, SensorID: granted.SensorID, TenantID: granted.TenantID,
 		TenantName: granted.TenantName, Name: granted.Name, KeyID: granted.KeyID, Scope: granted.Scope,
 		PlatformKey: pairing.Encode(platformPub), PairedAt: time.Now().UTC(),
-		// A sensor paired from now on fails closed without a local policy.
-		RequireLocalPolicy: true}
+		// A sensor paired from now on fails closed without a local policy,
+		// and never starts out accepting unsigned jobs.
+		RequireLocalPolicy: true, RequireSignedJobs: !o.AllowUnsignedJobs}
 	id.PlatformTLSPinElement, id.PlatformTLSPin = pc.tlsPin()
-	id.JobSigningKeys, id.JobSigningRoot = pc.jobSigning(ctx, o)
+	var err error
+	if id.JobSigningKeys, id.JobSigningRoot, err = pc.jobSigning(ctx, o); err != nil {
+		return nil, err
+	}
 	if err := o.Store.Save(id); err != nil {
 		return nil, err
 	}
@@ -268,29 +286,60 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 		_, _ = fmt.Fprintf(o.Out, "Job signer pinned: %s; this sensor runs only jobs the platform's signer signed.\n", strings.Join(ids, ", "))
 	}
 	if id.JobSigningRoot != "" {
-		_, _ = fmt.Fprintf(o.Out, "Job-signing root pinned: %s; signer keys are accepted from the key sets it signs.\n", id.JobSigningRoot)
+		how := "named by the platform's key set"
+		if o.JobSigningRoot != "" {
+			how = "SENSOR_JOB_SIGNING_ROOT, out of band; the platform's key set is signed by it"
+		}
+		_, _ = fmt.Fprintf(o.Out, "Job-signing root pinned: %s (%s); signer keys are accepted from the key sets it signs.\n", id.JobSigningRoot, how)
+	}
+	if id.RequireSignedJobs && id.JobSigningRoot == "" && len(id.JobSigningKeys) == 0 {
+		_, _ = fmt.Fprintf(o.Out, "WARNING: the platform served no job signer: this sensor requires signed jobs and will not start until SENSOR_JOB_SIGNING_ROOT (shown in the console) is set or the platform runs its job signer and the sensor is paired again.\n")
 	}
 	return id, nil
 }
 
+// ErrJobSigningRootMismatch: the key set the platform serves is not signed
+// by the root given out of band (SENSOR_JOB_SIGNING_ROOT).
+var ErrJobSigningRootMismatch = errors.New("pairing: the platform's job-signing key set is not signed by SENSOR_JOB_SIGNING_ROOT")
+
 // jobSigning returns the job signer's keys the platform's hello lists now,
 // and the root of the key set it serves, over the pairing connection (the
 // platform TLS pin and the sensor's new signature). Each key's id is
-// recomputed; one that does not match is left out. The root is pinned only
-// from a key set signed by that root and current. A hello that cannot be
-// read pins nothing (the sensor then runs unsigned jobs, as one paired with
-// a platform that does not sign them), with a warning.
-func (c *pairClient) jobSigning(ctx context.Context, o PairOptions) ([]jobsig.PublicKey, string) {
+// recomputed; one that does not match is left out.
+//
+// With o.JobSigningRoot (out of band) the served key set must be signed by
+// that root and current; otherwise pairing fails (ErrJobSigningRootMismatch)
+// and nothing is saved: the platform may be lying about its signer. Without
+// it the root the key set names is pinned on first use. A hello that cannot
+// be read, or a platform that serves no signer, pins nothing (with a
+// warning); a new identity still requires signed jobs (RequireSignedJobs).
+func (c *pairClient) jobSigning(ctx context.Context, o PairOptions) ([]jobsig.PublicKey, string, error) {
+	pinnedRoot, _ := jobsig.ParseRoot(o.JobSigningRoot) // validated by Pair
 	var h protov2.Hello
 	if err := c.do(ctx, o, http.MethodGet, protov2.HelloPath, nil, http.StatusOK, &h); err != nil {
-		_, _ = fmt.Fprintf(o.Out, "WARNING: could not read the platform's job-signing keys (%v); signed jobs are not required on this sensor. Set SENSOR_JOB_SIGNING_ROOT (or SENSOR_JOB_SIGNING_KEYS) and SENSOR_REQUIRE_SIGNED_JOBS=true, or pair again.\n", err)
-		return nil, ""
+		if pinnedRoot != "" {
+			return nil, "", fmt.Errorf("%w: the platform's hello could not be read: %w", ErrJobSigningRootMismatch, err)
+		}
+		_, _ = fmt.Fprintf(o.Out, "WARNING: could not read the platform's job-signing keys (%v); nothing is pinned.\n", err)
+		return nil, "", nil
 	}
 	if h.SignedJobs == nil || h.SignedJobs.PayloadType != jobsig.PayloadType {
-		return nil, ""
+		if pinnedRoot != "" {
+			return nil, "", fmt.Errorf("%w: the platform does not sign jobs", ErrJobSigningRootMismatch)
+		}
+		return nil, "", nil
 	}
 	root := ""
-	if len(h.SignedJobs.KeySet) > 0 {
+	switch {
+	case pinnedRoot != "":
+		if len(h.SignedJobs.KeySet) == 0 {
+			return nil, "", fmt.Errorf("%w: the platform serves no key set", ErrJobSigningRootMismatch)
+		}
+		if _, err := jobsig.VerifyKeySet(h.SignedJobs.KeySet, pinnedRoot, time.Now()); err != nil {
+			return nil, "", fmt.Errorf("%w (%s): %w", ErrJobSigningRootMismatch, pinnedRoot, err)
+		}
+		root = pinnedRoot
+	case len(h.SignedJobs.KeySet) > 0:
 		ks, err := jobsig.TrustOnFirstUse(h.SignedJobs.KeySet, time.Now())
 		if err != nil {
 			_, _ = fmt.Fprintf(o.Out, "WARNING: the platform serves a job-signing key set that is not valid; its root is not pinned: %v\n", err)
@@ -307,10 +356,10 @@ func (c *pairClient) jobSigning(ctx context.Context, o PairOptions) ([]jobsig.Pu
 		}
 		keys = append(keys, pk)
 	}
-	if len(keys) == 0 && h.Supports(protov2.FeatureSignedJobs) {
-		_, _ = fmt.Fprintf(o.Out, "WARNING: the platform signs jobs but listed no signer key yet; signed jobs are not required on this sensor. Set SENSOR_JOB_SIGNING_KEYS and SENSOR_REQUIRE_SIGNED_JOBS=true, or pair again.\n")
+	if len(keys) == 0 && root == "" && h.Supports(protov2.FeatureSignedJobs) {
+		_, _ = fmt.Fprintf(o.Out, "WARNING: the platform announces signed jobs but serves no valid signer key or key set; nothing is pinned.\n")
 	}
-	return keys, root
+	return keys, root, nil
 }
 
 // tlsPin is the platform TLS pin the identity stores: SENSOR_CA_FINGERPRINT

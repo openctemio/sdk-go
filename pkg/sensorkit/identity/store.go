@@ -102,6 +102,17 @@ type Identity struct {
 	// JobSigningKeys are not used: rotating or revoking a signer key is a
 	// new key set, not a new pairing. SENSOR_JOB_SIGNING_ROOT overrides it.
 	JobSigningRoot string `json:"job_signing_root,omitempty"`
+	// RequireSignedJobs is true for an identity paired by an SDK that never
+	// starts out accepting unsigned jobs (api RFC-040 §5.6, research/191
+	// A-1): the sensor requires signed jobs whatever it pinned, so a
+	// platform that served no signer key at pairing cannot leave it
+	// accepting unsigned jobs for good. With nothing pinned it does not start
+	// until SENSOR_JOB_SIGNING_ROOT (from the console, out of band) or
+	// SENSOR_JOB_SIGNING_KEYS is set. SENSOR_REQUIRE_SIGNED_JOBS=false is
+	// refused; only SENSOR_DANGEROUS_ALLOW_UNSIGNED_JOBS (development) lifts
+	// it. False on an identity written by an older SDK, or paired with that
+	// development flag.
+	RequireSignedJobs bool `json:"require_signed_jobs,omitempty"`
 }
 
 // TLSPin parses the platform TLS pin: the element and the SHA-256
