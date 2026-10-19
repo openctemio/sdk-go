@@ -239,7 +239,8 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		body = b
 	}
-	inner := &sealedmsg.Request{RequestMeta: sealedmsg.RequestMeta{Method: req.Method, Path: req.URL.RequestURI(), Header: req.Header.Clone()}, Body: body}
+	inner := &sealedmsg.Request{RequestMeta: sealedmsg.RequestMeta{Method: req.Method, Path: req.URL.RequestURI(), Header: req.Header.Clone(),
+		ReplyKey: t.cfg.EncryptionKey.Public().Bytes()}, Body: body}
 	env, err := sealedmsg.SealRequest(t.cfg.IngestKey, t.cfg.Route, inner)
 	if err != nil {
 		return nil, err

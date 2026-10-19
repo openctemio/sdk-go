@@ -66,7 +66,12 @@ func (f *fakeRelay) authorized(r *http.Request) bool {
 }
 
 func (f *fakeRelay) honest(req *sealedmsg.Request, digest [32]byte) [][]byte {
-	env, err := sealedmsg.SealResponse(f.sensorPub, f.respKey, f.route, digest,
+	replyTo, err := req.ReplyTo()
+	if err != nil || replyTo.KeyID() != f.sensorPub.KeyID() {
+		f.t.Errorf("reply key %v", err)
+		return nil
+	}
+	env, err := sealedmsg.SealResponse(replyTo, f.respKey, f.route, digest,
 		&sealedmsg.Response{Status: 200, Header: http.Header{"Content-Type": {"text/plain"}}, Body: []byte("answer:" + req.Path)})
 	if err != nil {
 		f.t.Error(err)
