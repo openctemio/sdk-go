@@ -237,7 +237,8 @@ func encodeRecord(m recordMeta, data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(data)+len(mj)+4 > maxRecordBytes {
+	// Each part is bounded on its own first, so the sum below cannot overflow.
+	if len(data) > maxRecordBytes || len(mj) > maxRecordBytes || len(data)+len(mj)+4 > maxRecordBytes {
 		return nil, ErrTooLarge
 	}
 	out := make([]byte, 4, 4+len(mj)+len(data))
