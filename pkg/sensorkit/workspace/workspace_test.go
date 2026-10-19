@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -250,5 +251,42 @@ func TestRemoveAllReadOnlyTreeAndLinkRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outside, "keep")); err != nil {
 		t.Fatal("a link root was followed")
+	}
+}
+
+// A sweep running while jobs start never removes a new workspace: the
+// directory is live before it exists.
+func TestSweepNeverRemovesAWorkspaceBeingCreated(t *testing.T) {
+	m, err := Open(filepath.Join(t.TempDir(), "work"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	swept := make(chan struct{})
+	go func() {
+		defer close(swept)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_, _ = m.SweepBounded(context.Background(), nil, 0)
+			}
+		}
+	}()
+	var ws []*Workspace
+	for i := range 200 {
+		w, err := m.Create("tenant-a", fmt.Sprintf("cmd-%d", i), Limits{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ws = append(ws, w)
+	}
+	close(stop)
+	<-swept
+	for _, w := range ws {
+		if _, err := os.Stat(w.Dir()); err != nil {
+			t.Fatalf("live workspace %s removed by a concurrent sweep: %v", w.Dir(), err)
+		}
 	}
 }

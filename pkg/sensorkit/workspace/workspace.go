@@ -138,13 +138,18 @@ func (m *Manager) Create(tenant, job string, lim Limits) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace: %w", err)
 	}
 	dir := filepath.Join(tdir, job+"-"+hex.EncodeToString(rnd[:]))
-	if err := os.Mkdir(dir, 0o700); err != nil { // never an existing directory
-		return nil, fmt.Errorf("workspace: %w", err)
-	}
 	w := &Workspace{m: m, tenant: tenant, job: job, dir: dir, lim: lim}
+	// Live before it exists: a concurrent sweep must never see the new
+	// directory as an orphan.
 	m.mu.Lock()
 	m.live[dir] = w
 	m.mu.Unlock()
+	if err := os.Mkdir(dir, 0o700); err != nil { // never an existing directory
+		m.mu.Lock()
+		delete(m.live, dir)
+		m.mu.Unlock()
+		return nil, fmt.Errorf("workspace: %w", err)
+	}
 	return w, nil
 }
 
