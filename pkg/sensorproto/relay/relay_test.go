@@ -51,8 +51,8 @@ func FuzzReadBatch(f *testing.F) {
 }
 
 // TestBatchVector pins the wire framing against the file shared with the
-// sdk-go copy of this package; both sides keep testdata/vector-batch-v1.json
-// byte-identical.
+// platform copy of this package (openctemio/openctem api/pkg/sensorproto/relay);
+// both sides keep testdata/vector-batch-v1.json byte-identical.
 func TestBatchVector(t *testing.T) {
 	raw, err := os.ReadFile("testdata/vector-batch-v1.json")
 	if err != nil {
