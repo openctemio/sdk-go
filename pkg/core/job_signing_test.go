@@ -144,6 +144,7 @@ type jobPollerFixture struct {
 	exec   *spyExecutor
 	poller *CommandPoller
 	v      *jobsig.Verifier
+	g      *JobGuard
 }
 
 func newJobPollerFixture(t *testing.T, required bool, pinned bool) *jobPollerFixture {
@@ -166,6 +167,7 @@ func newJobPollerFixture(t *testing.T, required bool, pinned bool) *jobPollerFix
 	f.exec = &spyExecutor{v: f.v, keyID: jobsig.KeyID(f.signer.pub())}
 	f.poller = NewCommandPoller(f.client, f.exec, &CommandPollerConfig{MaxConcurrent: 2, AllowedTypes: []string{"scan"}})
 	f.poller.SetJobGuard(g)
+	f.g = g
 	return f
 }
 
@@ -365,5 +367,37 @@ func TestNewJobGuard(t *testing.T) {
 		if req != tc.required || set != tc.set || (err != nil) != tc.bad {
 			t.Fatalf("%q: %v %v %v", tc.env, req, set, err)
 		}
+	}
+}
+
+func TestJobGuardAllowUnsignedJobsWarnsPerJob(t *testing.T) {
+	f := newJobPollerFixture(t, false, true)
+	var warned []string
+	f.g.AllowUnsignedJobs(func(c *Command) { warned = append(warned, c.ID) })
+	f.offer(jsCmd, jsPayload, nil)
+	f.run()
+	if len(f.exec.ran) != 1 || len(warned) != 1 || warned[0] != jsCmd {
+		t.Fatalf("ran %d, warned %v: want the unsigned job run and warned about", len(f.exec.ran), warned)
+	}
+	// A required guard never takes the escape.
+	f2 := newJobPollerFixture(t, true, true)
+	f2.g.AllowUnsignedJobs(func(*Command) { t.Fatal("warned on a required guard") })
+	f2.offer(jsCmd, jsPayload, nil)
+	f2.run()
+	f2.refusal(t, jsCmd)
+	if len(f2.exec.ran) != 0 {
+		t.Fatal("unsigned job ran on a required guard")
+	}
+}
+
+func TestDangerousAllowUnsignedJobsFromEnv(t *testing.T) {
+	for env, want := range map[string]bool{"": false, "1": true, "0": false} {
+		got, err := DangerousAllowUnsignedJobsFromEnv(func(string) (string, bool) { return env, env != "" })
+		if err != nil || got != want {
+			t.Fatalf("%q: %v %v", env, got, err)
+		}
+	}
+	if _, err := DangerousAllowUnsignedJobsFromEnv(func(string) (string, bool) { return "maybe", true }); err == nil {
+		t.Fatal("garbage accepted")
 	}
 }

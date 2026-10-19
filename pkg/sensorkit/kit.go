@@ -406,6 +406,9 @@ func New(opts Options) (*Kit, error) {
 	if err := core.CheckEnv(); err != nil {
 		return nil, err
 	}
+	if httpsec.AllowLoopback {
+		_, _ = fmt.Fprintf(k.errw, "WARNING: OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK is on: the SDK's HTTP clients and scan target checks accept loopback addresses; it is a test switch, never set it on a production sensor\n")
+	}
 	// The sensor-local policy: a policy that cannot be loaded stops the
 	// sensor (fail closed). Whether a sensor without one refuses network
 	// jobs is decided once the identity is known (applyRequireLocalPolicy).
@@ -722,6 +725,8 @@ func (k *Kit) loadLocalPolicy() (*core.LocalPolicy, error) {
 const (
 	requireFromIdentity = "identity"
 	requireFromEnv      = "env"
+	// requireFromDangerous: unsigned jobs allowed by the development flag.
+	requireFromDangerous = "env-dangerous"
 )
 
 // ResolveRequireLocalPolicy decides whether a sensor without a local policy
