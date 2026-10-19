@@ -72,6 +72,8 @@ var (
 	// ErrInvalidName: a tenant, namespace or record name outside the
 	// allowed form.
 	ErrInvalidName = errors.New("localstore: invalid name")
+	// ErrKeyExists: AdoptTenantKey for a tenant that already has a key.
+	ErrKeyExists = errors.New("localstore: tenant already has a data key")
 )
 
 // nameRE is the form of tenant, namespace and record names: a file name on
@@ -484,7 +486,7 @@ func (s *Store) AdoptTenantKey(tenant string, key []byte) error {
 		return ErrClosed
 	}
 	if _, err := os.Stat(s.keyPath(tenant)); err == nil {
-		return fmt.Errorf("localstore: tenant %s already has a key", tenant)
+		return fmt.Errorf("%w: %s", ErrKeyExists, tenant)
 	}
 	if err := s.writeTenantKey(tenant, key); err != nil {
 		return err

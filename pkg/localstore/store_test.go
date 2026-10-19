@@ -405,8 +405,8 @@ func TestAdoptTenantKey(t *testing.T) {
 	if err := s.AdoptTenantKey(SensorTenant, key); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AdoptTenantKey(SensorTenant, key); err == nil {
-		t.Fatal("a second adoption replaced the key")
+	if err := s.AdoptTenantKey(SensorTenant, key); !errors.Is(err, ErrKeyExists) {
+		t.Fatalf("a second adoption: %v, want ErrKeyExists", err)
 	}
 	z, err := s.Sealer(SensorTenant, "outbox")
 	if err != nil {
