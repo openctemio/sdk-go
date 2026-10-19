@@ -145,6 +145,11 @@ type ScanCommandPayload struct {
 	// CustomTemplates (TemplateManifest in a DSSE envelope). Custom
 	// templates run only when it verifies (see TemplateVerifier.Verify).
 	CustomTemplatesEnvelope *SignedEnvelope `json:"custom_templates_envelope,omitempty"`
+	// RuleSources is which detection rules the scan runs: "both" (the
+	// default, also when empty), "platform" or "tenant" (RuleSources). A
+	// platform-only job carries no custom templates, a tenant-only job at
+	// least one; anything else is refused (checkRuleSources).
+	RuleSources string `json:"rule_sources,omitempty"`
 	// Capability is the capability the job runs ("scan.ports@1"), sent to
 	// a tool that reported a contract. Params are its standard params as
 	// the workflow set them; the tool runtime maps them onto the tool's
@@ -1531,7 +1536,7 @@ func (e *DefaultCommandExecutor) verifyCustomTemplates(cmd *Command, payload *Sc
 			return fmt.Errorf("custom templates refused: they are not the templates the signed job names (%d signed, %d received)",
 				len(cmd.signedTemplates), len(got))
 		}
-		return nil
+		return checkCustomTemplateContents(payload.CustomTemplates, contents)
 	}
 	verifier := e.templates.Load()
 	if verifier == nil {
@@ -1543,6 +1548,18 @@ func (e *DefaultCommandExecutor) verifyCustomTemplates(cmd *Command, payload *Sc
 	}
 	if _, err := verifier.Verify(payload.CustomTemplatesEnvelope, b, payload.CustomTemplates, contents); err != nil {
 		return fmt.Errorf("custom templates refused: %w", err)
+	}
+	return checkCustomTemplateContents(payload.CustomTemplates, contents)
+}
+
+// checkCustomTemplateContents is the sensor's own content check of signed
+// custom templates (custom_template_check.go): a template that could run
+// code here is refused whatever signed it.
+func checkCustomTemplateContents(tpls []EmbeddedTemplate, contents [][]byte) error {
+	for i := range tpls {
+		if err := CheckCustomTemplate(tpls[i].TemplateType, contents[i]); err != nil {
+			return fmt.Errorf("custom template %s refused: %w", tpls[i].Name, err)
+		}
 	}
 	return nil
 }
@@ -1762,6 +1779,14 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// per-request timeout, RunPerTarget enforces it per target.
 	opts.TargetTimeout = payload.Budget.Target()
 	ProgressFrom(ctx).SetTargets(targets)
+
+	// Which rules run: the platform's, the organization's or both; a job
+	// that contradicts its own templates is refused.
+	ruleSources, err := checkRuleSources(payload.RuleSources, len(payload.CustomTemplates))
+	if err != nil {
+		return nil, err
+	}
+	opts.RuleSources = ruleSources
 
 	// Handle custom templates if provided
 	var templateDir string
