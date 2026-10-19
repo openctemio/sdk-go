@@ -807,3 +807,47 @@ func TestCommandLogsAreEvictedFirstAndNeverMarkResultsLost(t *testing.T) {
 		t.Fatal("unexpected dead letter")
 	}
 }
+
+// Wake spreads the start of a drain: the queue becomes ready, but nothing
+// is delivered before one random instant within min(WakeSpread, items ×
+// 100 ms), so a fleet back after an outage does not upload its whole
+// backlog at once. The queue keeps its order.
+func TestWakeSpreadsTheDrain(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	o := openTest(t, t.TempDir(), func(c *Config) { c.now = func() time.Time { return now } })
+	for i := range 400 {
+		if _, err := o.Enqueue(Meta{Kind: KindReport}, fmt.Appendf(nil, "%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	starts := map[time.Time]bool{}
+	for range 20 {
+		o.mu.Lock()
+		for _, e := range o.entries {
+			e.state.NextAttempt = now.Add(time.Hour) // backing off after failures
+		}
+		o.mu.Unlock()
+		o.Wake()
+		o.mu.Lock()
+		at := o.drainAt
+		e, wake := o.nextLocked(now)
+		o.mu.Unlock()
+		if at.Before(now) || at.After(now.Add(DefaultWakeSpread)) {
+			t.Fatalf("drain starts %s after wake, want within %s", at.Sub(now), DefaultWakeSpread)
+		}
+		if at.After(now) && (e != nil || !wake.Equal(at)) {
+			t.Fatalf("an item was handed out before the drain start (wake %v)", wake)
+		}
+		starts[at] = true
+	}
+	if len(starts) < 2 {
+		t.Fatal("the drain start is not random")
+	}
+	// A small queue starts within items × 100 ms; WakeSpread < 0 drains at once.
+	if d := wakeDelay(DefaultWakeSpread, 3); d > 300*time.Millisecond {
+		t.Fatalf("3 items: delay %s", d)
+	}
+	if d := wakeDelay(-1, 1000); d != 0 {
+		t.Fatalf("WakeSpread < 0: delay %s", d)
+	}
+}
