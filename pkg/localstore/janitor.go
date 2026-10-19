@@ -134,8 +134,12 @@ type OutboxCleaner interface {
 	Bytes() (pending, dead int64)
 	// PurgeDead deletes dead letters older than maxAge (at most limit).
 	PurgeDead(ctx context.Context, maxAge time.Duration, limit int) (int, int64)
-	// DropTenant removes a tenant's items.
-	DropTenant(tenant string) (int, error)
+	// DropTenant removes a tenant's items and reports how many are in
+	// flight (kept; try again once they are done).
+	DropTenant(tenant string) (dropped, inFlight int, err error)
+	// AcceptsWork is false while unacknowledged results fill the outbox
+	// (they are never evicted for space): the sensor stops claiming.
+	AcceptsWork() (bool, string)
 }
 
 // PackCache is the content pack cache as the janitor sees it.
@@ -296,6 +300,12 @@ func (j *Janitor) Status() Status {
 // reason when not. Before the first sweep it falls back to the volume's
 // own free space check.
 func (j *Janitor) AcceptsWork() (bool, string) {
+	if j.cfg.Outbox != nil {
+		// Live: a full outbox refuses results now, not at the next sweep.
+		if ok, why := j.cfg.Outbox.AcceptsWork(); !ok {
+			return false, why
+		}
+	}
 	st := j.Status()
 	if st.StopClaiming {
 		return false, st.Reason
@@ -529,8 +539,13 @@ func (j *Janitor) eraseTenant(t string) error {
 		}
 	}
 	if j.cfg.Outbox != nil {
-		if _, err := j.cfg.Outbox.DropTenant(t); err != nil {
+		_, inflight, err := j.cfg.Outbox.DropTenant(t)
+		if err != nil {
 			return err
+		}
+		if inflight > 0 {
+			// Erasing the key now would strand those items: wait.
+			return fmt.Errorf("%d item(s) in flight", inflight)
 		}
 	}
 	return j.cfg.Store.EraseTenant(t)
@@ -576,6 +591,14 @@ func (j *Janitor) assess(pol Policy) Status {
 			st.Level = WatermarkHigh
 		}
 		reasons = append(reasons, fmt.Sprintf("%d MiB of the %d MiB quota used", st.Total>>20, pol.StoreQuotaBytes>>20))
+	}
+	if j.cfg.Outbox != nil {
+		if ok, why := j.cfg.Outbox.AcceptsWork(); !ok {
+			if st.Level == WatermarkOK {
+				st.Level = WatermarkHigh
+			}
+			reasons = append(reasons, why)
+		}
 	}
 	if wsBytes > pol.WorkspaceBudgetBytes {
 		if st.Level == WatermarkOK {

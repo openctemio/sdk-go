@@ -138,13 +138,18 @@ func (m *Manager) Create(tenant, job string, lim Limits) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace: %w", err)
 	}
 	dir := filepath.Join(tdir, job+"-"+hex.EncodeToString(rnd[:]))
-	if err := os.Mkdir(dir, 0o700); err != nil { // never an existing directory
-		return nil, fmt.Errorf("workspace: %w", err)
-	}
 	w := &Workspace{m: m, tenant: tenant, job: job, dir: dir, lim: lim}
+	// Live before it exists: a concurrent sweep must never see the new
+	// directory as an orphan.
 	m.mu.Lock()
 	m.live[dir] = w
 	m.mu.Unlock()
+	if err := os.Mkdir(dir, 0o700); err != nil { // never an existing directory
+		m.mu.Lock()
+		delete(m.live, dir)
+		m.mu.Unlock()
+		return nil, fmt.Errorf("workspace: %w", err)
+	}
 	return w, nil
 }
 
@@ -206,15 +211,55 @@ func (w *Workspace) Close() error {
 	return err
 }
 
-// removeAll removes dir after making every directory in it writable.
+// beforeChmod is a test hook called with each directory path just before
+// removeAll makes it writable.
+var beforeChmod func(path string)
+
+// removeAll removes dir after making every directory in it writable. A
+// task running in the workspace can replace a directory by a symbolic link
+// at any moment, so nothing here resolves a path outside dir: the walk and
+// every chmod and removal go through an os.Root (openat semantics), which
+// refuses a link that leaves it, and a link is removed as a link.
 func removeAll(dir string) error {
-	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && d.IsDir() {
-			_ = os.Chmod(p, 0o700) //nolint:gosec // our own directory, made removable
+	fi, err := os.Lstat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() { // a file or a link: remove it, never follow it
+		return os.Remove(dir)
+	}
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	if rfi, serr := r.Stat("."); serr != nil || !os.SameFile(fi, rfi) {
+		return fmt.Errorf("workspace: %s changed while it was being removed", dir)
+	}
+	_ = r.Chmod(".", 0o700) //nolint:gosec // our own directory, made removable
+	_ = fs.WalkDir(r.FS(), ".", func(p string, d fs.DirEntry, werr error) error {
+		if werr == nil && d.IsDir() && p != "." {
+			if beforeChmod != nil {
+				beforeChmod(filepath.Join(dir, filepath.FromSlash(p)))
+			}
+			_ = r.Chmod(p, 0o700) //nolint:gosec // our own directory, made removable
 		}
 		return nil
 	})
-	return os.RemoveAll(dir)
+	entries, err := fs.ReadDir(r.FS(), ".")
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if rerr := r.RemoveAll(e.Name()); rerr != nil {
+			return rerr
+		}
+	}
+	_ = r.Close()
+	return os.Remove(dir)
 }
 
 // Sweep removes every job directory not created by this process and not

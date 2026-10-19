@@ -184,6 +184,17 @@ func Open(root string, opts Options) (*Cache, error) {
 	return c, nil
 }
 
+// SetPinnedKeys replaces the pinned content-signing keys (a key rotation).
+// Every earlier load check is forgotten: a held pack is verified in full
+// again at its next Acquire, so a pack signed only by a key that is no
+// longer pinned stops loading at once, not after ReverifyEvery.
+func (c *Cache) SetPinnedKeys(tenant, platform []ed25519.PublicKey) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.opts.TenantKeys, c.opts.PlatformKeys = tenant, platform
+	clear(c.verified)
+}
+
 // Root is the cache root (a tool host's ContentRoot).
 func (c *Cache) Root() string { return c.root }
 
@@ -323,11 +334,14 @@ func (c *Cache) Install(ctx context.Context, p Pack) (string, error) {
 // of its scope and returns it.
 func (c *Cache) verifyStatement(p Pack) (*Statement, error) {
 	var keys []ed25519.PublicKey
+	c.mu.Lock()
+	tenantKeys, platformKeys := c.opts.TenantKeys, c.opts.PlatformKeys
+	c.mu.Unlock()
 	switch p.Scope {
 	case ScopeTenant:
-		keys = c.opts.TenantKeys
+		keys = tenantKeys
 	case ScopePlatform:
-		keys = c.opts.PlatformKeys
+		keys = platformKeys
 	default:
 		return nil, fmt.Errorf("%w: unknown scope %q", ErrVerify, p.Scope)
 	}

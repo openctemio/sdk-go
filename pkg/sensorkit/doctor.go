@@ -338,9 +338,9 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 		settingsreg.Setting{Name: EnvOutboxDir, Type: settingsreg.Path, Group: "storage",
 			Description: "Outbox directory. Mount a persistent volume."},
 		settingsreg.Setting{Name: EnvOutboxMaxBytes, Type: settingsreg.Bytes, Default: "1GiB", Group: "storage",
-			Description: "Outbox size limit."},
+			Description: "Outbox size limit. Dead letters and log batches are evicted to stay within it; unacknowledged results never are: a full outbox refuses new results and the sensor stops claiming jobs."},
 		settingsreg.Setting{Name: EnvOutboxMaxAge, Type: settingsreg.Duration, Default: "168h", Group: "storage",
-			Description: "Outbox age limit."},
+			Description: "Age after which dead letters are deleted; unacknowledged results are kept until the platform acknowledges them."},
 		settingsreg.Setting{Name: EnvOutboxKeyFile, Type: settingsreg.Path, Group: "storage",
 			Description: "Outbox encryption key file (default <outbox dir>/outbox.key)."},
 	)

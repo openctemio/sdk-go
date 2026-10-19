@@ -157,7 +157,7 @@ type Config struct {
 	// enables the outbox (in OutboxDir, else RetryQueueDir/outbox, else
 	// ~/.openctem/outbox) and imports the reports an older SDK left in
 	// RetryQueueDir. RetryInterval and RetryMaxAttempts are ignored: the
-	// outbox retries with back-off until RetryTTL (OutboxMaxAge) evicts.
+	// outbox retries with back-off until the platform acknowledges or refuses the report.
 	EnableRetryQueue bool          `yaml:"enable_retry_queue" json:"enable_retry_queue"`
 	RetryQueueDir    string        `yaml:"retry_queue_dir" json:"retry_queue_dir"`
 	RetryInterval    time.Duration `yaml:"retry_interval" json:"retry_interval"`
