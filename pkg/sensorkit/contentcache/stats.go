@@ -17,6 +17,12 @@ type Stats struct {
 	// BytesSaved is what was not fetched: held packs on a hit, held files
 	// in a delta install.
 	BytesSaved int64 `json:"bytes_saved"`
+	// FullVerifications counts full load checks (statement, every file).
+	FullVerifications int64 `json:"full_verifications"`
+	// VerifyFailures counts loads refused because a held pack no longer
+	// matched its signed digest or install-time index, or its statement no
+	// longer verified (report it as tampering).
+	VerifyFailures int64 `json:"verify_failures"`
 }
 
 type statsBox struct {

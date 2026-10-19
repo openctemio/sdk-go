@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -114,5 +115,85 @@ func TestPairPinsTheKeySetRoot(t *testing.T) {
 				t.Fatalf("output:\n%s", out.String())
 			}
 		})
+	}
+}
+
+// A new identity requires signed jobs, also when the platform served no
+// signer (it then warns that the sensor will not start until a root is set
+// out of band); only the development flag leaves the requirement off.
+func TestPairRequiresSignedJobsByDefault(t *testing.T) {
+	_, srv := newFakePlatform(t) // no hello route: no signer served
+	var out bytes.Buffer
+	id, err := Pair(context.Background(), opts(t, srv, &out))
+	if err != nil {
+		t.Fatalf("pair: %v\n%s", err, out.String())
+	}
+	if !id.RequireSignedJobs || len(id.JobSigningKeys) != 0 || id.JobSigningRoot != "" {
+		t.Fatalf("identity: %+v", id)
+	}
+	if !strings.Contains(out.String(), "will not start until SENSOR_JOB_SIGNING_ROOT") {
+		t.Fatalf("no warning:\n%s", out.String())
+	}
+
+	_, srv = newFakePlatform(t)
+	o := opts(t, srv, &out)
+	o.AllowUnsignedJobs = true
+	id, err = Pair(context.Background(), o)
+	if err != nil || id.RequireSignedJobs {
+		t.Fatalf("with the development flag: %v %+v", err, id)
+	}
+}
+
+// A root given out of band (the console's install snippet) is pinned only
+// when the key set the platform serves is signed by it; otherwise pairing
+// fails and no identity is saved, whatever the platform claims.
+func TestPairChecksTheOutOfBandRoot(t *testing.T) {
+	signer := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{3}, 32)).Public().(ed25519.PublicKey)
+	root := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, 32))
+	other := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{8}, 32))
+	rootID := jobsig.KeyID(root.Public().(ed25519.PublicKey))
+	for _, tc := range []struct {
+		name   string
+		served *protov2.SignedJobs
+		ok     bool
+	}{
+		{"signed by the root", &protov2.SignedJobs{PayloadType: jobsig.PayloadType, KeySet: testKeySet(t, root, time.Now(), signer)}, true},
+		{"signed by another root", &protov2.SignedJobs{PayloadType: jobsig.PayloadType, KeySet: testKeySet(t, other, time.Now(), signer)}, false},
+		{"expired", &protov2.SignedJobs{PayloadType: jobsig.PayloadType, KeySet: testKeySet(t, root, time.Now().Add(-48*time.Hour), signer)}, false},
+		{"keys but no key set", &protov2.SignedJobs{PayloadType: jobsig.PayloadType, Keys: []protov2.SignedJobKey{
+			{KeyID: jobsig.NewPublicKey(signer).KeyID, Algorithm: jobsig.NewPublicKey(signer).Algorithm, PublicKey: jobsig.NewPublicKey(signer).PublicKey}}}, false},
+		{"platform does not sign", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, srv := newFakePlatform(t)
+			f.signedJobs = tc.served
+			var out bytes.Buffer
+			o := opts(t, srv, &out)
+			o.JobSigningRoot = rootID
+			o.AllowUnsignedJobs = true // the out-of-band root wins over the development flag
+			id, err := Pair(context.Background(), o)
+			if !tc.ok {
+				if !errors.Is(err, ErrJobSigningRootMismatch) {
+					t.Fatalf("err = %v, want ErrJobSigningRootMismatch\n%s", err, out.String())
+				}
+				if _, _, err := o.Store.Load(); err == nil {
+					t.Fatal("an identity was saved although the root did not match")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("pair: %v\n%s", err, out.String())
+			}
+			if id.JobSigningRoot != rootID || !strings.Contains(out.String(), "out of band") {
+				t.Fatalf("root %q\n%s", id.JobSigningRoot, out.String())
+			}
+		})
+	}
+	// A malformed root stops pairing before anything is sent.
+	f, srv := newFakePlatform(t)
+	o := opts(t, srv, &bytes.Buffer{})
+	o.JobSigningRoot = "SHA256:00"
+	if _, err := Pair(context.Background(), o); err == nil || f.sensorPub != nil {
+		t.Fatalf("malformed root: err %v, started %v", err, f.sensorPub != nil)
 	}
 }
