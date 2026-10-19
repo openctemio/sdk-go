@@ -386,3 +386,54 @@ func TestRemovedRevocationsFailClosed(t *testing.T) {
 		t.Fatalf("Acquire with the revocation record removed: %v", err)
 	}
 }
+
+// A key rotation takes effect at the next load, not after the re-check
+// interval.
+func TestSetPinnedKeysForgetsEarlierVerification(t *testing.T) {
+	f := newFixture(t)
+	p, _ := installT(t, f, map[string]string{"a.yaml": "id: good"})
+	_, rel, err := f.cache.Acquire(p.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel()
+	if _, rel, err = f.cache.Acquire(p.Digest); err != nil { // served from the verified cache
+		t.Fatal(err)
+	}
+	rel()
+	_, newK, _ := ed25519.GenerateKey(nil)
+	f.cache.SetPinnedKeys([]ed25519.PublicKey{newK.Public().(ed25519.PublicKey)}, nil)
+	if _, _, err := f.cache.Acquire(p.Digest); !errors.Is(err, ErrVerify) {
+		t.Fatalf("Acquire after the key was unpinned: %v", err)
+	}
+}
+
+// An older copy of the revocation list put back (it names fewer packs) must
+// not un-revoke anything: the cache fails closed until the next sync.
+func TestRolledBackRevocationsFailClosed(t *testing.T) {
+	f := newFixture(t)
+	st := openStore(t, t.TempDir())
+	c := storeFixture(t, f, st)
+	ctx := context.Background()
+	a := f.pack(t, ScopeTenant, f.tenantK, "tenant-a", map[string]string{"a.yaml": "id: a"})
+	b := f.pack(t, ScopeTenant, f.tenantK, "tenant-a", map[string]string{"b.yaml": "id: b"})
+	c.Sync(ctx, []Pack{a, b}, []string{a.Digest}) // revocation list v1: a
+	recPath := filepath.Join(st.Dir(), "kv", "tenant-a", "content", revocationsName+".rec")
+	old, err := os.ReadFile(recPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Sync(ctx, []Pack{b}, []string{b.Digest}) // v2: a and b
+	if err := os.WriteFile(recPath, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c2 := storeFixture(t, f, st)
+	if _, _, err := c2.Acquire(b.Digest); !errors.Is(err, ErrRevocationsUnknown) {
+		t.Fatalf("a pack revoked since the rolled-back list loads: %v", err)
+	}
+	// The next sync brings the platform's list and the cache is whole again.
+	c2.Sync(ctx, nil, []string{a.Digest, b.Digest})
+	if _, err := c2.Install(ctx, b); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("install of a revoked pack after the sync: %v", err)
+	}
+}

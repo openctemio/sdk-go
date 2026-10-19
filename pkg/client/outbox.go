@@ -29,7 +29,8 @@ type OutboxConfig struct {
 	// MaxBytes caps the bytes on disk (default 1 GiB, and never more than
 	// half of the space the outbox could use).
 	MaxBytes int64
-	// MaxAge evicts items older than this (default 7 days).
+	// MaxAge deletes dead letters older than this (default 7 days); pending
+	// items are kept until the platform acknowledges them.
 	MaxAge time.Duration
 	// Concurrency is 1 (default) or 2.
 	Concurrency int

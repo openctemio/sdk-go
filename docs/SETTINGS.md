@@ -64,6 +64,6 @@ Setup & health checklist shows each one's presence, never its value.
 | [`SENSOR_SHARED_MODE`](https://docs.openctem.io/sensors/settings/#SENSOR_SHARED_MODE) | enum |  | `0` |  | 1 for a sensor that runs jobs of many tenants: the tool sandbox, network confinement and a local policy are required (refuse to start without them), no writable state is shared between jobs, and a private target needs the private-range switch and the job's zone. |
 | [`SENSOR_OUTBOX`](https://docs.openctem.io/sensors/settings/#SENSOR_OUTBOX) | enum |  |  |  | The durable results outbox (on for a daemon). |
 | [`SENSOR_OUTBOX_DIR`](https://docs.openctem.io/sensors/settings/#SENSOR_OUTBOX_DIR) | path |  |  |  | Outbox directory. Mount a persistent volume. |
-| [`SENSOR_OUTBOX_MAX_BYTES`](https://docs.openctem.io/sensors/settings/#SENSOR_OUTBOX_MAX_BYTES) | bytes |  | `1GiB` |  | Outbox size limit. |
-| [`SENSOR_OUTBOX_MAX_AGE`](https://docs.openctem.io/sensors/settings/#SENSOR_OUTBOX_MAX_AGE) | duration |  | `168h` |  | Outbox age limit. |
+| [`SENSOR_OUTBOX_MAX_BYTES`](https://docs.openctem.io/sensors/settings/#SENSOR_OUTBOX_MAX_BYTES) | bytes |  | `1GiB` |  | Outbox size limit. Dead letters and log batches are evicted to stay within it; unacknowledged results never are: a full outbox refuses new results and the sensor stops claiming jobs. |
+| [`SENSOR_OUTBOX_MAX_AGE`](https://docs.openctem.io/sensors/settings/#SENSOR_OUTBOX_MAX_AGE) | duration |  | `168h` |  | Age after which dead letters are deleted; unacknowledged results are kept until the platform acknowledges them. |
 | [`SENSOR_OUTBOX_KEY_FILE`](https://docs.openctem.io/sensors/settings/#SENSOR_OUTBOX_KEY_FILE) | path |  |  |  | Outbox encryption key file (default <outbox dir>/outbox.key). |

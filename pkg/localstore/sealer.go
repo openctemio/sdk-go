@@ -13,6 +13,7 @@ type Sealer struct {
 	s       *Store
 	tenant  string
 	purpose string
+	gen     uint64
 }
 
 // Sealer returns a sealer for the tenant and purpose (creating the tenant's
@@ -27,10 +28,10 @@ func (s *Store) Sealer(tenant, purpose string) (*Sealer, error) {
 	if _, err := s.tenantAEAD(tenant); err != nil {
 		return nil, err
 	}
-	return &Sealer{s: s, tenant: tenant, purpose: purpose}, nil
+	return &Sealer{s: s, tenant: tenant, purpose: purpose, gen: s.tenantGen(tenant)}, nil
 }
 
-func (z *Sealer) aead() (cipher.AEAD, error) { return z.s.tenantAEAD(z.tenant) }
+func (z *Sealer) aead() (cipher.AEAD, error) { return z.s.tenantAEADGen(z.tenant, &z.gen) }
 
 func (z *Sealer) binding(name string) binding {
 	return binding{purpose: "sealer/" + z.purpose, tenant: z.tenant, name: name}

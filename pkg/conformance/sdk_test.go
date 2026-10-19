@@ -623,10 +623,11 @@ func TestOutbox_RefusedResultsFailTheCommand(t *testing.T) {
 	}
 }
 
-// While the platform is down the outbox fills; the byte cap evicts the
-// oldest result, a report of a command whose command result is still queued.
-// The command must then be reported failed, not as a clean, complete run.
-func TestOutbox_EvictedResultsFailTheCommand(t *testing.T) {
+// While the platform is down the outbox fills. It never evicts a queued
+// result to make room: a new report is refused (the client then tries to
+// send it directly, which fails while the platform is down) and the queued
+// command completes cleanly once the platform is back.
+func TestOutbox_FullOutboxKeepsQueuedResults(t *testing.T) {
 	f := NewFakePlatform(true)
 	defer f.Close()
 	cmd := "0192a3b4-0000-7000-8000-000000000004"
@@ -675,21 +676,25 @@ func TestOutbox_EvictedResultsFailTheCommand(t *testing.T) {
 	if err := c.ReportCommandResult(ctx, cmd, &core.CommandResult{Status: "completed", FindingsCount: 1}); err != nil {
 		t.Fatal(err)
 	}
-	// Two more reports: the cap evicts the oldest item, the command's report.
-	for _, tag := range []string{"a", "b"} {
-		if _, err := c.PushFindings(context.Background(), big(tag)); err != nil {
-			t.Fatal(err)
-		}
+	// One more report fits; the next one does not and is refused, not
+	// made room for by evicting the command's report.
+	if _, err := c.PushFindings(context.Background(), big("a")); err != nil {
+		t.Fatal(err)
 	}
-	if st, _ := c.OutboxStats(); st.Evicted == 0 {
-		t.Fatalf("nothing evicted: %+v", st)
+	if _, err := c.PushFindings(context.Background(), big("b")); err == nil {
+		t.Fatal("a report the full outbox refused was reported delivered while the platform is down")
+	}
+	if st, _ := c.OutboxStats(); st.Evicted != 0 || st.Refused == 0 {
+		t.Fatalf("stats after the outbox filled: %+v", st)
+	}
+	if ok, _ := c.Outbox().AcceptsWork(); ok {
+		t.Fatal("a full outbox still accepts work")
 	}
 	down.Store(false)
 	c.Outbox().Wake()
 	waitUntil(t, 5*time.Second, func() bool { s, _ := f.CommandState(cmd); return s != "running" })
-	state, msg := f.CommandState(cmd)
-	if state != "failed" || !strings.Contains(msg, "lost") {
-		t.Fatalf("command %s (%q) after its results were evicted", state, msg)
+	if state, msg := f.CommandState(cmd); state != "completed" {
+		t.Fatalf("command %s (%q): its queued results were not all delivered", state, msg)
 	}
 }
 
