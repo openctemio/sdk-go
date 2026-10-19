@@ -305,15 +305,20 @@ func createKey(path, tmpDir string) ([]byte, error) {
 		return nil, fmt.Errorf("localstore: generate key: %w", err)
 	}
 	content, _ := FormatKey(key)
-	if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
+	if err := mkdirSynced(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("localstore: key dir: %w", err)
 	}
 	// O_EXCL through a link: two processes creating a shared key file at
-	// once must not end up with different keys.
+	// once must not end up with different keys. The temporary file sits
+	// next to the key (a KeyFile on another volume, the recommended setup,
+	// cannot be linked or renamed across devices) and is fsynced before it
+	// is linked: wrapped keys written right after must never outlive an
+	// empty key file after a crash.
 	var rnd [8]byte
 	_, _ = rand.Read(rnd[:])
-	tmp := filepath.Join(tmpDir, "key."+hex.EncodeToString(rnd[:])+".tmp")
-	if err := os.WriteFile(tmp, content, fileMode); err != nil {
+	tmp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+"."+hex.EncodeToString(rnd[:])+".tmp")
+	if err := writeSynced(tmp, content); err != nil {
+		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("localstore: write key: %w", err)
 	}
 	defer func() { _ = os.Remove(tmp) }()
@@ -321,11 +326,11 @@ func createKey(path, tmpDir string) ([]byte, error) {
 		if errors.Is(err, fs.ErrExist) {
 			return loadKey(path)
 		}
-		if err := os.Rename(tmp, path); err != nil {
-			return nil, fmt.Errorf("localstore: install key: %w", err)
-		}
+		return nil, fmt.Errorf("localstore: install key: %w", err)
 	}
-	_ = syncDir(filepath.Dir(path))
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("localstore: install key: %w", err)
+	}
 	return key, nil
 }
 
