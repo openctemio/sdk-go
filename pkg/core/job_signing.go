@@ -29,6 +29,29 @@ import (
 // required when the identity pinned job-signing keys at pairing.
 const EnvRequireSignedJobs = "SENSOR_REQUIRE_SIGNED_JOBS"
 
+// EnvDangerousAllowUnsignedJobs is the one way to run unsigned jobs on a
+// sensor that pinned job-signing keys or a root (EnvRequireSignedJobs=false
+// is refused there). It exists for development; the sensor logs a warning at
+// start and for every unsigned job it accepts.
+const EnvDangerousAllowUnsignedJobs = "SENSOR_DANGEROUS_ALLOW_UNSIGNED_JOBS"
+
+// DangerousAllowUnsignedJobsFromEnv reports whether EnvDangerousAllowUnsignedJobs
+// is set to a true value (an unrecognized value is an error).
+func DangerousAllowUnsignedJobsFromEnv(lookup func(string) (string, bool)) (bool, error) {
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	v, ok := lookup(EnvDangerousAllowUnsignedJobs)
+	if v = strings.TrimSpace(v); !ok || v == "" {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("%s=%q is not recognized: set it to 1 or leave it unset", EnvDangerousAllowUnsignedJobs, v)
+	}
+	return b, nil
+}
+
 // RefusalRuleJobSignature is the rule of a command refused for its job
 // signature.
 const RefusalRuleJobSignature = "job_signature"
@@ -83,6 +106,10 @@ type JobGuard struct {
 	// shared: this sensor serves many organizations; it runs only
 	// instance-scope jobs (NewSharedJobGuard).
 	shared bool
+	// unsignedWarn is set by AllowUnsignedJobs: it is called for every
+	// unsigned command the guard lets through on a pinned sensor.
+	// A pointer keeps JobGuard comparable.
+	unsignedWarn *func(cmd *Command)
 
 	// cv follows the platform's config_version (SetConfigVersion); a
 	// pointer keeps JobGuard comparable.
@@ -154,6 +181,15 @@ func NewSharedJobGuard(v *jobsig.Verifier, sensorID string) (*JobGuard, error) {
 	return &JobGuard{v: v, required: true, sensorID: sensorID, shared: true}, nil
 }
 
+// AllowUnsignedJobs makes a guard that verifies (a key is pinned) accept
+// unsigned commands, calling warn for each one. It is the development escape
+// EnvDangerousAllowUnsignedJobs; it never applies to a required guard.
+func (g *JobGuard) AllowUnsignedJobs(warn func(cmd *Command)) {
+	if g != nil && g.v != nil && !g.required && warn != nil {
+		g.unsignedWarn = &warn
+	}
+}
+
 // Posture is the guard's JobsSigned* posture.
 func (g *JobGuard) Posture() string {
 	switch {
@@ -181,6 +217,9 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 	case unsigned, g.v == nil:
 		// Legacy: unsigned commands run; without a pinned key a signature
 		// cannot be checked.
+		if unsigned && g.unsignedWarn != nil {
+			(*g.unsignedWarn)(cmd)
+		}
 		return nil
 	}
 	g.refreshKeySet(ctx)
