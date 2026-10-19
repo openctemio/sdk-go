@@ -407,15 +407,19 @@ func effectivePort(u *url.URL) string {
 	return ""
 }
 
+// EnvAllowInsecureHTTP is the development escape that lets the platform URL
+// use plain http to a host that is not loopback (CheckAPIBaseURL).
+const EnvAllowInsecureHTTP = "SENSOR_ALLOW_INSECURE_HTTP"
+
 // CheckAPIBaseURL validates an operator-supplied OpenCTEM API base URL.
 //
 // It returns an error for anything that cannot be a sane API endpoint:
-// a non-http(s) scheme, a missing host, or embedded userinfo (credentials
-// in the URL end up in logs and error strings). For a plain-http URL whose
-// host is not loopback it returns a non-empty warning instead of an error:
-// the API key is sent as a bearer token, so clear-text transport outside a
-// local dev setup exposes it, but rejecting it outright would break
-// existing in-cluster deployments that terminate TLS elsewhere.
+// a non-http(s) scheme, a missing host, embedded userinfo (credentials in
+// the URL end up in logs and error strings), or plain http to a host that is
+// not loopback: the API key is a bearer token and the jobs it fetches steer
+// the sensor, so anyone on the network path could read the key and inject
+// jobs. SENSOR_ALLOW_INSECURE_HTTP=1 (development only) turns that error
+// into a returned warning.
 func CheckAPIBaseURL(raw string) (warning string, err error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", fmt.Errorf("API base URL is empty")
@@ -435,7 +439,10 @@ func CheckAPIBaseURL(raw string) (warning string, err error) {
 		return "", fmt.Errorf("invalid API base URL %q: credentials must not be embedded in the URL", u.Redacted())
 	}
 	if scheme == "http" && !isLoopbackHost(u.Hostname()) {
-		return fmt.Sprintf("API base URL %s uses plain http: the API key is sent in clear text; use https outside local development", u.Redacted()), nil
+		if strings.TrimSpace(os.Getenv(EnvAllowInsecureHTTP)) == "1" {
+			return fmt.Sprintf("API base URL %s uses plain http and %s=1 allows it: the API key is sent in clear text and anyone on the network path can read it and inject jobs; development only", u.Redacted(), EnvAllowInsecureHTTP), nil
+		}
+		return "", fmt.Errorf("invalid API base URL %q: plain http to a host that is not loopback exposes the API key and lets anyone on the network path inject jobs; use https (for development only, set %s=1)", u.Redacted(), EnvAllowInsecureHTTP)
 	}
 	return "", nil
 }

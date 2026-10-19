@@ -31,22 +31,35 @@ func pinJobKeysOnIdentity(t *testing.T, stateDir string, keys ...jobsig.PublicKe
 func TestNew_JobSigningPosture(t *testing.T) {
 	key := jobsig.NewPublicKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{5}, 32)).Public().(ed25519.PublicKey))
 	for _, tc := range []struct {
-		name    string
-		pinned  bool
-		envKeys string
-		require string
-		want    string
-		log     string
-		failure string
+		name   string
+		pinned bool
+		// requires: the identity was paired to require signed jobs
+		// (identity.RequireSignedJobs) whatever it pinned.
+		requires bool
+		envKeys  string
+		require  string
+		danger   string
+		want     string
+		log      string
+		failure  string
 	}{
 		{name: "new identity", pinned: true, want: core.JobsSignedRequired, log: "Signed jobs: required (paired by this SDK)"},
-		{name: "env false", pinned: true, require: "false", want: core.JobsSignedVerifiedWhenPresent, log: "verified when present"},
-		{name: "legacy identity", want: core.JobsSignedOff},
+		{name: "env false is refused when keys are pinned", pinned: true, require: "false", failure: core.EnvDangerousAllowUnsignedJobs},
+		{name: "env false with the dangerous dev flag", pinned: true, require: "false", danger: "1", want: core.JobsSignedVerifiedWhenPresent,
+			log: "WARNING: " + core.EnvDangerousAllowUnsignedJobs + " is set"},
+		{name: "legacy identity", want: core.JobsSignedOff, log: "signed jobs: off"},
 		{name: "legacy identity, env keys", envKeys: key.KeyID, want: core.JobsSignedVerifiedWhenPresent, log: key.KeyID},
 		{name: "legacy identity, env keys, required", envKeys: key.PublicKey, require: "true", want: core.JobsSignedRequired,
 			log: "required (" + core.EnvRequireSignedJobs + "=true)"},
 		{name: "required without a key", require: "true", failure: "no job-signing key or root is pinned"},
 		{name: "bad key", envKeys: "SHA256:00", failure: EnvJobSigningKeys},
+		// A new identity requires signed jobs even when the platform
+		// served no signer at pairing: it does not start until a root or
+		// key is set out of band, and an env var cannot lower it.
+		{name: "requires, nothing pinned", requires: true, failure: EnvJobSigningRoot},
+		{name: "requires, env false refused", requires: true, require: "false", failure: core.EnvDangerousAllowUnsignedJobs},
+		{name: "requires, dangerous dev flag", requires: true, require: "false", danger: "1", want: core.JobsSignedOff},
+		{name: "requires, key set out of band", requires: true, envKeys: key.PublicKey, want: core.JobsSignedRequired},
 		{name: "bad require", require: "maybe", failure: core.EnvRequireSignedJobs},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,11 +72,25 @@ func TestNew_JobSigningPosture(t *testing.T) {
 			if tc.pinned {
 				pinJobKeysOnIdentity(t, opts.StateDir, key)
 			}
+			if tc.requires {
+				st := identity.NewStore(opts.StateDir)
+				id, _, err := st.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				id.RequireSignedJobs = true
+				if err := st.Save(id); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if tc.envKeys != "" {
 				t.Setenv(EnvJobSigningKeys, tc.envKeys)
 			}
 			if tc.require != "" {
 				t.Setenv(core.EnvRequireSignedJobs, tc.require)
+			}
+			if tc.danger != "" {
+				t.Setenv(core.EnvDangerousAllowUnsignedJobs, tc.danger)
 			}
 			k, err := New(opts)
 			if tc.failure != "" {
@@ -179,7 +206,7 @@ func TestNew_TemplateKeysCheckWithSignedJobs(t *testing.T) {
 		want    string
 	}{
 		{name: "signed jobs required", want: "not_needed"},
-		{name: "verified when present", require: "false", want: "missing"},
+		{name: "verified when present (dev flag)", require: "false", want: "missing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Cleanup(func() { core.SetJobsPosture("") })
@@ -192,6 +219,7 @@ func TestNew_TemplateKeysCheckWithSignedJobs(t *testing.T) {
 			pinJobKeysOnIdentity(t, opts.StateDir, key)
 			if tc.require != "" {
 				t.Setenv(core.EnvRequireSignedJobs, tc.require)
+				t.Setenv(core.EnvDangerousAllowUnsignedJobs, "1")
 			}
 			k, err := New(opts)
 			if err != nil {

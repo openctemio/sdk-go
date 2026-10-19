@@ -114,24 +114,42 @@ func RetryAfter(err error, after time.Duration) error {
 
 // Wake says the platform is reachable again (a heartbeat was accepted): the
 // circuit closes, an authentication pause lifts and every item backing off
-// after a network or server error becomes ready now. Items told to wait by a
-// Retry-After keep their delay.
+// after a network or server error becomes ready. The drain starts after one
+// random delay, U(0, min(WakeSpread, waiting items × 100 ms)), so sensors
+// that all come back after a platform outage spread their uploads instead
+// of sending every queued result at once; the queue keeps its order. Items
+// told to wait by a Retry-After keep their delay.
 func (o *Outbox) Wake() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.resumeLocked("the platform answered a heartbeat")
 	now := o.cfg.now()
 	if o.circuitUntil.After(now) {
-		o.cfg.Logf("platform reachable again: delivering the queue now")
+		o.cfg.Logf("platform reachable again: delivering the queue")
 	}
 	o.circuitUntil = time.Time{}
 	o.consecutiveFail = 0
+	waiting := 0
 	for _, e := range o.entries {
 		if e.dead == nil && !e.state.RateLimited && e.state.NextAttempt.After(now) {
 			e.state.NextAttempt = time.Time{}
+			waiting++
 		}
 	}
+	o.drainAt = time.Time{}
+	if d := wakeDelay(o.cfg.WakeSpread, waiting); d > 0 {
+		o.drainAt = now.Add(d)
+	}
 	o.signalLocked()
+}
+
+// wakeDelay is the random delay before a woken drain of waiting items.
+func wakeDelay(spread time.Duration, waiting int) time.Duration {
+	if spread <= 0 || waiting <= 0 {
+		return 0
+	}
+	window := min(spread, time.Duration(waiting)*wakeSpreadPerItem)
+	return time.Duration(rand.Int64N(int64(window) + 1)) //nolint:gosec // jitter, not a secret
 }
 
 // Resume lifts an authentication pause (the API key was replaced).
@@ -177,6 +195,9 @@ func (o *Outbox) nextLocked(now time.Time) (*entry, time.Time) {
 	}
 	if now.Before(o.circuitUntil) {
 		return nil, o.circuitUntil
+	}
+	if now.Before(o.drainAt) {
+		return nil, o.drainAt
 	}
 	var wake time.Time
 	for _, e := range o.sortedLocked(func(e *entry) bool { return e.dead == nil && !e.inflight }) {
