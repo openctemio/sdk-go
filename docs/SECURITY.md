@@ -83,7 +83,7 @@ the sensor's owner refused, or a dangerous protocol, through.
 After the signature check, every custom template's content is checked on
 the sensor (`core.CheckCustomTemplate`): a nuclei template with a `code`,
 `javascript`, `flow`, `file` or `headless` block (keys compared without
-regard to case), a self-contained request, `workflows`, a payload list
+regard to case), a self-contained template or request (at any depth), a `# !include:` directive, `workflows`, a payload list
 loaded from a file, or a second YAML document is refused and the command
 fails before anything is written. Because every custom template passes
 this check, a scanner may load custom templates together with its own in
