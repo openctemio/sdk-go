@@ -100,6 +100,9 @@ var (
 	// sealed with a key. Open refuses rather than create a new key, which
 	// would make every one of those items unreadable (see CheckKey).
 	ErrKeyMissing = errors.New("outbox: encryption key file is missing but sealed items exist")
+	// ErrStoreRequired: the outbox holds items sealed with a local store
+	// (format 2) and was opened without one.
+	ErrStoreRequired = errors.New("outbox: items sealed with the local store exist but no store is configured")
 )
 
 // Kind is what an item carries.
@@ -380,6 +383,11 @@ func Open(cfg Config) (*Outbox, error) {
 		}
 	}
 	if c.Store == nil {
+		if n := countItems(c.Dir, fileVersion2); n > 0 {
+			// Without the store these items cannot be read: opening would
+			// quarantine them (a configuration rollback losing results).
+			return nil, fmt.Errorf("%w: %s holds %d item(s) sealed with the local store; configure Store", ErrStoreRequired, c.Dir, n)
+		}
 		if err := CheckKey(c.Dir, c.KeyFile); err != nil {
 			return nil, err
 		}

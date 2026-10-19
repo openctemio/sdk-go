@@ -132,7 +132,11 @@ func (z tenantSealer) open(t byte, id string, data []byte) ([]byte, error) {
 
 // legacyItems counts the version 1 items (pending and dead letters): the
 // only ones that need the outbox key once a store seals new items.
-func legacyItems(dir string) int {
+func legacyItems(dir string) int { return countItems(dir, fileVersion) }
+
+// countItems counts the items (pending and dead letters) of one file
+// format version.
+func countItems(dir string, version byte) int {
 	n := 0
 	for _, sub := range []string{dirPending, dirDead} {
 		names, err := os.ReadDir(filepath.Join(dir, sub))
@@ -151,7 +155,7 @@ func legacyItems(dir string) int {
 			var hdr [5]byte
 			_, rerr := f.Read(hdr[:])
 			_ = f.Close()
-			if rerr == nil && string(hdr[:4]) == fileMagic && hdr[4] == fileVersion {
+			if rerr == nil && string(hdr[:4]) == fileMagic && hdr[4] == version {
 				n++
 			}
 		}

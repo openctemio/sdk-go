@@ -167,6 +167,24 @@ func TestStoreModeKeyRules(t *testing.T) {
 	}
 }
 
+// TestStoreModeRules: an outbox with format 2 items refuses to open without
+// the store rather than quarantine them (a configuration rollback must not
+// lose results).
+func TestStoreModeRules(t *testing.T) {
+	dir := t.TempDir()
+	st := openStore(t, t.TempDir())
+	o := openTest(t, dir, func(c *Config) { c.Store = st })
+	tk, _ := o.Enqueue(Meta{Kind: KindReport, TenantID: "tenant-a"}, []byte("a"))
+	_ = o.Close()
+	if _, err := Open(Config{Dir: dir, Logf: quietLog(t)}); !errors.Is(err, ErrStoreRequired) {
+		t.Fatalf("format 2 items without a store: %v, want ErrStoreRequired", err)
+	}
+	if _, err := os.Stat(itemFile(o, tk.Meta.ID)); err != nil {
+		t.Fatal("format 2 item lost by an open without the store")
+	}
+
+}
+
 func FuzzTenantOpen(f *testing.F) {
 	st, err := localstore.Open(localstore.Options{Dir: f.TempDir(), Logf: func(string, ...any) {}})
 	if err != nil {
