@@ -133,9 +133,9 @@ type Cache struct {
 	// written since). A cache that holds packs but has no record lost it:
 	// it fails closed until the next Sync.
 	revocationsPersisted bool
-	verified           map[string]verified
-	now                func() time.Time
-	stats              statsBox
+	verified             map[string]verified
+	now                  func() time.Time
+	stats                statsBox
 }
 
 // Open opens (creating) a cache rooted at root, private to the sensor.
