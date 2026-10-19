@@ -246,9 +246,10 @@ func (c *Cache) Acquire(digest string) (string, func(), error) {
 	if _, ok := c.Path(digest); !ok {
 		return "", nil, fmt.Errorf("%w: %s", ErrNotHeld, digest)
 	}
+	at := c.now()
 	c.inUse[digest]++
-	c.used[digest] = c.now()
-	touch(p, c.used[digest])
+	c.used[digest] = at
+	touch(p, at)
 	var once sync.Once
 	return p, func() {
 		once.Do(func() {
@@ -411,10 +412,11 @@ func (c *Cache) store(digest string, files []file, statement []byte) (string, er
 		}
 		return "", err
 	}
+	at := c.now()
 	c.mu.Lock()
-	c.used[digest] = c.now()
+	c.used[digest] = at
 	c.mu.Unlock()
-	touch(dst, c.used[digest])
+	touch(dst, at)
 	return dst, nil
 }
 
