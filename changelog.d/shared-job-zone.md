@@ -1,4 +1,0 @@
-### Security: a shared job's private ranges come from its signed zone
-
-- `jobsig.Statement.Zone` (`zone`: the instance scan zone's `id` and `ranges`, api RFC-100 §6.1). The signer signs it only for a zone in its own zone ledger that is assigned to the job's organization and served by the claiming sensor. An organization's sensor refuses a statement that carries a zone (reason `sensor_scope`); a shared sensor refuses a zone without an id or ranges.
-- A shared sensor runs a verified job with `core.WithJobZone` set to the private ranges of the signed zone (`core.ParseZoneRanges` drops anything that is not wholly private). `ScanTargetPolicy.Shared` and `toolhost.Host.Shared` then let a private target through only inside those ranges, and only when the operator allows private targets. A job without a signed zone keeps reaching public addresses only; an unsigned `zone_ranges` field is still ignored.

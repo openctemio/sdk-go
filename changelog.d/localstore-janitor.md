@@ -1,6 +1,0 @@
-### Added: the janitor, retention and cleanup for the sensor's local data (`localstore.Janitor`)
-
-- One `localstore.Janitor` owns cleanup of every class: results the platform acknowledged are deleted at once (new `outbox.Config.OnDelivered` tells the janitor), dead letters after 7 days (`Outbox.PurgeDead`), journal tombstones after 24 hours (`Store.CompactJournal`), workspaces of jobs that are not open (`workspace.Manager.SweepBounded`), content packs by last use (`contentcache.Cache.Prune`: revoked at once, unassigned and unused for 14 days, least recently used beyond the 2 GiB cap, never one in use), a log rotation hook, and a tenant's data on `Janitor.Unassign` (crypto-erase).
-- It runs at start, after a burst of acknowledgements and every 10 minutes; a pass is bounded in time (30 s) and removals (5000) and is safe to stop at any point.
-- Watermarks: at 85 % of the quota or under 15 % of the volume free the cold cache is evicted, then `Janitor.AcceptsWork` turns false (stop claiming); under 64 MiB free only acknowledgements and deletions proceed. Unacknowledged results are never deleted for space.
-- `Policy` carries the caps from the platform, clamped so a policy tunes cleanup but cannot switch it off. `Janitor.Status` and `Store.Usage` give bytes per class and the last sweep for the heartbeat.
