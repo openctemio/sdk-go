@@ -4,8 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
+
+// journalMu serializes the journal's read-modify-write cycles: two
+// goroutines starting the same non-repeatable step must not both pass the
+// check. Journal writes are rare, one lock is enough.
+var journalMu sync.Mutex
 
 // The job journal (openctem research 194 §5.4 (2)): one sealed record per
 // job the sensor holds, rewritten at every step change. After a crash or a
@@ -63,6 +69,28 @@ type JobRecord struct {
 	// the record then stays as a tombstone until its retention passes.
 	Interrupted   bool      `json:"interrupted,omitempty"`
 	InterruptedAt time.Time `json:"interrupted_at,omitzero"`
+	// Finished is set when a job that ran non-repeatable steps completed:
+	// the record stays as a tombstone (its non-repeatable steps only) until
+	// its retention passes, so the same command handed back never runs
+	// them again.
+	Finished   bool      `json:"finished,omitempty"`
+	FinishedAt time.Time `json:"finished_at,omitzero"`
+}
+
+// tombstone reports whether the record only remembers steps that must not
+// run again.
+func (r JobRecord) tombstone() bool { return r.Interrupted || r.Finished }
+
+// keepSteps returns the steps that must never run again: every
+// non-repeatable step that started, finished or not.
+func keepSteps(steps []Step) []Step {
+	var out []Step
+	for _, st := range steps {
+		if !st.Repeatable {
+			out = append(out, st)
+		}
+	}
+	return out
 }
 
 // Interruption is a job of an earlier boot found by Recover.
@@ -74,8 +102,8 @@ type Interruption struct {
 	Reason string
 }
 
-// ErrStepRefused: the step started before for this command, is not
-// repeatable and did not finish.
+// ErrStepRefused: the step is not repeatable and already started for this
+// command (finished or not, in this or an earlier run).
 var ErrStepRefused = errors.New("localstore: a non-repeatable step already started for this command")
 
 // Journal is a tenant's job journal.
@@ -123,6 +151,8 @@ func (j *Journal) Begin(r JobRecord) error {
 	if err := validName(r.CommandID); err != nil {
 		return err
 	}
+	journalMu.Lock()
+	defer journalMu.Unlock()
 	r.Tenant = j.kv.tenant
 	r.Boot = j.s.Stats().Boot
 	if r.StartedAt.IsZero() {
@@ -134,25 +164,25 @@ func (j *Journal) Begin(r JobRecord) error {
 	case err != nil:
 		return err
 	default:
-		if !prev.Interrupted && prev.Boot == r.Boot && r.LeaseEpoch <= prev.LeaseEpoch {
+		if !prev.tombstone() && prev.Boot == r.Boot && r.LeaseEpoch <= prev.LeaseEpoch {
 			return fmt.Errorf("localstore: job %s already journaled for lease epoch %d", r.CommandID, prev.LeaseEpoch)
 		}
 		// Carry the steps that must never run again.
-		for _, st := range prev.Steps {
-			if st.State == StepStarted && !st.Repeatable {
-				r.Steps = append(r.Steps, st)
-			}
-		}
+		r.Steps = append(keepSteps(prev.Steps), r.Steps...)
 	}
-	r.Interrupted = false
-	r.InterruptedAt = time.Time{}
+	r.Interrupted, r.InterruptedAt = false, time.Time{}
+	r.Finished, r.FinishedAt = false, time.Time{}
 	return j.save(r)
 }
 
-// StepStarted records that a step begins. It returns ErrStepRefused when
-// the step is not repeatable and already started for this command without
-// finishing (in this or an earlier run).
+// StepStarted records that a step begins; the caller runs the step only
+// after it returned nil (the record is on disk first). It returns
+// ErrStepRefused when the step is not repeatable and already started for
+// this command, finished or not, in this or an earlier run: its side effect
+// may have happened, so it is never repeated.
 func (j *Journal) StepStarted(commandID, step string, repeatable bool) error {
+	journalMu.Lock()
+	defer journalMu.Unlock()
 	r, err := j.load(commandID)
 	if err != nil {
 		return err
@@ -162,7 +192,7 @@ func (j *Journal) StepStarted(commandID, step string, repeatable bool) error {
 		if st.Name != step {
 			continue
 		}
-		if st.State == StepStarted && (!st.Repeatable || !repeatable) {
+		if !st.Repeatable || (!repeatable && st.State == StepStarted) {
 			return fmt.Errorf("%w: %s of %s", ErrStepRefused, step, commandID)
 		}
 		r.Steps[i] = Step{Name: step, State: StepStarted, Repeatable: repeatable, At: now}
@@ -174,6 +204,8 @@ func (j *Journal) StepStarted(commandID, step string, repeatable bool) error {
 
 // StepDone records that a step finished.
 func (j *Journal) StepDone(commandID, step string) error {
+	journalMu.Lock()
+	defer journalMu.Unlock()
 	r, err := j.load(commandID)
 	if err != nil {
 		return err
@@ -188,10 +220,24 @@ func (j *Journal) StepDone(commandID, step string) error {
 	return fmt.Errorf("localstore: step %s of %s was never started", step, commandID)
 }
 
-// Finish removes the record of a job that completed (its result is queued).
+// Finish closes the record of a job that completed (its result is
+// queued). A job without non-repeatable steps leaves nothing; one with
+// them leaves a tombstone of those steps until the retention passes.
 func (j *Journal) Finish(commandID string) error {
 	if err := validName(commandID); err != nil {
 		return err
+	}
+	journalMu.Lock()
+	defer journalMu.Unlock()
+	r, err := j.load(commandID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err == nil {
+		if keep := keepSteps(r.Steps); len(keep) > 0 {
+			r.Steps, r.Finished, r.FinishedAt = keep, true, j.s.opts.now().UTC()
+			return j.save(r)
+		}
 	}
 	return j.kv.Delete(commandID)
 }
@@ -209,6 +255,8 @@ func (s *Store) Recover(retention time.Duration) ([]Interruption, error) {
 	if retention <= 0 {
 		retention = DefaultJournalRetention
 	}
+	journalMu.Lock()
+	defer journalMu.Unlock()
 	boot := s.Stats().Boot
 	now := s.opts.now().UTC()
 	var out []Interruption
@@ -226,8 +274,12 @@ func (s *Store) Recover(retention time.Duration) ([]Interruption, error) {
 			if err != nil {
 				continue
 			}
-			if r.Interrupted {
-				if now.Sub(r.InterruptedAt) > retention {
+			if r.tombstone() {
+				at := r.InterruptedAt
+				if r.Finished {
+					at = r.FinishedAt
+				}
+				if now.Sub(at) > retention {
 					_ = j.kv.Delete(name)
 				}
 				continue

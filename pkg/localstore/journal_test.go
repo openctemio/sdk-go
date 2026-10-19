@@ -2,6 +2,8 @@ package localstore
 
 import (
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -37,8 +39,92 @@ func TestJournalStepsAndFinish(t *testing.T) {
 	if err := j.Finish("cmd-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := j.Get("cmd-1"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("finished job still journaled: %v", err)
+	// The finished job ran a non-repeatable step: a tombstone of it stays,
+	// and the same command handed back cannot run that step again.
+	r, err := j.Get("cmd-1")
+	if err != nil || !r.Finished || len(r.Steps) != 1 || r.Steps[0].Name != "validate" {
+		t.Fatalf("tombstone after finish: %+v %v", r, err)
+	}
+	if err := j.Begin(JobRecord{CommandID: "cmd-1", LeaseEpoch: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.StepStarted("cmd-1", "discover", true); err != nil {
+		t.Fatalf("repeatable step after finish: %v", err)
+	}
+	if err := j.StepStarted("cmd-1", "validate", false); !errors.Is(err, ErrStepRefused) {
+		t.Fatalf("finished non-repeatable step started again: %v", err)
+	}
+
+	// A job with repeatable steps only leaves nothing.
+	if err := j.Begin(JobRecord{CommandID: "cmd-2", LeaseEpoch: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.StepStarted("cmd-2", "discover", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Finish("cmd-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.Get("cmd-2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("finished repeatable-only job still journaled: %v", err)
+	}
+}
+
+// TestDoneNonRepeatableStepNeverRerun: a crash after a non-repeatable step
+// finished (its side effect happened) but before the result was queued:
+// the command handed back after the restart cannot run the step again.
+func TestDoneNonRepeatableStepNeverRerun(t *testing.T) {
+	dir := t.TempDir()
+	s := openT(t, dir)
+	j, _ := s.Journal("tenant-a")
+	if err := j.Begin(JobRecord{CommandID: "cmd-1", LeaseEpoch: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.StepStarted("cmd-1", "exploit-check", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.StepDone("cmd-1", "exploit-check"); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s2 := openT(t, dir)
+	if _, err := s2.Recover(0); err != nil {
+		t.Fatal(err)
+	}
+	j2, _ := s2.Journal("tenant-a")
+	if err := j2.Begin(JobRecord{CommandID: "cmd-1", LeaseEpoch: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j2.StepStarted("cmd-1", "exploit-check", false); !errors.Is(err, ErrStepRefused) {
+		t.Fatalf("finished non-repeatable step after a crash: %v, want ErrStepRefused", err)
+	}
+}
+
+// TestStepStartedConcurrent: of many goroutines starting the same
+// non-repeatable step, exactly one is allowed.
+func TestStepStartedConcurrent(t *testing.T) {
+	s := openT(t, t.TempDir())
+	j, _ := s.Journal("tenant-a")
+	if err := j.Begin(JobRecord{CommandID: "cmd-1", LeaseEpoch: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var ok atomic.Int32
+	start := make(chan struct{})
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if j.StepStarted("cmd-1", "exploit-check", false) == nil {
+				ok.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if ok.Load() != 1 {
+		t.Fatalf("%d goroutines started the non-repeatable step, want 1", ok.Load())
 	}
 }
 
