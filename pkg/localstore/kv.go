@@ -1,6 +1,7 @@
 package localstore
 
 import (
+	"crypto/cipher"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -48,6 +49,9 @@ type recordMeta struct {
 	WrittenAt time.Time `json:"written_at"`
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 	Boot      uint64    `json:"boot"`
+	// Seq and Guarded belong to guarded records (see Guarded).
+	Seq     uint64 `json:"seq,omitempty"`
+	Guarded bool   `json:"guarded,omitempty"`
 }
 
 // PutOption changes how Put writes a record.
@@ -57,6 +61,7 @@ type putOptions struct {
 	expiresAt time.Time
 	ttl       time.Duration
 	critical  bool
+	guarded   bool
 }
 
 // WithExpiry makes Get answer ErrExpired once d has passed.
@@ -73,6 +78,16 @@ func WithExpiresAt(t time.Time) PutOption {
 // critically low (journal and state updates that keep the sensor
 // consistent). Keep such records small.
 func Critical() PutOption { return func(o *putOptions) { o.critical = true } }
+
+// Guarded makes the store itself remember how many times the record was
+// written (in its sealed meta record), so an older copy put back, or the
+// record being deleted behind the store's back, is detected: Get answers
+// ErrRollback and the event is reported through OnTamper. Use it for the
+// few records whose rollback is an attack (the pack revocation list, the
+// policy cache); it costs one extra small write. The counters themselves
+// are protected by the master key; if meta.rec is lost or restored, every
+// guarded record reads as ErrRollback until it is written again.
+func Guarded() PutOption { return func(o *putOptions) { o.guarded = true } }
 
 // Info describes a record without returning its data.
 type Info struct {
@@ -116,6 +131,9 @@ func (kv *KV) Put(name string, data []byte, opts ...PutOption) error {
 	if err != nil {
 		return err
 	}
+	if po.guarded {
+		return kv.putGuarded(aead, m, name, data)
+	}
 	rec, err := seal(aead, kindKV, kv.binding(name), pt)
 	if err != nil {
 		return err
@@ -124,6 +142,45 @@ func (kv *KV) Put(name string, data []byte, opts ...PutOption) error {
 		return fmt.Errorf("localstore: write %s/%s/%s: %w", kv.tenant, kv.namespace, name, err)
 	}
 	return nil
+}
+
+// putGuarded writes the record with the next counter, then records the
+// counter in the meta record. A crash between the two leaves a record ahead
+// of the meta record, which reads fine (only a lower counter is a rollback).
+func (kv *KV) putGuarded(aead cipher.AEAD, m recordMeta, name string, data []byte) error {
+	s := kv.s
+	key := guardKey(kv.tenant, kv.namespace, name)
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+	m.Guarded, m.Seq = true, s.meta.Guard[key]+1
+	pt, err := encodeRecord(m, data)
+	if err != nil {
+		return err
+	}
+	rec, err := seal(aead, kindKV, kv.binding(name), pt)
+	if err != nil {
+		return err
+	}
+	if err := writeAtomic(filepath.Join(s.dir, dirTmp), kv.path(name), rec); err != nil {
+		return fmt.Errorf("localstore: write %s/%s/%s: %w", kv.tenant, kv.namespace, name, err)
+	}
+	if s.meta.Guard == nil {
+		s.meta.Guard = map[string]uint64{}
+	}
+	s.meta.Guard[key] = m.Seq
+	delete(s.meta.Lost, key)
+	delete(s.reported, key)
+	return s.writeMetaLocked()
+}
+
+// guardState says what the meta record expects of a record: its counter,
+// whether it is guarded at all, and whether the counter is lost.
+func (kv *KV) guardState(name string) (seq uint64, guarded, lost bool) {
+	key := guardKey(kv.tenant, kv.namespace, name)
+	kv.s.metaMu.Lock()
+	defer kv.s.metaMu.Unlock()
+	seq, guarded = kv.s.meta.Guard[key]
+	return seq, guarded, kv.s.meta.Lost[key]
 }
 
 // Get reads a record. ErrNotFound when absent, ErrExpired when its expiry
@@ -155,6 +212,10 @@ func (kv *KV) read(name string, wantData bool) (recordMeta, []byte, error) {
 	path := kv.path(name)
 	raw, err := readBounded(path, maxRecordBytes+headerLen+nonceLen+64)
 	if errors.Is(err, fs.ErrNotExist) {
+		if _, guarded, lost := kv.guardState(name); guarded || lost {
+			kv.s.reportRollback(kv.tenant, kv.namespace, name, "guarded record is missing")
+			return recordMeta{}, nil, ErrRollback
+		}
 		return recordMeta{}, nil, ErrNotFound
 	}
 	if err != nil && !errors.Is(err, errAuth) {
@@ -173,6 +234,12 @@ func (kv *KV) read(name string, wantData bool) (recordMeta, []byte, error) {
 		kv.s.quarantine(path, TamperEvent{Tenant: kv.tenant, Namespace: kv.namespace, Name: name, Reason: "record failed authentication"})
 		return recordMeta{}, nil, ErrTampered
 	}
+	if seq, guarded, lost := kv.guardState(name); guarded || lost {
+		if lost || !m.Guarded || m.Seq < seq {
+			kv.s.reportRollback(kv.tenant, kv.namespace, name, "guarded record is older than the store's counter or its counter is lost")
+			return recordMeta{}, nil, ErrRollback
+		}
+	}
 	if !m.ExpiresAt.IsZero() && !kv.s.opts.now().Before(m.ExpiresAt) {
 		return m, nil, ErrExpired
 	}
@@ -188,6 +255,20 @@ func (kv *KV) Delete(name string) error {
 	if err := validName(name); err != nil {
 		return err
 	}
+	// A guarded record's counter goes first: the deletion is ours, not a
+	// rollback.
+	key := guardKey(kv.tenant, kv.namespace, name)
+	kv.s.metaMu.Lock()
+	if _, ok := kv.s.meta.Guard[key]; ok || kv.s.meta.Lost[key] {
+		delete(kv.s.meta.Guard, key)
+		delete(kv.s.meta.Lost, key)
+		delete(kv.s.reported, key)
+		if err := kv.s.writeMetaLocked(); err != nil {
+			kv.s.metaMu.Unlock()
+			return err
+		}
+	}
+	kv.s.metaMu.Unlock()
 	if err := os.Remove(kv.path(name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}

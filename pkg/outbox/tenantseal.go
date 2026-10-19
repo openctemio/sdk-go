@@ -204,3 +204,54 @@ func (o *Outbox) DropTenant(tenant string) (dropped, inFlight int, err error) {
 	}
 	return n, inFlight, nil
 }
+
+// Retiring format 1. With a store, the outbox key only reads version 1
+// items (and was adopted as the organization sensor's data key, which is
+// how new items are sealed). Once no version 1 item is left, Open records
+// that in the store, then deletes the key file, so the old single key
+// stops being a second copy of the organization key. The flag is written
+// first: a crash between the two steps leaves a key file that the next Open
+// removes. The key is deleted only when it is the default file inside the
+// outbox directory; a key file the operator placed elsewhere is theirs.
+const (
+	retiredNamespace = "outbox"
+	retiredName      = "format1-retired"
+)
+
+// formatOneRetired reports whether the store holds the retirement flag.
+func formatOneRetired(st *localstore.Store) bool {
+	if !st.HasTenant(localstore.SensorTenant) {
+		return false
+	}
+	kv, err := st.KV(localstore.SensorTenant, retiredNamespace)
+	if err != nil {
+		return false
+	}
+	_, err = kv.Get(retiredName)
+	return err == nil
+}
+
+// retireLegacyKey records the retirement and removes the old key file.
+func (o *Outbox) retireLegacyKey() {
+	st := o.cfg.Store
+	if !formatOneRetired(st) {
+		if _, err := os.Lstat(o.cfg.KeyFile); err != nil {
+			return // no key file: nothing to retire, nothing to record
+		}
+		kv, err := st.KV(localstore.SensorTenant, retiredNamespace)
+		if err == nil {
+			err = kv.Put(retiredName, []byte("1"), localstore.Critical())
+		}
+		if err != nil {
+			o.cfg.Logf("cannot record that format 1 is retired, keeping the outbox key: %v", err)
+			return
+		}
+	}
+	if filepath.Clean(filepath.Dir(o.cfg.KeyFile)) != filepath.Clean(o.cfg.Dir) {
+		return
+	}
+	if err := os.Remove(o.cfg.KeyFile); err == nil {
+		_ = syncDir(o.cfg.Dir)
+		o.cfg.Logf("no version 1 item is left: the old outbox key %s was removed", o.cfg.KeyFile)
+	}
+}

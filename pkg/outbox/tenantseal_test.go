@@ -200,3 +200,84 @@ func FuzzTenantOpen(f *testing.F) {
 		}
 	})
 }
+
+// Once no version 1 item is left, the old outbox key is retired: recorded
+// in the store first, then deleted.
+func TestFormatOneRetiredAfterTheLastV1ItemLeaves(t *testing.T) {
+	dir := t.TempDir()
+	o := openTest(t, dir, nil)
+	_, _ = o.Enqueue(Meta{Kind: KindReport}, []byte("old"))
+	_ = o.Close()
+	keyFile := filepath.Join(dir, keyName)
+	oldKey, err := os.ReadFile(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := openStore(t, t.TempDir())
+	o2 := openTest(t, dir, func(c *Config) { c.Store = st })
+	if _, err := os.Stat(keyFile); err != nil {
+		t.Fatal("the key was removed while a version 1 item needs it")
+	}
+	r := &recorder{}
+	stop := runFor(t, o2, r)
+	waitFor(t, func() bool { return len(r.list()) == 1 })
+	stop()
+	nw, _ := o2.Enqueue(Meta{Kind: KindReport}, []byte("new"))
+	_ = o2.Close()
+
+	o3 := openTest(t, dir, func(c *Config) { c.Store = st })
+	if _, err := os.Stat(keyFile); !os.IsNotExist(err) {
+		t.Fatalf("the version 1 key was kept after the last version 1 item left: %v", err)
+	}
+	if !formatOneRetired(st) {
+		t.Fatal("retirement not recorded in the store")
+	}
+	if got := o3.Pending(); len(got) != 1 || got[0].ID != nw.Meta.ID {
+		t.Fatalf("format 2 items after retirement: %+v", got)
+	}
+	_ = o3.Close()
+
+	// A crash between the flag and the delete leaves the key file: the next
+	// Open removes it, and nothing recreates it.
+	_ = os.WriteFile(keyFile, oldKey, 0o600)
+	o4 := openTest(t, dir, func(c *Config) { c.Store = st })
+	if _, err := os.Stat(keyFile); !os.IsNotExist(err) {
+		t.Fatal("a leftover version 1 key survived")
+	}
+	// A version 1 item that appears after retirement is quarantined as
+	// unreadable, not opened and not a reason to bring the key back.
+	_ = o4.Close()
+	old := openTest(t, t.TempDir(), nil)
+	tk, _ := old.Enqueue(Meta{Kind: KindReport}, []byte("planted"))
+	planted, _ := os.ReadFile(itemFile(old, tk.Meta.ID))
+	_ = os.WriteFile(filepath.Join(dir, dirPending, tk.Meta.ID+itemExt), planted, 0o600)
+	o5 := openTest(t, dir, func(c *Config) { c.Store = st })
+	if s := o5.Stats(); s.Corrupt != 1 || s.PendingCount != 1 {
+		t.Fatalf("planted version 1 item: %+v", s)
+	}
+	if _, err := os.Stat(keyFile); !os.IsNotExist(err) {
+		t.Fatal("the key came back")
+	}
+}
+
+func TestFreshOutboxWithStoreCreatesNoOldKeyAndCustomKeyIsKept(t *testing.T) {
+	dir := t.TempDir()
+	st := openStore(t, t.TempDir())
+	o := openTest(t, dir, func(c *Config) { c.Store = st })
+	_ = o.Close()
+	if _, err := os.Stat(filepath.Join(dir, keyName)); !os.IsNotExist(err) {
+		t.Fatal("a version 1 key was created for an outbox that has no version 1 items")
+	}
+	// A key file the operator placed elsewhere is never deleted.
+	custom := filepath.Join(t.TempDir(), "mounted.key")
+	dir2 := t.TempDir()
+	if _, _, err := loadOrCreateKey(custom, ""); err != nil {
+		t.Fatal(err)
+	}
+	st2 := openStore(t, t.TempDir())
+	o2 := openTest(t, dir2, func(c *Config) { c.Store, c.KeyFile = st2, custom })
+	_ = o2.Close()
+	if _, err := os.Stat(custom); err != nil {
+		t.Fatalf("an operator's key file was deleted: %v", err)
+	}
+}

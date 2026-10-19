@@ -125,7 +125,7 @@ func (c *Cache) saveRevocations() error {
 	if err != nil {
 		return err
 	}
-	return c.opts.State.Put(revocationsName, data, localstore.Critical())
+	return c.opts.State.Put(revocationsName, data, localstore.Critical(), localstore.Guarded())
 }
 
 // sealIndex writes the sealed index of files into a staging directory.

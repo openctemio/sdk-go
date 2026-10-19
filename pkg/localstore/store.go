@@ -77,6 +77,11 @@ var (
 	// ErrTenantErased: the tenant was erased after this handle was made;
 	// get a new handle (which starts the tenant over with a new key).
 	ErrTenantErased = errors.New("localstore: tenant was erased")
+	// ErrRollback: a guarded record is older than the store's own counter
+	// for it, was removed, or cannot be checked because the counters were
+	// lost (an old copy of a record or of the store was put back, or a file
+	// was deleted). Fail closed; a guarded Put makes the record valid again.
+	ErrRollback = errors.New("localstore: guarded record rolled back, removed or unverifiable")
 )
 
 // nameRE is the form of tenant, namespace and record names: a file name on
@@ -133,6 +138,11 @@ type Stats struct {
 	// sealed record. The platform remembers the last one it saw; a value
 	// that goes back means an old copy of the store was restored.
 	Boot uint64 `json:"boot"`
+	// BootReset: the boot record was lost or went back at this Open (the
+	// platform cannot trust the generation as a counter this time; report
+	// it in the heartbeat). Every guarded record then reads as ErrRollback
+	// until it is written again.
+	BootReset bool `json:"boot_reset,omitempty"`
 	// KeyOnDataVolume: the master key is the default file inside Dir.
 	KeyOnDataVolume bool `json:"key_on_data_volume"`
 	// Tampered counts records that failed authentication.
@@ -157,6 +167,12 @@ type Store struct {
 	// silently creating a new key.
 	gen   map[string]uint64
 	stats Stats
+
+	// metaMu guards meta (the sealed meta.rec): the boot generation and the
+	// per-record counters of guarded records (see Guarded).
+	metaMu   sync.Mutex
+	meta     metaRecord
+	reported map[string]bool
 }
 
 // Open opens (creating if needed) the store directory, takes its lock,
@@ -179,7 +195,7 @@ func Open(opts Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{opts: o, dir: dir, unlock: unlock, tenants: map[string]cipher.AEAD{}, gen: map[string]uint64{}}
+	s := &Store{opts: o, dir: dir, unlock: unlock, tenants: map[string]cipher.AEAD{}, gen: map[string]uint64{}, reported: map[string]bool{}}
 	if err := s.init(); err != nil {
 		unlock()
 		return nil, err
@@ -344,13 +360,23 @@ func createKey(path, tmpDir string) ([]byte, error) {
 type metaRecord struct {
 	Boot    uint64    `json:"boot"`
 	Created time.Time `json:"created"`
+	// Guard is the latest counter of each guarded record, by
+	// tenant/namespace/name.
+	Guard map[string]uint64 `json:"guard,omitempty"`
+	// Lost lists the guarded records whose counter is unknown since the
+	// meta record was lost or went back: they read as ErrRollback until
+	// they are written again.
+	Lost map[string]bool `json:"lost,omitempty"`
 }
+
+func guardKey(tenant, namespace, name string) string { return tenant + "/" + namespace + "/" + name }
 
 func (s *Store) bumpBoot() error {
 	path := filepath.Join(s.dir, metaName)
 	b := binding{purpose: "meta"}
 	var m metaRecord
-	data, err := readBounded(path, 4096)
+	reset := false
+	data, err := readBounded(path, 1<<20)
 	switch {
 	case err == nil:
 		pt, oerr := open(s.master, kindMeta, b, data)
@@ -358,28 +384,120 @@ func (s *Store) bumpBoot() error {
 			break
 		}
 		m = metaRecord{}
+		reset = true
 		s.quarantine(path, TamperEvent{Name: metaName, Reason: "boot record failed authentication"})
 	case errors.Is(err, fs.ErrNotExist):
 		if s.hasWrappedKeys() {
+			reset = true
 			s.tamper(TamperEvent{Name: metaName, Reason: "boot record missing while tenant keys exist"})
 		}
 	default:
 		return fmt.Errorf("localstore: read boot record: %w", err)
 	}
+	// Every record was written in a boot generation at or below the meta
+	// record's. One above it proves meta.rec went back (an old copy of the
+	// store or of the file was put back), which hides rolled-back records.
+	var maxBoot uint64
+	lost := map[string]bool{}
+	s.scanRecords(func(tenant, ns, name string, rm recordMeta) {
+		maxBoot = max(maxBoot, rm.Boot)
+		if rm.Guarded {
+			lost[guardKey(tenant, ns, name)] = true
+		}
+	})
+	if !reset && maxBoot > m.Boot {
+		reset = true
+		s.tamper(TamperEvent{Name: metaName, Reason: fmt.Sprintf("boot generation %d is behind a record written in generation %d: an older copy of the store was restored", m.Boot, maxBoot)})
+	}
+	if reset {
+		// The counters are gone or stale: the boot generation restarts above
+		// the highest one any record carries (it never goes back), and every
+		// guarded record is unverifiable until it is written again.
+		m.Boot = max(m.Boot, maxBoot)
+		s.stats.BootReset = true
+		m.Guard = nil
+		m.Lost = nil
+		if len(lost) > 0 {
+			m.Lost = lost
+		}
+	}
 	if m.Created.IsZero() {
 		m.Created = s.opts.now().UTC()
 	}
 	m.Boot++
-	pt, _ := json.Marshal(m)
-	rec, err := seal(s.master, kindMeta, b, pt)
+	s.metaMu.Lock()
+	s.meta = m
+	err = s.writeMetaLocked()
+	s.metaMu.Unlock()
 	if err != nil {
 		return err
 	}
-	if err := writeAtomic(filepath.Join(s.dir, dirTmp), path, rec); err != nil {
-		return fmt.Errorf("localstore: write boot record: %w", err)
-	}
 	s.stats.Boot = m.Boot
 	return nil
+}
+
+// writeMetaLocked seals and writes meta.rec (s.metaMu held).
+func (s *Store) writeMetaLocked() error {
+	pt, err := json.Marshal(s.meta)
+	if err != nil {
+		return err
+	}
+	rec, err := seal(s.master, kindMeta, binding{purpose: "meta"}, pt)
+	if err != nil {
+		return err
+	}
+	if err := writeAtomic(filepath.Join(s.dir, dirTmp), filepath.Join(s.dir, metaName), rec); err != nil {
+		return fmt.Errorf("localstore: write boot record: %w", err)
+	}
+	return nil
+}
+
+// scanRecords calls f with the header of every record that opens, of
+// every tenant that has a key (records that do not open are left for the
+// read that finds them).
+func (s *Store) scanRecords(f func(tenant, namespace, name string, m recordMeta)) {
+	for _, tenant := range s.Tenants() {
+		a, err := s.tenantAEAD(tenant)
+		if err != nil {
+			continue
+		}
+		nss, _ := os.ReadDir(filepath.Join(s.dir, dirKV, tenant))
+		for _, ns := range nss {
+			if !ns.IsDir() || validName(ns.Name()) != nil {
+				continue
+			}
+			files, _ := os.ReadDir(filepath.Join(s.dir, dirKV, tenant, ns.Name()))
+			for _, fe := range files {
+				name, ok := strings.CutSuffix(fe.Name(), recExt)
+				if !ok || !fe.Type().IsRegular() || validName(name) != nil {
+					continue
+				}
+				raw, err := readBounded(filepath.Join(s.dir, dirKV, tenant, ns.Name(), fe.Name()), maxRecordBytes+headerLen+nonceLen+64)
+				if err != nil {
+					continue
+				}
+				pt, err := open(a, kindKV, binding{purpose: "kv", tenant: tenant, namespace: ns.Name(), name: name}, raw)
+				if err != nil {
+					continue
+				}
+				if m, _, err := decodeRecord(pt); err == nil {
+					f(tenant, ns.Name(), name, m)
+				}
+			}
+		}
+	}
+}
+
+// reportRollback reports a rolled-back guarded record once per record.
+func (s *Store) reportRollback(tenant, namespace, name, why string) {
+	key := guardKey(tenant, namespace, name)
+	s.metaMu.Lock()
+	seen := s.reported[key]
+	s.reported[key] = true
+	s.metaMu.Unlock()
+	if !seen {
+		s.tamper(TamperEvent{Tenant: tenant, Namespace: namespace, Name: name, Reason: why})
+	}
 }
 
 // Close releases the lock. Records already written stay.
@@ -582,6 +700,7 @@ func (s *Store) EraseTenant(tenant string) error {
 // removeTenantData removes a tenant's records (best effort). Called with
 // s.mu held.
 func (s *Store) removeTenantData(tenant string) {
+	s.forgetGuards(tenant)
 	_ = os.RemoveAll(filepath.Join(s.dir, dirKV, tenant))
 	_ = syncDir(filepath.Join(s.dir, dirKV))
 }
@@ -626,5 +745,41 @@ func (s *Store) trimCorrupt() {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	for _, e := range entries[:len(entries)-maxCorruptKept] {
 		_ = os.Remove(filepath.Join(cdir, e.Name()))
+	}
+}
+
+// forgetGuards drops the counters of a tenant's guarded records (the
+// tenant was erased; a new start must not read as a rollback). s.mu may be
+// held.
+func (s *Store) forgetGuards(tenant string) {
+	prefix := tenant + "/"
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+	changed := false
+	for _, m := range []any{s.meta.Guard, s.meta.Lost} {
+		switch mm := m.(type) {
+		case map[string]uint64:
+			for k := range mm {
+				if strings.HasPrefix(k, prefix) {
+					delete(mm, k)
+					changed = true
+				}
+			}
+		case map[string]bool:
+			for k := range mm {
+				if strings.HasPrefix(k, prefix) {
+					delete(mm, k)
+					changed = true
+				}
+			}
+		}
+	}
+	for k := range s.reported {
+		if strings.HasPrefix(k, prefix) {
+			delete(s.reported, k)
+		}
+	}
+	if changed {
+		_ = s.writeMetaLocked()
 	}
 }

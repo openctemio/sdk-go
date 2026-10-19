@@ -386,34 +386,44 @@ func Open(cfg Config) (*Outbox, error) {
 			_ = os.Remove(filepath.Join(o.tmpDir, n.Name()))
 		}
 	}
-	if c.Store == nil {
-		if n := countItems(c.Dir, fileVersion2); n > 0 {
-			// Without the store these items cannot be read: opening would
-			// quarantine them (a configuration rollback losing results).
-			return nil, fmt.Errorf("%w: %s holds %d item(s) sealed with the local store; configure Store", ErrStoreRequired, c.Dir, n)
+	created := false
+	if c.Store != nil && (formatOneRetired(c.Store) || legacyItems(c.Dir) == 0) {
+		// Nothing needs the version 1 key any more (or it was retired
+		// earlier, and a version 1 item that shows up now is quarantined as
+		// unreadable like any file that does not authenticate).
+		o.seal = tenantSealer{store: c.Store}
+		o.retireLegacyKey()
+	} else {
+		if c.Store == nil {
+			if n := countItems(c.Dir, fileVersion2); n > 0 {
+				// Without the store these items cannot be read: opening would
+				// quarantine them (a configuration rollback losing results).
+				return nil, fmt.Errorf("%w: %s holds %d item(s) sealed with the local store; configure Store", ErrStoreRequired, c.Dir, n)
+			}
+			if err := CheckKey(c.Dir, c.KeyFile); err != nil {
+				return nil, err
+			}
+		} else if _, err := os.Stat(c.KeyFile); errors.Is(err, fs.ErrNotExist) && legacyItems(c.Dir) > 0 {
+			return nil, fmt.Errorf("%w: %s does not exist and %s holds version 1 items only that key can read", ErrKeyMissing, c.KeyFile, c.Dir)
 		}
-		if err := CheckKey(c.Dir, c.KeyFile); err != nil {
+		key, wasCreated, err := loadOrCreateKey(c.KeyFile, o.tmpDir)
+		if err != nil {
 			return nil, err
 		}
-	} else if _, err := os.Stat(c.KeyFile); errors.Is(err, fs.ErrNotExist) && legacyItems(c.Dir) > 0 {
-		return nil, fmt.Errorf("%w: %s does not exist and %s holds version 1 items only that key can read", ErrKeyMissing, c.KeyFile, c.Dir)
-	}
-	key, created, err := loadOrCreateKey(c.KeyFile, o.tmpDir)
-	if err != nil {
-		return nil, err
-	}
-	legacy, err := newSealer(key)
-	if err != nil {
-		return nil, err
-	}
-	o.seal = legacySealer{s: legacy}
-	if c.Store != nil {
-		// The outbox key becomes the organization sensor's data key when the
-		// store has none yet: nothing is re-encrypted.
-		if aerr := c.Store.AdoptTenantKey(localstore.SensorTenant, key); aerr != nil && !errors.Is(aerr, localstore.ErrKeyExists) {
-			return nil, aerr
+		created = wasCreated
+		legacy, err := newSealer(key)
+		if err != nil {
+			return nil, err
 		}
-		o.seal = tenantSealer{legacy: legacy, store: c.Store}
+		o.seal = legacySealer{s: legacy}
+		if c.Store != nil {
+			// The outbox key becomes the organization sensor's data key when the
+			// store has none yet: nothing is re-encrypted.
+			if aerr := c.Store.AdoptTenantKey(localstore.SensorTenant, key); aerr != nil && !errors.Is(aerr, localstore.ErrKeyExists) {
+				return nil, aerr
+			}
+			o.seal = tenantSealer{legacy: legacy, store: c.Store}
+		}
 	}
 	if err := o.load(); err != nil {
 		return nil, err
