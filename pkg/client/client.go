@@ -468,6 +468,10 @@ type HeartbeatRequest struct {
 	// ConfigReport is the config report's digest, rollup and counts, sent
 	// only to a platform that lists the "config_report" feature.
 	ConfigReport *core.ConfigReportSummary `json:"config_report,omitempty"`
+
+	// LocalStore is the state of the sensor's local data, sent only to a
+	// platform that lists the "local_store" feature.
+	LocalStore *core.LocalStoreReport `json:"local_store,omitempty"`
 }
 
 // MarshalJSON encodes the heartbeat. active_jobs is sent even when it is 0
@@ -689,6 +693,9 @@ func (c *Client) sendHeartbeat(ctx context.Context, status *core.SensorStatus) (
 	}
 	if status.ConfigReport != nil && c.PlatformSupports(ctx, protov2.FeatureConfigReport) {
 		req.ConfigReport = status.ConfigReport
+	}
+	if status.LocalStore != nil && c.PlatformSupports(ctx, protov2.FeatureLocalStore) {
+		req.LocalStore = status.LocalStore
 	}
 	ob := c.Outbox()
 	if ob != nil {

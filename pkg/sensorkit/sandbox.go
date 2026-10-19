@@ -107,7 +107,8 @@ func (k *Kit) setupSandbox() error {
 
 // protectedPaths are the files no tool may read: the renewable API key, the
 // paired identity (signing key, protocol v3 certificate), the outbox and its
-// key, the local policy, and the sensor's own list.
+// key, the local store and its master key, the local policy, and the
+// sensor's own list.
 func (k *Kit) protectedPaths() []string {
 	var out []string
 	add := func(p string) {
@@ -127,6 +128,12 @@ func (k *Kit) protectedPaths() []string {
 	add(k.s.outbox.Config.KeyFile)
 	if d := k.s.outbox.Config.Dir; d != "" {
 		add(outbox.DefaultKeyFile(d))
+	}
+	// The local store and its master key: the keys of every organization's
+	// records.
+	if k.ls != nil {
+		add(k.ls.dir)
+		add(k.ls.keyFile)
 	}
 	if lp := k.s.local; lp != nil {
 		add(lp.Path())

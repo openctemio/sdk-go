@@ -80,6 +80,9 @@ type BaseSensor struct {
 	// loadReporter supplies the active and maximum jobs on every heartbeat
 	// (see SetLoadReporter).
 	loadReporter LoadReporter
+	// localStore reports the local data on every heartbeat
+	// (SetLocalStoreReporter).
+	localStore func() *LocalStoreReport
 
 	// manifest is the registration state of the sensor manifest (api
 	// RFC-033, manifest.go).
@@ -430,6 +433,15 @@ func (a *BaseSensor) SetLoadReporter(r LoadReporter) {
 	a.statusMu.Unlock()
 }
 
+// SetLocalStoreReporter makes every heartbeat carry f's report of the
+// sensor's local data (SensorStatus.LocalStore). f is called on every
+// heartbeat and must be quick. nil reports nothing. Call before Start.
+func (a *BaseSensor) SetLocalStoreReporter(f func() *LocalStoreReport) {
+	a.statusMu.Lock()
+	a.localStore = f
+	a.statusMu.Unlock()
+}
+
 // SetCapabilityReporter makes every heartbeat carry r's report instead of
 // the tool registry's (see Tools): the tools the sensor actually has, the
 // capabilities it serves and its concurrency. The platform dispatches by it
@@ -458,7 +470,11 @@ func (a *BaseSensor) withCapabilities(ctx context.Context, status *SensorStatus)
 	a.statusMu.RLock()
 	r := a.capReporter
 	lr := a.loadReporter
+	ls := a.localStore
 	a.statusMu.RUnlock()
+	if ls != nil && status != nil {
+		status.LocalStore = ls()
+	}
 	if r == nil && a.tools != nil {
 		r = a.tools
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
+	"github.com/openctemio/sdk-go/pkg/localstore"
 	"github.com/openctemio/sdk-go/pkg/netctx"
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
@@ -370,6 +371,11 @@ type Kit struct {
 	// poller sends a command's last lines before its result.
 	logs atomic.Pointer[logShipper]
 
+	// ls is the local store and what runs on it (nil with the outbox off);
+	// janitorRef is its janitor while Run runs.
+	ls         *localStore
+	janitorRef atomic.Pointer[localstore.Janitor]
+
 	// network is the host owner's network declaration; controlViaProxy:
 	// platform requests go through a proxy. netWatch keeps the network
 	// report (set by Run).
@@ -390,6 +396,26 @@ func (k *Kit) warnLoopback() {
 // New resolves the settings, checks them, connects the platform client and
 // opens the outbox. It prints what an operator needs to know (the outbox,
 // a renewed key in use). An error carries the exit code (ExitCode).
+// applyCATrust installs the configured CA bundle and CA fingerprint pin.
+func applyCATrust(opts Options) error {
+	if f := envOr(opts.CACertFile, EnvCACertFile); f != "" {
+		pool, err := httpsec.LoadCAFile(f)
+		if err != nil {
+			return err
+		}
+		httpsec.SetAPIRootCAs(pool)
+		httpsec.SetContentRootCAs(pool)
+	}
+	if f := envOr(opts.CAFingerprint, EnvCAFingerprint); f != "" {
+		fp, err := httpsec.ParseCAFingerprint(f)
+		if err != nil {
+			return usageError(fmt.Errorf("%s: %w", EnvCAFingerprint, err))
+		}
+		httpsec.SetAPIPinnedCA(fp)
+	}
+	return nil
+}
+
 func New(opts Options) (*Kit, error) {
 	if err := MigrateLegacyEnv(); err != nil {
 		return nil, err
@@ -433,20 +459,8 @@ func New(opts Options) (*Kit, error) {
 	if s.outbox, err = ResolveOutbox(opts.Outbox, opts.OutboxOverrides, true); err != nil {
 		return nil, err
 	}
-	if f := envOr(opts.CACertFile, EnvCACertFile); f != "" {
-		pool, err := httpsec.LoadCAFile(f)
-		if err != nil {
-			return nil, err
-		}
-		httpsec.SetAPIRootCAs(pool)
-		httpsec.SetContentRootCAs(pool)
-	}
-	if f := envOr(opts.CAFingerprint, EnvCAFingerprint); f != "" {
-		fp, err := httpsec.ParseCAFingerprint(f)
-		if err != nil {
-			return nil, usageError(fmt.Errorf("%s: %w", EnvCAFingerprint, err))
-		}
-		httpsec.SetAPIPinnedCA(fp)
+	if err := applyCATrust(opts); err != nil {
+		return nil, err
 	}
 	if s.templates, err = resolveTemplateKeys(opts.TemplateSigningKeys); err != nil {
 		return nil, err
@@ -505,11 +519,18 @@ func New(opts Options) (*Kit, error) {
 			k.closeClient()
 			return nil, err
 		}
+		// The local store seals the outbox per organization; the janitor and
+		// the job journal use it too.
+		if err := k.openLocalStore(); err != nil {
+			k.closeClient()
+			return nil, err
+		}
 		// Durable outbox: results are on disk before the first send.
 		if err := EnableOutbox(k.client, s.outbox, s.verbose, k.out, k.errw); err != nil {
 			k.closeClient()
 			return nil, fmt.Errorf("outbox: %w", err)
 		}
+		k.recoverJobs()
 		if s.verbose {
 			_, _ = fmt.Fprintf(k.out, "  Sensor protocol: %s\n", protocol)
 		}
@@ -858,6 +879,7 @@ func (k *Kit) closeClient() {
 	if k.client != nil {
 		_ = k.client.Close()
 	}
+	k.closeLocalStore()
 }
 
 // ScannerOption configures an added scanner.
@@ -981,6 +1003,29 @@ func (k *Kit) allowed(e scannerEntry) bool {
 	return false
 }
 
+// applyScannerPriority sets the scanners' scheduling priority and, when
+// asked, protects the sensor itself from the OOM killer.
+func (k *Kit) applyScannerPriority() {
+	out, errw := k.out, k.errw
+	// Scanner processes yield the CPU and the disk to the sensor and are
+	// OOM-killed before it (api RFC-035 §5.3).
+	core.SetScannerPriority(k.s.scannerPriority)
+	if p := k.s.scannerPriority; p != nil {
+		_, _ = fmt.Fprintf(out, "  Scanner priority: low (nice +%d, I/O best-effort %d, oom_score_adj %d; %s=normal turns it off)\n",
+			p.Nice, p.IOLevel, p.OOMScoreAdj, EnvScannerPriority)
+	} else {
+		_, _ = fmt.Fprintf(out, "  Scanner priority: normal (the sensor's own)\n")
+	}
+	// Opt-in: the sensor itself is the OOM killer's last choice. Before any
+	// scanner starts; ApplyScannerPriority keeps scanners from inheriting it.
+	if k.s.protectFromOOM {
+		code, summary := protectFromOOM(out, errw, writeSelfOOMScoreAdj)
+		k.oomCheck(true, code, summary)
+	} else {
+		k.oomCheck(false, "", "")
+	}
+}
+
 // Run runs the sensor until ctx is canceled (or SIGINT/SIGTERM, unless ctx
 // comes from SignalContext): it reports the tools, checks the platform
 // accepts the key (waiting while it does not), then heartbeats, runs the
@@ -1000,6 +1045,8 @@ func (k *Kit) Run(ctx context.Context) error {
 		defer stop()
 	}
 	defer k.closeClient()
+	stopJanitor := k.startJanitor(ctx)
+	defer stopJanitor()
 
 	s, out, errw := k.sensor, k.out, k.errw
 	for _, p := range k.parsers {
@@ -1021,23 +1068,7 @@ func (k *Kit) Run(ctx context.Context) error {
 	// a saturated sensor it takes seconds, and the heartbeat must not wait
 	// for it (api RFC-035 §5.1).
 	reg.SetBackgroundRefresh(true)
-	// Scanner processes yield the CPU and the disk to the sensor and are
-	// OOM-killed before it (api RFC-035 §5.3).
-	core.SetScannerPriority(k.s.scannerPriority)
-	if p := k.s.scannerPriority; p != nil {
-		_, _ = fmt.Fprintf(out, "  Scanner priority: low (nice +%d, I/O best-effort %d, oom_score_adj %d; %s=normal turns it off)\n",
-			p.Nice, p.IOLevel, p.OOMScoreAdj, EnvScannerPriority)
-	} else {
-		_, _ = fmt.Fprintf(out, "  Scanner priority: normal (the sensor's own)\n")
-	}
-	// Opt-in: the sensor itself is the OOM killer's last choice. Before any
-	// scanner starts; ApplyScannerPriority keeps scanners from inheriting it.
-	if k.s.protectFromOOM {
-		code, summary := protectFromOOM(out, errw, writeSelfOOMScoreAdj)
-		k.oomCheck(true, code, summary)
-	} else {
-		k.oomCheck(false, "", "")
-	}
+	k.applyScannerPriority()
 
 	k.addScheduledScanners(ctx, scanners)
 	for _, c := range k.collectors {
@@ -1094,6 +1125,9 @@ func (k *Kit) Run(ctx context.Context) error {
 		// The config report goes to a platform that takes it, with its
 		// digest on every heartbeat.
 		s.SetConfigReporter(core.ConfigReporterFunc(k.ConfigReport))
+		if k.ls != nil {
+			s.SetLocalStoreReporter(k.localStoreReport)
+		}
 	}
 
 	var poller *core.CommandPoller
@@ -1161,6 +1195,9 @@ func (k *Kit) Run(ctx context.Context) error {
 		}
 	}
 	<-pollerDone
+
+	// The janitor stops before the outbox closes.
+	stopJanitor()
 
 	// Undelivered results stay in the outbox for the next start.
 	if k.client != nil {
@@ -1368,6 +1405,12 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// No polling while the platform rejects the key (also without the
 	// doorbell); polling resumes with the first accepted heartbeat.
 	poller.SetAuthGate(k.sensor.AuthGate())
+	// Results beat new work: claim nothing while the storage is full.
+	if k.ls != nil && k.ls.store != nil {
+		poller.SetClaimGate(k.acceptsWork)
+		// Every job is journaled, so a crash is reported at the next start.
+		poller.SetJobJournal(jobJournal{st: k.ls.store})
+	}
 	// Heartbeats report the commands running now and the slot count.
 	k.sensor.SetLoadReporter(poller)
 	// Commands for tools outside the platform's policy fail instead of

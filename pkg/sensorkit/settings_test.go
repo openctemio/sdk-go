@@ -24,7 +24,7 @@ func clearEnv(t *testing.T) {
 		EnvOutboxKeyFile, "RETRY_QUEUE", "RETRY_DIR", "SENSOR_ALLOW_PRIVATE_TARGETS", "AGENT_ID", "AGENT_NAME",
 		"AGENT_ALLOW_PRIVATE_TARGETS", core.EnvLocalPolicy, core.EnvAllowedRanges, core.EnvAllowedPorts, core.EnvKillSwitchFile,
 		core.EnvRequireLocalPolicy, netctx.EnvSite, netctx.EnvReach, netctx.EnvDNSSuffixes, netctx.EnvInternet, netctx.EnvReport,
-		netctx.EnvDNSResolvers, EnvSharedMode,
+		netctx.EnvDNSResolvers, EnvSharedMode, EnvStoreDir, EnvStoreKeyFile, EnvWorkspaceDir,
 	} {
 		t.Setenv(k, "")
 		_ = os.Unsetenv(k)
