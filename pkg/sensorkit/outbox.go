@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/client"
+	"github.com/openctemio/sdk-go/pkg/localstore"
 	"github.com/openctemio/sdk-go/pkg/outbox"
 )
 
@@ -242,14 +243,38 @@ func OutboxCommand(p OutboxPlan, requeueDead bool, w, errw io.Writer) int {
 		_, _ = fmt.Fprintf(errw, "Error: the outbox is off; set %s=on or %s\n", EnvOutbox, EnvOutboxDir)
 		return ExitError
 	}
-	// The status command never creates a key: with no key file, opening the
-	// outbox would write one, and a new key cannot read items sealed with
-	// the old one. Report from the directory alone instead.
+	// With a local store beside the outbox, the items are sealed under the
+	// store's keys: open it (the status command never creates one).
+	var lst *localstore.Store
+	storeDir, _ := resolveStorePaths(p.Config.Dir)
+	storeKey := strings.TrimSpace(os.Getenv(EnvStoreKeyFile))
+	storeKeyPath := firstNonEmpty(storeKey, filepath.Join(storeDir, "master.key"))
+	// Opening the store without its key would create one (the default file
+	// always is): with no key there is nothing the store can read, so the
+	// outbox is reported without it (items sealed with the store then make
+	// it fail with ErrStoreRequired instead of a new key being written).
+	_, kerr := os.Stat(storeKeyPath)
+	if fi, serr := os.Stat(storeDir); serr == nil && fi.IsDir() && kerr == nil {
+		var err error
+		lst, err = localstore.Open(localstore.Options{Dir: storeDir, KeyFile: storeKey, Logf: func(string, ...any) {}})
+		if errors.Is(err, localstore.ErrLocked) {
+			_, _ = fmt.Fprintf(errw, "Error: %v.\nA running sensor holds the store: stop it first, or read its outbox state on the platform (the sensor's heartbeat reports it).\n", err)
+			return ExitError
+		}
+		if err != nil {
+			_, _ = fmt.Fprintf(errw, "Error: %v\n", err)
+			return ExitError
+		}
+		defer func() { _ = lst.Close() }()
+	}
+	// Without a store the status command never creates a key: with no key
+	// file, opening the outbox would write one, and a new key cannot read
+	// items sealed with the old one. Report from the directory alone instead.
 	keyFile := p.Config.KeyFile
 	if keyFile == "" {
 		keyFile = outbox.DefaultKeyFile(p.Config.Dir)
 	}
-	if _, serr := os.Stat(keyFile); errors.Is(serr, fs.ErrNotExist) {
+	if _, serr := os.Stat(keyFile); lst == nil && errors.Is(serr, fs.ErrNotExist) {
 		if err := outbox.CheckKey(p.Config.Dir, keyFile); err != nil {
 			_, _ = fmt.Fprintf(errw, "Error: %v\n", err)
 			return ExitError
@@ -257,7 +282,7 @@ func OutboxCommand(p OutboxPlan, requeueDead bool, w, errw io.Writer) int {
 		_, _ = fmt.Fprintf(w, "Outbox %s\n  empty: no results waiting and no key file yet (%s is created on the sensor's first start)\n", p.Config.Dir, keyFile)
 		return 0
 	}
-	ob, err := outbox.Open(outbox.Config{Dir: p.Config.Dir, KeyFile: p.Config.KeyFile, MaxBytes: p.Config.MaxBytes, MaxAge: p.Config.MaxAge})
+	ob, err := outbox.Open(outbox.Config{Dir: p.Config.Dir, KeyFile: p.Config.KeyFile, MaxBytes: p.Config.MaxBytes, MaxAge: p.Config.MaxAge, Store: lst})
 	if errors.Is(err, outbox.ErrLocked) {
 		_, _ = fmt.Fprintf(errw, "Error: %v.\nA running sensor holds the outbox: stop it first, or read its outbox state on the platform (the sensor's heartbeat reports it).\n", err)
 		return ExitError

@@ -359,6 +359,16 @@ type CommandPoller struct {
 	draining   atomic.Bool
 	drainGrace time.Duration
 
+	// claimGate says whether the sensor may claim new jobs now (storage
+	// and outbox limits; SetClaimGate). claimBlocked remembers the last
+	// answer so a change is logged once.
+	claimGate    atomic.Pointer[func() (bool, string)]
+	claimBlocked atomic.Bool
+
+	// journal records every job from its start to its result
+	// (SetJobJournal), so the next start reports the ones a crash cut short.
+	journal atomic.Pointer[JobJournal]
+
 	// local is the sensor-local policy (SetLocalPolicy): admission before
 	// every command and the kill switch. killed is true while its kill
 	// switch is engaged.
@@ -791,6 +801,60 @@ func (p *CommandPoller) keyHint() string {
 	return "(unknown)"
 }
 
+// SetClaimGate makes the poller claim nothing while f reports false (with
+// the reason): the sensor's storage is full, so results beat new work.
+// Running commands finish, and polling resumes as soon as f reports true.
+// The change of state is logged once each way. Safe while the poller runs;
+// nil removes the gate.
+func (p *CommandPoller) SetClaimGate(f func() (ok bool, reason string)) {
+	if f == nil {
+		p.claimGate.Store(nil)
+		return
+	}
+	p.claimGate.Store(&f)
+}
+
+// JobJournal records the jobs the sensor runs, so the next start can report
+// the ones a crash or a kill cut short (localstore's job journal through
+// sensorkit). JobStarted is called once the platform accepted the start and
+// before anything runs; JobFinished once the job's result was handed to the
+// client (queued in the outbox), or the job was handed back. tenant is the
+// organization of a verified shared job ("" on an organization sensor).
+type JobJournal interface {
+	JobStarted(cmdID, tenant string, leaseEpoch int) error
+	JobFinished(cmdID, tenant string) error
+}
+
+// SetJobJournal makes the poller journal every job it runs. A journal that
+// cannot write is logged and the job still runs (only its crash report is
+// lost). nil removes it. Call before Start.
+func (p *CommandPoller) SetJobJournal(j JobJournal) {
+	if j == nil {
+		p.journal.Store(nil)
+		return
+	}
+	p.journal.Store(&j)
+}
+
+// claimAllowed applies the claim gate and logs a change of state once.
+func (p *CommandPoller) claimAllowed() bool {
+	g := p.claimGate.Load()
+	if g == nil {
+		return true
+	}
+	ok, why := (*g)()
+	if !ok {
+		if p.claimBlocked.CompareAndSwap(false, true) {
+			fmt.Printf("[command-poller] Not claiming new jobs: %s\n", why)
+		}
+		return false
+	}
+	if p.claimBlocked.CompareAndSwap(true, false) {
+		fmt.Printf("[command-poller] Claiming new jobs again\n")
+	}
+	return true
+}
+
 // paused reports whether the platform paused or drained this sensor.
 func (p *CommandPoller) paused() bool {
 	return p.doorbell != nil && p.doorbell.Paused()
@@ -871,6 +935,10 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Not polling: %s\n", p.doorbell.State())
 		}
+		return
+	}
+	// Storage or the outbox is full: results beat new work.
+	if !p.claimAllowed() {
 		return
 	}
 	// The platform rejects the key: polling would only collect more 401s.
@@ -1107,22 +1175,44 @@ func (p *CommandPoller) claim(ctx context.Context, cmd *Command) error {
 
 // executeCommand executes a single command. jobErr is the JobGuard's
 // verdict: a command it refused is reported failed and never started.
-func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr error) {
-	defer func() {
-		p.queue.cancel(cmd.ID, context.Canceled) // free the context
-		p.queue.forget(cmd.ID)
-		<-p.sem
-		// A command ended: the host it held is free, so a command handed
-		// back for it may run now.
-		p.claims.progressed()
-		if p.backlog.Load() {
-			select {
-			case p.slotFreed <- struct{}{}:
-			default:
-			}
+// releaseCommandSlot frees what a finished command held: its context, its
+// queue entry, its concurrency slot and the host it claimed.
+func (p *CommandPoller) releaseCommandSlot(cmd *Command) {
+	p.queue.cancel(cmd.ID, context.Canceled) // free the context
+	p.queue.forget(cmd.ID)
+	<-p.sem
+	// A command ended: the host it held is free, so a command handed
+	// back for it may run now.
+	p.claims.progressed()
+	if p.backlog.Load() {
+		select {
+		case p.slotFreed <- struct{}{}:
+		default:
 		}
-		p.activeCmds.Done()
-	}()
+	}
+	p.activeCmds.Done()
+}
+
+// journalJob records the job in the journal before anything of it runs and
+// returns the function that closes the record; with no journal it is a no-op.
+func (p *CommandPoller) journalJob(cmd *Command) func() {
+	jp := p.journal.Load()
+	if jp == nil {
+		return func() {}
+	}
+	j := *jp
+	if jerr := j.JobStarted(cmd.ID, cmd.jobTenant, cmd.LeaseEpoch); jerr != nil {
+		fmt.Printf("[command-poller] Warning: command %s is not journaled (a crash would not be reported): %v\n", cmd.ID, jerr)
+	}
+	return func() {
+		if jerr := j.JobFinished(cmd.ID, cmd.jobTenant); jerr != nil {
+			fmt.Printf("[command-poller] Warning: closing the journal record of command %s: %v\n", cmd.ID, jerr)
+		}
+	}
+}
+
+func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr error) {
+	defer p.releaseCommandSlot(cmd)
 
 	startTime := time.Now()
 	// Results pushed while executing belong to this command: a Pusher with
@@ -1187,6 +1277,10 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		return
 	}
 	p.queue.markStarted(cmd.ID)
+	// The journal knows the job before anything of it runs; the record goes
+	// when this function returns: the result is queued (or the job handed
+	// back) by then.
+	defer p.journalJob(cmd)()
 	p.clog(ctx, cmd.ID, "info", "Received by the sensor", map[string]any{"type": cmd.Type})
 
 	// The sensor-local policy first: nothing the platform says (its tool

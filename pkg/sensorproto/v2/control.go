@@ -120,6 +120,11 @@ const (
 	// config_report summary (api RFC-033, config report). Without it a
 	// sensor sends neither.
 	FeatureConfigReport = "config_report"
+	// FeatureLocalStore: the platform reads the heartbeat member
+	// "local_store" (bytes per class, watermark, last cleanup sweep, boot
+	// generation of the sensor's local data). Without it a sensor sends
+	// none.
+	FeatureLocalStore = "local_store"
 	// FeatureCapacity: claim-N (api RFC-046 §11, RFC-030 §5.9). A sensor
 	// that names it in X-OpenCTEM-Sensor-Features on GET /commands gets the
 	// commands already claimed for it (status acknowledged, lease set), at

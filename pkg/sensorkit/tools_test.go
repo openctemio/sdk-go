@@ -14,7 +14,6 @@ import (
 	"github.com/openctemio/sdk-go/pkg/conformance"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
-	"github.com/openctemio/sdk-go/pkg/outbox"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -140,9 +139,12 @@ func TestKit_ContractTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyFile := outbox.DefaultKeyFile(opts.Outbox.Dir)
+	// The secret a tool must not read: the local store's master key, which
+	// wraps every organization's data key.
+	storeDir, _ := kitStoreDirs(opts.Outbox.Dir)
+	keyFile := filepath.Join(storeDir, "master.key")
 	if _, err := os.Stat(keyFile); err != nil {
-		t.Fatalf("outbox key: %v", err)
+		t.Fatalf("store master key: %v", err)
 	}
 	probe.ReadPath = keyFile
 	t.Cleanup(func() { probe.ReadPath = "" })
