@@ -76,6 +76,12 @@ const (
 	// DefaultCircuitThreshold consecutive transient failures open the circuit:
 	// no delivery until the cool-down passes or Wake is called.
 	DefaultCircuitThreshold = 3
+	// DefaultWakeSpread bounds how far Wake spreads the start of a drain,
+	// and wakeSpreadPerItem is the spread each waiting item adds: a fleet
+	// that comes back after a platform outage does not upload every queued
+	// result in the same second.
+	DefaultWakeSpread = 30 * time.Second
+	wakeSpreadPerItem = 100 * time.Millisecond
 	// maxRetryAfter caps a server's Retry-After.
 	maxRetryAfter = time.Hour
 	// maxStateFile and maxReasonFile bound what is read back from disk.
@@ -198,6 +204,10 @@ type Config struct {
 	// CircuitThreshold is the number of consecutive transient failures that
 	// pause all delivery until the back-off passes or Wake is called.
 	CircuitThreshold int
+	// WakeSpread bounds the random delay Wake puts before the drain starts:
+	// U(0, min(WakeSpread, waiting items × 100 ms)). Default 30 s; negative
+	// drains at once.
+	WakeSpread time.Duration
 	// Logf receives the outbox's log lines (state changes, evictions,
 	// quarantines, dead letters). Default: the standard logger.
 	Logf func(format string, args ...any)
@@ -253,6 +263,9 @@ func (c *Config) withDefaults() Config {
 	}
 	if out.BackoffMax < out.BackoffBase {
 		out.BackoffMax = out.BackoffBase
+	}
+	if out.WakeSpread == 0 {
+		out.WakeSpread = DefaultWakeSpread
 	}
 	if out.CircuitThreshold <= 0 {
 		out.CircuitThreshold = DefaultCircuitThreshold
@@ -323,6 +336,8 @@ type Outbox struct {
 	authErr         string
 	consecutiveFail int
 	circuitUntil    time.Time
+	// drainAt delays the drain Wake started (WakeSpread); zero: none.
+	drainAt time.Time
 
 	// counters since Open
 	evicted     int64
