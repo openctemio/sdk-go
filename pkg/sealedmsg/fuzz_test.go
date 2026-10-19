@@ -10,7 +10,7 @@ import (
 func FuzzOpenRequest(f *testing.F) {
 	k, _ := GenerateKey()
 	r := Route{Realm: "r", SensorID: "s"}
-	good, _ := SealRequest(k.Public(), r, &Request{RequestMeta: RequestMeta{Method: "GET", Path: "/"}})
+	good, _ := SealRequest(k.Public(), r, &Request{RequestMeta: RequestMeta{Method: "GET", Path: "/", ReplyKey: k.Public().Bytes()}})
 	f.Add(good)
 	f.Add([]byte("OCSE\x01\x01\x00\x01"))
 	f.Fuzz(func(t *testing.T, env []byte) {
@@ -23,7 +23,7 @@ func FuzzOpenRequest(f *testing.F) {
 
 // FuzzUnframe: the inner framing never panics.
 func FuzzUnframe(f *testing.F) {
-	pt, _ := frame(RequestMeta{ID: "1", Method: "GET", Path: "/"}, []byte("b"))
+	pt, _ := frame(RequestMeta{ID: "1", Method: "GET", Path: "/", ReplyKey: []byte("k")}, []byte("b"))
 	f.Add(pt)
 	f.Add([]byte{0, 0, 0, 2, '{', '}'})
 	f.Fuzz(func(t *testing.T, pt []byte) {
