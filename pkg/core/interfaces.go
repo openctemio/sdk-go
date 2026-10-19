@@ -55,6 +55,13 @@ type ScanOptions struct {
 	// Used by Nuclei (-t), Semgrep (--config), Betterleaks (--config)
 	CustomTemplateDir string `yaml:"custom_template_dir" json:"custom_template_dir"`
 
+	// RuleSources is which detection rules the scan runs (rule_sources.go):
+	// the scanner's own rules, the custom templates in CustomTemplateDir,
+	// or both in one run. The zero value is RuleSourcesBoth. A scanner that
+	// honors it lets its sensor report CapabilityRuleSources; one that
+	// does not runs its own rules plus the custom templates, as before.
+	RuleSources RuleSources `yaml:"rule_sources" json:"rule_sources,omitempty"`
+
 	// AllowInteractsh lets this scan use out-of-band callbacks (nuclei's
 	// Interactsh), which are off by default. The command executor sets it
 	// only when the platform's scan command allows it
