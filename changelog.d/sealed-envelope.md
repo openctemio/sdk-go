@@ -1,6 +1,0 @@
-### Added: end-to-end sealed envelopes for relayed sensor traffic (`pkg/sealedmsg`)
-
-- `SealRequest` seals a sensor's ordinary signed v2 request (method, path, headers including the request signature, body) to the platform's ingest key with HPKE: hybrid ML-KEM-768 + X25519, HKDF-SHA256, ChaCha20-Poly1305. A relay, an object store or any other intermediary can delay or drop the envelope, but cannot read or change it. Moved to another sensor's or realm's mailbox, it does not open.
-- `SealResponse` signs the platform's answer with its response key, binds it to the digest of the request envelope and to the route, and seals it to the sensor's encryption key. `OpenResponse` and `OpenResponseAny` check the signature against the pinned keys before parsing anything, and refuse a response for another request or sensor, one forged by the intermediary, or one more than 10 minutes off the sensor's clock.
-- The request carries the sensor's encryption public key (`ReplyKey`) inside the sealed envelope; the platform seals its answer to it.
-- Connection-level headers are not carried, header injection and oversize parts are refused, and keys rotate by key id (`PeekHeader`). `testdata/vector-v1.json` is the cross-implementation test vector for the platform's side.
