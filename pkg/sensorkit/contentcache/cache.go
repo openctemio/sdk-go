@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/localstore"
 )
 
 // Scopes of a pack.
@@ -105,6 +106,16 @@ type Options struct {
 	// Limits bound one archive (zero: DefaultLimits).
 	Limits Limits
 	Fetch  Fetcher
+	// Index seals each installed pack's file index (a *localstore.Sealer
+	// for the pack's tenant): loads are then checked against it. Without
+	// it, loads rebuild the canonical archive (see verify.go).
+	Index IndexSealer
+	// State persists the revocation set (a localstore namespace). Without
+	// it, revocations last until the process ends.
+	State *localstore.KV
+	// ReverifyEvery is how long a full load check of an unchanged pack
+	// holds (0: DefaultReverifyEvery).
+	ReverifyEvery time.Duration
 }
 
 // Cache is the content pack cache of one sensor.
@@ -115,8 +126,16 @@ type Cache struct {
 	inUse  map[string]int
 	used   map[string]time.Time
 	banned map[string]bool // revoked
-	now    func() time.Time
-	stats  statsBox
+	// revocationsUnknown: the persisted revocation set failed
+	// authentication; every load fails until the next Sync.
+	revocationsUnknown bool
+	// revocationsPersisted: the revocation record exists (read at Open or
+	// written since). A cache that holds packs but has no record lost it:
+	// it fails closed until the next Sync.
+	revocationsPersisted bool
+	verified           map[string]verified
+	now                func() time.Time
+	stats              statsBox
 }
 
 // Open opens (creating) a cache rooted at root, private to the sensor.
@@ -127,6 +146,9 @@ func Open(root string, opts Options) (*Cache, error) {
 	if opts.Limits == (Limits{}) {
 		opts.Limits = DefaultLimits
 	}
+	if opts.ReverifyEvery <= 0 {
+		opts.ReverifyEvery = DefaultReverifyEvery
+	}
 	for _, d := range []string{root, filepath.Join(root, "packs")} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
@@ -135,12 +157,26 @@ func Open(root string, opts Options) (*Cache, error) {
 			return nil, err
 		}
 	}
-	c := &Cache{root: root, opts: opts, inUse: map[string]int{}, used: map[string]time.Time{}, banned: map[string]bool{}, now: time.Now}
+	c := &Cache{root: root, opts: opts, inUse: map[string]int{}, used: map[string]time.Time{}, banned: map[string]bool{},
+		verified: map[string]verified{}, now: time.Now}
+	c.loadRevocations()
 	// Leftover staging from an interrupted install goes.
 	entries, _ := os.ReadDir(filepath.Join(root, "packs"))
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".staging-") {
 			_ = removeTree(filepath.Join(root, "packs", e.Name()))
+		}
+	}
+	// Packs held without a revocation record: the record was removed (or a
+	// snapshot of the packs restored next to an empty store). What was
+	// revoked is unknown until the next Sync.
+	if opts.State != nil && !c.revocationsPersisted && !c.revocationsUnknown && len(c.Held()) > 0 {
+		c.revocationsUnknown = true
+	}
+	// Packs revoked while the sensor was stopped go now.
+	for _, d := range c.Held() {
+		if c.banned[d] {
+			c.remove(d)
 		}
 	}
 	return c, nil
@@ -179,15 +215,33 @@ func (c *Cache) Held() []string {
 }
 
 // Acquire marks a held pack in use by one task and returns its directory
-// and the release; a pack in use is never removed.
+// and the release; a pack in use is never removed. The pack is verified on
+// every load (verify.go): a revoked, tampered or no longer trusted pack is
+// refused.
 func (c *Cache) Acquire(digest string) (string, func(), error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.banned[digest] {
+	unknown, banned := c.revocationsUnknown, c.banned[digest]
+	c.mu.Unlock()
+	if unknown {
+		return "", nil, ErrRevocationsUnknown
+	}
+	if banned {
 		return "", nil, fmt.Errorf("%w: %s", ErrRevoked, digest)
 	}
 	p, ok := c.Path(digest)
 	if !ok {
+		return "", nil, fmt.Errorf("%w: %s", ErrNotHeld, digest)
+	}
+	if err := c.verifyHeld(digest, p); err != nil {
+		c.refuseTampered(digest)
+		return "", nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.banned[digest] { // revoked while it was being checked
+		return "", nil, fmt.Errorf("%w: %s", ErrRevoked, digest)
+	}
+	if _, ok := c.Path(digest); !ok {
 		return "", nil, fmt.Errorf("%w: %s", ErrNotHeld, digest)
 	}
 	c.inUse[digest]++
@@ -341,6 +395,9 @@ func (c *Cache) store(digest string, files []file, statement []byte) (string, er
 	if err := writeIndex(staging, files); err != nil {
 		return "", err
 	}
+	if err := c.sealIndex(staging, digest, files); err != nil {
+		return "", err
+	}
 	if err := sealTree(staging); err != nil {
 		return "", err
 	}
@@ -386,6 +443,9 @@ type SyncReport struct {
 	Installed []string          `json:"installed,omitempty"`
 	Removed   []string          `json:"removed,omitempty"`
 	Failed    map[string]string `json:"failed,omitempty"`
+	// RevocationsError: the revocation set could not be persisted (it
+	// still holds in memory).
+	RevocationsError string `json:"revocations_error,omitempty"`
 }
 
 // Sync makes the cache hold the desired set: missing packs are installed
@@ -396,11 +456,23 @@ type SyncReport struct {
 func (c *Cache) Sync(ctx context.Context, desired []Pack, revoked []string) SyncReport {
 	rep := SyncReport{Failed: map[string]string{}}
 	c.mu.Lock()
+	added := false
 	for _, d := range revoked {
-		if digestRE.MatchString(d) {
+		if digestRE.MatchString(d) && !c.banned[d] {
 			c.banned[d] = true
+			added = true
 		}
 	}
+	// A sync is the platform's current list: the cache knows again what
+	// is revoked (and keeps every earlier revocation: the set only grows).
+	if added || c.revocationsUnknown || (c.opts.State != nil && !c.revocationsPersisted) {
+		if err := c.saveRevocations(); err != nil {
+			rep.RevocationsError = err.Error()
+		} else {
+			c.revocationsPersisted = true
+		}
+	}
+	c.revocationsUnknown = false
 	c.mu.Unlock()
 	for _, d := range revoked {
 		if c.remove(d) {
@@ -452,6 +524,7 @@ func (c *Cache) remove(digest string) bool {
 	}
 	c.mu.Lock()
 	delete(c.used, digest)
+	delete(c.verified, digest)
 	c.mu.Unlock()
 	return true
 }

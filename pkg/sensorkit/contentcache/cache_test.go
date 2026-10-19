@@ -38,18 +38,19 @@ func (f *memFetcher) Fetch(_ context.Context, d string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
 
+// tarOf builds the platform's canonical archive of files (sorted, PAX,
+// mtime 0), as the platform serves packs.
 func tarOf(t *testing.T, files map[string]string) []byte {
 	t.Helper()
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
+	fs := make([]file, 0, len(files))
 	for n, d := range files {
-		if err := tw.WriteHeader(&tar.Header{Name: n, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(d))}); err != nil {
-			t.Fatal(err)
-		}
-		_, _ = tw.Write([]byte(d))
+		fs = append(fs, file{path: n, data: []byte(d)})
 	}
-	_ = tw.Close()
-	return buf.Bytes()
+	b, err := canonicalTar(fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 func digestOf(b []byte) string {
