@@ -68,9 +68,15 @@ type PairOptions struct {
 	// JobSigningRoot is the job-signing root the console's install snippet
 	// gives out of band (SENSOR_JOB_SIGNING_ROOT: "SHA256:<hex>" or the
 	// base64 key). Set, the key set the platform serves must be signed by
-	// it, or pairing fails before the identity is saved: the root then
-	// comes from a channel the platform does not control. Empty: the root
-	// the platform's key set names is pinned on first use.
+	// it, or pairing fails before the identity is saved. This protects
+	// against whatever sits between the sensor and the platform (a proxy,
+	// a forged TLS chain the pin did not catch) and against a platform
+	// compromised after the operator copied the snippet. It is not
+	// independent of the platform itself: the console reads the root from
+	// the platform's API, so a platform already compromised when the
+	// snippet was copied can show its own root. For that case take the
+	// root fingerprint from whoever holds the offline root key. Empty: the
+	// root the platform's key set names is pinned on first use (TOFU).
 	JobSigningRoot string
 	// AllowUnsignedJobs is SENSOR_DANGEROUS_ALLOW_UNSIGNED_JOBS at pairing
 	// (development only): the identity does not require signed jobs.

@@ -107,7 +107,7 @@ type Identity struct {
 	// A-1): the sensor requires signed jobs whatever it pinned, so a
 	// platform that served no signer key at pairing cannot leave it
 	// accepting unsigned jobs for good. With nothing pinned it does not start
-	// until SENSOR_JOB_SIGNING_ROOT (from the console, out of band) or
+	// until SENSOR_JOB_SIGNING_ROOT (from the console's install snippet) or
 	// SENSOR_JOB_SIGNING_KEYS is set. SENSOR_REQUIRE_SIGNED_JOBS=false is
 	// refused; only SENSOR_DANGEROUS_ALLOW_UNSIGNED_JOBS (development) lifts
 	// it. False on an identity written by an older SDK, or paired with that
