@@ -1175,22 +1175,44 @@ func (p *CommandPoller) claim(ctx context.Context, cmd *Command) error {
 
 // executeCommand executes a single command. jobErr is the JobGuard's
 // verdict: a command it refused is reported failed and never started.
-func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr error) {
-	defer func() {
-		p.queue.cancel(cmd.ID, context.Canceled) // free the context
-		p.queue.forget(cmd.ID)
-		<-p.sem
-		// A command ended: the host it held is free, so a command handed
-		// back for it may run now.
-		p.claims.progressed()
-		if p.backlog.Load() {
-			select {
-			case p.slotFreed <- struct{}{}:
-			default:
-			}
+// releaseCommandSlot frees what a finished command held: its context, its
+// queue entry, its concurrency slot and the host it claimed.
+func (p *CommandPoller) releaseCommandSlot(cmd *Command) {
+	p.queue.cancel(cmd.ID, context.Canceled) // free the context
+	p.queue.forget(cmd.ID)
+	<-p.sem
+	// A command ended: the host it held is free, so a command handed
+	// back for it may run now.
+	p.claims.progressed()
+	if p.backlog.Load() {
+		select {
+		case p.slotFreed <- struct{}{}:
+		default:
 		}
-		p.activeCmds.Done()
-	}()
+	}
+	p.activeCmds.Done()
+}
+
+// journalJob records the job in the journal before anything of it runs and
+// returns the function that closes the record; with no journal it is a no-op.
+func (p *CommandPoller) journalJob(cmd *Command) func() {
+	jp := p.journal.Load()
+	if jp == nil {
+		return func() {}
+	}
+	j := *jp
+	if jerr := j.JobStarted(cmd.ID, cmd.jobTenant, cmd.LeaseEpoch); jerr != nil {
+		fmt.Printf("[command-poller] Warning: command %s is not journaled (a crash would not be reported): %v\n", cmd.ID, jerr)
+	}
+	return func() {
+		if jerr := j.JobFinished(cmd.ID, cmd.jobTenant); jerr != nil {
+			fmt.Printf("[command-poller] Warning: closing the journal record of command %s: %v\n", cmd.ID, jerr)
+		}
+	}
+}
+
+func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr error) {
+	defer p.releaseCommandSlot(cmd)
 
 	startTime := time.Now()
 	// Results pushed while executing belong to this command: a Pusher with
@@ -1258,17 +1280,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	// The journal knows the job before anything of it runs; the record goes
 	// when this function returns: the result is queued (or the job handed
 	// back) by then.
-	if jp := p.journal.Load(); jp != nil {
-		j := *jp
-		if jerr := j.JobStarted(cmd.ID, cmd.jobTenant, cmd.LeaseEpoch); jerr != nil {
-			fmt.Printf("[command-poller] Warning: command %s is not journaled (a crash would not be reported): %v\n", cmd.ID, jerr)
-		}
-		defer func() {
-			if jerr := j.JobFinished(cmd.ID, cmd.jobTenant); jerr != nil {
-				fmt.Printf("[command-poller] Warning: closing the journal record of command %s: %v\n", cmd.ID, jerr)
-			}
-		}()
-	}
+	defer p.journalJob(cmd)()
 	p.clog(ctx, cmd.ID, "info", "Received by the sensor", map[string]any{"type": cmd.Type})
 
 	// The sensor-local policy first: nothing the platform says (its tool

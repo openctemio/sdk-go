@@ -396,6 +396,26 @@ func (k *Kit) warnLoopback() {
 // New resolves the settings, checks them, connects the platform client and
 // opens the outbox. It prints what an operator needs to know (the outbox,
 // a renewed key in use). An error carries the exit code (ExitCode).
+// applyCATrust installs the configured CA bundle and CA fingerprint pin.
+func applyCATrust(opts Options) error {
+	if f := envOr(opts.CACertFile, EnvCACertFile); f != "" {
+		pool, err := httpsec.LoadCAFile(f)
+		if err != nil {
+			return err
+		}
+		httpsec.SetAPIRootCAs(pool)
+		httpsec.SetContentRootCAs(pool)
+	}
+	if f := envOr(opts.CAFingerprint, EnvCAFingerprint); f != "" {
+		fp, err := httpsec.ParseCAFingerprint(f)
+		if err != nil {
+			return usageError(fmt.Errorf("%s: %w", EnvCAFingerprint, err))
+		}
+		httpsec.SetAPIPinnedCA(fp)
+	}
+	return nil
+}
+
 func New(opts Options) (*Kit, error) {
 	if err := MigrateLegacyEnv(); err != nil {
 		return nil, err
@@ -439,20 +459,8 @@ func New(opts Options) (*Kit, error) {
 	if s.outbox, err = ResolveOutbox(opts.Outbox, opts.OutboxOverrides, true); err != nil {
 		return nil, err
 	}
-	if f := envOr(opts.CACertFile, EnvCACertFile); f != "" {
-		pool, err := httpsec.LoadCAFile(f)
-		if err != nil {
-			return nil, err
-		}
-		httpsec.SetAPIRootCAs(pool)
-		httpsec.SetContentRootCAs(pool)
-	}
-	if f := envOr(opts.CAFingerprint, EnvCAFingerprint); f != "" {
-		fp, err := httpsec.ParseCAFingerprint(f)
-		if err != nil {
-			return nil, usageError(fmt.Errorf("%s: %w", EnvCAFingerprint, err))
-		}
-		httpsec.SetAPIPinnedCA(fp)
+	if err := applyCATrust(opts); err != nil {
+		return nil, err
 	}
 	if s.templates, err = resolveTemplateKeys(opts.TemplateSigningKeys); err != nil {
 		return nil, err
@@ -995,6 +1003,29 @@ func (k *Kit) allowed(e scannerEntry) bool {
 	return false
 }
 
+// applyScannerPriority sets the scanners' scheduling priority and, when
+// asked, protects the sensor itself from the OOM killer.
+func (k *Kit) applyScannerPriority() {
+	out, errw := k.out, k.errw
+	// Scanner processes yield the CPU and the disk to the sensor and are
+	// OOM-killed before it (api RFC-035 §5.3).
+	core.SetScannerPriority(k.s.scannerPriority)
+	if p := k.s.scannerPriority; p != nil {
+		_, _ = fmt.Fprintf(out, "  Scanner priority: low (nice +%d, I/O best-effort %d, oom_score_adj %d; %s=normal turns it off)\n",
+			p.Nice, p.IOLevel, p.OOMScoreAdj, EnvScannerPriority)
+	} else {
+		_, _ = fmt.Fprintf(out, "  Scanner priority: normal (the sensor's own)\n")
+	}
+	// Opt-in: the sensor itself is the OOM killer's last choice. Before any
+	// scanner starts; ApplyScannerPriority keeps scanners from inheriting it.
+	if k.s.protectFromOOM {
+		code, summary := protectFromOOM(out, errw, writeSelfOOMScoreAdj)
+		k.oomCheck(true, code, summary)
+	} else {
+		k.oomCheck(false, "", "")
+	}
+}
+
 // Run runs the sensor until ctx is canceled (or SIGINT/SIGTERM, unless ctx
 // comes from SignalContext): it reports the tools, checks the platform
 // accepts the key (waiting while it does not), then heartbeats, runs the
@@ -1037,23 +1068,7 @@ func (k *Kit) Run(ctx context.Context) error {
 	// a saturated sensor it takes seconds, and the heartbeat must not wait
 	// for it (api RFC-035 §5.1).
 	reg.SetBackgroundRefresh(true)
-	// Scanner processes yield the CPU and the disk to the sensor and are
-	// OOM-killed before it (api RFC-035 §5.3).
-	core.SetScannerPriority(k.s.scannerPriority)
-	if p := k.s.scannerPriority; p != nil {
-		_, _ = fmt.Fprintf(out, "  Scanner priority: low (nice +%d, I/O best-effort %d, oom_score_adj %d; %s=normal turns it off)\n",
-			p.Nice, p.IOLevel, p.OOMScoreAdj, EnvScannerPriority)
-	} else {
-		_, _ = fmt.Fprintf(out, "  Scanner priority: normal (the sensor's own)\n")
-	}
-	// Opt-in: the sensor itself is the OOM killer's last choice. Before any
-	// scanner starts; ApplyScannerPriority keeps scanners from inheriting it.
-	if k.s.protectFromOOM {
-		code, summary := protectFromOOM(out, errw, writeSelfOOMScoreAdj)
-		k.oomCheck(true, code, summary)
-	} else {
-		k.oomCheck(false, "", "")
-	}
+	k.applyScannerPriority()
 
 	k.addScheduledScanners(ctx, scanners)
 	for _, c := range k.collectors {
