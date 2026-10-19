@@ -64,5 +64,16 @@
 // Critical (journal and state updates) are accepted, so a full disk never
 // corrupts a record and never blocks a deletion.
 //
+// # Retention
+//
+// Janitor deletes what the sensor no longer needs and keeps every class
+// within its cap (see Policy for the defaults): results the platform
+// acknowledged, dead letters after 7 days, finished-job tombstones after 24
+// hours, workspaces of jobs that are not open, content packs by last use,
+// rotated logs and the data of tenants that left. It never deletes an
+// unacknowledged result for space: at the high watermark it evicts the cold
+// cache and then reports Status.StopClaiming, because results beat new
+// work.
+//
 // Stability: Experimental (docs/STABILITY.md).
 package localstore

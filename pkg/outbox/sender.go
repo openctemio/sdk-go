@@ -282,6 +282,12 @@ func (o *Outbox) attempt(ctx context.Context, d Deliverer, e *entry) {
 
 	value, derr := safeDeliver(ctx, d, del)
 
+	acked := false
+	defer func() { // runs after the unlock below
+		if acked && o.cfg.OnDelivered != nil {
+			o.cfg.OnDelivered(e.meta)
+		}
+	}()
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	e.inflight = false
@@ -298,6 +304,7 @@ func (o *Outbox) attempt(ctx context.Context, d Deliverer, e *entry) {
 		_ = removeFiles(filepath.Join(o.pendingDir, e.meta.ID+itemExt), filepath.Join(o.pendingDir, e.meta.ID+stateExt))
 		delete(o.entries, e.meta.ID)
 		o.delivered++
+		acked = true
 		o.consecutiveFail = 0
 		o.circuitUntil = time.Time{}
 		o.finishLocked(e.meta.ID, Result{Delivered: true, Value: value})

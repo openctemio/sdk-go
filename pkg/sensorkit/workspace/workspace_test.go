@@ -161,3 +161,36 @@ func TestRootNarrowed(t *testing.T) {
 		t.Log("noexec unknown on this platform")
 	}
 }
+
+func TestSweepBoundedByLimitAndContext(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "work")
+	m, _ := Open(root)
+	for i := range 5 {
+		w, _ := m.Create("tenant-a", "cmd-"+string(rune('a'+i)), Limits{})
+		_ = os.WriteFile(filepath.Join(w.Dir(), "f"), []byte("data"), 0o600)
+	}
+	m2, _ := Open(root) // a new process: all five are orphans
+	n, err := m2.SweepBounded(context.Background(), nil, 2)
+	if err != nil || n != 2 {
+		t.Fatalf("limit: %d %v", n, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if n, err := m2.SweepBounded(ctx, nil, 0); n != 0 || err == nil {
+		t.Fatalf("canceled: %d %v", n, err)
+	}
+	if n, _ := m2.SweepBounded(context.Background(), nil, 0); n != 3 {
+		t.Fatalf("rest: %d", n)
+	}
+}
+
+func TestBytesCountsAllJobs(t *testing.T) {
+	m, _ := Open(filepath.Join(t.TempDir(), "work"))
+	a, _ := m.Create("tenant-a", "cmd-1", Limits{})
+	b, _ := m.Create("tenant-b", "cmd-1", Limits{})
+	_ = os.WriteFile(filepath.Join(a.Dir(), "f"), make([]byte, 1000), 0o600)
+	_ = os.WriteFile(filepath.Join(b.Dir(), "f"), make([]byte, 500), 0o600)
+	if got := m.Bytes(); got != 1500 {
+		t.Fatalf("bytes %d", got)
+	}
+}
