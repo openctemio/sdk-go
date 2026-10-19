@@ -8,6 +8,184 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.35.0 — 2026-10-19
+
+### Security: one deny list with the platform (ctis addrscope)
+
+- `httpsec.IsIPBlockedWith` (and with it the scan target policy, the local policy's built-in deny list and the shared-sensor zone rule), and the egress forwarder's public-only check now use `github.com/openctemio/ctis/addrscope`. The platform checks job targets with the same package.
+- An IPv6 address that carries an IPv4 address (NAT64, 6to4, Teredo, IPv4-compatible) is judged by that IPv4 address. `64:ff9b::a00:1`, `2002:a00:1::1` and a Teredo address whose client is 10.0.0.1 are refused, even where private targets are allowed. The same forms of a public address are no longer refused for their range alone.
+- Newly refused: `fec0::/10` (deprecated site-local). Vendor hosts and egress-proxy destinations that resolve to CGNAT, benchmarking or reserved space are refused too. Ranges that hold `192.0.0.0/24`, `198.18.0.0/15` or an IPv6 range that carries IPv4 are refused as range targets.
+
+### Security: content packs are verified every time a task loads them, and revocations survive restarts
+
+- `contentcache.Cache.Acquire` re-verifies a held pack before a task may use it. It checks the stored statement against the keys pinned now, so a key that is no longer pinned stops working, and that the statement names the pack's digest and this organization. It also checks the files on disk, against the index sealed at install (`Options.Index`, a `localstore.Sealer`) or, without one, by rebuilding the canonical archive and comparing its digest with the signed one. A changed, added, removed or symlinked file, or a statement or index taken from another pack, refuses the load. The pack is then removed when no task holds it, and the failure is counted (`Stats.VerifyFailures`).
+- An unchanged pack is fully checked again at most every `ReverifyEvery` (default 6 h). "Unchanged" compares size, mode, modification time, change time and inode, and an unprivileged writer cannot set the change time back.
+- With `Options.State` (a `localstore` namespace) the revocation set is persisted and only grows. A revoked pack stays refused after a restart and while the platform is unreachable, and is removed at start when nothing holds it. A revocation record that fails authentication refuses every load (`ErrRevocationsUnknown`) until the platform's next sync.
+
+### Security: store rollback detection, stale handles after erasure, link-safe workspace removal
+
+- `localstore.Guarded()` marks a record whose rollback is an attack: the store counts its writes in the sealed meta record, and an older copy put back, a replacement by an unguarded file or a deletion behind the store's back reads as `ErrRollback` and is reported through `OnTamper`. The content pack revocation list is guarded. If `meta.rec` is lost, or an older copy of it is restored (a record then carries a boot generation above it), the boot generation restarts above the records', `Stats.BootReset` is set for the heartbeat, and every guarded record reads as `ErrRollback` until it is written again.
+- A `Sealer` or `KV` handle made before `Store.EraseTenant` now fails with `ErrTenantErased` instead of silently creating a new key; asking the store for a new handle is the explicit way to start a tenant over.
+- `Outbox.DropTenant` now also returns how many of the tenant's items are in flight (kept; call again before erasing the key). **Behaviour change:** the signature is `(dropped, inFlight int, err error)`. The janitor waits for in-flight items before it erases a tenant.
+- Removing a workspace no longer resolves any path outside it: the walk, the chmod and the removal use `os.Root`, so a task that swaps a directory for a link while it is being removed cannot make the sensor change or delete anything outside the workspace.
+- `contentcache.Cache.SetPinnedKeys` replaces the pinned signing keys and forgets earlier load checks, so a pack signed only by a key no longer pinned stops loading at once.
+
+### Security: per-organization keys for queued results, with crypto-erasure (`outbox.Config.Store`)
+
+- With a `localstore.Store` (`outbox.Config.Store`, `client.OutboxConfig.Store`), every new outbox item and its state are sealed under the data key of the item's organization (file format 2, which names the tenant in the header). Before, one key covered every organization.
+- A shared sensor can now remove an organization's queued results with `Outbox.DropTenant` and then crypto-erase them with `Store.EraseTenant`; a copy left on a snapshot can no longer be read. An item copied over another organization's, or relabelled in its header, does not open. A tenant name read from a file never creates a key.
+- Upgrade: items written before (format 1) are still read with the outbox key, which the store adopts as the organization sensor's data key, so nothing is re-encrypted. Without the outbox key, format-2-only outboxes open and format 1 items still refuse to open, as before.
+
+### Security: a confined task never dials an address no check has seen
+
+- `LocalPolicy.AdmittedAddrs` without a policy file applies the built-in deny list to the addresses it returns, as `CheckTarget` does. A name that passed the target check with a public address and resolves to a private, loopback, CGNAT, link-local or metadata address when the task starts is refused, not pinned for the task's forwarder (DNS rebinding).
+- The tool host, when its policy has no `AdmittedAddrs`, checks every address of its own lookup with the policy's target check before pinning it (a CI run without any policy, whose admission checks no target either, is unchanged). Before, it pinned whatever the name resolved to when the task started.
+
+### Security: pinned job-signing keys cannot be turned off by env; plain-http platform URLs are refused
+
+- On a sensor whose identity pinned job-signing keys or a root at pairing, `SENSOR_REQUIRE_SIGNED_JOBS=false` is now a usage error (it may only raise the requirement). The one escape is `SENSOR_DANGEROUS_ALLOW_UNSIGNED_JOBS=1`, for development: the sensor warns at start and for every unsigned job it accepts (`core.JobGuard.AllowUnsignedJobs`).
+- A sensor with no pinned key (posture `off`) now warns at start whatever the verbosity; the posture is already part of the posture report sent to the platform.
+- `httpsec.CheckAPIBaseURL` returns an error for a plain `http://` platform URL to a host that is not loopback (it was a warning). `SENSOR_ALLOW_INSECURE_HTTP=1` (development only) turns the error back into a warning.
+- The sensor warns at start when the test switch `OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK` is on.
+
+### Security: a newly paired sensor never starts out accepting unsigned jobs
+
+- An identity paired by this SDK records `require_signed_jobs`: the sensor requires signed jobs whatever the platform served at pairing. Before, a platform that served no job-signing key (or a hello that could not be read) left the sensor accepting unsigned jobs for good, so a compromised platform could downgrade every new pairing.
+- With nothing pinned, such a sensor does not start until `SENSOR_JOB_SIGNING_ROOT` (shown in the console's install snippet) or `SENSOR_JOB_SIGNING_KEYS` is set. `SENSOR_REQUIRE_SIGNED_JOBS=false` alone is refused; only `SENSOR_DANGEROUS_ALLOW_UNSIGNED_JOBS=1` (development) lifts it: at pairing on its own, at start together with `SENSOR_REQUIRE_SIGNED_JOBS=false`.
+- `SENSOR_JOB_SIGNING_ROOT` set at pairing is checked against the key set the platform serves: pairing pins it only when that key set is signed by it and current, and fails otherwise without saving an identity (`identity.ErrJobSigningRootMismatch`). Trust note: the console reads the root from the platform's API, so this guards against anything between the sensor and the platform and against a platform compromised after the snippet was copied, not against one already compromised when it was copied; for that, take the root fingerprint from whoever holds the offline root key. Without the root, the key set's root is pinned on first use.
+- **Upgrade note:** existing identities are unchanged. A new pairing against a platform without its job signer gives a sensor that will not start until the signer runs or the root is set; set `SENSOR_DANGEROUS_ALLOW_UNSIGNED_JOBS=1` while pairing only for development.
+
+### Security: a shared job's private ranges come from its signed zone
+
+- `jobsig.Statement.Zone` (`zone`: the instance scan zone's `id` and `ranges`, api RFC-100 §6.1). The signer signs it only for a zone in its own zone ledger that is assigned to the job's organization and served by the claiming sensor. An organization's sensor refuses a statement that carries a zone (reason `sensor_scope`); a shared sensor refuses a zone without an id or ranges.
+- A shared sensor runs a verified job with `core.WithJobZone` set to the private ranges of the signed zone (`core.ParseZoneRanges` drops anything that is not wholly private). `ScanTargetPolicy.Shared` and `toolhost.Host.Shared` then let a private target through only inside those ranges, and only when the operator allows private targets. A job without a signed zone keeps reaching public addresses only; an unsigned `zone_ranges` field is still ignored.
+
+### Security: shared mode and the sensor's identity scope must agree
+
+- A sensor whose identity is enrolled with scope `instance` refuses to start
+  unless shared mode is on, and shared mode refuses to start on an identity
+  that belongs to an organization.
+
+### Security: shared mode, the per-job isolation profile of a sensor that runs jobs of many tenants
+
+- `SENSOR_SHARED_MODE=1` (or `sensorkit.Options.Shared`) requires the tool sandbox and network confinement. A sensor that sets `SENSOR_SANDBOX` or `SENSOR_SANDBOX_NETWORK` to anything weaker, or that runs on a host that cannot give both, refuses to start before it pairs. So does a shared sensor without a loaded local policy.
+- `executor.Config.Shared`: a task's write paths and its `HOME`, `TMPDIR`, `TMP`, `TEMP` and `XDG_*` directories must lie beneath the task root, so no writable cache, output or configuration directory is shared between jobs. Every task directory is removed after its task.
+- `core.ScanTargetPolicy.Shared` and `toolhost.Host.Shared`: a private target passes only when the operator allows private targets and it lies in the job's zone ranges. Loopback, link-local, metadata and CGNAT addresses never pass. The rule applies at admission and again to every address pinned for the task's forwarder.
+- `toolhost.Host.Shared` refuses to run a tool on a backend that does not enforce every sandbox control and confine the network.
+
+### Security: shared mode is refused when the sensor takes no platform jobs
+
+- `SENSOR_SHARED_MODE=1` with `Options.DisableCommands` or `Options.Standalone` now fails at start with a usage error. Shared mode isolates the jobs of many organizations; a sensor that takes no platform jobs gains nothing from it and would only appear to be a shared sensor.
+
+### Security: a shared sensor runs only instance-scope signed jobs and binds results to the job's organization
+
+- `jobsig.Statement.SensorScope` (`sensor_scope`) and `jobsig.Binding.Shared`. An organization's sensor refuses a statement that carries `sensor_scope`. A shared sensor requires `sensor_scope` `instance` and its own `sensor_id`, and accepts any `tenant_id` (refusal reason `sensor_scope`).
+- `core.NewSharedJobGuard`: in shared mode every command must carry a signed job that verifies. A shared sensor without a pinned job-signing key or root refuses to start.
+- `core.JobLedger` (`CommandPollerConfig.Ledger`, `Client.SetJobLedger`): the poller holds each command while it runs it, with the organization of its verified job (`core.WithJobTenant`). The client refuses, before storing or sending, any of the following for a command it does not hold (`core.ErrJobNotHeld`): a report, a command result, a log batch, or an unsolicited push. Outbox items of a held job carry `outbox.Meta.TenantID` next to `CommandID`.
+
+### Upgrade notes
+
+- A sensor that sets `SENSOR_REQUIRE_SIGNED_JOBS=false` while it pinned keys at pairing now refuses to start; remove the variable. A platform URL that is `http://` to a non-loopback host must move to `https://`.
+
+- Replace each removed package as docs/STABILITY.md listed it: the outbox through `sensorkit` (pipeline, audit); secrets declared in the tool contract (credentials); categorized tool errors in the tool contract (errors); preflight checks, the config report and the settings registry in `sensorkit` (health, metrics, options); the platform's own EPSS and KEV enrichment (enrichers); the platform's connectors module (connectors, providers).
+
+- Drop any import of `pkg/transport/grpc` and any call to `Client.GetEPSSScores`, `Client.GetKEVEntries` or `Client.EnrichFindings`; nothing replaces them on the sensor side (the platform enriches findings on ingest).
+
+### Removed: packages deprecated since v0.18.0
+
+- `pkg/pipeline`, `pkg/audit`, `pkg/credentials`, `pkg/errors`, `pkg/health`, `pkg/metrics`, `pkg/options`, `pkg/enrichers/{epss,kev}`, `pkg/connectors` (with `pkg/connectors/github`) and `pkg/providers/github` are removed, with the `custom-connector` and `custom-provider` examples. They were deprecated in v0.18.0 with removal announced; nothing in the sensor, the asset collector, the Tenable.sc connector, the CI runner or the platform imports them.
+
+### Removed: pkg/platform (routes the core never served)
+
+- `pkg/platform` is removed. Its bootstrap registration, lease and poll clients called `/api/v1/platform/{register,lease,poll,jobs}`, which no OpenCTEM API serves, so a sensor built on them could never connect. Shared sensors of an instance enroll with `SENSOR_INSTANCE_ENROLLMENT_TOKEN` and speak the same protocol as every sensor (api RFC-100).
+- The parts `sensorkit` used (the state directory, the credentials file, the key choice at start and the API key renewal client and loop) move to `internal/sensorstate` unchanged. Sensors built on `sensorkit` see no difference.
+- **Upgrade note:** code that imported `github.com/openctemio/sdk-go/pkg/platform` no longer builds. There is no replacement for the platform-mode client; use `sensorkit` (or `pkg/client` with `core.CommandPoller`). `cmd/sensor-migrate` no longer covers `pkg/platform`.
+
+### Removed: protocol v1 gRPC transport, v1 proto files and the threat-intel client calls
+
+- `pkg/transport/grpc` and `proto/openctemio/v1` (with their buf configuration) are removed, as announced when they were deprecated: no platform serves them. `google.golang.org/grpc` is no longer a direct dependency. Sensor protocol v3 (`pkg/sensorproto/v3`) is unchanged.
+- `Client.GetEPSSScores`, `Client.GetKEVEntries` and `Client.EnrichFindings` (and the `EPSSScore` and `KEVEntry` types) are removed: they called `/api/v1/threatintel/epss` and `/api/v1/threatintel/kev`, which the platform does not serve, so every call failed. The platform enriches findings with EPSS and KEV itself on ingest.
+- `legacyv1.HeaderSensorID` and `legacyv1.GRPCMetadataSensorID` are removed: no route reads them. `legacyv1.FieldSensorID` stays for migrating old credentials files.
+
+### Added: a sensor enrolls as a shared sensor with SENSOR_INSTANCE_ENROLLMENT_TOKEN
+
+- A sensor with no identity and `SENSOR_INSTANCE_ENROLLMENT_TOKEN` set (a single-use token a super administrator issued, or one the install registered for its bundled sensor) runs the usual key-bound pairing with the token in the signed start request and is enrolled as a shared sensor of the instance, without an administrator's approval (api RFC-100 §7).
+- `identity.PairOptions.EnrollmentToken`, `pairing.StartRequest.EnrollmentToken`, `pairing.Identity.Scope` (`pairing.ScopeInstance`) and `identity.Identity.Scope`. With a token the identity must be a shared sensor's (no tenant); without one, an identity without a tenant is refused.
+- A refused token (`identity.ErrEnrollmentRefused`) or an expired request stops the sensor; a spent token never starts a second request. The token is never printed; it cannot be combined with `SENSOR_PAIRING_CODE`, and it is ignored (with a note) once the sensor is paired.
+
+### Added: a job journal for crash recovery, and per-job workspaces
+
+- `localstore.Journal` keeps one sealed record per held job and rewrites it at every step change. After a crash or a kill, `Store.Recover` returns the jobs of the earlier boot as interruptions, naming the step that was running, so the caller can report them as the command's result. Each record then stays as a tombstone (7 days by default). A step marked non-repeatable (an active check, a state-changing request) that had started is never started again for that command, even when the platform hands the command back. Journal writes go through on a critically full disk, and erasing a tenant erases its journal.
+- `sensorkit/workspace` gives each job its own directory under `<root>/<tenant>/`. Every level is 0700, owned by the sensor's user, and refused when it is a symbolic link. A watch reports when a job exceeds its byte quota (2 GiB by default). The directory is removed on close even when a task made files read-only. `Sweep` removes whatever a crash left without following links out of the root, and `EraseTenant` removes an organization's directories.
+
+### Added: the janitor, retention and cleanup for the sensor's local data (`localstore.Janitor`)
+
+- One `localstore.Janitor` owns cleanup of every class: results the platform acknowledged are deleted at once (new `outbox.Config.OnDelivered` tells the janitor), dead letters after 7 days (`Outbox.PurgeDead`), journal tombstones after 24 hours (`Store.CompactJournal`), workspaces of jobs that are not open (`workspace.Manager.SweepBounded`), content packs by last use (`contentcache.Cache.Prune`: revoked at once, unassigned and unused for 14 days, least recently used beyond the 2 GiB cap, never one in use), a log rotation hook, and a tenant's data on `Janitor.Unassign` (crypto-erase).
+- It runs at start, after a burst of acknowledgements and every 10 minutes; a pass is bounded in time (30 s) and removals (5000) and is safe to stop at any point.
+- Watermarks: at 85 % of the quota or under 15 % of the volume free the cold cache is evicted, then `Janitor.AcceptsWork` turns false (stop claiming); under 64 MiB free only acknowledgements and deletions proceed. Unacknowledged results are never deleted for space.
+- `Policy` carries the caps from the platform, clamped so a policy tunes cleanup but cannot switch it off. `Janitor.Status` and `Store.Usage` give bytes per class and the last sweep for the heartbeat.
+
+### Added: an encrypted, crash-safe local store for sensors (`pkg/localstore`)
+
+- One master key, read from a mounted secret (`Options.KeyFile`) or created next to the data, wraps a random data key per tenant. A shared sensor keeps each organization's records under its own key; `EraseTenant` deletes the wrapped key first, so a copy of the records left on a snapshot or a backup can no longer be decrypted.
+- Records are sealed with AES-256-GCM and bound to their tenant, namespace and name; a record that is edited, truncated or copied over another one is quarantined, counted and reported (`OnTamper`), never returned and never a crash. Writes are atomic (temporary file, fsync, rename, fsync of the directory); a kill -9 at any point leaves the previous or the new record.
+- Records may carry an expiry: once it passes, `Get` returns `ErrExpired` and no data, so scope-bearing data cached for offline work fails closed.
+- `Disk` and `AcceptsWork` report the volume's free space and inodes: below the low mark a sensor stops taking new work; below the critical mark only writes marked `Critical` and deletions go through.
+- A boot generation, kept in a sealed record and incremented by every start, lets the platform notice an old copy of the store being restored.
+- `Sealer` gives the outbox and the content cache the same per-tenant sealing for the files they keep themselves.
+
+### Added: relay transport for sensors that cannot reach the platform directly (`pkg/relayclient`)
+
+- `relayclient.Transport` is an `http.RoundTripper` placed under the request signer. Each signed v2 request is sealed to the platform's ingest key (`pkg/sealedmsg`) and posted to a sensor relay. The answer comes back on the sensor's relay mailbox, signed by the platform and sealed to the sensor's key, and is returned as the request's response. The rest of the client is unchanged.
+- The relay's certificate is checked against its SPKI pin from the pairing bundle (or against `RootCAs`). The sensor's identity key is the TLS client certificate, and the platform-signed ticket goes with every request; `OnTicketRefused` says when to renew it.
+- Answers that do not verify, that answer no outstanding request, or that repeat one already delivered are dropped and counted. The relay's `Retry-After` is honoured. Mailbox polls back off with full jitter up to 60 s. A missing answer is `ErrNoResponse`, which callers retry like any lost response.
+- Not wired into `sensorkit` yet: the mode selection, the fallback chain and the pairing bundle import come with the platform's relay connector.
+
+### Added: end-to-end sealed envelopes for relayed sensor traffic (`pkg/sealedmsg`)
+
+- `SealRequest` seals a sensor's ordinary signed v2 request (method, path, headers including the request signature, body) to the platform's ingest key with HPKE: hybrid ML-KEM-768 + X25519, HKDF-SHA256, ChaCha20-Poly1305. A relay, an object store or any other intermediary can delay or drop the envelope, but cannot read or change it. Moved to another sensor's or realm's mailbox, it does not open.
+- `SealResponse` signs the platform's answer with its response key, binds it to the digest of the request envelope and to the route, and seals it to the sensor's encryption key. `OpenResponse` and `OpenResponseAny` check the signature against the pinned keys before parsing anything, and refuse a response for another request or sensor, one forged by the intermediary, or one more than 10 minutes off the sensor's clock.
+- The request carries the sensor's encryption public key (`ReplyKey`) inside the sealed envelope; the platform seals its answer to it.
+- Connection-level headers are not carried, header injection and oversize parts are refused, and keys rotate by key id (`PeekHeader`). `testdata/vector-v1.json` is the cross-implementation test vector for the platform's side.
+
+### Added: zone rule helpers; capability shared.isolation@1
+
+- `core.WithJobZone`, `core.JobZoneFromContext`, `core.ParseZoneRanges`, `core.CheckSharedAddr` and `core.CheckSharedPrefix` implement a shared job's zone rule. Zone ranges will come only from the job's verified signed statement. An unsigned `zone_ranges` command field is ignored, so until the statement carries ranges, shared jobs reach public addresses only.
+- A sensor in shared mode advertises `shared.isolation@1` (`sensorkit.CapabilitySharedIsolation`), based on its runtime state.
+- Setting `SENSOR_SHARED_MODE` (`0`, `1`).
+
+### Changed: the version 1 outbox key is retired
+
+- With a store, once no version 1 item is left the outbox records that in the store and then deletes the old `outbox.key` (only the default file inside the outbox directory). A fresh outbox with a store no longer creates one. A version 1 item that appears after retirement is quarantined as unreadable.
+
+### Changed: a full outbox refuses new results instead of evicting queued ones
+
+- The byte cap no longer evicts pending reports or command results: it evicts dead letters, then command log batches (best effort by design). When unacknowledged results alone fill the outbox, `Enqueue` returns the new `outbox.ErrFull` without writing (the client then tries to send directly, as for any disk refusal), `Stats.Refused` counts it and a warning is logged at most once a minute. A reserve of 1/50 of the cap is kept for command results, so running commands can still report their end.
+- New `Outbox.AcceptsWork`: false while unacknowledged results hold 85 % of the cap or the last refused item would still not fit. `localstore.OutboxCleaner` gains `AcceptsWork`, and `Janitor.AcceptsWork` and `Status.StopClaiming` follow it: results beat new work.
+- **Behaviour change:** `MaxAge` (`SENSOR_OUTBOX_MAX_AGE`) now deletes dead letters only; a pending item is kept until the platform acknowledges or refuses it.
+- A janitor sweep can no longer remove a workspace that is being created (it is live before its directory exists).
+
+### Changed: the outbox spreads its drain after the platform comes back
+
+- `Outbox.Wake` (called when a heartbeat is accepted again) no longer starts delivering the whole backlog at once. The drain starts after one random delay of up to `min(WakeSpread, waiting items × 100 ms)`, 30 s at most by default, so a fleet that comes back after a platform outage does not send every queued result in the same second. The queue keeps its order. `outbox.Config.WakeSpread` sets the bound; a negative value drains at once.
+
+### Changed: a release no longer opens a pull request in openctemio/openctem
+
+- The release workflow no longer opens a `versions.yaml` pull request in openctemio/openctem (the pull request in openctemio/sensor is unchanged). The platform reads new releases from its signed release feed (openctem RFC-037 §12). Nothing changes for users of the SDK.
+
+### Fixed: SENSOR_INSTANCE_ENROLLMENT_TOKEN is in the settings registry
+
+- The variable was read by the kit but missing from the settings registry, so
+  the config report did not list it and `docs/SETTINGS.md` and the README had
+  no row for it. It is registered as a secret (never printed) and documented.
+
+### Fixed: a shared sensor's signed jobs are verified without a tenant id
+
+- A shared sensor belongs to no organization, so its identity has no tenant id.
+  Signed-job verification now requires the sensor id only in shared mode (the
+  signed statement names the organization); an organization sensor without a
+  tenant id is still refused at start.
+
 ## v0.34.0 — 2026-10-15
 
 ### Security: the job's identification reaches every request, or the task is refused
