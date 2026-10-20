@@ -2,6 +2,7 @@ package toolrt
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -38,6 +39,8 @@ func CheckRetest(m tool.Manifest, task tool.Task) *tool.Error {
 			return tool.AsError(tool.Invalid("retest item %q: target %q is not in the task", it.Ref, it.Target))
 		case len(it.RuleID) > 512 || len(it.Fingerprint) > 512 || len(it.Attrs) > 32:
 			return tool.AsError(tool.Invalid("retest item %q: rule id, fingerprint or attributes too large", it.Ref))
+		case it.TemplatePath != "" && !validTemplatePath(it.TemplatePath):
+			return tool.AsError(tool.Invalid("retest item %q: the template path must be a clean absolute file path", it.Ref))
 		}
 		seen[it.Ref] = true
 	}
@@ -130,4 +133,14 @@ func Invoke(t tool.Tool, ctx tool.Context, task tool.Task) error {
 		return tool.Invalid("%s has no retest handler", t.Manifest().Name)
 	}
 	return r.Retest(rc, task)
+}
+
+// maxTemplatePath bounds a retest item's template path.
+const maxTemplatePath = 4096
+
+// validTemplatePath reports whether p is a clean absolute path without
+// control characters, at most maxTemplatePath long.
+func validTemplatePath(p string) bool {
+	return len(p) <= maxTemplatePath && filepath.IsAbs(p) && filepath.Clean(p) == p &&
+		strings.IndexFunc(p, unicode.IsControl) < 0
 }

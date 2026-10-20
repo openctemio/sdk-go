@@ -127,6 +127,13 @@ ignored, except during the handshake. A newer runtime may send more.
   tool that retests web findings declares `features.web_scope` and keeps
   every request inside it; without the feature, a web-scoped retest is
   refused (`refused_by_policy`) and never runs.
+  An item may carry `template_path`: the absolute path of a check the
+  platform delivered and the sensor verified (signed for this command,
+  content-checked). Run exactly that file for the item instead of your own
+  rule `rule_id`, and report its `template_digest` (`"sha256:"` + hex
+  SHA-256 of the file's bytes); report `unverifiable` when the file does not
+  load or run. Only a sensor whose kit opted in sets it
+  (`Kit.HandleRetestTemplates`).
 
 ## Time and cancel
 

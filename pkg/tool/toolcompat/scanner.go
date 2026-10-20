@@ -72,6 +72,15 @@ type Retester interface {
 // retest: "retest:<tool>". The platform routes retest commands by it.
 func RetestCapability(name string) string { return "retest:" + strings.ToLower(name) }
 
+// RetestTemplatesCapability is the capability a sensor reports for a tool
+// whose retest can run a custom template the platform delivers with the
+// retest command (tool.RetestItem.TemplatePath): "retest-templates:<tool>".
+// The platform sends a retest that carries templates only to a sensor that
+// reports it, beside RetestCapability.
+func RetestTemplatesCapability(name string) string {
+	return "retest-templates:" + strings.ToLower(name)
+}
+
 var (
 	_ Retester                    = (*toolScanner)(nil)
 	_ core.MultiTargetScanner     = (*toolScanner)(nil)

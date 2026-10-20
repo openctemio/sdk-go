@@ -355,7 +355,10 @@ type Kit struct {
 	// retests are the tools a sensor serves retests for itself
 	// (HandleRetest).
 	retests map[string]RetestFunc
-	ran     bool
+	// retestTemplates are the tools of retests whose handler runs the
+	// custom templates a retest command delivers (HandleRetestTemplates).
+	retestTemplates map[string]bool
+	ran             bool
 	// jobID makes Run run that one command and stop (RunJob).
 	jobID string
 
@@ -1353,7 +1356,7 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	types := slices.Clone(defaultCommandTypes)
 	handlers := maps.Clone(k.handlers)
 	if _, custom := handlers[RetestCommandType]; !custom {
-		if rx := newRetestExecutor(scanners, k.retests); rx != nil {
+		if rx := newRetestExecutor(scanners, k.retests, k.retestTemplates, executor, k.LocalPolicy); rx != nil {
 			handlers[RetestCommandType] = rx
 		}
 	}

@@ -56,7 +56,7 @@ err := core.ValidateTemplate(&core.EmbeddedTemplate{
 
 #### Template Signatures
 
-A scan command's custom templates run only when something the sensor pins
+A command's custom templates (a scan's, or a retest's, see below) run only when something the sensor pins
 vouches for exactly those bytes, or the command fails before any template
 is written or any scanner runs. Two ways, in this order:
 
@@ -88,6 +88,21 @@ loaded from a file, or a second YAML document is refused and the command
 fails before anything is written. Because every custom template passes
 this check, a scanner may load custom templates together with its own in
 one run.
+
+The check is one function for every command type
+(`core.DefaultCommandExecutor.VerifyCustomTemplates`). A **retest** command
+may carry custom templates too (`custom_templates`, optionally
+`custom_templates_envelope`, and items whose `template` names one of them):
+the kit refuses it unless the retest's tool opted in
+(`Kit.HandleRetestTemplates`, capability `retest-templates:<tool>`), the
+local policy allows custom templates, every templated item names a carried
+template of that tool's type, and the templates pass the verification and
+content check above. Only then are they written (`core.WriteCustomTemplates`:
+a new temporary directory, 0700, files 0600, removed when the retest ends)
+and the item's file handed to the tool (`tool.RetestItem.TemplatePath`,
+set by the sensor, never by the platform). A templated item's `fixed` or
+`still_present` verdict stands only under the delivered template's digest;
+otherwise it is `unverifiable`.
 
 #### Rule sources
 
