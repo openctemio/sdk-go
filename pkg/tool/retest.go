@@ -52,6 +52,16 @@ type RetestItem struct {
 	Fingerprint string `json:"fingerprint,omitempty"`
 	// Attrs are typed hints from the platform.
 	Attrs map[string]string `json:"attrs,omitempty"`
+	// TemplatePath is the file of the check to run for this item instead
+	// of the tool's own rule RuleID: a custom template the platform
+	// delivered with the retest command, which the sensor verified (signed
+	// for this command, the sensor's content check) and wrote to a private
+	// file the tool reads. Only the sensor sets it, for a tool that opted
+	// in to delivered templates (capability "retest-templates:<tool>");
+	// never the platform. The tool runs exactly this file and reports its
+	// digest (TemplateDigest of the file's bytes) in the item's verdict.
+	// Empty: the tool's own check, as before.
+	TemplatePath string `json:"template_path,omitempty"`
 }
 
 // Verdict is what a retest concluded about one item.

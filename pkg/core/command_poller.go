@@ -1510,22 +1510,48 @@ func (e *DefaultCommandExecutor) SetSensorID(id string) {
 	e.sensorID.Store(&id)
 }
 
-// verifyCustomTemplates decides whether the command's custom templates may
-// run. A command whose signed job the JobGuard verified carries them in its
-// statement: the platform's job signer approved exactly these digests
-// (api RFC-040 P2, its scope ledger), so they run when the templates
-// received are byte for byte the ones signed, with no template-signing key
-// needed. Otherwise (a sensor without signed jobs) the templates run only
-// if a pinned template-signing key signed exactly them for this command
-// (and this sensor, when it knows its id) in a manifest that has not
-// expired. This per-tenant key path is a fallback, to be removed once
-// signed jobs are required everywhere.
+// CommandTemplates is the custom-template part of a command payload (a
+// scan command, a retest command): the templates and their signed
+// manifest, in the payload's own field names.
+type CommandTemplates struct {
+	CustomTemplates         []EmbeddedTemplate `json:"custom_templates,omitempty"`
+	CustomTemplatesEnvelope *SignedEnvelope    `json:"custom_templates_envelope,omitempty"`
+}
+
+// verifyCustomTemplates is VerifyCustomTemplates for a scan command.
 func (e *DefaultCommandExecutor) verifyCustomTemplates(cmd *Command, payload *ScanCommandPayload) error {
-	contents := make([][]byte, len(payload.CustomTemplates))
-	for i := range payload.CustomTemplates {
-		c, err := decodeTemplateContent(&payload.CustomTemplates[i])
+	_, err := e.VerifyCustomTemplates(cmd, CommandTemplates{CustomTemplates: payload.CustomTemplates,
+		CustomTemplatesEnvelope: payload.CustomTemplatesEnvelope})
+	return err
+}
+
+// VerifyCustomTemplates decides whether the custom templates a command
+// carries may run, and returns their decoded contents in order. A command
+// whose signed job the JobGuard verified carries them in its statement:
+// the platform's job signer approved exactly these digests (api RFC-040
+// P2, its scope ledger), so they run when the templates received are byte
+// for byte the ones signed, with no template-signing key needed. Otherwise
+// (a sensor without signed jobs) the templates run only if a pinned
+// template-signing key (SetTemplateVerifier) signed exactly them for this
+// command (and this sensor, when it knows its id) in a manifest that has
+// not expired. This per-tenant key path is a fallback, to be removed once
+// signed jobs are required everywhere. Every template then passes the
+// sensor's own content check (CheckCustomTemplate): one that could run
+// code here is refused whatever signed it.
+//
+// It is the one check for every command type that carries templates (the
+// scan executor, the kit's retest executor); it does not check the local
+// policy's allow_custom_templates, which the caller does first. A command
+// without templates is refused: nothing was signed.
+func (e *DefaultCommandExecutor) VerifyCustomTemplates(cmd *Command, t CommandTemplates) ([][]byte, error) {
+	if cmd == nil || len(t.CustomTemplates) == 0 {
+		return nil, errors.New("custom templates refused: the command carries none")
+	}
+	contents := make([][]byte, len(t.CustomTemplates))
+	for i := range t.CustomTemplates {
+		c, err := decodeTemplateContent(&t.CustomTemplates[i])
 		if err != nil {
-			return err
+			return nil, err
 		}
 		contents[i] = c
 	}
@@ -1534,24 +1560,27 @@ func (e *DefaultCommandExecutor) verifyCustomTemplates(cmd *Command, payload *Sc
 		for i, c := range contents {
 			got[i] = jobsig.TemplateDigest(c)
 		}
-		if len(got) == 0 || !slices.Equal(got, cmd.signedTemplates) {
-			return fmt.Errorf("custom templates refused: they are not the templates the signed job names (%d signed, %d received)",
+		if !slices.Equal(got, cmd.signedTemplates) {
+			return nil, fmt.Errorf("custom templates refused: they are not the templates the signed job names (%d signed, %d received)",
 				len(cmd.signedTemplates), len(got))
 		}
-		return checkCustomTemplateContents(payload.CustomTemplates, contents)
+	} else {
+		verifier := e.templates.Load()
+		if verifier == nil {
+			return nil, ErrNoTemplateKeys
+		}
+		b := TemplateBinding{CommandID: cmd.ID}
+		if id := e.sensorID.Load(); id != nil {
+			b.SensorID = *id
+		}
+		if _, err := verifier.Verify(t.CustomTemplatesEnvelope, b, t.CustomTemplates, contents); err != nil {
+			return nil, fmt.Errorf("custom templates refused: %w", err)
+		}
 	}
-	verifier := e.templates.Load()
-	if verifier == nil {
-		return ErrNoTemplateKeys
+	if err := checkCustomTemplateContents(t.CustomTemplates, contents); err != nil {
+		return nil, err
 	}
-	b := TemplateBinding{CommandID: cmd.ID}
-	if id := e.sensorID.Load(); id != nil {
-		b.SensorID = *id
-	}
-	if _, err := verifier.Verify(payload.CustomTemplatesEnvelope, b, payload.CustomTemplates, contents); err != nil {
-		return fmt.Errorf("custom templates refused: %w", err)
-	}
-	return checkCustomTemplateContents(payload.CustomTemplates, contents)
+	return contents, nil
 }
 
 // checkCustomTemplateContents is the sensor's own content check of signed
@@ -2070,28 +2099,48 @@ const MaxTemplatesPerCommand = 50
 // - Oversized templates that could exhaust disk space
 // - Invalid template types
 func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templates []EmbeddedTemplate) (string, func(), error) {
+	dir, _, cleanup, err := writeTemplateFiles(scannerName, templates, e.verbose.Load())
+	return dir, cleanup, err
+}
+
+// WriteCustomTemplates writes verified custom templates (see
+// VerifyCustomTemplates; nothing unverified may be written) to a new
+// private temporary directory (0700, each file 0600) and returns the
+// directory, each template's file in order, and the cleanup that removes
+// them. The directory is outside the sandbox's task root, so a tool's
+// sandboxed child of this sensor reads it, as a scan's custom template
+// directory. The same name, size, type and content-hash checks as a scan's
+// templates apply.
+func WriteCustomTemplates(scannerName string, templates []EmbeddedTemplate) (dir string, files []string, cleanup func(), err error) {
+	return writeTemplateFiles(scannerName, templates, false)
+}
+
+// writeTemplateFiles is WriteCustomTemplates, logging each file when
+// verbose.
+func writeTemplateFiles(scannerName string, templates []EmbeddedTemplate, verbose bool) (string, []string, func(), error) {
 	// SECURITY: Limit number of templates to prevent resource exhaustion
 	if len(templates) > MaxTemplatesPerCommand {
-		return "", nil, fmt.Errorf("too many templates: max %d allowed, got %d", MaxTemplatesPerCommand, len(templates))
+		return "", nil, nil, fmt.Errorf("too many templates: max %d allowed, got %d", MaxTemplatesPerCommand, len(templates))
 	}
 
 	// SECURITY: Validate all templates BEFORE creating temp directory
 	for i := range templates {
 		if err := ValidateTemplate(&templates[i]); err != nil {
-			return "", nil, fmt.Errorf("invalid template at index %d: %w", i, err)
+			return "", nil, nil, fmt.Errorf("invalid template at index %d: %w", i, err)
 		}
 	}
 
 	// Create temp directory for templates
 	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("openctem-templates-%s-*", scannerName))
 	if err != nil {
-		return "", nil, fmt.Errorf("create temp dir: %w", err)
+		return "", nil, nil, fmt.Errorf("create temp dir: %w", err)
 	}
 
 	cleanup := func() {
 		os.RemoveAll(tmpDir) //nolint:errcheck // best-effort cleanup
 	}
 
+	files := make([]string, 0, len(templates))
 	// Track written filenames to detect duplicates
 	writtenNames := make(map[string]bool)
 
@@ -2105,7 +2154,7 @@ func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templa
 		content, err := decodeTemplateContent(&tpl)
 		if err != nil {
 			cleanup()
-			return "", nil, err
+			return "", nil, nil, err
 		}
 
 		// Verify content hash if provided (mandatory for integrity)
@@ -2114,7 +2163,7 @@ func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templa
 			computedHash := hex.EncodeToString(hash[:])
 			if !strings.EqualFold(computedHash, tpl.ContentHash) {
 				cleanup()
-				return "", nil, fmt.Errorf("template %s hash mismatch: expected %s, got %s", tpl.Name, tpl.ContentHash, computedHash)
+				return "", nil, nil, fmt.Errorf("template %s hash mismatch: expected %s, got %s", tpl.Name, tpl.ContentHash, computedHash)
 			}
 		}
 
@@ -2129,7 +2178,7 @@ func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templa
 		filename := filepath.Base(tpl.Name)
 		if filename == "." || filename == ".." || filename == "" {
 			cleanup()
-			return "", nil, fmt.Errorf("invalid template filename: %s", tpl.Name)
+			return "", nil, nil, fmt.Errorf("invalid template filename: %s", tpl.Name)
 		}
 
 		// Add extension if missing
@@ -2140,7 +2189,7 @@ func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templa
 		// SECURITY: Check for duplicate filenames (could indicate attack)
 		if writtenNames[filename] {
 			cleanup()
-			return "", nil, fmt.Errorf("duplicate template filename: %s", filename)
+			return "", nil, nil, fmt.Errorf("duplicate template filename: %s", filename)
 		}
 		writtenNames[filename] = true
 
@@ -2148,21 +2197,22 @@ func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templa
 		filePath := filepath.Join(tmpDir, filename)
 		if !isSubPath(tmpDir, filePath) {
 			cleanup()
-			return "", nil, fmt.Errorf("template path escape detected: %s", filename)
+			return "", nil, nil, fmt.Errorf("template path escape detected: %s", filename)
 		}
 
 		// Write template content to file with restrictive permissions
 		if err := os.WriteFile(filePath, content, 0600); err != nil {
 			cleanup()
-			return "", nil, fmt.Errorf("write template %s: %w", tpl.Name, err)
+			return "", nil, nil, fmt.Errorf("write template %s: %w", tpl.Name, err)
 		}
 
-		if e.verbose.Load() {
+		files = append(files, filePath)
+		if verbose {
 			fmt.Printf("[executor] Wrote custom template: %s\n", filePath)
 		}
 	}
 
-	return tmpDir, cleanup, nil
+	return tmpDir, files, cleanup, nil
 }
 
 // decodeTemplateContent returns the template bytes carried base64-encoded in

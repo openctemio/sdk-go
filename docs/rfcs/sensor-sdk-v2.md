@@ -399,6 +399,27 @@ the command. The timeout defaults to 2 minutes and is capped at 30. The command
 completes with `metadata.retest = {tool, status, verdicts: [{ref, verdict,
 detail}], error?}`.
 
+Delivered checks. A retest command may carry the organization's own check for
+an item: `custom_templates` (the scan command's `EmbeddedTemplate` shape),
+optionally `custom_templates_envelope`, and `"template": "<id>"` on each item
+checked with one of them. A sensor serves this only for a tool registered with
+`Kit.HandleRetestTemplates(name, run)`, which also reports capability
+`retest-templates:<tool>` (`toolcompat.RetestTemplatesCapability`); the
+platform sends such a command only to a sensor that reports it. Before `run`
+is called the kit refuses the command unless the local policy allows custom
+templates, verifies the templates exactly as a scan's (the signed job's
+template digests, else the per-tenant manifest bound to this sensor and
+command; `core.DefaultCommandExecutor.VerifyCustomTemplates`), runs the
+content check on each, and refuses an item that names a template the command
+does not carry or a template of another tool's type. It then writes the
+templates to a private temporary directory, which the sandboxed tool child can
+read, and sets `tool.RetestItem.TemplatePath` on each templated item; the
+files are removed when `run` returns. The tool runs exactly that file for the
+item and reports `TemplateDigest` = `"sha256:"` + hex SHA-256 of the file's
+bytes. A templated `fixed` or `still_present` verdict under any other digest
+becomes `unverifiable`, and an `unverifiable` verdict without a digest gets
+the delivered one.
+
 #### D.3.8 Minimal tool (Go, about 15 lines)
 
 A simple tool is declared with the builder (`tool.Define`): name and version,

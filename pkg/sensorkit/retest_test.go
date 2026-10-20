@@ -62,6 +62,11 @@ func TestKit_RetestCommand(t *testing.T) {
 		return k.toolHost().RunBuiltin(ctx, retestContract, task, toolhost.RunOptions{})
 	})
 
+	// A tool whose retest also runs delivered templates reports both.
+	k.HandleRetestTemplates("ext-tpl", func(ctx context.Context, task tool.Task) (*toolhost.Outcome, error) {
+		return k.toolHost().RunBuiltin(ctx, retestContract, task, toolhost.RunOptions{})
+	})
+
 	good, offTarget, noRetest := "0192a3b4-0000-7000-8000-0000000000e1", "0192a3b4-0000-7000-8000-0000000000e2", "0192a3b4-0000-7000-8000-0000000000e3"
 	f.QueueCommandPayload(good, RetestCommandType, json.RawMessage(`{"scanner":"kit-retest","retest_id":"r1","timeout_seconds":60,
 		"targets":["1.1.1.1","8.8.8.8"],
@@ -122,7 +127,9 @@ func TestKit_RetestCommand(t *testing.T) {
 	}
 	hb := lastBeat(t, f)
 	if !slices.Contains(hb.Capabilities, "retest:kit-retest") || !slices.Contains(hb.Capabilities, "retest:ext-scanner") ||
-		slices.Contains(hb.Capabilities, "retest:kit-contract") {
+		slices.Contains(hb.Capabilities, "retest:kit-contract") ||
+		!slices.Contains(hb.Capabilities, "retest:ext-tpl") || !slices.Contains(hb.Capabilities, "retest-templates:ext-tpl") ||
+		slices.Contains(hb.Capabilities, "retest-templates:ext-scanner") || slices.Contains(hb.Capabilities, "retest-templates:kit-retest") {
 		t.Errorf("capabilities %v", hb.Capabilities)
 	}
 }
