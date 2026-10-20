@@ -3,14 +3,15 @@ package sensorkit
 import (
 	"bytes"
 	"crypto/ed25519"
-	"github.com/openctemio/sdk-go/pkg/conformance"
-	"github.com/openctemio/sdk-go/pkg/core"
-	"github.com/openctemio/sdk-go/pkg/jobsig"
-	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/openctemio/sdk-go/pkg/conformance"
+	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/jobsig"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
 )
 
 func writeFile(t *testing.T, dir, name, content string, mode os.FileMode) string {
