@@ -72,16 +72,28 @@ func (k *Kit) resolveJobSigning() error {
 	if k.opts.Standalone || !s.commands || k.client == nil {
 		return nil
 	}
-	envKeys, err := jobsig.ParseKeys(envOr(k.opts.JobSigningKeys, EnvJobSigningKeys))
+	keysText, keysFromFile, err := settingValue(k.opts.JobSigningKeys, EnvJobSigningKeys)
+	if err != nil {
+		return err
+	}
+	envKeys, err := jobsig.ParseKeys(keysText)
 	if err != nil {
 		return usageError(fmt.Errorf("%s: %w", EnvJobSigningKeys, err))
 	}
-	root, err := jobsig.ParseRoot(envOr(k.opts.JobSigningRoot, EnvJobSigningRoot))
+	rootText, rootFromFile, err := settingValue(k.opts.JobSigningRoot, EnvJobSigningRoot)
+	if err != nil {
+		return err
+	}
+	root, err := jobsig.ParseRoot(rootText)
 	if err != nil {
 		return usageError(fmt.Errorf("%s: %w", EnvJobSigningRoot, err))
 	}
+	// A pin the installer put in a file is exclusive: what pairing took from
+	// the platform on first use (a root or keys a compromised platform could
+	// have served) is not trusted next to it.
+	exclusive := keysFromFile || rootFromFile
 	pinned := 0
-	if s.identity != nil && s.identity.JobSigningRoot != "" {
+	if s.identity != nil && s.identity.JobSigningRoot != "" && !exclusive {
 		idRoot, err := jobsig.ParseRoot(s.identity.JobSigningRoot)
 		if err != nil || !strings.HasPrefix(s.identity.JobSigningRoot, "SHA256:") {
 			return usageError(errors.New("identity: job_signing_root is not a SHA256:<hex> key id; pair again"))
@@ -92,7 +104,7 @@ func (k *Kit) resolveJobSigning() error {
 		pinned++
 	}
 	var idKeys *jobsig.Keys
-	if s.identity != nil && len(s.identity.JobSigningKeys) > 0 {
+	if s.identity != nil && len(s.identity.JobSigningKeys) > 0 && !exclusive {
 		if idKeys, err = jobsig.FromPublicKeys(s.identity.JobSigningKeys); err != nil {
 			return usageError(fmt.Errorf("identity: job_signing_keys: %w; pair again", err))
 		}

@@ -52,7 +52,7 @@ func pairingCode() (string, error) {
 // SENSOR_INSTANCE_ENROLLMENT_TOKEN) had no effect (the sensor already has
 // credentials) so it can be removed.
 func (k *Kit) notePairingCodeIgnored(why string) {
-	for _, env := range []string{EnvPairingCode, EnvInstanceEnrollmentToken} {
+	for _, env := range []string{EnvPairingCode, EnvInstanceEnrollmentToken, EnvInstanceEnrollmentTokenFile} {
 		if strings.TrimSpace(os.Getenv(env)) == "" {
 			continue
 		}
@@ -60,11 +60,15 @@ func (k *Kit) notePairingCodeIgnored(why string) {
 	}
 }
 
-// instanceEnrollmentToken is SENSOR_INSTANCE_ENROLLMENT_TOKEN ("" when
-// unset). A value that is not octe_ and 49 letters or digits stops the
-// sensor; the error never carries the value.
+// instanceEnrollmentToken is SENSOR_INSTANCE_ENROLLMENT_TOKEN or the content
+// of SENSOR_INSTANCE_ENROLLMENT_TOKEN_FILE ("" when neither is set). A value
+// that is not octe_ and 49 letters or digits stops the sensor; the error
+// never carries the value.
 func instanceEnrollmentToken() (string, error) {
-	v := strings.TrimSpace(os.Getenv(EnvInstanceEnrollmentToken))
+	v, _, err := settingValue("", EnvInstanceEnrollmentToken)
+	if err != nil {
+		return "", err
+	}
 	if v == "" {
 		return "", nil
 	}
@@ -174,6 +178,10 @@ func (k *Kit) resolveIdentity() error {
 	if err != nil {
 		return usageError(err)
 	}
+	pinRoot, _, err := settingValue(k.opts.JobSigningRoot, EnvJobSigningRoot)
+	if err != nil {
+		return err
+	}
 	_, _ = fmt.Fprintf(k.errw, "This sensor has no identity yet; pairing with %s (identity in %s).\n", s.apiURL, store.Dir())
 	id, err = identity.Pair(ctx, identity.PairOptions{
 		BaseURL:         s.apiURL,
@@ -185,13 +193,17 @@ func (k *Kit) resolveIdentity() error {
 		PlatformKeyPin:  envOr(k.opts.PlatformKey, EnvPlatformKey),
 		// The job-signing root from the install snippet (out of band),
 		// checked against what the platform serves before it is pinned.
-		JobSigningRoot:    envOr(k.opts.JobSigningRoot, EnvJobSigningRoot),
+		JobSigningRoot:    pinRoot,
 		AllowUnsignedJobs: allowUnsigned,
 		// A spent enrollment token cannot start another request.
 		Retry:     token == "",
 		Out:       k.errw,
 		UserAgent: productToken(k.opts.ProductName, k.opts.Version),
 	})
+	// The token is single-use and spent (or refused) by now: take it out of
+	// the environment so scanner processes the sensor starts do not inherit
+	// it. A _FILE token was never in the environment.
+	_ = os.Unsetenv(EnvInstanceEnrollmentToken)
 	if err != nil {
 		return fmt.Errorf("pairing: %w", err)
 	}
