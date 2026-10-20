@@ -812,3 +812,40 @@ func TestWakeSpreadsTheDrain(t *testing.T) {
 		t.Fatalf("WakeSpread < 0: delay %s", d)
 	}
 }
+
+// A restart with the outbox at its cap, or under a cap lowered below what is
+// queued, keeps every unacknowledged result: nothing is evicted for space and
+// new items are still refused until deliveries make room.
+func TestUnackedResultsSurviveRestartAtOrOverCap(t *testing.T) {
+	dir := t.TempDir()
+	capOf := func(max int64) func(*Config) {
+		return func(c *Config) { c.MaxBytes = max; c.MaxDiskFraction = -1 }
+	}
+	o := openTest(t, dir, capOf(3000))
+	var ids []string
+	for i := range 40 {
+		tk, err := o.Enqueue(Meta{Kind: KindReport}, append([]byte(strings.Repeat("x", 50)), byte(i)))
+		if errors.Is(err, ErrFull) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, tk.Meta.ID)
+	}
+	if len(ids) == 0 || len(ids) == 40 {
+		t.Fatalf("queued %d items, want the cap to be reached", len(ids))
+	}
+	_ = o.Close()
+
+	for _, max := range []int64{3000, 1000} { // same cap, then a cap below the queued bytes
+		o2 := openTest(t, dir, capOf(max))
+		if st := o2.Stats(); st.PendingCount != len(ids) || st.Evicted != 0 {
+			t.Fatalf("cap %d: stats %+v, want %d pending and none evicted", max, st, len(ids))
+		}
+		if _, err := o2.Enqueue(Meta{Kind: KindReport}, []byte("more")); !errors.Is(err, ErrFull) {
+			t.Fatalf("cap %d: enqueue err = %v, want ErrFull", max, err)
+		}
+		_ = o2.Close()
+	}
+}
