@@ -15,7 +15,6 @@ import (
 	"os"
 	"slices"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -357,54 +356,6 @@ func parseCommandMeta(cmd *Command) commandMeta {
 		_ = json.Unmarshal(cmd.Payload, &m)
 	}
 	return m
-}
-
-// classRank orders priority classes: verify > interactive > scheduled >
-// background (api RFC-030 D8). Unknown or absent sorts with scheduled.
-func classRank(class string) int {
-	switch strings.ToLower(class) {
-	case "verify":
-		return 0
-	case "interactive":
-		return 1
-	case "background":
-		return 3
-	default:
-		return 2
-	}
-}
-
-// priorityRank orders command priorities: critical > high > normal > low.
-func priorityRank(p string) int {
-	switch strings.ToLower(p) {
-	case "critical", "p0":
-		return 0
-	case "high":
-		return 1
-	case "low":
-		return 3
-	default:
-		return 2
-	}
-}
-
-// orderCommands sorts a poll batch: class first, then priority, then the
-// platform's order.
-func orderCommands(cmds []*Command) {
-	sort.SliceStable(cmds, func(i, j int) bool {
-		mi, mj := parseCommandMeta(cmds[i]), parseCommandMeta(cmds[j])
-		if ci, cj := classRank(mi.Class), classRank(mj.Class); ci != cj {
-			return ci < cj
-		}
-		pi, pj := cmds[i].Priority, cmds[j].Priority
-		if pi == "" {
-			pi = mi.Priority
-		}
-		if pj == "" {
-			pj = mj.Priority
-		}
-		return priorityRank(pi) < priorityRank(pj)
-	})
 }
 
 // DefaultPerHostConcurrency is how many held commands may touch one host
