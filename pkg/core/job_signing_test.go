@@ -401,3 +401,40 @@ func TestDangerousAllowUnsignedJobsFromEnv(t *testing.T) {
 		t.Fatal("garbage accepted")
 	}
 }
+
+// The platform's batch order is the signer's sequence order while the
+// priorities are mixed (aging put a low job first): every job verifies, none
+// is refused by a local re-sort.
+func TestPollerAcceptsAMixedPriorityBatchInPlatformOrder(t *testing.T) {
+	f := newJobPollerFixture(t, true, true)
+	ids := []string{"cccccccc-0000-4000-8000-0000000000a1", "cccccccc-0000-4000-8000-0000000000a2", "cccccccc-0000-4000-8000-0000000000a3"}
+	prios := []string{"low", "critical", "normal"}
+	for i, id := range ids {
+		// One host each: the per-host limit hands a shared host back.
+		pl := json.RawMessage(`{"scanner":"nuclei","targets":["203.0.113.` + string(rune('1'+i)) + `"]}`)
+		f.offer(id, pl, f.signer.sign(t, id, 2, pl, nil)) // seq 1, 2, 3
+		f.client.list[i].Priority = prios[i]
+		f.client.answers[id].Priority = prios[i]
+	}
+	f.run()
+	if len(f.exec.ran) != 3 {
+		t.Fatalf("ran %d of 3 (results %+v)", len(f.exec.ran), f.client.results)
+	}
+	for _, id := range ids {
+		if r := f.client.results[id]; r == nil || r.Status != "completed" {
+			t.Fatalf("%s: %+v", id, r)
+		}
+	}
+	if got := f.v.LastSeq(jobsig.KeyID(f.signer.pub())); got != 3 {
+		t.Fatalf("last seq %d, want 3", got)
+	}
+	// An attacker replaying the first job (old seq, old nonce) is refused.
+	f.offer(ids[0], jsPayload, f.signer.sign(t, ids[0], 2, jsPayload, func(st *jobsig.Statement) { st.Seq = 1 }))
+	f.run()
+	if len(f.exec.ran) != 3 {
+		t.Fatal("a job with an old sequence number ran")
+	}
+	if r := f.refusal(t, ids[0]); !strings.Contains(r.Error, "replay") {
+		t.Fatalf("refusal = %q", r.Error)
+	}
+}

@@ -1003,9 +1003,11 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		fmt.Printf("[command-poller] Received %d commands\n", len(resp.Commands))
 	}
 
-	// Local order: priority class, then priority (the platform's order
-	// otherwise).
-	orderCommands(resp.Commands)
+	// The batch is handled in the order the platform returned it, which is
+	// the order its signer numbered the jobs in: the job signature check
+	// below needs per-signer sequence numbers to increase, so a local
+	// re-sort (by priority) would refuse valid jobs. The platform owns the
+	// order (priority, aging, fairness).
 	limit := p.slotLimit()
 
 	// started and declined decide the claim backoff: a poll that started
@@ -1097,8 +1099,8 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			}
 			continue
 		}
-		// The job signature, here in claim order (the signer's sequence
-		// numbers increase with the claims) and before anything runs.
+		// The job signature, here in the platform's order (the signer's
+		// sequence numbers increase along it) and before anything runs.
 		jobErr := p.jobs.Load().Check(ctx, cmd)
 
 		// Execute asynchronously, in a context of its own: stopping the

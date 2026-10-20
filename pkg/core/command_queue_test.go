@@ -191,30 +191,19 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 }
 
 // One slot, a batch in platform order low, critical, normal (and a verify
-// class): the verify command is claimed first, then critical.
-func TestQueue_LocalPriorityOrder(t *testing.T) {
+// class): the poller keeps the platform's order, it does not re-sort.
+func TestQueue_KeepsPlatformOrder(t *testing.T) {
 	c := newQueueClient(
 		scanCmd("low", "low", map[string]any{"target": "a.example.com"}),
 		scanCmd("crit", "critical", map[string]any{"target": "b.example.com"}),
 		scanCmd("norm", "normal", map[string]any{"target": "c.example.com"}),
 		scanCmd("verify", "low", map[string]any{"target": "d.example.com", "class": "verify"}),
 	)
-	resp, _ := c.GetCommands(context.Background())
-	orderCommands(resp.Commands)
-	var got []string
-	for _, cmd := range resp.Commands {
-		got = append(got, cmd.ID)
-	}
-	if fmt.Sprint(got) != "[verify crit norm low]" {
-		t.Fatalf("order %v", got)
-	}
-
-	// Through the poller, against a client that returns the whole batch.
 	e := newCtxExecutor()
 	p := NewCommandPoller(&legacyBatch{c}, e, &CommandPollerConfig{MaxConcurrent: 1})
 	p.pollAndExecute(context.Background())
-	if id := <-e.started; id != "verify" {
-		t.Fatalf("first run %s, want verify", id)
+	if id := <-e.started; id != "low" {
+		t.Fatalf("first run %s, want low (platform order)", id)
 	}
 	close(e.release)
 	p.activeCmds.Wait()
