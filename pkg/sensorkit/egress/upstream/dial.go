@@ -25,6 +25,10 @@ const maxReplyHeader = 8 << 10
 type attemptError struct {
 	class string
 	err   error
+	// replyTimeout: the proxy took the request and sent no CONNECT reply
+	// in time. The pool decides whether that is the target or the proxy
+	// (Pool.observe).
+	replyTimeout bool
 }
 
 func (e *attemptError) Error() string { return e.class + ": " + e.err.Error() }
@@ -32,6 +36,15 @@ func (e *attemptError) Unwrap() error { return e.err }
 
 func failed(class string, format string, args ...any) *attemptError {
 	return &attemptError{class: class, err: fmt.Errorf(format, args...)}
+}
+
+// replyTimedOut is the error of a CONNECT that got no reply in time: about
+// the target at first (a proxy that is up waits on a target that does not
+// answer), about the proxy once it never carried a tunnel in the job
+// (Pool.observe).
+func replyTimedOut(e *Endpoint, err error) *attemptError {
+	return &attemptError{class: egress.ClassTargetUnreachable, replyTimeout: true,
+		err: fmt.Errorf("%s: no CONNECT reply in time: %w", e, err)}
 }
 
 // tunnel opens a tunnel to target through e. Every error is an
@@ -156,8 +169,8 @@ func httpConnect(c net.Conn, e *Endpoint, target netip.AddrPort) (net.Conn, erro
 	if err != nil {
 		if isTimeout(err) {
 			// The proxy accepted the connection and the request: it is
-			// waiting on the target.
-			return nil, failed(egress.ClassTargetUnreachable, "%s: no CONNECT reply in time: %w", e, err)
+			// waiting on the target, or it hangs.
+			return nil, replyTimedOut(e, err)
 		}
 		return nil, failed(egress.ClassProxyDown, "%s: %w", e, err)
 	}
@@ -277,6 +290,9 @@ func socks5Connect(c net.Conn, e *Endpoint, target netip.AddrPort) (net.Conn, er
 		if _, err := io.ReadFull(br, st[:]); err != nil {
 			return nil, failed(egress.ClassProxyDown, "%s: read authentication status: %w", e, err)
 		}
+		if st[0] != socksAuthVersion {
+			return nil, failed(egress.ClassProxyDown, "%s: malformed authentication status", e)
+		}
 		if st[1] != 0x00 {
 			return nil, failed(egress.ClassProxyAuth, "%s: proxy refused the credentials", e)
 		}
@@ -300,7 +316,7 @@ func socks5Connect(c net.Conn, e *Endpoint, target netip.AddrPort) (net.Conn, er
 	rep, err := readSOCKSReply(br)
 	if err != nil {
 		if isTimeout(err) {
-			return nil, failed(egress.ClassTargetUnreachable, "%s: no CONNECT reply in time: %w", e, err)
+			return nil, replyTimedOut(e, err)
 		}
 		return nil, failed(egress.ClassProxyDown, "%s: %w", e, err)
 	}
