@@ -31,6 +31,12 @@ const (
 	breakerJitter    = 0.2
 )
 
+// replyTimeoutLimit is the number of CONNECT replies that never came,
+// through an endpoint that has carried no tunnel in the job, after which
+// the endpoint is taken as hung (proxy_down) rather than every target as
+// unreachable.
+const replyTimeoutLimit = breakerThreshold
+
 // maxSamples bounds the handshake times kept per endpoint.
 const maxSamples = 256
 
@@ -76,6 +82,9 @@ type endpointState struct {
 	backoff     time.Duration
 	probing     bool
 	authFailed  bool
+	// replyTimeouts counts CONNECT replies that never came while no tunnel
+	// through the endpoint has succeeded in the job.
+	replyTimeouts int
 
 	// stats
 	ok, down, auth, unreach, refused int64
@@ -172,15 +181,15 @@ func (p *Pool) Dial(ctx context.Context, network, addr string) (net.Conn, error)
 		c, err := p.tunnel(actx, &e, target)
 		cancel()
 		if err == nil {
-			p.observe(i, probe, "", p.opts.now().Sub(start), "")
+			p.observe(i, probe, "", false, p.opts.now().Sub(start), "")
 			return c, nil
 		}
-		class, cause := egress.ClassProxyDown, err
+		class, cause, replyTimeout := egress.ClassProxyDown, err, false
 		var ae *attemptError
 		if errors.As(err, &ae) {
-			class, cause = ae.class, ae.err
+			class, cause, replyTimeout = ae.class, ae.err, ae.replyTimeout
 		}
-		if ctx.Err() != nil {
+		if callerDone(ctx) {
 			// The caller gave up (the task ended or its dial timed out):
 			// nothing is learned about the endpoint.
 			if probe {
@@ -188,7 +197,7 @@ func (p *Pool) Dial(ctx context.Context, network, addr string) (net.Conn, error)
 			}
 			return nil, &egress.UpstreamError{Class: class, Endpoint: e.ID, Final: true, Err: cause}
 		}
-		p.observe(i, probe, class, 0, err.Error())
+		class = p.observe(i, probe, class, replyTimeout, 0, err.Error())
 		last = &egress.UpstreamError{Class: class, Endpoint: e.ID, Final: class != egress.ClassTargetUnreachable, Err: cause}
 		if class != egress.ClassProxyDown {
 			return nil, last
@@ -200,6 +209,17 @@ func (p *Pool) Dial(ctx context.Context, network, addr string) (net.Conn, error)
 	// Every usable endpoint is down: the connection fails, never direct.
 	last.Final = true
 	return nil, last
+}
+
+// callerDone reports whether the caller's context has ended, its deadline
+// included: the connection's I/O deadline is the context's, so a read can
+// time out a moment before the context's own timer marks it done.
+func callerDone(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	d, ok := ctx.Deadline()
+	return ok && !time.Now().Before(d)
 }
 
 // ErrNoEndpoint is the error of a connection when no endpoint is usable
@@ -288,13 +308,27 @@ func (p *Pool) release(i int) {
 	p.mu.Unlock()
 }
 
-// observe counts one attempt through endpoint i and moves its breaker.
-func (p *Pool) observe(i int, wasProbe bool, class string, handshake time.Duration, errMsg string) {
+// observe counts one attempt through endpoint i, moves its breaker and
+// returns the attempt's class. A CONNECT reply that never came
+// (replyTimeout) is about the target while the endpoint has carried a
+// tunnel in the job. Before that it counts towards the breaker without
+// closing it, and from the replyTimeoutLimit-th one (or on a half-open
+// probe) it is proxy_down: a proxy that accepts connections and never
+// answers is quarantined like one that refuses them.
+func (p *Pool) observe(i int, wasProbe bool, class string, replyTimeout bool, handshake time.Duration, errMsg string) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := &p.state[i]
 	if wasProbe {
 		s.probing = false
+	}
+	hung := false
+	if replyTimeout && s.ok == 0 {
+		s.replyTimeouts++
+		hung = true
+		if wasProbe || s.replyTimeouts >= replyTimeoutLimit {
+			class = egress.ClassProxyDown
+		}
 	}
 	switch class {
 	case "":
@@ -318,10 +352,16 @@ func (p *Pool) observe(i int, wasProbe bool, class string, handshake time.Durati
 	if errMsg != "" {
 		s.lastErr = sanitize(class, errMsg, p.cfg.Endpoints[i])
 	}
+	if hung && class != egress.ClassProxyDown {
+		// Not yet taken as hung: counted towards the breaker, which only
+		// a proxy_down opens.
+		s.consecutive++
+		return class
+	}
 	if class != egress.ClassProxyDown {
 		// The proxy answered: it is up.
 		s.consecutive, s.openUntil, s.backoff = 0, time.Time{}, 0
-		return
+		return class
 	}
 	s.consecutive++
 	if wasProbe || s.consecutive >= breakerThreshold {
@@ -334,6 +374,7 @@ func (p *Pool) observe(i int, wasProbe bool, class string, handshake time.Durati
 		j := 1 + breakerJitter*(2*p.opts.jitter()-1)
 		s.openUntil = p.opts.now().Add(time.Duration(float64(s.backoff) * j))
 	}
+	return class
 }
 
 // Report is the body of the job's egress report (POST
