@@ -23,6 +23,11 @@
 //     a host it cannot cover is a coverage gap (Forwarder.TargetRate);
 //   - records the destination, the verdict and the bytes (Record).
 //
+// Forwarder.Dial may send the connections through an organization's proxy
+// pool (package egress/upstream): the checks above run first, the pool
+// only chooses the path to the address they allowed (TargetHost, Record's
+// Endpoint, UpstreamError).
+//
 // The forwarder enforces nothing by itself: a tool reaches the network only
 // through it when the sandbox leaves it no other route (a network namespace
 // with no interface but loopback; RFC-060 §4.2). Without that, it is a
@@ -112,6 +117,10 @@ type Record struct {
 	Reason   string    `json:"reason,omitempty"`
 	BytesOut int64     `json:"bytes_out,omitempty"`
 	BytesIn  int64     `json:"bytes_in,omitempty"`
+	// Endpoint is the id of the upstream proxy endpoint that carried the
+	// connection (a connection Dial returned as an EndpointConn), empty
+	// for a direct one.
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // ErrRefused is the error of a destination outside the scope.
@@ -400,21 +409,33 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 		dial = d.DialContext
 	}
 	var lastErr error
+	targetErr := false // lastErr is about the target, not about an upstream proxy
+	dctxBase := WithTargetHost(ctx, host)
 	for _, a := range addrs {
-		dctx, cancel := context.WithTimeout(ctx, f.limits.DialTimeout)
+		dctx, cancel := context.WithTimeout(dctxBase, f.limits.DialTimeout)
 		c, err := dial(dctx, "tcp", net.JoinHostPort(a.String(), strconv.Itoa(port)))
 		cancel()
-		if ctx.Err() == nil {
+		var ue *UpstreamError
+		proxyFault := errors.As(err, &ue) && ue.ProxyFault()
+		if ctx.Err() == nil && !proxyFault {
 			target.RecordErr(host, a, port, err)
 		}
 		if err == nil {
 			f.hostRate.ReportDial(normName(host), port, nil)
 			rec.Verdict, rec.Addr = Allowed, a.String()
+			if ec, ok := c.(EndpointConn); ok {
+				rec.Endpoint = ec.UpstreamEndpoint()
+			}
 			return c, rec, nil
 		}
-		lastErr = err
+		lastErr, targetErr = err, !proxyFault
+		if ue != nil && ue.Final {
+			break
+		}
 	}
-	if ctx.Err() == nil {
+	// A proxy that failed says nothing about the target: the target's rate
+	// is paced on what the target did only.
+	if ctx.Err() == nil && targetErr {
 		f.hostRate.ReportDial(normName(host), port, lastErr)
 	}
 	rec.Verdict, rec.Reason = Allowed, "dial failed: "+lastErr.Error()
