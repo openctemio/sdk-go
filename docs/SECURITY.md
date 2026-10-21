@@ -634,9 +634,11 @@ arguments or environment:
 - Failover only when a proxy is down (TCP/TLS failed or timed out, or a
   reply that is not the protocol), once per endpoint; a proxy that refuses
   the credentials is not used again in the job; an answer about the
-  target (CONNECT 403/502/503/504, SOCKS refusal or unreachable, or no
-  CONNECT reply in time after the proxy took the request) ends that
-  connection. A pooled connection never falls back to a direct dial. A
+  target (CONNECT 403/502/503/504, SOCKS refusal or unreachable) ends that
+  connection. No CONNECT reply in time after the proxy took the request is
+  about the target once the endpoint has carried a tunnel in the job;
+  before that the third such timeout is `proxy_down`, so a proxy that
+  accepts connections and never answers is taken out. A pooled connection never falls back to a direct dial. A
   pool sent as the organization's default applies to public targets only:
   private, ULA, CGNAT and loopback targets are dialed directly, as before.
 - Each endpoint has a breaker local to the job (3 consecutive proxy
@@ -647,6 +649,13 @@ arguments or environment:
   each address a host name resolves to: loopback, link-local, cloud
   metadata, multicast, unspecified, broadcast, 0.0.0.0/8 and 240.0.0.0/4
   are refused, private addresses allowed (segment proxies).
+- Not through the pool: DNS (resolved on the sensor, so the sensor's
+  resolver sees the names), UDP, the scanner content the sensor manages
+  (content path) and a code scan's repository checkout (cloned by the
+  sensor from its own network before the tools start).
+- An `http` endpoint receives its Basic `Proxy-Authorization` in clear
+  text over the network path to the proxy; use an `https` endpoint when
+  that path is not trusted.
 - Credentials are asked for the command under its lease (v2 HTTPS only,
   never through protocol v3), only when an endpoint has some, and stay in
   the sensor's memory. Records, logs, errors and reports name an endpoint
