@@ -28,6 +28,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/reach"
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/egress/upstream"
 	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
@@ -179,6 +180,10 @@ type ScanCommandPayload struct {
 	// the command's tool, set by administrators on the platform; checked
 	// against the tool's own schema like the config (resolveScanSettings).
 	SettingsLayers *SettingsLayers `json:"settings_layers,omitempty"`
+	// Egress is the organization's proxy pool for the job's tool traffic
+	// (egress_job.go): set by the platform for the claiming sensor, never
+	// with credentials. Absent: no proxy (direct, as before).
+	Egress *upstream.Config `json:"egress,omitempty"`
 }
 
 // CapabilityScanner is a scanner that runs capability jobs: it takes the
@@ -298,6 +303,8 @@ type CommandExecutionResult struct {
 
 // CommandPoller polls the server for pending commands.
 type CommandPoller struct {
+	// egressReporter sends a pooled job's egress report (SetEgressReporter).
+	egressReporter atomic.Pointer[EgressReporter]
 	// ledger: a shared sensor's held jobs (CommandPollerConfig.Ledger).
 	ledger        *JobLedger
 	client        CommandClient
@@ -1235,6 +1242,8 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		ctx = WithJobZone(ctx, cmd.jobZone)
 	}
 	ctx, usage := withUsageRecorder(ctx)
+	// The proxy pool a pooled job prepares, for its egress report.
+	ctx, egressUsed := withEgressHolder(ctx)
 	// Every target the job dials through the guarded dialer or a task
 	// forwarder, and every outcome a scanner records, lands here; the
 	// result carries the summary (reach.Recorder.Metadata).
@@ -1346,6 +1355,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		kerr := refuse("kill_switch", "stopped by the sensor owner while running")
 		p.clog(context.WithoutCancel(ctx), cmd.ID, "error", "Stopped: "+kerr.Error(), refusalFields(kerr))
 		p.finishLog(ctx, cmd.ID)
+		p.reportEgress(ctx, cmd, egressUsed)
 		p.refuseCommand(context.WithoutCancel(ctx), cmd, kerr)
 		return
 	}
@@ -1413,6 +1423,8 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	addReachMetadata(reportResult, reached)
 	p.logOutcome(ctx, cmd, reportResult, err, time.Since(startTime))
 	p.finishLog(ctx, cmd.ID)
+	// The pool's signals go before the result, also when the job failed.
+	p.reportEgress(ctx, cmd, egressUsed)
 
 	// Report result back to server. A client with an outbox queues it behind
 	// the command's results, so the platform sees the command complete only
@@ -1457,6 +1469,11 @@ func (p *CommandPoller) SetVerbose(v bool) {
 
 // DefaultCommandExecutor provides default command execution.
 type DefaultCommandExecutor struct {
+	// egress: the local veto on proxy pools and the credential fetch
+	// (egress_job.go).
+	egressMu sync.Mutex
+	egress   egressSetup
+
 	scanners   map[string]Scanner
 	collectors map[string]Collector
 	pusher     Pusher
@@ -1760,6 +1777,19 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	opts, err := e.newScanOptions(cmd, target, targets, scanner, &payload)
 	if err != nil {
 		return nil, err
+	}
+	// A pooled job: every tool connection goes through the organization's
+	// proxy pool, or the job does not run (never direct).
+	if payload.Egress != nil {
+		if es, ok := scanner.(EgressScanner); !ok || !es.RoutesEgress() {
+			return nil, EgressNotRouted(payload.Scanner)
+		}
+		pool, err := e.PrepareEgress(ctx, cmd.ID, payload.Egress)
+		if err != nil {
+			return nil, err
+		}
+		opts.Egress = pool
+		ctx = WithEgressDialer(ctx, pool)
 	}
 
 	local := e.local.Load()

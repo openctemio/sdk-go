@@ -103,6 +103,10 @@ type ScanOptions struct {
 	WebScope *webscope.Scope `yaml:"-" json:"-"`
 	// OrgHTTP is the job's organization HTTP policy (see ScanCommandPayload).
 	OrgHTTP *OrgHTTPPolicy `yaml:"-" json:"-"`
+	// Egress is the job's proxy pool (see ScanCommandPayload.Egress and
+	// egress_job.go): the tool host dials every task connection through it.
+	// Only an EgressScanner receives a pooled job.
+	Egress EgressDialer `yaml:"-" json:"-"`
 	// Limits are the port, protocol and path limits of the job's targets,
 	// from its verified signed statement only (never the payload); only a
 	// ScopeLimitScanner receives them.

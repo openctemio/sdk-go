@@ -145,8 +145,10 @@ func v3Carries(method, rest string) bool {
 		return method == http.MethodGet
 	case parts[0] == "results":
 		return len(parts) >= 2
-	case parts[0] == "commands" && len(parts) == 3 && parts[2] == protov2.SourceCredentialAction:
-		// A code-scan source credential stays on v2 HTTPS (no v3 method).
+	case parts[0] == "commands" && len(parts) == 3 && (parts[2] == protov2.SourceCredentialAction ||
+		parts[2] == protov2.EgressCredentialsAction || parts[2] == protov2.EgressReportAction):
+		// A code-scan source credential, a proxy pool's credentials and the
+		// pool's report stay on v2 HTTPS (no v3 method).
 		return false
 	case parts[0] == "commands" && len(parts) >= 3:
 		return true

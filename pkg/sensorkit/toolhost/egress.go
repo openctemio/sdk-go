@@ -14,6 +14,7 @@ import (
 
 	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/adapt"
+	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/internal/absname"
 	"github.com/openctemio/sdk-go/pkg/reach"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
@@ -57,7 +58,14 @@ type taskEgress struct {
 // network. A tool with network "none" gets none (no way out at all); a
 // backend that does not confine gets none (nil, the task runs as before).
 func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared) (*taskEgress, error) {
-	if !be.Status().NetworkEnforced || p.m.Permissions.Network == tool.NetNone {
+	if p.m.Permissions.Network == tool.NetNone {
+		return nil, nil
+	}
+	if !be.Status().NetworkEnforced {
+		if p.egress != nil {
+			// prepare refused this already; never run a pooled task direct.
+			return nil, fmt.Errorf("toolhost: the job's proxy pool needs a sandbox that confines the network")
+		}
 		return nil, nil
 	}
 	scope := h.taskScope(ctx, p.m, p.task)
@@ -77,6 +85,11 @@ func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared
 		e.fw.Reach = reach.NewRecorder()
 	}
 	e.fw.TargetRate().OnChange = e.change
+	if p.egress != nil {
+		// The job's proxy pool carries every connection the scope allows;
+		// the scope check, pinning and per-target rate run first.
+		e.fw.Dial = p.egress.Dial
+	}
 	pl, err := net.Listen("unix", e.proxy)
 	if err != nil {
 		_ = os.RemoveAll(dir)
@@ -330,6 +343,30 @@ func (h *Host) checkLimits(m tool.Manifest, task tool.Task) *tool.Error {
 	}
 	if !h.backend().Status().NetworkEnforced {
 		return tool.AsError(tool.Refused("the job's targets are limited to some ports or paths; this sensor's sandbox does not confine the network, so the limits cannot be enforced"))
+	}
+	return nil
+}
+
+// taskEgressDialer is the job's proxy pool for a task: the task's own, else
+// the one on the job's context (core.WithEgressDialer), so every tool task
+// of a pooled job uses it whatever path started it.
+func taskEgressDialer(ctx context.Context, task tool.Task) core.EgressDialer {
+	if task.Egress != nil {
+		return task.Egress
+	}
+	return core.EgressDialerFrom(ctx)
+}
+
+// checkEgress refuses a task of a pooled job that would not run behind a
+// forwarder that confines the network: its connections would go direct.
+// A tool with network "none" makes none and runs.
+func (h *Host) checkEgress(m tool.Manifest, d core.EgressDialer) *tool.Error {
+	if d == nil || m.Permissions.Network == tool.NetNone {
+		return nil
+	}
+	if !h.backend().Status().NetworkEnforced {
+		return tool.AsError(tool.Refused(fmt.Sprintf("the job's traffic goes through a proxy pool; this sensor's sandbox does not confine the network, so tool %s could reach its targets directly (%s)",
+			m.Name, core.RefusalEgressUnavailable)))
 	}
 	return nil
 }
