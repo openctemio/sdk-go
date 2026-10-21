@@ -358,6 +358,9 @@ type prepared struct {
 	notes []LogLine
 	// contentPaths are the task's content packs, granted read-only.
 	contentPaths []string
+	// egress is the job's proxy pool: the forwarder's Dial hook (nil:
+	// direct).
+	egress core.EgressDialer
 }
 
 // prepare checks the manifest and the task (targets, config), admits it
@@ -378,6 +381,10 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, ierr, nil
 	}
 	if ierr := h.checkLimits(m, task); ierr != nil {
+		return nil, ierr, nil
+	}
+	egressDialer := taskEgressDialer(ctx, task)
+	if ierr := h.checkEgress(m, egressDialer); ierr != nil {
 		return nil, ierr, nil
 	}
 	task, ierr := admitContract(m, task)
@@ -433,8 +440,9 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if err != nil {
 		return nil, tool.AsError(err), nil
 	}
+	task.Egress = nil // kept in prepared only: it never travels with the task
 	p := &prepared{m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine, contentPaths: contentPaths,
-		targetRate: o.TargetRate}
+		targetRate: o.TargetRate, egress: egressDialer}
 	if task.IsRetest() && len(adm.Refused) > 0 {
 		// A retest never reaches a target the policy refused: its items
 		// are not sent and end unverifiable.

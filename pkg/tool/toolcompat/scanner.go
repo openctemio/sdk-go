@@ -87,11 +87,17 @@ var (
 	_ core.ToolContractProvider   = (*toolScanner)(nil)
 	_ core.SettingsSchemaProvider = (*toolScanner)(nil)
 	_ core.CapabilityScanner      = (*toolScanner)(nil)
+	_ core.EgressScanner          = (*toolScanner)(nil)
 )
 
 // TakesCapabilityJobs: a tool that implements capabilities runs
 // capability jobs (the runtime maps their params, tool.Manifest.ApplyParams).
 func (s *toolScanner) TakesCapabilityJobs() bool { return len(s.m.Implements) > 0 }
+
+// RoutesEgress: every task runs through the tool host, which dials the
+// task's connections through the job's proxy pool (it refuses the task on
+// a sandbox that does not confine the network).
+func (s *toolScanner) RoutesEgress() bool { return true }
 
 // EnforcesScopeLimits: the tool host enforces a task's scope limits (it
 // refuses the task on a sandbox that cannot).
@@ -208,6 +214,7 @@ func (s *toolScanner) ScanTargets(ctx context.Context, targets []string, opts *c
 		task.WebScope = opts.WebScope
 		task.Limits = opts.Limits
 		task.OrgHTTP = opts.OrgHTTP
+		task.Egress = opts.Egress
 	}
 	if opts != nil && opts.Settings != nil && len(s.m.Config) > 0 {
 		raw, err := json.Marshal(opts.Settings.Values())

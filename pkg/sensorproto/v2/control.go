@@ -388,6 +388,67 @@ type SourceCredentialResponse struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
+// EgressCredentialsAction is the action of POST /commands/{id}/egress-credentials:
+// the sensor holding a scan command's lease (HeaderLeaseEpoch) asks for the
+// credentials of the proxy pool the command's egress block names
+// (EgressCredentialsRequest). The platform answers only the leasing sensor
+// and only for the pool currently effective for it, else 404
+// command_not_found. Never logged, never stored on the command. Not carried
+// by protocol v3: it stays on v2 HTTPS.
+const EgressCredentialsAction = "egress-credentials"
+
+// EgressCredentialsRequest is the body of POST /commands/{id}/egress-credentials.
+type EgressCredentialsRequest struct {
+	PoolID string `json:"pool_id"`
+}
+
+// EgressCredential is one endpoint's credentials.
+type EgressCredential struct {
+	EndpointID string `json:"endpoint_id"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+}
+
+// EgressCredentialsResponse is the answer of POST /commands/{id}/egress-credentials:
+// the endpoints of the pool that have credentials.
+type EgressCredentialsResponse struct {
+	Credentials []EgressCredential `json:"credentials"`
+}
+
+// EgressReportAction is the action of POST /commands/{id}/egress-report:
+// the per-endpoint signals of a job that ran through a proxy pool
+// (EgressReport), sent best-effort at the end of the job before it
+// completes or fails, under the command's lease. Answer 204. Not carried by
+// protocol v3: it stays on v2 HTTPS.
+const EgressReportAction = "egress-report"
+
+// MaxEgressReportEndpoints bounds an egress report.
+const MaxEgressReportEndpoints = 64
+
+// MaxEgressLastError bounds EgressEndpointReport.LastError.
+const MaxEgressLastError = 200
+
+// EgressReport is the body of POST /commands/{id}/egress-report. It never
+// carries credentials or URLs with userinfo.
+type EgressReport struct {
+	PoolID    string                 `json:"pool_id"`
+	Endpoints []EgressEndpointReport `json:"endpoints"`
+}
+
+// EgressEndpointReport is one endpoint's connection attempts over the job,
+// by class, and its tunnel handshake times.
+type EgressEndpointReport struct {
+	EndpointID        string `json:"endpoint_id"`
+	OK                int64  `json:"ok"`
+	ProxyDown         int64  `json:"proxy_down"`
+	ProxyAuth         int64  `json:"proxy_auth"`
+	TargetUnreachable int64  `json:"target_unreachable"`
+	TargetRefused     int64  `json:"target_refused"`
+	HandshakeMsP50    int64  `json:"handshake_ms_p50"`
+	HandshakeMsP95    int64  `json:"handshake_ms_p95"`
+	LastError         string `json:"last_error"`
+}
+
 // CompleteRequest is the body of POST /commands/{id}/complete.
 type CompleteRequest struct {
 	Result json.RawMessage `json:"result,omitempty"`

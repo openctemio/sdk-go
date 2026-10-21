@@ -99,7 +99,7 @@ func newRTFixture(t *testing.T, policy *core.LocalPolicy) *rtFixture {
 		return out, nil
 	}
 	f.x = newRetestExecutor(nil, map[string]RetestFunc{"nuclei": run, "other": run}, map[string]bool{"nuclei": true},
-		exec, func() *core.LocalPolicy { return policy })
+		exec, func() *core.LocalPolicy { return policy }, exec)
 	return f
 }
 

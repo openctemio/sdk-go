@@ -246,6 +246,25 @@ func hostile(mode string) int {
 		}
 		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
 		return 0
+	case "egress-pool-probe":
+		// A CONNECT to its target through the relay; the finding's title is
+		// the answer, its description everything the tool can see of its
+		// environment and arguments.
+		proxyAddr := strings.TrimPrefix(os.Getenv("HTTPS_PROXY"), "http://")
+		code := "noproxy"
+		if c, err := net.DialTimeout("tcp", proxyAddr, 3*time.Second); err == nil {
+			_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+			target := os.Getenv("TOOLHOST_TARGET")
+			fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+			line, _ := bufio.NewReader(c).ReadString('\n')
+			if f := strings.Fields(line); len(f) > 1 {
+				code = f[1]
+			}
+			_ = c.Close()
+		}
+		seen := strings.Join(append(os.Environ(), os.Args...), " ")
+		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"description":%q,"severity":"low"}]}`+"\n", "target="+code, seen)
+		return 0
 	case "socks-probe":
 		return socksProbe()
 	case "limits-probe":

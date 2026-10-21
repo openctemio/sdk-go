@@ -10,6 +10,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/egress/upstream"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
 	"github.com/openctemio/sdk-go/pkg/tool/toolcompat"
@@ -45,6 +46,9 @@ type retestPayload struct {
 	// User-Agent and headers), as on a scan command: the tool host puts it
 	// on every request of the retest or refuses a tool that cannot.
 	HTTPPolicy *core.OrgHTTPPolicy `json:"http_policy,omitempty"`
+	// Egress is the organization's proxy pool, as on a scan command: the
+	// retest's tool connections go through it, or the retest does not run.
+	Egress *upstream.Config `json:"egress,omitempty"`
 	// CustomTemplates and CustomTemplatesEnvelope are the custom templates
 	// the platform delivers with the retest, as on a scan command (signed
 	// for this command; see core.DefaultCommandExecutor.VerifyCustomTemplates).
@@ -74,6 +78,8 @@ type RetestResult struct {
 // RetestFunc runs one retest task (tool.Task.Retest set) of a tool and
 // returns the host's outcome (toolhost.Host.RunBuiltin or RunManifest): a
 // sensor that runs its tools itself serves retests with it (HandleRetest).
+// It must run the task through the tool host: a pooled retest's proxy pool
+// travels in tool.Task.Egress and on ctx, and only the host applies it.
 type RetestFunc func(ctx context.Context, task tool.Task) (*toolhost.Outcome, error)
 
 // HandleRetest makes the kit serve the platform's retest commands for tool
@@ -138,13 +144,21 @@ type retestExecutor struct {
 	verifier TemplateVerifier
 	// policy is the local policy in force (allow_custom_templates).
 	policy func() *core.LocalPolicy
+	// egress prepares a pooled retest's proxy pool (nil refuses one).
+	egress egressPreparer
+}
+
+// egressPreparer turns a command's egress block into the job's pool
+// (*core.DefaultCommandExecutor).
+type egressPreparer interface {
+	PrepareEgress(ctx context.Context, cmdID string, cfg *upstream.Config) (*upstream.Pool, error)
 }
 
 // newRetestExecutor returns the executor of the scanners that can retest
 // and of the tools given to HandleRetest (nil when there is none).
 func newRetestExecutor(scanners []scannerEntry, handled map[string]RetestFunc, templated map[string]bool,
-	verifier TemplateVerifier, policy func() *core.LocalPolicy) *retestExecutor {
-	rx := &retestExecutor{tools: map[string]RetestFunc{}, templated: templated, verifier: verifier, policy: policy}
+	verifier TemplateVerifier, policy func() *core.LocalPolicy, egress egressPreparer) *retestExecutor {
+	rx := &retestExecutor{tools: map[string]RetestFunc{}, templated: templated, verifier: verifier, policy: policy, egress: egress}
 	for _, e := range scanners {
 		r, ok := e.s.(toolcompat.Retester)
 		if !ok || !r.Retests() {
@@ -183,6 +197,19 @@ func (x *retestExecutor) Execute(ctx context.Context, cmd *core.Command) (*core.
 	task, err := retestTask(cmd.ID, p)
 	if err != nil {
 		return nil, err
+	}
+	// A pooled retest: its tool runs through the tool host, which dials
+	// through the pool or refuses the task (never direct).
+	if p.Egress != nil {
+		if x.egress == nil {
+			return nil, core.EgressNotRouted(name)
+		}
+		pool, err := x.egress.PrepareEgress(ctx, cmd.ID, p.Egress)
+		if err != nil {
+			return nil, err
+		}
+		task.Egress = pool
+		ctx = core.WithEgressDialer(ctx, pool)
 	}
 	digests, cleanup, err := x.prepareTemplates(cmd, name, p, &task)
 	if err != nil {

@@ -289,6 +289,8 @@ type settings struct {
 	name, apiURL, apiKey, sensorID, protocol string
 	commands                                 bool
 	shared                                   bool
+	// scanEgress is the local veto on platform proxy pools (scan_egress.go).
+	scanEgress ScanEgress
 	// ledger: a shared sensor's held jobs; the client refuses results
 	// for any other (core.JobLedger).
 	ledger          *core.JobLedger
@@ -471,6 +473,9 @@ func New(opts Options) (*Kit, error) {
 	proxyOpts := ProxyOptions{Control: opts.ControlProxy, Content: opts.ContentProxy, Scan: opts.ScanProxy}
 	proxies, err := ResolveProxies(proxyOpts)
 	if err != nil {
+		return nil, err
+	}
+	if s.scanEgress, err = ResolveScanEgress(); err != nil {
 		return nil, err
 	}
 	if err := k.applyNetwork(proxies, proxyOpts); err != nil {
@@ -1334,6 +1339,12 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	if sc, ok := any(k.client).(core.SourceCredentials); ok {
 		executor.SetSourceCredentials(sc)
 	}
+	// Pooled jobs: the local veto, and the pool's credentials asked from
+	// the platform for the command.
+	executor.SetEgressPolicy(k.s.scanEgress.policy(k.s.shared))
+	if ec, ok := any(k.client).(core.EgressCredentials); ok {
+		executor.SetEgressCredentials(ec)
+	}
 	k.executor.Store(executor)
 	if r := k.opts.CommandAssetResolver; r != nil {
 		executor.SetAssetResolver(r)
@@ -1356,7 +1367,7 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	types := slices.Clone(defaultCommandTypes)
 	handlers := maps.Clone(k.handlers)
 	if _, custom := handlers[RetestCommandType]; !custom {
-		if rx := newRetestExecutor(scanners, k.retests, k.retestTemplates, executor, k.LocalPolicy); rx != nil {
+		if rx := newRetestExecutor(scanners, k.retests, k.retestTemplates, executor, k.LocalPolicy, executor); rx != nil {
 			handlers[RetestCommandType] = rx
 		}
 	}
@@ -1402,6 +1413,10 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 		Ledger:        k.s.ledger,
 	})
 	poller.SetResourceManager(resources)
+	// A pooled job reports its proxy endpoints' signals before its result.
+	if er, ok := any(k.client).(core.EgressReporter); ok {
+		poller.SetEgressReporter(er)
+	}
 	if doorbell != nil {
 		poller.SetDoorbell(doorbell)
 	}
@@ -1515,6 +1530,12 @@ type aliasScanner struct {
 }
 
 func (a aliasScanner) Name() string { return a.name }
+
+// RoutesEgress forwards the wrapped scanner's answer (core.EgressScanner).
+func (a aliasScanner) RoutesEgress() bool {
+	es, ok := a.Scanner.(core.EgressScanner)
+	return ok && es.RoutesEgress()
+}
 
 // SettingsSchema forwards the wrapped scanner's settings schema, so a scan
 // dispatched under the configured name gets the same typed settings.

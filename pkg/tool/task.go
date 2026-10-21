@@ -78,6 +78,10 @@ type Task struct {
 	// merges it into HTTP (after the local policy) and clears it; a tool
 	// never acts on it.
 	OrgHTTP *core.OrgHTTPPolicy `json:"-"`
+	// Egress is the job's proxy pool (core.EgressDialer). The tool host
+	// makes it the task forwarder's Dial hook in the sensor's process; a
+	// tool never sees it, nor the pool's credentials.
+	Egress core.EgressDialer `json:"-"`
 	// Content are the task's content packs per slot the manifest
 	// declares, resolved by the sensor to read-only paths (ContentPaths).
 	Content []TaskContent `json:"content,omitempty"`
