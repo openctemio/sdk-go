@@ -170,6 +170,7 @@ one, the new key wins. Every heartbeat also carries the process's
 | Proxy to the platform | `SENSOR_CONTROL_PROXY` (URL or `direct`), else `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | none |
 | Proxy for content and feeds | `SENSOR_CONTENT_PROXY` (URL or `direct`), else the platform setting | the platform setting |
 | Proxy variables for scanners | `SENSOR_SCAN_PROXY`: `inherit` (scanners get the sensor's `HTTP(S)_PROXY`; warned at start) or `direct` | `inherit` |
+| Organization proxy pools for scan traffic | `SENSOR_SCAN_EGRESS`: `platform` (a job's pool carries its confined tools' connections; never direct) or `direct-only` (every pooled job refused, `egress_refused_by_host`); `SENSOR_SCAN_EGRESS_ALLOW`: comma list of accepted `host:port` or `host` endpoints. See [docs/SECURITY.md](docs/SECURITY.md#organization-proxy-pools-sensor_scan_egress) | `platform`, any valid endpoint |
 | Key renewal | `SENSOR_KEY_AUTORENEW=true\|false`, `Options.KeyAutoRenew` / `NoKeyAutoRenew`, `Options.CredentialsFile` | on when the state directory persists (outside a container; inside one, a mounted, non-tmpfs volume), else off |
 | Pre-rename names | `AGENT_ID`, `AGENT_NAME`, `AGENT_ALLOW_PRIVATE_TARGETS` and the other removed names | refused: the sensor exits 2 and names the replacement; only the `-agent-id` flag is still applied, with a warning |
 
