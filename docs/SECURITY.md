@@ -610,6 +610,70 @@ process group with `setsid` is bounded by its rlimits but not killed with the
 group. The sandbox never uses a Docker socket; future backends (a Kubernetes
 Pod per task, a rootless container) plug in behind the same interface.
 
+#### Organization proxy pools (`SENSOR_SCAN_EGRESS`)
+
+A scan or retest command may carry `egress`: the organization's proxy pool
+its tools' connections go through (`pkg/sensorkit/egress/upstream`). The
+pool is the task forwarder's Dial hook, so it applies to every connection a
+confined tool makes, with no tool flag and no credential in a tool's
+arguments or environment:
+
+- The forwarder checks each destination against the job's scope, pins its
+  address and applies the per-target rate **before** the pool is asked: an
+  out-of-scope target never reaches a proxy, and the rate toward a target
+  is shared by all endpoints.
+- The tunnel is opened to the checked IP address and port, never to a name
+  (`socks5h` is treated as `socks5`). DNS stays with the forwarder: names
+  are resolved on the sensor, not by the proxy.
+- HTTP CONNECT, HTTP CONNECT over TLS to an `https` proxy (certificate
+  verified against the system roots, TLS 1.2 or later, never skipped) and
+  SOCKS5 with optional username/password. Many HTTP proxies allow CONNECT
+  to port 443 only: a port scan or a non-HTTPS service through such a
+  proxy needs it to allow CONNECT to the scanned ports; SOCKS5 has no such
+  limit.
+- Failover only when a proxy is down (TCP/TLS failed or timed out, or a
+  reply that is not the protocol), once per endpoint; a proxy that refuses
+  the credentials is not used again in the job; an answer about the
+  target (CONNECT 403/502/503/504, SOCKS refusal or unreachable) ends that
+  connection. No CONNECT reply in time after the proxy took the request is
+  about the target once the endpoint has carried a tunnel in the job;
+  before that the third such timeout is `proxy_down`, so a proxy that
+  accepts connections and never answers is taken out. A pooled connection never falls back to a direct dial. A
+  pool sent as the organization's default applies to public targets only:
+  private, ULA, CGNAT and loopback targets are dialed directly, as before.
+- Each endpoint has a breaker local to the job (3 consecutive proxy
+  failures: 30 s, doubling to 10 min, with jitter, then one probe) and
+  counters the sensor reports at the end of the job (`egress-report`).
+  The platform computes health and the weights; the sensor uses them.
+- Endpoint addresses are checked in the job and again at every dial for
+  each address a host name resolves to: loopback, link-local, cloud
+  metadata, multicast, unspecified, broadcast, 0.0.0.0/8 and 240.0.0.0/4
+  are refused, private addresses allowed (segment proxies).
+- Not through the pool: DNS (resolved on the sensor, so the sensor's
+  resolver sees the names), UDP, the scanner content the sensor manages
+  (content path) and a code scan's repository checkout (cloned by the
+  sensor from its own network before the tools start).
+- An `http` endpoint receives its Basic `Proxy-Authorization` in clear
+  text over the network path to the proxy; use an `https` endpoint when
+  that path is not trusted.
+- Credentials are asked for the command under its lease (v2 HTTPS only,
+  never through protocol v3), only when an endpoint has some, and stay in
+  the sensor's memory. Records, logs, errors and reports name an endpoint
+  as `scheme://host:port` or by its id only.
+- A pooled job runs only where every tool task is confined to its
+  forwarder: a scanner outside the tool host, a sandbox that does not
+  confine the network or a shared sensor refuses it (`egress_unavailable`;
+  a shared sensor: `egress_refused_by_host`). Tools with network `none`
+  make no connection and run as usual.
+
+The sensor's owner keeps a veto: `SENSOR_SCAN_EGRESS=direct-only` refuses
+every pooled job (`egress_refused_by_host`) and the sensor stops reporting
+`egress.upstream@1`, so the platform sends it none;
+`SENSOR_SCAN_EGRESS_ALLOW=proxy.corp.example:3128,10.0.0.5` accepts only
+the named endpoints (a host without a port allows any port). A sensor
+reports `egress.upstream@1` only when its tasks run confined
+(`net.confined@1`) and the veto is not `direct-only`.
+
 #### Shared mode (`SENSOR_SHARED_MODE=1`, `sensorkit.Options.Shared`)
 
 A sensor that runs jobs of many tenants (an instance's shared sensors, api
@@ -911,6 +975,11 @@ export SENSOR_API_KEY="<sensor key>"   # or pair the sensor and set no key at al
 - [ ] `posture.jobs.keyset_expires_at` is more than 7 days away; `<state dir>/job-signing-keyset.json` is on a persistent volume
 - [ ] `posture.jobs.signed` is `required` everywhere the platform signs jobs
 - [ ] `<state dir>/job-signing-seq.json` is on a persistent volume
+
+### Proxy pools
+
+- [ ] Sensors that must never send scan traffic through a platform-chosen proxy run with `SENSOR_SCAN_EGRESS=direct-only`, or pin the accepted endpoints with `SENSOR_SCAN_EGRESS_ALLOW`
+- [ ] HTTP proxies used for port scans allow CONNECT to the scanned ports (or use SOCKS5)
 
 ### Templates
 - [ ] Template validation enabled (automatic)
