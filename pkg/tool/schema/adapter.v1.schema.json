@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://openctem.io/schema/adapter/v1/message.schema.json",
+  "$id": "https://raw.githubusercontent.com/openctemio/sdk-go/main/pkg/tool/schema/adapter.v1.schema.json",
   "title": "OpenCTEM adapter protocol v1 message",
   "description": "One line of adapter protocol v1: newline-delimited JSON (UTF-8, at most 1 MiB per line) on the tool's stdin (runtime to adapter) and stdout (adapter to runtime), one task per process; stderr is free-form diagnostics. Unknown message types are ignored after the handshake; unknown members are ignored except inside record data, which is CTIS and decoded strictly. Order: runtime hello, adapter hello, describe/manifest (the manifest without its run section must equal the tool.yaml), optional validate/validation, run, then adapter messages until result. Credentials arrive only in the run message, only those the manifest declares. A retest task (task.retest present) is answered with verdict messages, not records.",
   "type": "object",

@@ -40,6 +40,7 @@ commands:
   test      [dir|tool.yaml] [--update] [--capability] [--scope] [--fuzz 30s] [--timeout 30s] [--sandbox auto]
   diff      <old tool.yaml> <new tool.yaml>
   describe  [--json] [dir|tool.yaml]
+  version   (also: openctem version)
 `
 
 // Main runs "openctem tool <args>".

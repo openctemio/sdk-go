@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://openctem.io/schema/tool/v1/tool.schema.json",
+  "$id": "https://raw.githubusercontent.com/openctemio/sdk-go/main/pkg/tool/schema/tool.v1.schema.json",
   "title": "OpenCTEM tool manifest (tool.yaml)",
   "description": "Describes a tool a sensor runs. The runtime trusts this file, never the tool's description of itself. Unknown keys are refused. Rules that span fields (class against network and tier, placeholders against the config schema, no secrets in config) are enforced by the validators of the SDKs, which share test vectors.",
   "type": "object",
