@@ -1,8 +1,31 @@
 # `openctem tool`: scaffold, check and run a tool
 
+## Install
+
+Without the Go toolchain (Python or shell tools), download the binary from the [GitHub release](https://github.com/openctemio/sdk-go/releases) and verify it. Each release carries `openctem_<version>_<os>_<arch>.tar.gz` for linux and darwin on amd64 and arm64, a `SHA256SUMS` file and its keyless cosign bundle `SHA256SUMS.sigstore.json`:
+
 ```bash
-go install github.com/openctemio/sdk-go/cmd/openctem@latest
+v=0.37.0   # a release version, without the leading "v"
+base=https://github.com/openctemio/sdk-go/releases/download/v$v
+curl -sSLO $base/openctem_${v}_linux_amd64.tar.gz
+curl -sSLO $base/SHA256SUMS
+curl -sSLO $base/SHA256SUMS.sigstore.json
+
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/openctemio/sdk-go/.github/workflows/release.yml@refs/tags/v$v" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+
+tar -xzf openctem_${v}_linux_amd64.tar.gz openctem
 ```
+
+With Go, install a released version:
+
+```bash
+go install github.com/openctemio/sdk-go/cmd/openctem@v0.37.0
+```
+
+`openctem version` (also `openctem --version` and `openctem tool version`) prints `openctem <version>`: the release the binary was built from, or `<sdk version>-devel` for a build from a checkout.
 
 Every command reads the tool's `tool.yaml` (a directory or the file itself). Every task runs through the sensor runtime's host (`pkg/sensorkit/toolhost`) and the same process sandbox a sensor uses (`pkg/sensorkit/executor`), so a tool behaves here as it will on a sensor. Nothing talks to a platform.
 
