@@ -1010,7 +1010,7 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 			return refuse("unreadable verdict")
 		}
 		if err := asm.Verdict(v.Item, tool.VerdictReport{Verdict: v.Verdict, Detail: s.p.redact(toolrt.CleanString(v.Detail)),
-			Code: v.Code, Evidence: v.Evidence, TemplateDigest: v.TemplateDigest}); err != nil {
+			Code: wireVerdictCode(v.Code), Evidence: v.Evidence, TemplateDigest: v.TemplateDigest}); err != nil {
 			return refuse(s.p.redact(err.Error()))
 		}
 	case toolwire.TypeHeartbeat:
@@ -1220,6 +1220,17 @@ func targetOutcome(t TargetOutcome) (outcome.Target, bool) {
 		return o, false
 	}
 	return o, o.Valid()
+}
+
+// wireVerdictCode is the verdict code an out-of-process tool may give: a
+// runtime-only code (egress_refused) is a claim about the sensor's
+// confinement the tool's word cannot prove, so it is dropped; the host sets
+// it itself (egressRefusedVerdicts).
+func wireVerdictCode(c tool.VerdictCode) tool.VerdictCode {
+	if c.RuntimeOnly() {
+		return ""
+	}
+	return c
 }
 
 // verdicts are the final verdicts in the order of the task as it was asked

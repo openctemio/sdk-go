@@ -126,7 +126,8 @@ ignored, except during the handshake. A newer runtime may send more.
   An `unverifiable` verdict may carry a `code` saying why, from a closed set:
   `template_not_found`, `excluded_by_policy`, `target_unreachable`,
   `egress_refused`, `no_verdict`. The runtime drops any other code, and
-  `egress_refused` from a tool (only the runtime sees the confinement); `detail`
+  drops `egress_refused` from an adapter (only the runtime can prove the
+  confinement refused a target); `detail`
   is free text for people. An item you never judge gets a verdict from the
   runtime (`target_unreachable`, `egress_refused` or `no_verdict`). An item
   on a target the confinement refused every connection toward is

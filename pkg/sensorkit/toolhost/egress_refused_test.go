@@ -125,3 +125,14 @@ func TestEgressRefusedVerdicts(t *testing.T) {
 		t.Errorf("i1 changed: %+v", out.Verdicts[1])
 	}
 }
+
+// An out-of-process tool cannot claim the confinement refused a target:
+// the host drops that code from its verdict and keeps the others.
+func TestWireVerdictCode(t *testing.T) {
+	if got := wireVerdictCode(tool.CodeEgressRefused); got != "" {
+		t.Fatalf("egress_refused from a tool kept: %q", got)
+	}
+	if got := wireVerdictCode(tool.CodeTemplateNotFound); got != tool.CodeTemplateNotFound {
+		t.Fatalf("template_not_found dropped: %q", got)
+	}
+}

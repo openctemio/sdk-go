@@ -99,8 +99,9 @@ const (
 	// CodeTargetUnreachable: the sensor could not connect to the target.
 	CodeTargetUnreachable VerdictCode = "target_unreachable"
 	// CodeEgressRefused: the sensor's network confinement refused the target.
-	// Set by the runtime only (it watches the confinement); a tool that
-	// reports it has the code dropped.
+	// Set by the runtime (it watches the confinement) or a built-in tool
+	// (tool.Dial's ErrEgressRefused); the host drops it from a tool that runs
+	// out of process.
 	CodeEgressRefused VerdictCode = "egress_refused"
 	// CodeNoVerdict: the tool ended without a verdict for the item (it
 	// stopped early or never reached the target); Detail says what the
@@ -117,9 +118,9 @@ func (c VerdictCode) Valid() bool {
 	return false
 }
 
-// RuntimeOnly reports whether c is a code only the runtime may set: the
-// tool cannot see the sensor's network confinement, so its claim of one is
-// not trusted.
+// RuntimeOnly reports whether c is a code an out-of-process tool may not
+// set: the claim is about the sensor's network confinement, which such a
+// tool's word cannot prove.
 func (c VerdictCode) RuntimeOnly() bool { return c == CodeEgressRefused }
 
 // RetestVerdict is an item's final verdict, as the runtime reports it.

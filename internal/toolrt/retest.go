@@ -60,7 +60,7 @@ func (a *Assembler) Verdict(ref string, r tool.VerdictReport) error {
 		return fmt.Errorf("retest item %q is not in the task", ref)
 	}
 	v := tool.RetestVerdict{Ref: ref, Verdict: r.Verdict, Detail: tool.CapDetail(CleanString(r.Detail))}
-	if r.Verdict == tool.Unverifiable && r.Code.Valid() && !r.Code.RuntimeOnly() {
+	if r.Verdict == tool.Unverifiable && r.Code.Valid() {
 		v.Code = r.Code
 	}
 	if err := checkVerdictEvidence(r); err != nil {
