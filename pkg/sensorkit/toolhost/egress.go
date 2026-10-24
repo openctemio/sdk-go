@@ -456,3 +456,33 @@ func egressLog(recs []egress.Record) []LogLine {
 	}
 	return out
 }
+
+// egressRefusedVerdicts makes unverifiable (tool.CodeEgressRefused) the
+// verdict of every retest item whose target the confinement refused every
+// connection toward (markEgressRefused): the tool never reached the target,
+// so whatever it concluded about it (and the template digest it claimed)
+// is not trusted, and the platform is told the confinement is why.
+func egressRefusedVerdicts(out *Outcome, items []tool.RetestItem) {
+	if len(out.Verdicts) == 0 {
+		return
+	}
+	refused := map[string]bool{}
+	for _, to := range out.Targets {
+		if to.State == tool.StateFailed && to.Class == tool.EgressRefused {
+			refused[to.Ref] = true
+		}
+	}
+	if len(refused) == 0 {
+		return
+	}
+	target := make(map[string]string, len(items))
+	for _, it := range items {
+		target[it.Ref] = it.Target
+	}
+	for i, v := range out.Verdicts {
+		if refused[target[v.Ref]] {
+			out.Verdicts[i] = tool.RetestVerdict{Ref: v.Ref, Verdict: tool.Unverifiable, Code: tool.CodeEgressRefused,
+				Detail: "the sensor's network confinement refused every connection toward the target"}
+		}
+	}
+}

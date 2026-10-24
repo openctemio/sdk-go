@@ -243,6 +243,8 @@ type VerdictMsg struct {
 	Item    string       `json:"item"`
 	Verdict tool.Verdict `json:"verdict"`
 	Detail  string       `json:"detail,omitempty"`
+	// Code is the reason of an unverifiable verdict (tool.VerdictCode).
+	Code tool.VerdictCode `json:"code,omitempty"`
 	// Evidence and TemplateDigest support the verdict
 	// (tool.VerdictReport); the runtime checks them again.
 	Evidence       []ctis.EvidenceItem `json:"evidence,omitempty"`

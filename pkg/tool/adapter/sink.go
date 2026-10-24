@@ -124,7 +124,7 @@ func (s *sink) Log(level slog.Level, msg string, attrs map[string]any) {
 
 func (s *sink) Verdict(ref string, r tool.VerdictReport) {
 	_ = s.w.Write(toolwire.VerdictMsg{Envelope: toolwire.Env(toolwire.TypeVerdict), Item: ref, Verdict: r.Verdict,
-		Detail: r.Detail, Evidence: r.Evidence, TemplateDigest: r.TemplateDigest})
+		Detail: r.Detail, Code: r.Code, Evidence: r.Evidence, TemplateDigest: r.TemplateDigest})
 }
 
 // Artifact creates <workdir>/artifacts/<name>; closing it announces the

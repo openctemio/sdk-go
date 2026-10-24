@@ -97,3 +97,42 @@ func TestScopeKeyMatchesTaskScope(t *testing.T) {
 		}
 	}
 }
+
+// A retest item on a target the confinement refused every connection
+// toward is unverifiable with the egress_refused code, whatever the tool
+// concluded; items on other targets keep their verdict.
+func TestEgressRefusedVerdicts(t *testing.T) {
+	out := &Outcome{
+		Targets: []TargetOutcome{
+			{Ref: "a", State: tool.StateFailed, Class: tool.EgressRefused},
+			{Ref: "b", State: tool.StateDone},
+		},
+		Verdicts: []tool.RetestVerdict{
+			{Ref: "i0", Verdict: tool.Fixed, TemplateDigest: "sha256:x"},
+			{Ref: "i1", Verdict: tool.StillPresent},
+			{Ref: "i2", Verdict: tool.Unverifiable, Code: tool.CodeTemplateNotFound},
+		},
+	}
+	items := []tool.RetestItem{{Ref: "i0", Target: "a"}, {Ref: "i1", Target: "b"}, {Ref: "i2", Target: "a"}}
+	egressRefusedVerdicts(out, items)
+	for _, i := range []int{0, 2} {
+		v := out.Verdicts[i]
+		if v.Verdict != tool.Unverifiable || v.Code != tool.CodeEgressRefused || v.TemplateDigest != "" {
+			t.Errorf("%s: %+v", v.Ref, v)
+		}
+	}
+	if out.Verdicts[1].Verdict != tool.StillPresent || out.Verdicts[1].Code != "" {
+		t.Errorf("i1 changed: %+v", out.Verdicts[1])
+	}
+}
+
+// An out-of-process tool cannot claim the confinement refused a target:
+// the host drops that code from its verdict and keeps the others.
+func TestWireVerdictCode(t *testing.T) {
+	if got := wireVerdictCode(tool.CodeEgressRefused); got != "" {
+		t.Fatalf("egress_refused from a tool kept: %q", got)
+	}
+	if got := wireVerdictCode(tool.CodeTemplateNotFound); got != tool.CodeTemplateNotFound {
+		t.Fatalf("template_not_found dropped: %q", got)
+	}
+}
