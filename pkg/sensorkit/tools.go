@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -121,47 +122,31 @@ func (k *Kit) adapterDirs() []string {
 }
 
 // loadAdapterTools adds the tools the operator installed in the adapter
-// directories: <dir>/tool.yaml and <dir>/<name>/tool.yaml. The runtime
-// trusts the manifest file, never the program's description of itself; a
-// manifest is loaded only from a directory and a file no other user can
-// change (owned by root or the sensor's user, not group- or
-// world-writable, not a symbolic link), and only with a run section. A
-// manifest that fails a check is reported and skipped; it never runs.
+// directories: <dir>/tool.yaml and <dir>/<name>/tool.yaml. The decision
+// (what loads, what is refused and why) is InspectAdapterDirs, the same
+// function the "tools manifests" command shows the operator; the kit only
+// registers what it returns and reports each refusal.
 func (k *Kit) loadAdapterTools() {
 	dirs := k.adapterDirs()
 	if len(dirs) == 0 {
 		return
 	}
-	taken := map[string]bool{}
+	var builtin []string
 	for _, e := range k.scanners {
-		taken[strings.ToLower(e.s.Name())] = true
+		builtin = append(builtin, e.s.Name())
 		if e.as != "" {
-			taken[strings.ToLower(e.as)] = true
+			builtin = append(builtin, e.as)
 		}
 	}
-	added := 0
-	for _, dir := range dirs {
-		for _, mf := range adapterManifests(dir) {
-			if added >= maxAdapterTools {
-				k.adapterProblem(mf, fmt.Errorf("more than %d adapter tools; the rest are not loaded", maxAdapterTools))
-				return
-			}
-			m, err := loadAdapterManifest(dir, mf)
-			if err != nil {
-				k.adapterProblem(mf, err)
-				continue
-			}
-			if taken[m.Name] {
-				k.adapterProblem(mf, fmt.Errorf("tool %s is already provided by the sensor", m.Name))
-				continue
-			}
-			taken[m.Name] = true
-			added++
-			k.AddScanner(toolcompat.AsScanner(manifestTool{m}, toolcompat.ScannerConfig{
-				Host: k.toolHost(), Mode: tool.Daemon, Dir: filepath.Dir(mf), Credentials: k.toolCredentials(m.Name),
-			}))
-			_, _ = fmt.Fprintf(k.out, "  Adapter tool: %s %s (%s)\n", m.Name, m.Version, mf)
-		}
+	rep := inspectAdapterDirs(dirs, builtin)
+	for _, l := range rep.loaded {
+		k.AddScanner(toolcompat.AsScanner(manifestTool{l.m}, toolcompat.ScannerConfig{
+			Host: k.toolHost(), Mode: tool.Daemon, Dir: filepath.Dir(l.path), Credentials: k.toolCredentials(l.m.Name),
+		}))
+		_, _ = fmt.Fprintf(k.out, "  Adapter tool: %s %s (%s)\n", l.m.Name, l.m.Version, l.path)
+	}
+	for _, r := range rep.Refused {
+		k.adapterProblem(r.Manifest, errors.New(r.Reason))
 	}
 }
 
@@ -193,19 +178,29 @@ func adapterManifests(dir string) []string {
 	return out
 }
 
+// Bounds of the walk over a tool's own directory.
+const (
+	maxAdapterTreeDepth   = 4
+	maxAdapterTreeEntries = 1024
+)
+
 // loadAdapterManifest reads one operator-installed manifest after the
-// ownership checks of the adapter directory, the tool's directory, the
-// manifest and a program shipped next to it.
+// ownership checks of the adapter directory, of every file and directory
+// of the tool's own directory (anything the tool may load: its program, a
+// helper module, a mapping, a wordlist), or, for a manifest directly in
+// the adapter directory, of the files the manifest references.
 func loadAdapterManifest(root, path string) (tool.Manifest, error) {
 	dir := filepath.Dir(path)
-	checks := []string{root, path}
-	if filepath.Clean(dir) != filepath.Clean(root) {
-		checks = []string{root, dir, path}
+	own := filepath.Clean(dir) != filepath.Clean(root)
+	if err := checkTrustedPath(root); err != nil {
+		return tool.Manifest{}, err
 	}
-	for _, p := range checks {
-		if err := checkTrustedPath(p); err != nil {
+	if own {
+		if err := checkTrustedTree(dir); err != nil {
 			return tool.Manifest{}, err
 		}
+	} else if err := checkTrustedPath(path); err != nil {
+		return tool.Manifest{}, err
 	}
 	m, err := tool.LoadManifestFile(path)
 	if err != nil {
@@ -214,13 +209,42 @@ func loadAdapterManifest(root, path string) (tool.Manifest, error) {
 	if m.Run == nil || len(m.Run.Argv) == 0 {
 		return tool.Manifest{}, errors.New("the manifest has no run section (only tools compiled into the sensor may omit it)")
 	}
-	prog := m.Run.Argv[0]
-	if !filepath.IsAbs(prog) && strings.ContainsRune(prog, filepath.Separator) {
-		if err := checkTrustedPath(filepath.Join(dir, prog)); err != nil {
-			return tool.Manifest{}, err
+	if !own {
+		refs := []string{}
+		if prog := m.Run.Argv[0]; !filepath.IsAbs(prog) && strings.ContainsRune(prog, filepath.Separator) {
+			refs = append(refs, prog)
+		}
+		if m.Run.Output != nil && m.Run.Output.Mapping != "" {
+			refs = append(refs, m.Run.Output.Mapping)
+		}
+		for _, r := range refs {
+			if err := checkTrustedPath(filepath.Join(dir, r)); err != nil {
+				return tool.Manifest{}, err
+			}
 		}
 	}
 	return m.Normalized(), nil
+}
+
+// checkTrustedTree applies checkTrustedPath to a directory and everything
+// below it, bounded in depth and entries (a tree past a bound is refused,
+// never partly checked). The directory must hold only what the tool needs.
+func checkTrustedTree(dir string) error {
+	entries := 0
+	return filepath.WalkDir(dir, func(p string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		if rel != "." && strings.Count(rel, string(filepath.Separator)) >= maxAdapterTreeDepth {
+			return fmt.Errorf("%s is deeper than %d levels below the tool directory", p, maxAdapterTreeDepth)
+		}
+		entries++
+		if entries > maxAdapterTreeEntries {
+			return fmt.Errorf("the tool directory %s holds more than %d entries; keep only what the tool needs", dir, maxAdapterTreeEntries)
+		}
+		return checkTrustedPath(p)
+	})
 }
 
 // manifestTool is an operator-installed tool: its manifest only; the

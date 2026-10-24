@@ -19,4 +19,7 @@ go run github.com/openctemio/sdk-go/cmd/openctem tool test examples/python-adapt
 
 To install it on a sensor, copy the directory into one of the
 `SENSOR_ADAPTER_DIRS`. The directory must be owned by root or the sensor user,
-and not writable by others.
+and not writable by others. So must every file in it (the program and any helper
+module such as `openctem_tool.py`, mapping or wordlist); a tool directory with
+a group- or world-writable, foreign-owned or symlinked file is refused, and the
+sensor names the file in the `adapter_refused` check.

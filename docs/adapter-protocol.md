@@ -264,6 +264,12 @@ content:
 An operator installs the tool's directory (its `tool.yaml` and program) in one
 of the sensor's adapter directories (`SENSOR_ADAPTER_DIRS`). The directory and
 files must not be writable by another user, and must not be symbolic links.
+This covers every file and directory of the tool directory, not only the
+program (a helper module, a mapping and a wordlist are loaded by the tool and
+could otherwise be swapped); the tree is checked to 4 levels and 1024 entries,
+and a larger one is refused. A refused tool is reported as `adapter_refused`
+naming the file. `sensorkit.InspectAdapterDirs` gives the same answer without
+starting a sensor.
 The sensor runs an operator-installed tool in its process sandbox (private
 task directory, rlimits, no_new_privs, Landlock, seccomp). That sandbox does
 not yet enforce the network class: the targets are admitted against the local
