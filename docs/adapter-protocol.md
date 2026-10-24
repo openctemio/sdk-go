@@ -123,6 +123,11 @@ ignored, except during the handshake. A newer runtime may send more.
   `retest: true`): answer one `verdict` per item (`still_present`, `fixed` or
   `unverifiable`) and emit no records. `fixed` counts only for a target you
   reported `done`.
+  An `unverifiable` verdict may carry a `code` saying why, from a closed set:
+  `template_not_found`, `excluded_by_policy`, `target_unreachable`,
+  `egress_refused`, `no_verdict`. The runtime drops any other code; `detail`
+  is free text for people. An item you never judge gets a verdict from the
+  runtime (`target_unreachable`, `egress_refused` or `no_verdict`).
   A retest task carries the job's `web_scope` like a scan task. A networked
   tool that retests web findings declares `features.web_scope` and keeps
   every request inside it; without the feature, a web-scoped retest is

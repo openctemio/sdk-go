@@ -82,11 +82,47 @@ const (
 // Valid reports whether v is a known verdict.
 func (v Verdict) Valid() bool { return v == StillPresent || v == Fixed || v == Unverifiable }
 
+// VerdictCode says why an item is Unverifiable, in a closed set the
+// platform maps to text and a suggested action. Free text in Detail is for
+// people only; nothing decides on it. An unknown code is dropped by the
+// runtime (the tool's output is hostile until checked).
+type VerdictCode string
+
+// Verdict codes of an Unverifiable item.
+const (
+	// CodeTemplateNotFound: the check is not installed on this sensor
+	// (its template set does not hold the id).
+	CodeTemplateNotFound VerdictCode = "template_not_found"
+	// CodeExcludedByPolicy: the check is installed but the sensor's safety
+	// policy never runs it (a destructive, intrusive or code class).
+	CodeExcludedByPolicy VerdictCode = "excluded_by_policy"
+	// CodeTargetUnreachable: the sensor could not connect to the target.
+	CodeTargetUnreachable VerdictCode = "target_unreachable"
+	// CodeEgressRefused: the sensor's network confinement refused the target.
+	CodeEgressRefused VerdictCode = "egress_refused"
+	// CodeNoVerdict: the tool ended without a verdict for the item (it
+	// stopped early or never reached the target); Detail says what the
+	// runtime knows.
+	CodeNoVerdict VerdictCode = "no_verdict"
+)
+
+// Valid reports whether c is a known code.
+func (c VerdictCode) Valid() bool {
+	switch c {
+	case CodeTemplateNotFound, CodeExcludedByPolicy, CodeTargetUnreachable, CodeEgressRefused, CodeNoVerdict:
+		return true
+	}
+	return false
+}
+
 // RetestVerdict is an item's final verdict, as the runtime reports it.
 type RetestVerdict struct {
 	Ref     string  `json:"ref"`
 	Verdict Verdict `json:"verdict"`
 	Detail  string  `json:"detail,omitempty"`
+	// Code says why an Unverifiable item has no conclusion ("" when the
+	// tool gave none, or for another verdict).
+	Code VerdictCode `json:"code,omitempty"`
 	// Evidence is what the attempt saw (at most MaxVerdictEvidence items),
 	// sensitive values marked (ctis.MarkSensitive), never masked.
 	Evidence []ctis.EvidenceItem `json:"evidence,omitempty"`
@@ -100,8 +136,10 @@ const MaxVerdictEvidence = 5
 
 // VerdictReport is a verdict with what supports it (RetestContext.Report).
 type VerdictReport struct {
-	Verdict        Verdict
-	Detail         string
+	Verdict Verdict
+	Detail  string
+	// Code is the reason of an Unverifiable verdict (optional).
+	Code           VerdictCode
 	Evidence       []ctis.EvidenceItem
 	TemplateDigest string
 }

@@ -60,6 +60,9 @@ func (a *Assembler) Verdict(ref string, r tool.VerdictReport) error {
 		return fmt.Errorf("retest item %q is not in the task", ref)
 	}
 	v := tool.RetestVerdict{Ref: ref, Verdict: r.Verdict, Detail: tool.CapDetail(CleanString(r.Detail))}
+	if r.Verdict == tool.Unverifiable && r.Code.Valid() {
+		v.Code = r.Code
+	}
 	if err := checkVerdictEvidence(r); err != nil {
 		v = tool.RetestVerdict{Ref: ref, Verdict: tool.Unverifiable, Detail: tool.CapDetail("evidence refused: " + err.Error())}
 	} else {
@@ -102,7 +105,7 @@ func (a *Assembler) Verdicts(runErr *tool.Error) []tool.RetestVerdict {
 		v, ok := a.verdicts[ref]
 		switch {
 		case !ok:
-			v = tool.RetestVerdict{Ref: ref, Verdict: tool.Unverifiable, Detail: "the tool reported no verdict"}
+			v = a.missingVerdict(ref, runErr)
 		case v.Verdict == tool.Fixed && runErr != nil:
 			v = tool.RetestVerdict{Ref: ref, Verdict: tool.Unverifiable, Detail: "the retest did not finish: " + string(runErr.Class)}
 		case v.Verdict == tool.Fixed:
@@ -143,4 +146,32 @@ const maxTemplatePath = 4096
 func validTemplatePath(p string) bool {
 	return len(p) <= maxTemplatePath && filepath.IsAbs(p) && filepath.Clean(p) == p &&
 		strings.IndexFunc(p, unicode.IsControl) < 0
+}
+
+// missingVerdict is the verdict of an item the tool never judged: it says
+// what the runtime knows (the item's target failed, was skipped or was
+// never reached; the run failed) so the platform shows a reason, not a bare
+// "no verdict". A target that failed because it did not answer or was
+// refused by the network confinement keeps those codes.
+func (a *Assembler) missingVerdict(ref string, runErr *tool.Error) tool.RetestVerdict {
+	v := tool.RetestVerdict{Ref: ref, Verdict: tool.Unverifiable, Code: tool.CodeNoVerdict}
+	r, ok := a.results[a.items[ref].Target]
+	switch {
+	case ok && r.State == tool.StateFailed && r.Error != nil && (r.Error.Class == tool.TargetUnreachable || r.Error.Class == tool.NotFound):
+		v.Code = tool.CodeTargetUnreachable
+		v.Detail = "the sensor could not connect to the target"
+	case ok && r.State == tool.StateFailed && r.Error != nil && r.Error.Class == tool.EgressRefused:
+		v.Code = tool.CodeEgressRefused
+		v.Detail = "the sensor's network confinement refused the target"
+	case ok && r.State != tool.StateDone:
+		v.Detail = "the check ended without a verdict: the target was " + string(r.State)
+		if r.Error != nil {
+			v.Detail += " (" + string(r.Error.Class) + ")"
+		}
+	case runErr != nil:
+		v.Detail = "the check ended without a verdict: the tool stopped (" + string(runErr.Class) + ")"
+	default:
+		v.Detail = "the check ended without a verdict: the tool finished without judging this item"
+	}
+	return v
 }
