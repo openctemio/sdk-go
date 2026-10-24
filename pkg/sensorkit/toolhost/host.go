@@ -717,6 +717,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	for _, l := range eg.finish(s.out, p.task.Targets) {
 		s.log(l.Level, l.Msg, l.Fields)
 	}
+	egressRefusedVerdicts(s.out, p.asked)
 	return s.out, nil
 }
 

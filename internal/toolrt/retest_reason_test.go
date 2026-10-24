@@ -51,6 +51,14 @@ func TestVerdictCodeIsClosedSet(t *testing.T) {
 	if vs[0].Code != tool.CodeTemplateNotFound || vs[1].Code != "" {
 		t.Fatalf("%+v", vs)
 	}
+	// The tool cannot see the sensor's confinement: its egress_refused
+	// claim is dropped.
+	e := retestAsm(t)
+	_ = e.Verdict("i0", tool.VerdictReport{Verdict: tool.Unverifiable, Code: tool.CodeEgressRefused})
+	_ = e.Target("t0", tool.StateDone, nil)
+	if got := e.Verdicts(nil)[0].Code; got != "" {
+		t.Fatalf("a tool's egress_refused kept: %q", got)
+	}
 	c := retestAsm(t)
 	_ = c.Verdict("i0", tool.VerdictReport{Verdict: tool.StillPresent, Code: tool.CodeNoVerdict})
 	if c.Verdicts(nil)[0].Code != "" {

@@ -97,3 +97,31 @@ func TestScopeKeyMatchesTaskScope(t *testing.T) {
 		}
 	}
 }
+
+// A retest item on a target the confinement refused every connection
+// toward is unverifiable with the egress_refused code, whatever the tool
+// concluded; items on other targets keep their verdict.
+func TestEgressRefusedVerdicts(t *testing.T) {
+	out := &Outcome{
+		Targets: []TargetOutcome{
+			{Ref: "a", State: tool.StateFailed, Class: tool.EgressRefused},
+			{Ref: "b", State: tool.StateDone},
+		},
+		Verdicts: []tool.RetestVerdict{
+			{Ref: "i0", Verdict: tool.Fixed, TemplateDigest: "sha256:x"},
+			{Ref: "i1", Verdict: tool.StillPresent},
+			{Ref: "i2", Verdict: tool.Unverifiable, Code: tool.CodeTemplateNotFound},
+		},
+	}
+	items := []tool.RetestItem{{Ref: "i0", Target: "a"}, {Ref: "i1", Target: "b"}, {Ref: "i2", Target: "a"}}
+	egressRefusedVerdicts(out, items)
+	for _, i := range []int{0, 2} {
+		v := out.Verdicts[i]
+		if v.Verdict != tool.Unverifiable || v.Code != tool.CodeEgressRefused || v.TemplateDigest != "" {
+			t.Errorf("%s: %+v", v.Ref, v)
+		}
+	}
+	if out.Verdicts[1].Verdict != tool.StillPresent || out.Verdicts[1].Code != "" {
+		t.Errorf("i1 changed: %+v", out.Verdicts[1])
+	}
+}
