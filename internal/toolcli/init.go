@@ -154,13 +154,58 @@ type scaffoldFile struct {
 	mode    os.FileMode
 }
 
-// sampleValues are fixture target values per CTIS asset type.
+// sampleValues are fixture target values per CTIS asset type that the kit
+// cannot serve. A type the kit can serve (see servedValues) never takes its
+// value from here, so a scaffold's self-test sends no traffic to a host on
+// the internet: the entries that look like internet names (example.com and
+// its subdomains, reserved by RFC 2606) are only used for types a stub
+// resolves to nothing (domain, subdomain) or never connects to (the rest).
 var sampleValues = map[string]string{
-	"domain": "example.com", "subdomain": "www.example.com", "ip_address": "192.0.2.10", "host": "host.example.com",
-	"open_port": "192.0.2.10:443", "service": "192.0.2.10:22", "http_service": "https://www.example.com",
-	"discovered_url": "https://www.example.com/login", "website": "https://www.example.com", "api": "https://api.example.com",
-	"web_application": "https://app.example.com", "repository": "fixtures/repo", "container": "registry.example.com/app:1.0",
+	"domain": "example.com", "subdomain": "www.example.com",
+	"repository": "fixtures/repo", "container": "registry.example.com/app:1.0",
 	"cloud_account": "123456789012", "network": "192.0.2.0/24", "subnet": "192.0.2.0/24",
+}
+
+// servedValues are fixture target values for the types the conformance kit
+// can serve from its loopback fixture server: the placeholders the kit
+// replaces by the server's address when it runs the fixture.
+var servedValues = map[string]string{
+	"http_service": "{{fixture.url}}", "website": "{{fixture.url}}", "web_application": "{{fixture.url}}",
+	"api": "{{fixture.url}}", "discovered_url": "{{fixture.url}}/login",
+	"open_port": "{{fixture.host_port}}", "service": "{{fixture.host_port}}",
+	"host": "{{fixture.host}}", "ip_address": "{{fixture.host}}",
+}
+
+// servedOrder is the preference among the served types a capability consumes:
+// URLs first, then services, then hosts.
+var servedOrder = []string{"http_service", "website", "web_application", "api", "discovered_url", "open_port", "service", "host", "ip_address"}
+
+// fixtureServe is the default serve member of a scaffold fixture: a small
+// page the stub tool may fetch (the kit answers it on 127.0.0.1).
+var fixtureServe = map[string]any{
+	"status":  200,
+	"headers": map[string]string{"Server": "fixture", "Content-Type": "text/html"},
+	"body":    "<html><head><title>fixture</title></head><body>ok</body></html>",
+}
+
+// serveFor is the serve member a task needs: one when a target uses a
+// placeholder.
+func serveFor(task tool.Task) any {
+	for _, t := range task.Targets {
+		if strings.Contains(t.Value, "{{fixture.") {
+			return fixtureServe
+		}
+	}
+	return nil
+}
+
+// scaffoldGitignore is the .gitignore of a scaffold.
+func scaffoldGitignore(kind string) string {
+	g := "__pycache__/\nfuzz/crashers/\n"
+	if kind == KindGo {
+		g += "bin/\n"
+	}
+	return g
 }
 
 // Scaffold builds the files of a new tool implementing one capability: a
@@ -185,19 +230,38 @@ func Scaffold(kind, capRef, name string) (map[string]scaffoldFile, tool.Manifest
 	}
 	task := tool.Task{ID: "selftest-sample"}
 	if len(m.Consumes) > 0 {
+		// The first type the kit can serve, else the first the tool consumes.
 		typ := m.Consumes[0]
-		task.Targets = []tool.Target{{Ref: "t1", Type: typ, Value: sampleValues[typ]}}
+		for _, c := range servedOrder {
+			if slices.Contains(m.Consumes, c) {
+				typ = c
+				break
+			}
+		}
+		value, served := servedValues[typ]
+		if !served {
+			value = sampleValues[typ]
+		}
+		task.Targets = []tool.Target{{Ref: "t1", Type: typ, Value: value}}
 	}
-	taskJSON, _ := json.MarshalIndent(task, "", "  ")
+	var taskBuf strings.Builder
+	enc := json.NewEncoder(&taskBuf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(struct {
+		Serve any `json:"serve,omitempty"`
+		tool.Task
+	}{serveFor(task), task})
 	expect, err := emptyReport(m, task)
 	if err != nil {
 		return nil, tool.Manifest{}, err
 	}
 	files := map[string]scaffoldFile{
-		"fixtures/task.json":                  {string(taskJSON) + "\n", 0o644},
+		"fixtures/task.json":                  {taskBuf.String(), 0o644},
 		"fixtures/expect.ctis.json":           {string(expect), 0o644},
 		".github/workflows/openctem-tool.yml": {pinCLI(githubCI), 0o644},
 		"Makefile":                            {makefile(kind, name), 0o644},
+		".gitignore":                          {scaffoldGitignore(kind), 0o644},
 	}
 	if len(task.Targets) > 0 && task.Targets[0].Type == "repository" {
 		files["fixtures/repo/README.md"] = scaffoldFile{"A sample repository for the self-test.\n", 0o644}

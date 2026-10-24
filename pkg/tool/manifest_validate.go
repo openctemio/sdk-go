@@ -183,15 +183,15 @@ func checkConsumes(c Class, s string) string {
 		if c != Enricher {
 			return "findings are consumed by enrichers only"
 		}
-		if !ctis.FindingType(strings.TrimPrefix(s, KindFinding+":")).IsValid() {
-			return "unknown CTIS finding type"
+		if t := strings.TrimPrefix(s, KindFinding+":"); !ctis.FindingType(t).IsValid() {
+			return unknownTypeMessage("finding", t, findingTypeNames())
 		}
 	default:
 		if c == Parser || c == Enricher {
 			return "a " + string(c) + " consumes " + map[Class]string{Parser: "file:<media type>", Enricher: "finding:<type>"}[c]
 		}
 		if !ctis.AssetType(s).IsValid() {
-			return "unknown CTIS asset type"
+			return unknownTypeMessage("asset", s, assetTypeNames())
 		}
 	}
 	return ""
@@ -205,11 +205,11 @@ func checkProduces(c Class, s string) string {
 			return "an enricher never creates assets"
 		}
 		if !ctis.AssetType(typ).IsValid() {
-			return "unknown CTIS asset type"
+			return unknownTypeMessage("asset", typ, assetTypeNames())
 		}
 	case KindFinding:
 		if !ctis.FindingType(typ).IsValid() {
-			return "unknown CTIS finding type"
+			return unknownTypeMessage("finding", typ, findingTypeNames())
 		}
 	case KindDependency, KindEndpoint:
 		if typ != "" || s != kind {

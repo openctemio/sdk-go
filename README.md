@@ -272,7 +272,10 @@ at the top of `main`) and test it with `testkit.Run`. The design:
 A tool outside the sensor binary is a directory with its `tool.yaml`
 descriptor and program, scaffolded and checked with the `openctem tool` CLI
 ([docs/tools/cli.md](docs/tools/cli.md)) and installed in a directory listed
-in `SENSOR_ADAPTER_DIRS`. Either way:
+in `SENSOR_ADAPTER_DIRS`. A tool directory must hold only what the tool needs:
+the sensor refuses it when any file or directory in it (to 4 levels, 1024
+entries) is a symbolic link, writable by group or others, or owned by someone
+other than root or the sensor user. Either way:
 
 - The descriptor's `config` is the tool's settings schema, in the closed
   subset of JSON Schema defined by
