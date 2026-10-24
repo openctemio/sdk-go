@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/openctemio/sdk-go/pkg/edgeprotect"
 )
 
 // testCtl is a controller on a fake clock with no jitter.
@@ -279,6 +281,52 @@ func TestARunOf403AfterAnswersIsABlock(t *testing.T) {
 	}
 	if err := c.Acquire(context.Background(), "h"); !errors.Is(err, ErrHostUnavailable) {
 		t.Fatalf("a blocked host was not backed off: %v", err)
+	}
+}
+
+// A bare 403 on the very first request stays an ordinary answer, but a
+// vendor's challenge or block page is a block from the first answer.
+func TestAVendorBlockPageOnTheFirstRequestIsABlock(t *testing.T) {
+	c, _ := testCtl(t, 100)
+	c.ReportResponse("plain", 403, "", edgeprotect.Verdict{State: edgeprotect.Direct})
+	c.ReportResponse("fronted", 403, "", edgeprotect.Verdict{Vendor: edgeprotect.Cloudflare, State: edgeprotect.Fronted})
+	if _, n := c.Gaps(); n != 0 {
+		t.Fatal("a bare 403 or a fronting marker was read as a block")
+	}
+	v := edgeprotect.Verdict{Vendor: edgeprotect.Cloudflare, State: edgeprotect.Challenged, Signal: "cloudflare.cf-mitigated"}
+	c.ReportResponse("h", 403, "", v)
+	gaps, n := c.Gaps()
+	if n != 1 || gaps[0].Host != "h" || gaps[0].Reason != GapBlocked || gaps[0].Edge != "challenged" || gaps[0].Vendor != "cloudflare" {
+		t.Fatalf("gaps %+v, want h blocked by a cloudflare challenge", gaps)
+	}
+	if err := c.Acquire(context.Background(), "h"); !errors.Is(err, ErrHostUnavailable) {
+		t.Fatalf("a challenged host was not backed off: %v", err)
+	}
+	// A challenge answered with 503 is a block, not congestion.
+	c.ReportResponse("h2", 503, "30", edgeprotect.Verdict{Vendor: edgeprotect.Cloudflare, State: edgeprotect.Challenged})
+	if gaps, _ := c.Gaps(); len(gaps) != 2 {
+		t.Fatalf("503 challenge: %+v", gaps)
+	}
+	// A rate-limit verdict stays congestion.
+	c.ReportResponse("h3", 429, "", edgeprotect.Verdict{Vendor: edgeprotect.Cloudflare, State: edgeprotect.RateLimited})
+	if gaps, _ := c.Gaps(); len(gaps) != 2 {
+		t.Fatalf("a rate limit became a block: %+v", gaps)
+	}
+}
+
+// An edge block after a run of plain 403s adds the edge to the gap that run made.
+func TestEdgeBlockNamesTheGapOfAnEarlierRun(t *testing.T) {
+	c, _ := testCtl(t, 100)
+	c.ReportHTTP("h", 200, "")
+	for range TargetRate.BlockRun {
+		c.ReportHTTP("h", 403, "")
+	}
+	if gaps, _ := c.Gaps(); len(gaps) != 1 || gaps[0].Edge != "" {
+		t.Fatalf("gaps %+v", gaps)
+	}
+	c.Report("h", Event{Signal: Forbidden, Edge: edgeprotect.Verdict{Vendor: edgeprotect.Akamai, State: edgeprotect.Blocked, Signal: "akamai.access-denied"}})
+	if gaps, _ := c.Gaps(); len(gaps) != 1 || gaps[0].Edge != "blocked" || gaps[0].Vendor != "akamai" {
+		t.Fatalf("gaps %+v", gaps)
 	}
 }
 

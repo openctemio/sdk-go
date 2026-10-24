@@ -651,7 +651,7 @@ func (lp *LocalPolicy) checkHost(ctx context.Context, host string, failClosed bo
 	ips, err := lp.resolve(ctx, name)
 	if err != nil || len(ips) == 0 {
 		if failClosed {
-			return nil, markTarget(RefusedTargetUnresolvable, refuse("targets", "cannot resolve %s (an address the policy cannot check is refused)", name))
+			return nil, markUnresolved(err, refuse("targets", "cannot resolve %s (an address the policy cannot check is refused)", name))
 		}
 		// An unresolvable dotless name is an image reference ("alpine"),
 		// not a host: it reaches no target network.

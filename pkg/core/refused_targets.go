@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/openctemio/sdk-go/pkg/reach"
 )
 
 // Refused-target reasons (the closed set the platform shows).
@@ -66,6 +68,10 @@ type RefusedTarget struct {
 	Rule string `json:"rule,omitempty"`
 	// Detail is a short, bounded explanation.
 	Detail string `json:"detail,omitempty"`
+	// DNS refines Reason "unresolvable" (additive; older receivers ignore
+	// it): "name_gone" when the resolver answered that the name has no
+	// addresses, "resolver_failed" when the lookup itself failed.
+	DNS string `json:"dns,omitempty"`
 }
 
 // targetRefusalError marks a target check error with its reason. Its text
@@ -73,6 +79,8 @@ type RefusedTarget struct {
 type targetRefusalError struct {
 	reason string
 	err    error
+	// dns refines reason unresolvable (reach.DNSKind).
+	dns reach.DNSKind
 }
 
 func (e *targetRefusalError) Error() string { return e.err.Error() }
@@ -86,6 +94,19 @@ func markTarget(reason string, err error) error {
 	return &targetRefusalError{reason: reason, err: err}
 }
 
+// markUnresolved gives err the refusal reason unresolvable and the kind of
+// lookup failure lookupErr was (nil with no addresses: the name has none).
+func markUnresolved(lookupErr, err error) error {
+	kind := reach.ClassifyDNS(lookupErr)
+	if lookupErr == nil {
+		kind = reach.NameGone
+	}
+	if kind == reach.DNSNone {
+		kind = reach.ResolverFailed
+	}
+	return &targetRefusalError{reason: RefusedTargetUnresolvable, err: err, dns: kind}
+}
+
 // refusedTargetOf describes why target was refused with err.
 func refusedTargetOf(target string, err error) RefusedTarget {
 	rt := RefusedTarget{Target: cleanRefusalDetail(truncateBytes(target, maxRefusedTargetValue)), Reason: RefusedTargetInvalid}
@@ -94,6 +115,7 @@ func refusedTargetOf(target string, err error) RefusedTarget {
 	switch {
 	case errors.As(err, &te):
 		rt.Reason = te.reason
+		rt.DNS = string(te.dns)
 	case errors.As(err, &pe):
 		rt.Reason = RefusedTargetDenied
 	}

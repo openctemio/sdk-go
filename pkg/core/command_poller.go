@@ -136,6 +136,12 @@ type ScanCommandPayload struct {
 	// Budget is the task's layered budget (per target, per task); nil
 	// from a platform that sends none (budget.go).
 	Budget *TaskBudget `json:"budget,omitempty"`
+	// OutcomeRevision is the highest per-target outcome revision the platform
+	// accepts (ctis outcome.Revision). Absent: 1. The sensor sends the classes
+	// that say why a target was not covered (a name that is gone, an edge
+	// that blocked, the sensor's own network) only at 2 or more; below it
+	// they go as the closest class the platform knows.
+	OutcomeRevision int `json:"outcome_revision,omitempty"`
 	// aliases maps a validated target to the payload's own value when the
 	// scan-target policy rewrote it (a resolved path): per-target outcomes
 	// name the payload's values (validateScanTargets).
@@ -1417,7 +1423,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 			reportResult.Metadata[k] = v
 		}
 		if err == nil && reportResult.TargetOutcomes != nil {
-			reportResult.TargetOutcomes = append(skippedOutcomes(admission.Refused), reportResult.TargetOutcomes...)
+			reportResult.TargetOutcomes = append(skippedOutcomes(admission.Refused, outcomeRevisionOf(cmd.Payload)), reportResult.TargetOutcomes...)
 		}
 	}
 	addReachMetadata(reportResult, reached)
@@ -1929,7 +1935,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 
 	// Every target is done unless the report marks it (refused, failed,
 	// unfinished); the report's marks are added once it is parsed.
-	result.TargetOutcomes = payload.outcomes(TargetOutcomes(targets, nil), refusedTargets)
+	result.TargetOutcomes = payload.outcomes(TargetOutcomesFor(ctx, targets, payload.evidence(ctx, nil, scanResult)), refusedTargets)
 
 	// Parse and push results if pusher is configured. Empty (or whitespace-
 	// only) output is a scan that found nothing; anything else must be read by
@@ -1978,7 +1984,7 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 		}
 
 		result.FindingsCount = len(report.Findings)
-		result.TargetOutcomes = payload.outcomes(TargetOutcomes(targets, report), refusedTargets)
+		result.TargetOutcomes = payload.outcomes(TargetOutcomesFor(ctx, targets, payload.evidence(ctx, report, scanResult)), refusedTargets)
 		report.Metadata.CoverageType = reachCoverageType(ctx, scanCoverageType(report, scanResult))
 		src.annotate(report)
 

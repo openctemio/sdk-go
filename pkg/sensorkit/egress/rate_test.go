@@ -148,3 +148,19 @@ func TestForwarderClosedPortsAreNotPushBack(t *testing.T) {
 		t.Fatalf("closed port throttled the host: %+v", s)
 	}
 }
+
+// The first answer of a host that is a vendor's challenge page makes the host
+// a blocked gap that names the edge; a bare 403 does not.
+func TestForwarderEdgeChallengeOnFirstAnswerIsABlock(t *testing.T) {
+	f := New(Scope{Prefixes: []netip.Prefix{pfx("127.0.0.1/32")}}, Limits{})
+	f.observeResponse("plain.example", &http.Response{StatusCode: 403, Header: http.Header{"Server": {"nginx"}}})
+	if _, n := f.TargetRate().Gaps(); n != 0 {
+		t.Fatal("a bare 403 was read as a block")
+	}
+	f.observeResponse("shop.example", &http.Response{StatusCode: 403, Header: http.Header{
+		"Server": {"cloudflare"}, "Cf-Mitigated": {"challenge"}}})
+	gaps, n := f.TargetRate().Gaps()
+	if n != 1 || gaps[0].Host != "shop.example" || gaps[0].Reason != adapt.GapBlocked || gaps[0].Edge != "challenged" || gaps[0].Vendor != "cloudflare" {
+		t.Fatalf("gaps %+v (%d), want shop.example blocked by a cloudflare challenge", gaps, n)
+	}
+}
