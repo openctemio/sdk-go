@@ -125,6 +125,8 @@ func (s *toolSuite) start() (*adapterProc, error) {
 	}
 	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // the tool under test, from its own manifest
 	cmd.Dir = s.dir
+	// A python tool under test must not leave __pycache__ in its source tree.
+	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -323,7 +325,8 @@ func (s *toolSuite) cancel() {
 	task := tool.Task{ID: "conformance-cancel"}
 	if len(s.m.Selftest) > 0 {
 		if ft, err := loadFixtureTask(s.dir, s.m.Selftest[0]); err == nil {
-			task = ft
+			defer ft.Close()
+			task = ft.Task
 			task.ID = "conformance-cancel"
 		}
 	}
@@ -370,20 +373,6 @@ func (s *toolSuite) cancel() {
 	}
 }
 
-func loadFixtureTask(dir string, f tool.Fixture) (tool.Task, error) {
-	var task tool.Task
-	raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(f.Task))) //nolint:gosec // a fixture path the manifest validated (relative, no ..)
-	if err != nil {
-		return task, err
-	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&task); err != nil {
-		return task, fmt.Errorf("%s: %w", f.Task, err)
-	}
-	return task, nil
-}
-
 // runFixtures runs every self-test fixture through the runtime's host.
 func runFixtures(t T, m tool.Manifest, dir string, opts ToolSuiteOptions) {
 	if len(m.Selftest) == 0 {
@@ -392,47 +381,57 @@ func runFixtures(t T, m tool.Manifest, dir string, opts ToolSuiteOptions) {
 	}
 	host := &toolhost.Host{Sensor: "conformance", RuntimeName: conformanceRuntime}
 	for _, f := range m.Selftest {
-		task, err := loadFixtureTask(dir, f)
-		if err != nil {
-			t.Errorf("Fixtures/%s: task: %v", f.Name, err)
-			continue
-		}
-		if task.ID == "" {
-			task.ID = "selftest-" + f.Name
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
-		out, err := host.RunManifest(ctx, m, task, toolhost.RunOptions{Trusted: true, Dir: dir, Credentials: opts.Credentials})
-		cancel()
-		if err != nil {
+		runFixture(t, host, m, dir, opts, f)
+	}
+}
+
+// runFixture runs one fixture (its server, if any, lives for the run).
+func runFixture(t T, host *toolhost.Host, m tool.Manifest, dir string, opts ToolSuiteOptions, f tool.Fixture) {
+	fx, err := loadFixtureTask(dir, f)
+	if err != nil {
+		t.Errorf("Fixtures/%s: task: %v", f.Name, err)
+		return
+	}
+	defer fx.Close()
+	task := fx.Task
+	if task.ID == "" {
+		task.ID = "selftest-" + f.Name
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+	out, err := host.RunManifest(ctx, m, task, toolhost.RunOptions{Trusted: true, Dir: dir, Credentials: opts.Credentials, Env: map[string]string{"PYTHONDONTWRITEBYTECODE": "1"}})
+	cancel()
+	if err != nil {
+		t.Errorf("Fixtures/%s: %v", f.Name, err)
+		return
+	}
+	if out.Err != nil && out.Status == tool.StatusFailed {
+		t.Errorf("Fixtures/%s: the task failed: %v (stderr: %s)", f.Name, out.Err, out.Stderr)
+		return
+	}
+	if out.Stats.Invalid > 0 {
+		t.Errorf("Fixtures/%s: %d invalid message(s) or record(s) refused by the runtime (logs: %+v)", f.Name, out.Stats.Invalid, out.Logs)
+	}
+	got, err := testkit.Normalize(out.Report)
+	if err == nil {
+		got, err = fx.Normalize(got)
+	}
+	if err != nil {
+		t.Errorf("Fixtures/%s: %v", f.Name, err)
+		return
+	}
+	expect := filepath.Join(dir, filepath.FromSlash(f.Expect))
+	if opts.Update {
+		if err := os.WriteFile(expect, got, 0o600); err != nil {
 			t.Errorf("Fixtures/%s: %v", f.Name, err)
-			continue
 		}
-		if out.Err != nil && out.Status == tool.StatusFailed {
-			t.Errorf("Fixtures/%s: the task failed: %v (stderr: %s)", f.Name, out.Err, out.Stderr)
-			continue
-		}
-		if out.Stats.Invalid > 0 {
-			t.Errorf("Fixtures/%s: %d invalid message(s) or record(s) refused by the runtime (logs: %+v)", f.Name, out.Stats.Invalid, out.Logs)
-		}
-		got, err := testkit.Normalize(out.Report)
-		if err != nil {
-			t.Errorf("Fixtures/%s: %v", f.Name, err)
-			continue
-		}
-		expect := filepath.Join(dir, filepath.FromSlash(f.Expect))
-		if opts.Update {
-			if err := os.WriteFile(expect, got, 0o600); err != nil {
-				t.Errorf("Fixtures/%s: %v", f.Name, err)
-			}
-			continue
-		}
-		want, err := os.ReadFile(expect) //nolint:gosec // a fixture path the manifest validated
-		if err != nil {
-			t.Errorf("Fixtures/%s: expect: %v (OPENCTEM_UPDATE_GOLDEN=1 writes it)", f.Name, err)
-			continue
-		}
-		if !bytes.Equal(bytes.TrimSpace(got), bytes.TrimSpace(want)) {
-			t.Errorf("Fixtures/%s: the report differs from %s\n--- got\n%s", f.Name, f.Expect, got)
-		}
+		return
+	}
+	want, err := os.ReadFile(expect) //nolint:gosec // a fixture path the manifest validated
+	if err != nil {
+		t.Errorf("Fixtures/%s: expect: %v (OPENCTEM_UPDATE_GOLDEN=1 writes it)", f.Name, err)
+		return
+	}
+	if !bytes.Equal(bytes.TrimSpace(got), bytes.TrimSpace(want)) {
+		t.Errorf("Fixtures/%s: the report differs from %s\n--- got\n%s", f.Name, f.Expect, got)
 	}
 }
