@@ -109,7 +109,7 @@ func LoadManifest(data []byte) (Manifest, error) {
 	jd := json.NewDecoder(bytes.NewReader(js))
 	jd.DisallowUnknownFields()
 	if err := jd.Decode(&m); err != nil {
-		return Manifest{}, ManifestErrors{{Message: err.Error()}}
+		return Manifest{}, ManifestErrors{manifestDecodeError(err, doc)}
 	}
 	if m.APIVersion != APIVersion {
 		return Manifest{}, ManifestErrors{{Path: "/apiVersion", Message: fmt.Sprintf("must be %q", APIVersion)}}

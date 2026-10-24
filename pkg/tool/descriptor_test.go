@@ -118,8 +118,8 @@ func TestDescriptorCases(t *testing.T) {
 		{"deprecated bad since", portScanYAML + "deprecated: {since: soon}\n", "/deprecated/since"},
 		{"deprecated bad replacement", portScanYAML + "deprecated: {since: 2.0.0, replaced_by: \"Bad Name\"}\n", "/deprecated/replaced_by"},
 		{"deprecated control message", portScanYAML + "deprecated: {since: 2.0.0, message: \"a\\u0007\"}\n", "/deprecated/message"},
-		{"unknown descriptor key", patch(portScanYAML, "safety", "safety: {tier_floor: T0}"), "unknown field"},
-		{"unknown param mapping key", patch(portScanYAML, "      rate", "      rate: {key: rate, scale: 2}"), "unknown field"},
+		{"unknown descriptor key", patch(portScanYAML, "safety", "safety: {tier_floor: T0}"), "unknown key"},
+		{"unknown param mapping key", patch(portScanYAML, "      rate", "      rate: {key: rate, scale: 2}"), "unknown key"},
 		{"secrets code finding types", "apiVersion: openctem.io/tool/v1\nname: leaks\nversion: 1.0.0\nclass: target-scan\ntier: T0\nimplements: [{capability: secrets.code@1}]\nconsumes: [repository]\nproduces: [finding:vulnerability]\n", "/produces/0"},
 	}
 	for _, tc := range cases {
