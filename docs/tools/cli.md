@@ -43,7 +43,8 @@ Exit status:
 
 It also writes:
 - a stub program that emits nothing (for `python`, a `run(ctx, task)` on the `openctem_tool.py` helper it also writes; see [adapter-protocol.md](../adapter-protocol.md));
-- a self-test fixture with its expected CTIS;
+- a self-test fixture with its expected CTIS (for tools that take URLs, services or hosts, a hermetic one: see "Hermetic fixtures");
+- a `.gitignore` (`__pycache__/`, `fuzz/crashers/`, and `bin/` for `go`);
 - a `Makefile` (`validate`, `test`, `conformance`);
 - the CI workflow `.github/workflows/openctem-tool.yml`.
 
@@ -75,6 +76,29 @@ The `--capability` suites:
 | Other capabilities | The tool cannot be pointed at a local fixture for these, so they are checked through the fixtures' output only. |
 
 Passing the kit at a capability's major is what being certified for it means.
+
+## Hermetic fixtures
+
+A self-test must not depend on the internet. A fixture task file (the JSON a `selftest[].task` path points to) may carry a top-level `serve` member, read only by the kit and the CLI: it is removed before the task is built, never reaches a sensor and is not part of `tool.yaml`.
+
+```json
+{"serve": {"status": 200, "headers": {"Server": "fixture"}, "body": "<html><title>ok</title></html>",
+           "paths": {"/.env": {"status": 200, "body": "SECRET=x"}}},
+ "id": "selftest-sample",
+ "targets": [{"ref": "t1", "type": "http_service", "value": "{{fixture.url}}"}]}
+```
+
+While the fixture runs, the kit serves it on `127.0.0.1` (a random port):
+- `serve` is the default response for any path: `status` (default 200, 200-599), `headers` and `body`;
+- `paths` overrides it for one exact path (a status or body left out is inherited, headers are added to the default's);
+- `"tls": true` serves HTTPS with a self-signed certificate. The tool must then accept it (for example through an `insecure` config key the fixture sets); a verifying client refuses it;
+- limits: body 1 MiB, 32 headers, 64 paths. A header name or value with CR or LF refuses the fixture with an error.
+
+Every target `value` may use `{{fixture.url}}` (`http://127.0.0.1:PORT`), `{{fixture.host}}` (`127.0.0.1`), `{{fixture.port}}` and `{{fixture.host_port}}`. Any other `{{fixture.*}}`, or a placeholder in a fixture without `serve`, is an error. A fixture without `serve` runs as before.
+
+The port changes on every run, so before comparing with the expect file (and before `--update` writes it) the kit replaces `http://127.0.0.1:PORT` by `{{fixture.url}}` and `127.0.0.1:PORT` by `{{fixture.host_port}}` in every string of the produced CTIS. The expect file holds the placeholders and is the same on every run. The server is stopped when the fixture ends.
+
+`init` writes such a fixture for tools that consume `http_service`, `website`, `web_application`, `api`, `discovered_url`, `open_port`, `service`, `host` or `ip_address`. `domain` and `subdomain` targets keep `example.com` names: the kit cannot serve a name, and the stub resolves nothing. Replace them by a served target as soon as the tool connects somewhere.
 
 ## CI
 

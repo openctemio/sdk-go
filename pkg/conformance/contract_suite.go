@@ -209,11 +209,12 @@ func (r *contractRun) fixtureContract() {
 		return
 	}
 	for _, f := range r.m.Selftest {
-		task, err := loadFixtureTask(r.dir, f)
+		fx, err := loadFixtureTask(r.dir, f)
 		if err != nil {
 			r.t.Errorf("FixtureContract/%s: %v", f.Name, err)
 			continue
 		}
+		task := fx.Task
 		for _, c := range caps {
 			if task.Capability != "" && task.Capability != c.Ref() {
 				continue
@@ -233,6 +234,7 @@ func (r *contractRun) fixtureContract() {
 				r.t.Errorf("FixtureContract/%s/%s: %d record(s) miss the contract, first: %s", f.Name, c.Ref(), len(v), v[0])
 			}
 		}
+		fx.Close()
 	}
 }
 
