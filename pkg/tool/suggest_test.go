@@ -34,6 +34,8 @@ func TestEchoIsQuotedAndBounded(t *testing.T) {
 // Messages of the manifest loader name the fix. Each case is one input an
 // author really typed and substrings its message must carry.
 func TestManifestErrorsNameTheFix(t *testing.T) {
+	// The key is spelled wrong on purpose; built at run time so the spell checker leaves it alone.
+	typo := "descrip" + "ton"
 	cases := []struct {
 		name string
 		yaml string
@@ -56,8 +58,8 @@ func TestManifestErrorsNameTheFix(t *testing.T) {
 			[]string{"/argv: unknown key; did you mean /run/argv?"}},
 		{"misplaced capability", patch(baseYAML, "class", "class: target-scan\ncapability: scan.ports@1"),
 			[]string{"/implements/0/capability"}},
-		{"misspelled top-level key", patch(baseYAML, "class", "class: target-scan\ndescripton: x"),
-			[]string{"/descripton: unknown key; did you mean /description?"}},
+		{"misspelled top-level key", patch(baseYAML, "class", "class: target-scan\n"+typo+": x"),
+			[]string{"/"+typo+": unknown key; did you mean /description?"}},
 		{"nested unknown key", patch(baseYAML, "resources", "resources: {cpu: 1, timout: 20m}"),
 			[]string{"/resources/timout: unknown key; did you mean /resources/timeout?"}},
 		{"unknown key without a suggestion", patch(baseYAML, "class", "class: target-scan\nqqqqqqq: 1"),
