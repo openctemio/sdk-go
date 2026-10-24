@@ -27,6 +27,8 @@ type HTTPFetcher struct {
 	mu      sync.Mutex
 	etag    string
 	desired *DesiredState
+	// manifests holds the last manifest and ETag per URL.
+	manifests map[string]manifestEntry
 }
 
 // DesiredState is the platform's desired-state document: the packs the

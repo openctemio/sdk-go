@@ -1,0 +1,5 @@
+### Added: content manifest and acquire-by-digest before a task
+
+- `contentcache.ContentManifest` (versioned JSON, version 1): per tool slot, the ordered rule-source snapshots (source slug, digest, scope, size, DSSE signature), disabled rule ids, quarantined rule ids, and revoked digests. `ParseManifest` validates it and refuses a newer version; unknown fields are ignored.
+- `Cache.Ensure` fetches the manifest's missing packs by digest, verifies the pinned-key DSSE signature, the digest and the canonical archive, and installs them keyed by digest. A held digest is never fetched again, revoked digests are refused before any network use, and a pack that cannot be delivered fails with `ErrUnavailable`. `Cache.Prepare` also sets the task's content and paths; `Cache.Revoke` bans digests.
+- `HTTPFetcher.Manifest` fetches a manifest with ETag and 304 support. The same fetcher serves the sensor routes and the CI routes (different base URL and credentials). Library only: the sensor and CI adopt it separately.
