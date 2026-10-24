@@ -278,7 +278,7 @@ func (m Manifest) validateContract(add func(p, format string, args ...any), sche
 		}
 		c, ok := capability.Lookup(im.Capability)
 		if !ok {
-			add(p+"/capability", "%s is not in the capability taxonomy (see docs/capabilities.md of ctis)", im.Capability)
+			add(p+"/capability", "%s", unknownCapabilityMessage(im.Capability))
 			continue
 		}
 		if c.Status == capability.StatusLater {
