@@ -26,16 +26,28 @@ const ManifestVersion = 1
 // requeued; verification failures are ErrVerify, not this.
 var ErrUnavailable = errors.New("content unavailable")
 
+// ErrUnsupported marks a manifest that requires a feature this SDK version
+// does not know (RequiredFeatures). The task fails with content_unsupported,
+// distinct from content_unavailable: requeueing to the same sensor cannot
+// help, only a sensor or CI client that understands the feature can run it.
+var ErrUnsupported = errors.New("content unsupported")
+
+// KnownFeatures is the set of RequiredFeatures this SDK version understands.
+// It is empty: version 1 has no optional behavior a reader must honor yet.
+// Add a name here in the same change that implements the feature.
+var KnownFeatures = map[string]struct{}{}
+
 // ErrManifest marks a manifest that is malformed or of an unknown version.
 var ErrManifest = errors.New("content manifest refused")
 
 // Manifest limits.
 const (
-	maxManifestSlots   = 8
-	maxManifestSources = 16
-	maxManifestRuleIDs = 20000
-	maxRuleIDLen       = 256
-	maxManifestBytes   = 8 << 20
+	maxManifestSlots    = 8
+	maxManifestSources  = 16
+	maxManifestFeatures = 32
+	maxManifestRuleIDs  = 20000
+	maxRuleIDLen        = 256
+	maxManifestBytes    = 8 << 20
 )
 
 var (
@@ -54,6 +66,11 @@ type ContentManifest struct {
 	Slots   []ManifestSlot `json:"slots"`
 	// Revoked are digests that must not be used or kept, from any source.
 	Revoked []string `json:"revoked,omitempty"`
+	// RequiredFeatures names behavior the reader must understand to run the
+	// task safely. A reader that does not know one refuses the task with
+	// ErrUnsupported instead of running it with partial semantics. Absent or
+	// empty means none; it lets later fields be added without bumping Version.
+	RequiredFeatures []string `json:"required_features,omitempty"`
 }
 
 // ManifestSlot is one tool slot's content.
@@ -109,6 +126,17 @@ func (m ContentManifest) Validate() error {
 	}
 	if m.Version < 1 || m.Version > ManifestVersion {
 		return bad("version %d is not supported (this SDK reads up to %d)", m.Version, ManifestVersion)
+	}
+	if len(m.RequiredFeatures) > maxManifestFeatures {
+		return bad("at most %d required features", maxManifestFeatures)
+	}
+	for _, f := range m.RequiredFeatures {
+		if _, ok := KnownFeatures[f]; !ok {
+			if len(f) > 64 {
+				f = f[:64]
+			}
+			return fmt.Errorf("%w: required feature %q is not known to this SDK", ErrUnsupported, f)
+		}
 	}
 	if len(m.Slots) > maxManifestSlots {
 		return bad("at most %d slots", maxManifestSlots)
