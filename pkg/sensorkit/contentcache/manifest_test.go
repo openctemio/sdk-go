@@ -238,3 +238,32 @@ func TestEnsureOverHTTPFetcherPrefixes(t *testing.T) {
 		t.Fatalf("held %v", f.cache.Held())
 	}
 }
+
+func TestManifestRequiredFeatures(t *testing.T) {
+	// Absent or empty: accepted, unknown fields still ignored.
+	m, err := ParseManifest([]byte(`{"version":1,"slots":[],"future_field":1}`))
+	if err != nil || len(m.RequiredFeatures) != 0 {
+		t.Fatalf("absent: %v", err)
+	}
+	if _, err := ParseManifest([]byte(`{"version":1,"slots":[],"required_features":[]}`)); err != nil {
+		t.Fatalf("empty: %v", err)
+	}
+	// Unknown feature: refused as unsupported, not as unavailable.
+	_, err = ParseManifest([]byte(`{"version":1,"slots":[],"required_features":["entitled-delivery"]}`))
+	if !errors.Is(err, ErrUnsupported) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unknown feature: %v", err)
+	}
+	// Ensure refuses a hand-built manifest the same way, before any fetch.
+	f := newFixture(t)
+	bad := ContentManifest{Version: 1, RequiredFeatures: []string{"x"}}
+	if _, err := f.cache.Ensure(context.Background(), bad, EnsureOptions{}); !errors.Is(err, ErrUnsupported) || f.fetch.calls != 0 {
+		t.Fatalf("ensure: %v", err)
+	}
+	// A feature this SDK knows is accepted.
+	KnownFeatures["test-feature"] = struct{}{}
+	defer delete(KnownFeatures, "test-feature")
+	ok := ContentManifest{Version: 1, RequiredFeatures: []string{"test-feature"}}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("known: %v", err)
+	}
+}
