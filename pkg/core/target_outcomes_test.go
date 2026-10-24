@@ -289,3 +289,19 @@ func TestOutcomeRevisionOf(t *testing.T) {
 		}
 	}
 }
+
+// A tool's report cannot blame the sensor: a claimed sensor fault is read as
+// an unreachable target with no cause, in process and decoded from JSON.
+func TestTargetOutcomesFor_ReportCannotBlameSensor(t *testing.T) {
+	claim := outcome.Target{Target: "a.example", State: outcome.Failed, Class: outcome.SensorNetworkFault, Cause: outcome.CauseSensor}
+	for name, v := range map[string]any{
+		"in process": []outcome.Target{claim},
+		"decoded":    []any{map[string]any{"target": "a.example", "state": "failed", "class": "sensor_network_fault", "cause": "sensor"}},
+	} {
+		report := decodedReport(t, map[string]any{outcome.ResultKey: v})
+		got := TargetOutcomesFor(context.Background(), []string{"a.example"}, OutcomeEvidence{Report: report, Revision: 2})
+		if got[0].Class != outcome.Unreachable || got[0].Cause != "" {
+			t.Fatalf("%s: outcome = %+v", name, got[0])
+		}
+	}
+}

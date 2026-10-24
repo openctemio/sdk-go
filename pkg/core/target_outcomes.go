@@ -218,7 +218,16 @@ func (p *ScanCommandPayload) outcomes(ran []outcome.Target, refused []RefusedTar
 // explicit outcomes first, then the targets a run that stopped part-way
 // never reached, then failed targets.
 func reportOutcomes(report *ctis.Report) []outcome.Target {
-	out := explicitOutcomes(report.Properties[outcome.ResultKey])
+	// Copy: the in-process list is the report's own and must not be edited.
+	out := append([]outcome.Target(nil), explicitOutcomes(report.Properties[outcome.ResultKey])...)
+	// A tool's report is not evidence about the sensor: only the sensor's own
+	// reach control may charge it, so a claimed sensor fault is downgraded.
+	for i := range out {
+		if out[i].Class == outcome.SensorNetworkFault {
+			out[i].Class = outcome.Unreachable
+		}
+		out[i].Cause = ""
+	}
 	for _, t := range stringList(report.Properties[unfinishedTargetsKey]) {
 		out = append(out, outcome.Target{Target: t, State: outcome.Unfinished})
 	}
