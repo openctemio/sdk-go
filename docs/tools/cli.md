@@ -12,7 +12,7 @@ curl -sSLO $base/SHA256SUMS
 curl -sSLO $base/SHA256SUMS.sigstore.json
 
 cosign verify-blob --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/openctemio/sdk-go/' \
+  --certificate-identity "https://github.com/openctemio/sdk-go/.github/workflows/release.yml@refs/tags/v$v" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
 
