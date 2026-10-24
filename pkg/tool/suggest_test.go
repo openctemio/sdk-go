@@ -59,7 +59,7 @@ func TestManifestErrorsNameTheFix(t *testing.T) {
 		{"misplaced capability", patch(baseYAML, "class", "class: target-scan\ncapability: scan.ports@1"),
 			[]string{"/implements/0/capability"}},
 		{"misspelled top-level key", patch(baseYAML, "class", "class: target-scan\n"+typo+": x"),
-			[]string{"/"+typo+": unknown key; did you mean /description?"}},
+			[]string{"/" + typo + ": unknown key; did you mean /description?"}},
 		{"nested unknown key", patch(baseYAML, "resources", "resources: {cpu: 1, timout: 20m}"),
 			[]string{"/resources/timout: unknown key; did you mean /resources/timeout?"}},
 		{"unknown key without a suggestion", patch(baseYAML, "class", "class: target-scan\nqqqqqqq: 1"),
