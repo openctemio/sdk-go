@@ -49,7 +49,7 @@ func TestRecorderBestOutcomeWins(t *testing.T) {
 	wantUnreached := []UnreachedTarget{
 		{Target: "192.0.2.11", Class: Timeout, Detail: "i/o timeout"},
 		{Target: "2001:db8::5", Class: NoRoute, Detail: "network is unreachable"},
-		{Target: "gone.example.com", Class: DNSFailure, Detail: "no such host"},
+		{Target: "gone.example.com", Class: DNSFailure, Detail: "no such host", Reason: "name_gone"},
 	}
 	if !reflect.DeepEqual(rep.UnreachedList, wantUnreached) {
 		t.Errorf("unreached = %+v, want %+v", rep.UnreachedList, wantUnreached)

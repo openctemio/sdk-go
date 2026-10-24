@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/openctemio/sdk-go/pkg/adapt"
+	"github.com/openctemio/sdk-go/pkg/edgeprotect"
 )
 
 // errReader remembers the first read error other than EOF: the host
@@ -25,7 +26,11 @@ func (e *errReader) Read(p []byte) (int, error) {
 
 // observeResponse feeds an HTTP answer of host to the rate controller.
 func (f *Forwarder) observeResponse(host string, resp *http.Response) {
-	f.hostRate.ReportHTTP(normName(host), resp.StatusCode, resp.Header.Get("Retry-After"))
+	// Only the headers are visible here (the body streams to the tool); a
+	// vendor's challenge or block that shows in its headers is a block from
+	// the first answer, a bare 403 stays an ordinary answer.
+	v := edgeprotect.Classify(resp.StatusCode, resp.Header, "", nil)
+	f.hostRate.ReportResponse(normName(host), resp.StatusCode, resp.Header.Get("Retry-After"), v)
 }
 
 // observeErr feeds a network error toward host to the rate controller

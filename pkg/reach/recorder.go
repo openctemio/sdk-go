@@ -51,6 +51,10 @@ type Observation struct {
 	Class Class
 	// Detail is a short reason, kept for unreached targets (bounded).
 	Detail string
+	// Reason refines the class for an unreached target: NameGone or
+	// ResolverFailed for DNSFailure (RecordErr sets it). Bounded to a short
+	// token.
+	Reason string
 }
 
 // Summary is the job's reach summary (MetaReach).
@@ -101,6 +105,9 @@ type UnreachedTarget struct {
 	Target string `json:"target"`
 	Class  Class  `json:"class"`
 	Detail string `json:"detail,omitempty"`
+	// Reason refines Class (additive; older receivers ignore it): "name_gone"
+	// or "resolver_failed" for a DNS failure.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Report is what a recorder collected.
@@ -120,11 +127,14 @@ type Recorder struct {
 	addrs map[addrKey]Class
 	// overflow counts outcomes of targets past MaxTrackedTargets.
 	overflow map[Class]int
+	// hosts keeps the best outcome per host (HostOf).
+	hosts map[string]*targetState
 }
 
 type targetState struct {
 	best   Class
 	detail string
+	reason string
 }
 
 type addrKey struct {
@@ -134,13 +144,21 @@ type addrKey struct {
 
 // NewRecorder returns an empty recorder.
 func NewRecorder() *Recorder {
-	return &Recorder{targets: map[string]*targetState{}, addrs: map[addrKey]Class{}, overflow: map[Class]int{}}
+	return &Recorder{targets: map[string]*targetState{}, addrs: map[addrKey]Class{}, overflow: map[Class]int{}, hosts: map[string]*targetState{}}
 }
 
 // Record adds one observation (an Unknown class is ignored).
 func (r *Recorder) Record(o Observation) {
 	if r == nil || !o.Class.Valid() {
 		return
+	}
+	if o.Class == DNSFailure && o.Reason == "" {
+		// A tool that names a DNS failure without saying which: the safe
+		// reading does not claim the name is gone.
+		o.Reason = string(ClassifyDNSText(o.Detail))
+		if o.Reason == "" {
+			o.Reason = string(ResolverFailed)
+		}
 	}
 	target := cleanText(o.Target, maxTargetLen)
 	addr := o.Addr
@@ -176,7 +194,98 @@ func (r *Recorder) Record(o Observation) {
 	if o.Class.rank() > st.best.rank() {
 		st.best = o.Class
 		st.detail = cleanText(o.Detail, maxDetailLen)
+		st.reason = cleanToken(o.Reason)
 	}
+	r.noteHost(target, o)
+}
+
+// noteHost keeps the best outcome per host (r.mu held), so a caller that
+// holds a URL or an address:port can find what was recorded for the same
+// host under another spelling.
+func (r *Recorder) noteHost(target string, o Observation) {
+	h := HostOf(target)
+	if h == "" {
+		return
+	}
+	st, ok := r.hosts[h]
+	if !ok {
+		if len(r.hosts) >= MaxTrackedTargets {
+			return
+		}
+		st = &targetState{}
+		r.hosts[h] = st
+	}
+	if o.Class.rank() > st.best.rank() {
+		st.best = o.Class
+		st.detail = cleanText(o.Detail, maxDetailLen)
+		st.reason = cleanToken(o.Reason)
+	}
+}
+
+// Lookup returns the best outcome recorded for target: under exactly that
+// text, else for the same host (HostOf). Reason is DNSKind text for a DNS
+// failure. ok is false when nothing was recorded.
+func (r *Recorder) Lookup(target string) (c Class, reason string, ok bool) {
+	if r == nil {
+		return Unknown, "", false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if st, found := r.targets[cleanText(target, maxTargetLen)]; found {
+		return st.best, st.reason, true
+	}
+	if st, found := r.hosts[HostOf(target)]; found {
+		return st.best, st.reason, true
+	}
+	return Unknown, "", false
+}
+
+// cleanToken keeps a short lower-case identifier (letters, digits, underscore,
+// dash) and drops anything else: a reason is data a result carries.
+func cleanToken(s string) string {
+	if len(s) > 32 {
+		return ""
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' && c != '-' {
+			return ""
+		}
+	}
+	return s
+}
+
+// HostOf returns the lower-case host of a target written as a URL, a
+// host:port, a bracketed address or a bare name or address ("" when it holds
+// none). It is how outcomes recorded under one spelling of a target are found
+// under another.
+func HostOf(target string) string {
+	t := strings.TrimSpace(target)
+	if t == "" {
+		return ""
+	}
+	if i := strings.Index(t, "://"); i >= 0 {
+		t = t[i+3:]
+		if j := strings.IndexAny(t, "/?#"); j >= 0 {
+			t = t[:j]
+		}
+		if k := strings.LastIndex(t, "@"); k >= 0 {
+			t = t[k+1:]
+		}
+	}
+	if strings.HasPrefix(t, "[") {
+		if j := strings.Index(t, "]"); j > 0 {
+			return strings.ToLower(t[1:j])
+		}
+		return ""
+	}
+	if strings.Count(t, ":") == 1 {
+		t, _, _ = strings.Cut(t, ":")
+	}
+	if j := strings.IndexAny(t, "/?#"); j >= 0 {
+		t = t[:j]
+	}
+	return strings.ToLower(strings.TrimSuffix(t, "."))
 }
 
 // RecordErr classifies err and records it; it returns the class.
@@ -186,7 +295,11 @@ func (r *Recorder) RecordErr(target string, addr netip.Addr, port int, err error
 	if err != nil {
 		detail = err.Error()
 	}
-	r.Record(Observation{Target: target, Addr: addr, Port: port, Class: c, Detail: detail})
+	reason := ""
+	if c == DNSFailure {
+		reason = string(ClassifyDNS(err))
+	}
+	r.Record(Observation{Target: target, Addr: addr, Port: port, Class: c, Detail: detail, Reason: reason})
 	return c
 }
 
@@ -213,7 +326,7 @@ func (r *Recorder) Report() Report {
 	for t, st := range r.targets {
 		classes[st.best]++
 		if st.best.Unreached() {
-			unreached = append(unreached, UnreachedTarget{Target: t, Class: st.best, Detail: st.detail})
+			unreached = append(unreached, UnreachedTarget{Target: t, Class: st.best, Detail: st.detail, Reason: st.reason})
 		}
 	}
 	for c, n := range r.overflow {

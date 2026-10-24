@@ -429,7 +429,7 @@ func (p *ScanTargetPolicy) checkHost(ctx context.Context, host string, failClose
 	ips, err := lookup(ctx, host)
 	if err != nil || len(ips) == 0 {
 		if failClosedOnDNS {
-			return markTarget(RefusedTargetUnresolvable, fmt.Errorf("cannot resolve scan target host %q (refusing to scan an unverifiable target): %v", host, err))
+			return markUnresolved(err, fmt.Errorf("cannot resolve scan target host %q (refusing to scan an unverifiable target): %v", host, err))
 		}
 		return nil
 	}

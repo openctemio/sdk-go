@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
+
+	"github.com/openctemio/sdk-go/pkg/edgeprotect"
 )
 
 // HostRate is one task's per-host rate controller: additive increase,
@@ -73,6 +75,11 @@ type Event struct {
 	Signal     Signal
 	Reason     string
 	RetryAfter time.Duration
+	// Edge is the edge protection verdict of the answer (zero: none was
+	// made). On a Forbidden event whose verdict stops the request (a
+	// vendor challenge or block page) the host is a block from its first
+	// answer: the vendor marker is evidence a bare 403 is not.
+	Edge edgeprotect.Verdict
 }
 
 // Reasons of an Event and of a Change.
@@ -110,6 +117,12 @@ type Gap struct {
 	Host   string `json:"host"`
 	Reason string `json:"reason"`
 	Detail string `json:"detail,omitempty"`
+	// Edge and Vendor say that an edge protection (a WAF or CDN) stopped the
+	// task: Edge is "challenged" or "blocked" (edgeprotect.State), Vendor the
+	// vendor. Additive: older receivers ignore them and still see Reason
+	// "blocked".
+	Edge   string `json:"edge,omitempty"`
+	Vendor string `json:"vendor,omitempty"`
 }
 
 // Change is one move of a host's rate or breaker.
@@ -178,6 +191,8 @@ type hostState struct {
 	throttled bool
 	gap       string
 	gapDetail string
+	gapEdge   string
+	gapVendor string
 }
 
 // NewHostRate returns the controller of one task with the given ceiling
@@ -310,6 +325,17 @@ func (c *HostRate) Report(host string, e Event) {
 	case Forbidden:
 		h.fails = 0
 		c.close(h, &ch)
+		if e.Edge.State.Stops() {
+			// A vendor challenge or block page: the edge, not the service,
+			// answered, and it will keep answering. No run of 403s is
+			// needed, and none is expected of a first request.
+			h.run403 = 0
+			h.bad++
+			c.setEdgeGap(h, e.Edge)
+			c.decrease(h, now, ReasonBlocked, &ch)
+			c.trip(h, now, ReasonBlocked, &ch)
+			break
+		}
 		if !h.answered {
 			break
 		}
@@ -374,6 +400,18 @@ func (c *HostRate) ReportHTTP(host string, status int, retryAfter string) {
 	default:
 		c.Report(host, Event{Signal: Answered})
 	}
+}
+
+// ReportResponse is ReportHTTP with the edge verdict of the answer: a
+// challenge or block page of a vendor's edge (verdict.State.Stops) is a block
+// whatever its status (a challenge is sometimes a 503), and from the first
+// answer. Without such a verdict it behaves as ReportHTTP.
+func (c *HostRate) ReportResponse(host string, status int, retryAfter string, v edgeprotect.Verdict) {
+	if v.State.Stops() {
+		c.Report(host, Event{Signal: Forbidden, Reason: ReasonBlocked, Edge: v})
+		return
+	}
+	c.ReportHTTP(host, status, retryAfter)
 }
 
 // advance closes the windows that ended before now: a window with health
@@ -487,6 +525,16 @@ func gapRank(r string) int {
 	return 0
 }
 
+// setEdgeGap makes the host a blocked gap that names the edge: it also sets
+// the edge members on a blocked gap an earlier run of plain 403s made.
+func (c *HostRate) setEdgeGap(h *hostState, v edgeprotect.Verdict) {
+	c.setGap(h, GapBlocked, fmt.Sprintf("%s %s (%s)", v.Vendor, v.State, v.Signal))
+	if h.gap == GapBlocked && h.gapEdge == "" {
+		h.gapEdge, h.gapVendor = string(v.State), v.Vendor
+		h.gapDetail = fmt.Sprintf("%s %s (%s)", v.Vendor, v.State, v.Signal)
+	}
+}
+
 func (c *HostRate) setGap(h *hostState, reason, detail string) {
 	if gapRank(reason) > gapRank(h.gap) {
 		h.gap, h.gapDetail = reason, detail
@@ -544,7 +592,7 @@ func (c *HostRate) Summary() Summary {
 		if h.gap != "" {
 			s.GapsTotal++
 			if len(s.Gaps) < c.b.MaxGaps {
-				s.Gaps = append(s.Gaps, Gap{Host: h.name, Reason: h.gap, Detail: h.gapDetail})
+				s.Gaps = append(s.Gaps, Gap{Host: h.name, Reason: h.gap, Detail: h.gapDetail, Edge: h.gapEdge, Vendor: h.gapVendor})
 			}
 		}
 	}
