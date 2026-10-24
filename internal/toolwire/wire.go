@@ -249,6 +249,8 @@ type VerdictMsg struct {
 	// (tool.VerdictReport); the runtime checks them again.
 	Evidence       []ctis.EvidenceItem `json:"evidence,omitempty"`
 	TemplateDigest string              `json:"template_digest,omitempty"`
+	// Requests are the check's per-request results (tool.RequestResult).
+	Requests []tool.RequestResult `json:"requests,omitempty"`
 }
 
 // Stats are the adapter's own counters (informational).

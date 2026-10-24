@@ -143,6 +143,12 @@ ignored, except during the handshake. A newer runtime may send more.
   SHA-256 of the file's bytes); report `unverifiable` when the file does not
   load or run. Only a sensor whose kit opted in sets it
   (`Kit.HandleRetestTemplates`).
+  A verdict may carry `requests`: one line per request the check made (at
+  most 64), each `{url, status, matched, error, edge_vendor, edge_state}`. A
+  check that probes several paths reports them so the platform can judge the
+  finding's own endpoint rather than whichever exchange came first. The URL
+  has no userinfo or query values; the runtime keeps at most 64 lines and
+  drops any without a URL.
 
 ## Time and cancel
 

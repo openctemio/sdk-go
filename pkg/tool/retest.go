@@ -137,10 +137,41 @@ type RetestVerdict struct {
 	// TemplateDigest identifies the exact check that ran (a template's
 	// digest), so the platform can tell a fix from a changed check.
 	TemplateDigest string `json:"template_digest,omitempty"`
+	// Requests is one line per request the check made (at most
+	// MaxVerdictRequests), so the platform can judge the finding's own
+	// endpoint when the check probes several. Empty from a tool that does not
+	// report it (the platform then reads the evidence as before).
+	Requests []RequestResult `json:"requests,omitempty"`
 }
 
 // MaxVerdictEvidence bounds the evidence items of one verdict.
 const MaxVerdictEvidence = 5
+
+// MaxVerdictRequests bounds the request results of one verdict.
+const MaxVerdictRequests = 64
+
+// MaxRequestURL bounds the URL of one request result.
+const MaxRequestURL = 2048
+
+// RequestResult is what one request of a check saw. The URL carries no
+// userinfo and no query values (the tool drops them); nothing here is a
+// response body. The platform decides on the finding's own endpoint from
+// these lines and treats them as untrusted.
+type RequestResult struct {
+	// URL is the request URL.
+	URL string `json:"url"`
+	// Status is the HTTP status (0: no response).
+	Status int `json:"status,omitempty"`
+	// Matched: the check's matchers matched this request's response.
+	Matched bool `json:"matched,omitempty"`
+	// Error is a short class of a failed request ("timeout"); empty when
+	// the request was answered.
+	Error string `json:"error,omitempty"`
+	// EdgeVendor and EdgeState are the CDN or WAF markers the answer
+	// carried (pkg/edgeprotect vendor and state); empty when none.
+	EdgeVendor string `json:"edge_vendor,omitempty"`
+	EdgeState  string `json:"edge_state,omitempty"`
+}
 
 // VerdictReport is a verdict with what supports it (RetestContext.Report).
 type VerdictReport struct {
@@ -150,6 +181,8 @@ type VerdictReport struct {
 	Code           VerdictCode
 	Evidence       []ctis.EvidenceItem
 	TemplateDigest string
+	// Requests is one line per request the check made (optional).
+	Requests []RequestResult
 }
 
 // ErrRetestRecord is the error of a record emitted in a retest task.

@@ -1010,7 +1010,7 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 			return refuse("unreadable verdict")
 		}
 		if err := asm.Verdict(v.Item, tool.VerdictReport{Verdict: v.Verdict, Detail: s.p.redact(toolrt.CleanString(v.Detail)),
-			Code: wireVerdictCode(v.Code), Evidence: v.Evidence, TemplateDigest: v.TemplateDigest}); err != nil {
+			Code: wireVerdictCode(v.Code), Evidence: v.Evidence, TemplateDigest: v.TemplateDigest, Requests: v.Requests}); err != nil {
 			return refuse(s.p.redact(err.Error()))
 		}
 	case toolwire.TypeHeartbeat:
