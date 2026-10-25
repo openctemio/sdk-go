@@ -162,8 +162,13 @@ type Problem struct {
 	Limit  *int64      `json:"limit,omitempty"`
 	// State is the command's current state on an invalid-transition problem
 	// (api RFC-029 §4.4).
-	State     string `json:"state,omitempty"`
-	Retryable bool   `json:"retryable"`
+	State string `json:"state,omitempty"`
+	// ServerTime and ClockOffsetSeconds are set on a clock-skew problem:
+	// the platform's clock, and the signature time minus it (positive when
+	// the sensor's clock is ahead).
+	ServerTime         *time.Time `json:"server_time,omitempty"`
+	ClockOffsetSeconds *int64     `json:"clock_offset_seconds,omitempty"`
+	Retryable          bool       `json:"retryable"`
 }
 
 // Name returns the problem type's short name, or "" when the type URI is

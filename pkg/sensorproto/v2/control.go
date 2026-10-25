@@ -307,6 +307,11 @@ const (
 	// ProblemManifestNotFound: GET /manifest for a sensor that registered
 	// none.
 	ProblemManifestNotFound ProblemType = "manifest-not-found"
+	// ProblemClockSkew: the request signature verified but its time lies
+	// outside the platform's clock tolerance (2 minutes): the sensor's
+	// clock or the platform's is wrong. Problem.ServerTime and
+	// Problem.ClockOffsetSeconds say by how much.
+	ProblemClockSkew ProblemType = "clock-skew"
 )
 
 // ProblemInvalidRequest (ProblemTypeBase): a malformed request body, on the

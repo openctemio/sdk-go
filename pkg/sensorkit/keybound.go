@@ -196,9 +196,12 @@ func (k *Kit) resolveIdentity() error {
 		JobSigningRoot:    pinRoot,
 		AllowUnsignedJobs: allowUnsigned,
 		// A spent enrollment token cannot start another request.
-		Retry:     token == "",
-		Out:       k.errw,
-		UserAgent: productToken(k.opts.ProductName, k.opts.Version),
+		Retry: token == "",
+		// A clock skew, a rate limit or an unavailable platform is waited
+		// out here with backoff, not by exiting into a restart loop.
+		RetryTransient: true,
+		Out:            k.errw,
+		UserAgent:      productToken(k.opts.ProductName, k.opts.Version),
 	})
 	// The token is single-use and spent (or refused) by now: take it out of
 	// the environment so scanner processes the sensor starts do not inherit
