@@ -167,29 +167,8 @@ func hostile(mode string) int {
 			}
 		}
 	case "settle-all-then-hang", "settle-one-then-heartbeat":
-		// Settles every target (or only the first) and then sends nothing
-		// but heartbeats, using no CPU: a tool hung after its work (the
-		// incident 2026-10-25), or one stuck mid-run. The first ignores a
-		// cancel (it must be killed); the second honors it.
 		handshake()
-		send(`{"v":1,"type":"record","kind":"finding","target":"t1","data":{"type":"misconfiguration","title":"on t1","severity":"low"}}`)
-		send(`{"v":1,"type":"target_status","target":"t1","status":"done"}`)
-		if mode == "settle-all-then-hang" {
-			send(`{"v":1,"type":"target_status","target":"t2","status":"done"}`)
-		} else {
-			go func() {
-				for {
-					if m := read(); m["type"] == "cancel" {
-						send(`{"v":1,"type":"result","status":"canceled"}`)
-						os.Exit(0)
-					}
-				}
-			}()
-		}
-		for {
-			send(`{"v":1,"type":"heartbeat"}`)
-			time.Sleep(200 * time.Millisecond)
-		}
+		hangAfterSettling(mode, send, read)
 	case "liar":
 		handshake()
 		send(`{"v":1,"type":"result","status":"ok"}`)
@@ -818,4 +797,30 @@ func socksProbe() int {
 	res = append(res, "outside="+socks(net.IPv4(192, 0, 2, 1), 80))
 	fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
 	return 0
+}
+
+// hangAfterSettling settles every target (settle-all-then-hang) or only the
+// first (settle-one-then-heartbeat) and then sends nothing but heartbeats,
+// using no CPU: a tool hung after its work (the incident 2026-10-25), or
+// one stuck mid-run. The first ignores a cancel (it must be killed); the
+// second honors it.
+func hangAfterSettling(mode string, send func(string), read func() map[string]any) {
+	send(`{"v":1,"type":"record","kind":"finding","target":"t1","data":{"type":"misconfiguration","title":"on t1","severity":"low"}}`)
+	send(`{"v":1,"type":"target_status","target":"t1","status":"done"}`)
+	if mode == "settle-all-then-hang" {
+		send(`{"v":1,"type":"target_status","target":"t2","status":"done"}`)
+	} else {
+		go func() {
+			for {
+				if m := read(); m["type"] == "cancel" {
+					send(`{"v":1,"type":"result","status":"canceled"}`)
+					os.Exit(0)
+				}
+			}
+		}()
+	}
+	for {
+		send(`{"v":1,"type":"heartbeat"}`)
+		time.Sleep(200 * time.Millisecond)
+	}
 }
