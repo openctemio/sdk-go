@@ -110,6 +110,11 @@ const (
 	GapRateFloor = "rate_floor"
 	// GapBlocked: the host answered with a block (a run of 403s).
 	GapBlocked = "blocked"
+	// GapProxyUnavailable: the job's proxy pool could not carry a
+	// connection toward the host (every endpoint down or refusing our
+	// credentials, or the proxy's rules refused the destination), so part
+	// of the host was never scanned. It says nothing about the host.
+	GapProxyUnavailable = "proxy_unavailable"
 )
 
 // Gap is one host whose coverage is incomplete, and why.
@@ -516,13 +521,25 @@ func (c *HostRate) lose(h *hostState, reason, detail string) { c.setGap(h, reaso
 func gapRank(r string) int {
 	switch r {
 	case GapBlocked:
-		return 3
+		return 4
 	case GapBreakerOpen:
+		return 3
+	case GapProxyUnavailable:
 		return 2
 	case GapRateFloor:
 		return 1
 	}
 	return 0
+}
+
+// MarkGap records that part of host's coverage is missing for a reason the
+// controller did not see itself (GapProxyUnavailable: the path failed, not
+// the host). The host keeps its strongest gap; its rate and breaker do not
+// move.
+func (c *HostRate) MarkGap(host, reason, detail string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.setGap(c.state(host, c.now()), reason, detail)
 }
 
 // setEdgeGap makes the host a blocked gap that names the edge: it also sets

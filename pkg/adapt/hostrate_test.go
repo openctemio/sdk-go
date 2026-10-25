@@ -405,3 +405,30 @@ func TestParseRetryAfter(t *testing.T) {
 		}
 	}
 }
+
+// A path gap (the proxy pool could not carry a connection) marks the host
+// without moving its rate, and a gap the host itself caused outranks it.
+func TestMarkGapKeepsTheStrongestReasonAndTheRate(t *testing.T) {
+	c, _ := testCtl(t, 100)
+	before := c.Rate("h")
+	c.MarkGap("h", GapProxyUnavailable, "proxy down")
+	if gaps, n := c.Gaps(); n != 1 || gaps[0].Reason != GapProxyUnavailable || c.Rate("h") != before {
+		t.Fatalf("gaps %+v (%d), rate %v -> %v", gaps, n, before, c.Rate("h"))
+	}
+	c.ReportHTTP("h", 200, "")
+	for range TargetRate.BlockRun {
+		c.ReportHTTP("h", 403, "")
+	}
+	if gaps, _ := c.Gaps(); len(gaps) != 1 || gaps[0].Reason != GapBlocked {
+		t.Fatalf("gaps %+v, want blocked", gaps)
+	}
+	c.MarkGap("h", GapProxyUnavailable, "proxy down")
+	if gaps, _ := c.Gaps(); gaps[0].Reason != GapBlocked {
+		t.Fatalf("a path gap replaced a block: %+v", gaps)
+	}
+	c.MarkGap("i", GapRateFloor, "")
+	c.MarkGap("i", GapProxyUnavailable, "")
+	if gaps, _ := c.Gaps(); len(gaps) != 2 || gaps[1].Reason != GapProxyUnavailable {
+		t.Fatalf("gaps %+v", gaps)
+	}
+}

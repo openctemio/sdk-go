@@ -142,6 +142,10 @@ func gapOutcome(target string, g adapt.Gap) (outcome.Target, bool) {
 		return outcome.Target{Target: target, State: outcome.Failed, Class: outcome.RateLimited, Cause: outcome.CauseTarget}, true
 	case adapt.GapBreakerOpen:
 		return outcome.Target{Target: target, State: outcome.Failed, Class: outcome.Unreachable, Cause: outcome.CauseTarget, Reason: "stopped_answering"}, true
+	case adapt.GapProxyUnavailable:
+		// The job's proxy pool did not carry the connections: the sensor's
+		// path failed, nothing is known about the target.
+		return outcome.Target{Target: target, State: outcome.Failed, Class: outcome.SensorNetworkFault, Cause: outcome.CauseSensor, Reason: adapt.GapProxyUnavailable}, true
 	}
 	return outcome.Target{}, false
 }

@@ -636,12 +636,27 @@ arguments or environment:
   reply that is not the protocol), once per endpoint; a proxy that refuses
   the credentials is not used again in the job; an answer about the
   target (CONNECT 403/502/503/504, SOCKS refusal or unreachable) ends that
-  connection. No CONNECT reply in time after the proxy took the request is
-  about the target once the endpoint has carried a tunnel in the job;
-  before that the third such timeout is `proxy_down`, so a proxy that
-  accepts connections and never answers is taken out. A pooled connection never falls back to a direct dial. A
+  connection. A CONNECT 401 is treated like 407 (only the proxy answers
+  before the tunnel is up). A CONNECT 500 is a live proxy that could not
+  reach the target, as some proxies answer for "unable to connect", never
+  `proxy_down`. No CONNECT reply in time after the proxy took the request
+  is about the target once the endpoint has carried a tunnel in the job;
+  before that, timeouts toward three distinct target addresses make it
+  `proxy_down`, so a proxy that accepts connections and never answers is
+  taken out, and a port scan of one filtered host is not. A pooled connection never falls back to a direct dial. A
   pool sent as the organization's default applies to public targets only:
   private, ULA, CGNAT and loopback targets are dialed directly, as before.
+- A connection the pool could not carry (every usable endpoint down or
+  refusing the credentials, or the proxy's own rules refusing the
+  destination, such as a CONNECT proxy that allows port 443 only) never
+  reached the target: its host becomes a `proxy_unavailable` coverage gap
+  (target outcome `sensor_network_fault`, cause `sensor`), so the scan ends
+  partial and its silence never closes a finding. Nothing is learned
+  about the target from it: no reach observation, no back-off. What a
+  proxy says about the target (CONNECT 502/503 or SOCKS host unreachable:
+  no route; CONNECT 504 or SOCKS general failure: timeout; SOCKS
+  connection refused: port closed) is recorded as the target's reach, as
+  on the direct path, without the proxy's address.
 - Each endpoint has a breaker local to the job (3 consecutive proxy
   failures: 30 s, doubling to 10 min, with jitter, then one probe) and
   counters the sensor reports at the end of the job (`egress-report`).
