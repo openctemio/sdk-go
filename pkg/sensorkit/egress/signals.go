@@ -5,8 +5,8 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/openctemio/ctis/edgeprotect"
 	"github.com/openctemio/sdk-go/pkg/adapt"
-	"github.com/openctemio/sdk-go/pkg/edgeprotect"
 )
 
 // errReader remembers the first read error other than EOF: the host
