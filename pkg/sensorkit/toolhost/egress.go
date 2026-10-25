@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/adapt"
@@ -39,6 +40,9 @@ const maxEgressLogLines = 20
 
 // taskEgress is a confined task's forwarder (api RFC-060): its two unix
 // sockets live in a task directory the sandbox hides from every task.
+// forwarderStopGrace bounds the wait for a task's forwarder to stop.
+var forwarderStopGrace = 10 * time.Second
+
 type taskEgress struct {
 	fw         *egress.Forwarder
 	dir        string
@@ -46,6 +50,9 @@ type taskEgress struct {
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 	once       sync.Once
+	// stuck is set when the forwarder did not stop within
+	// forwarderStopGrace: the task goes on without waiting for it.
+	stuck bool
 
 	// changes are the first rate changes (adapt.TargetRate.MaxChanges);
 	// moreChanges counts the rest.
@@ -132,7 +139,16 @@ func (e *taskEgress) stop() ([]egress.Record, int) {
 	}
 	e.once.Do(func() {
 		e.cancel()
-		e.wg.Wait()
+		// The forwarder closes every connection when its context ends, so
+		// this wait is short; it is bounded anyway: a forwarder that does
+		// not stop never holds the task (and its command) open.
+		done := make(chan struct{})
+		go func() { e.wg.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(forwarderStopGrace):
+			e.stuck = true
+		}
 		_ = os.RemoveAll(e.dir)
 	})
 	recs, dropped := e.fw.Records()
@@ -163,6 +179,11 @@ func (e *taskEgress) finish(out *Outcome, targets []tool.Target) []LogLine {
 		out.Reach = &r
 	}
 	lines := egressLog(out.Egress)
+	if e.stuck {
+		lines = append(lines, LogLine{Level: "warn",
+			Msg:    fmt.Sprintf("the egress forwarder did not stop within %s; the task finished without waiting for it", forwarderStopGrace),
+			Fields: map[string]any{"egress": "stop_timeout"}})
+	}
 	if unreached > 0 {
 		lines = append(lines, LogLine{Level: "warn",
 			Msg:    fmt.Sprintf("egress refused every connection toward %d of %d target(s): the sensor's network confinement did not let the tool reach them", unreached, len(targets)),

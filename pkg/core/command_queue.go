@@ -82,8 +82,12 @@ type heldCommand struct {
 	started   bool
 	// hosts are the politeness keys the command still holds: its keys at
 	// admission minus those its settled targets released.
-	hosts    []string
-	cancel   context.CancelCauseFunc
+	hosts  []string
+	cancel context.CancelCauseFunc
+	// canceled is set by the first cancel: a repeated one (the platform
+	// re-sends its cancel on every heartbeat until the command is gone) is
+	// a no-op.
+	canceled bool
 	progress *Progress
 	// holding tracks which keys the command's pending targets still need
 	// (politeness.Holding); nil until its targets are known.
@@ -266,15 +270,20 @@ func (q *localQueue) markStarted(id string) {
 }
 
 // cancel cancels the held command's context with cause; false if not held.
+// cancel cancels held command id with cause. It reports whether this call
+// canceled it: false when id is not held or was canceled already (a
+// repeated cancel is idempotent and changes nothing).
 func (q *localQueue) cancel(id string, cause error) bool {
 	q.mu.Lock()
 	hc := q.held[id]
 	var c context.CancelCauseFunc
-	if hc != nil {
-		c = hc.cancel
+	first := false
+	if hc != nil && !hc.canceled {
+		c, first = hc.cancel, true
+		hc.canceled = hc.cancel != nil
 	}
 	q.mu.Unlock()
-	if hc == nil {
+	if !first {
 		return false
 	}
 	if c != nil {

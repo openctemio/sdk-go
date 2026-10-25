@@ -725,7 +725,12 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	case res = <-waitDone:
 	case <-time.After(cancelGrace):
 		t.Kill("did not exit after its result")
-		res = <-waitDone
+		// A killed process is reaped at once; the wait is bounded anyway so
+		// nothing the tool left behind can hold the task open.
+		select {
+		case res = <-waitDone:
+		case <-time.After(cancelGrace):
+		}
 	}
 	s.finish(res, stopReason, stopClass, stderr, start, execution)
 	for _, l := range eg.finish(s.out, p.task.Targets) {
