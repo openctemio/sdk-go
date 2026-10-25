@@ -411,13 +411,25 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 	var lastErr error
 	targetErr := false // lastErr is about the target, not about an upstream proxy
 	dctxBase := WithTargetHost(ctx, host)
+	var pathErr *UpstreamError // the last failure was the path's (UpstreamError.PathFault)
 	for _, a := range addrs {
 		dctx, cancel := context.WithTimeout(dctxBase, f.limits.DialTimeout)
 		c, err := dial(dctx, "tcp", net.JoinHostPort(a.String(), strconv.Itoa(port)))
 		cancel()
 		var ue *UpstreamError
-		proxyFault := errors.As(err, &ue) && ue.ProxyFault()
-		if ctx.Err() == nil && !proxyFault {
+		if !errors.As(err, &ue) {
+			ue = nil
+		}
+		pathFault := ue != nil && ue.PathFault()
+		switch {
+		case ctx.Err() != nil || pathFault:
+			// Nothing learned about the target.
+		case ue != nil && ue.TargetClass.Valid():
+			// What the proxy said about the target, never the proxy's
+			// own address (the reach summary is shown with the run).
+			target.Record(reach.Observation{Target: host, Addr: a, Port: port, Class: ue.TargetClass,
+				Detail: "through the proxy pool: " + string(ue.TargetClass)})
+		default:
 			target.RecordErr(host, a, port, err)
 		}
 		if err == nil {
@@ -428,15 +440,25 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 			}
 			return c, rec, nil
 		}
-		lastErr, targetErr = err, !proxyFault
+		lastErr, targetErr, pathErr = err, !pathFault, nil
+		if pathFault {
+			pathErr = ue
+		}
 		if ue != nil && ue.Final {
 			break
 		}
 	}
-	// A proxy that failed says nothing about the target: the target's rate
+	// A path that failed says nothing about the target: the target's rate
 	// is paced on what the target did only.
 	if ctx.Err() == nil && targetErr {
 		f.hostRate.ReportDial(normName(host), port, lastErr)
+	}
+	if ctx.Err() == nil && pathErr != nil {
+		// The connection never left through the pool: that part of the
+		// host is not scanned, and the result must not read as "nothing
+		// found" (the scan ends partial with the host as a gap).
+		f.hostRate.MarkGap(normName(host), adapt.GapProxyUnavailable,
+			"the proxy pool could not carry a connection to port "+strconv.Itoa(port)+" ("+pathErr.Class+")")
 	}
 	rec.Verdict, rec.Reason = Allowed, "dial failed: "+lastErr.Error()
 	f.record(*rec)

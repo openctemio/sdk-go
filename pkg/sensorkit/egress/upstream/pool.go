@@ -20,6 +20,7 @@ import (
 	"github.com/openctemio/ctis/addrscope"
 
 	"github.com/openctemio/sdk-go/pkg/internal/absname"
+	"github.com/openctemio/sdk-go/pkg/reach"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 )
 
@@ -185,9 +186,10 @@ func (p *Pool) Dial(ctx context.Context, network, addr string) (net.Conn, error)
 			return c, nil
 		}
 		class, cause, replyTimeout := egress.ClassProxyDown, err, false
+		var targetClass reach.Class
 		var ae *attemptError
 		if errors.As(err, &ae) {
-			class, cause, replyTimeout = ae.class, ae.err, ae.replyTimeout
+			class, cause, replyTimeout, targetClass = ae.class, ae.err, ae.replyTimeout, ae.target
 		}
 		if callerDone(ctx) {
 			// The caller gave up (the task ended or its dial timed out):
@@ -199,6 +201,9 @@ func (p *Pool) Dial(ctx context.Context, network, addr string) (net.Conn, error)
 		}
 		class = p.observe(i, probe, class, replyTimeout, 0, err.Error())
 		last = &egress.UpstreamError{Class: class, Endpoint: e.ID, Final: class != egress.ClassTargetUnreachable, Err: cause}
+		if class == egress.ClassTargetUnreachable {
+			last.TargetClass = targetClass
+		}
 		if class != egress.ClassProxyDown {
 			return nil, last
 		}

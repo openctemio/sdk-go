@@ -124,13 +124,14 @@ func TestTargetOutcomesFor_NothingCoveredIsNeverDone(t *testing.T) {
 }
 
 func TestTargetOutcomesFor_GapKinds(t *testing.T) {
-	targets := []string{"a.example", "b.example", "c.example", "d.example", "e.example"}
+	targets := []string{"a.example", "b.example", "c.example", "d.example", "e.example", "f.example"}
 	gaps := []adapt.Gap{
 		{Host: "a.example", Reason: adapt.GapBlocked},                                                   // a run of plain 403s
 		{Host: "b.example", Reason: adapt.GapBlocked, Edge: "blocked", Vendor: "akamai"},                // vendor block page
 		{Host: "c.example", Reason: adapt.GapRateFloor},                                                 // pushed back at the floor
 		{Host: "d.example", Reason: adapt.GapBreakerOpen},                                               // stopped answering
 		{Host: "e.example", Reason: adapt.GapBlocked, Edge: "blocked", Vendor: "Not A Token\n<script>"}, // hostile vendor text
+		{Host: "f.example", Reason: adapt.GapProxyUnavailable},                                          // the proxy pool failed
 	}
 	got := TargetOutcomesFor(context.Background(), targets, rev2(func(e *OutcomeEvidence) { e.Gaps = gaps }))
 	want := []outcome.Target{
@@ -139,6 +140,7 @@ func TestTargetOutcomesFor_GapKinds(t *testing.T) {
 		{Target: "c.example", State: outcome.Failed, Class: outcome.RateLimited, Cause: outcome.CauseTarget},
 		{Target: "d.example", State: outcome.Failed, Class: outcome.Unreachable, Cause: outcome.CauseTarget, Reason: "stopped_answering"},
 		{Target: "e.example", State: outcome.Failed, Class: outcome.EdgeBlocked, Cause: outcome.CauseTarget},
+		{Target: "f.example", State: outcome.Failed, Class: outcome.SensorNetworkFault, Cause: outcome.CauseSensor, Reason: "proxy_unavailable"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("outcomes = %+v\nwant %+v", got, want)

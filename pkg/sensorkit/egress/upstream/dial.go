@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/reach"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 )
 
@@ -29,6 +30,9 @@ type attemptError struct {
 	// in time. The pool decides whether that is the target or the proxy
 	// (Pool.observe).
 	replyTimeout bool
+	// target is what a target_unreachable answer says about the target
+	// (egress.UpstreamError.TargetClass).
+	target reach.Class
 }
 
 func (e *attemptError) Error() string { return e.class + ": " + e.err.Error() }
@@ -38,12 +42,18 @@ func failed(class string, format string, args ...any) *attemptError {
 	return &attemptError{class: class, err: fmt.Errorf(format, args...)}
 }
 
+// unreachable is a target_unreachable attempt that says target about the
+// target.
+func unreachable(target reach.Class, format string, args ...any) *attemptError {
+	return &attemptError{class: egress.ClassTargetUnreachable, target: target, err: fmt.Errorf(format, args...)}
+}
+
 // replyTimedOut is the error of a CONNECT that got no reply in time: about
 // the target at first (a proxy that is up waits on a target that does not
 // answer), about the proxy once it never carried a tunnel in the job
 // (Pool.observe).
 func replyTimedOut(e *Endpoint, err error) *attemptError {
-	return &attemptError{class: egress.ClassTargetUnreachable, replyTimeout: true,
+	return &attemptError{class: egress.ClassTargetUnreachable, replyTimeout: true, target: reach.Timeout,
 		err: fmt.Errorf("%s: no CONNECT reply in time: %w", e, err)}
 }
 
@@ -179,8 +189,13 @@ func httpConnect(c net.Conn, e *Endpoint, target netip.AddrPort) (net.Conn, erro
 		return wrap(c, br, e.ID), nil
 	case code == 407:
 		return nil, failed(egress.ClassProxyAuth, "%s: proxy answered 407", e)
-	case code == 502 || code == 503 || code == 504:
-		return nil, failed(egress.ClassTargetUnreachable, "%s: proxy answered %d to CONNECT %s", e, code, hp)
+	case code == 504:
+		return nil, unreachable(reach.Timeout, "%s: proxy answered %d to CONNECT %s", e, code, hp)
+	case code == 502 || code == 503:
+		// The proxy reached no service there: a closed port and a host
+		// that does not answer look the same through most proxies, so the
+		// target is not taken as reached.
+		return nil, unreachable(reach.NoRoute, "%s: proxy answered %d to CONNECT %s", e, code, hp)
 	case code >= 400 && code < 500:
 		return nil, failed(egress.ClassTargetRefused, "%s: proxy answered %d to CONNECT %s", e, code, hp)
 	default:
@@ -325,10 +340,15 @@ func socks5Connect(c net.Conn, e *Endpoint, target netip.AddrPort) (net.Conn, er
 		return wrap(c, br, e.ID), nil
 	case 0x02:
 		return nil, failed(egress.ClassTargetRefused, "%s: proxy ruleset refused CONNECT %s", e, target)
-	case 0x01, 0x03, 0x04, 0x05, 0x06:
+	case 0x05:
+		// Connection refused: the target answered.
+		return nil, unreachable(reach.PortClosed, "%s: proxy reply %d to CONNECT %s", e, rep, target)
+	case 0x03, 0x04:
+		return nil, unreachable(reach.NoRoute, "%s: proxy reply %d to CONNECT %s", e, rep, target)
+	case 0x01, 0x06:
 		// 0x01 (general failure) is what many proxies answer when the
 		// target does not answer: about the target, not the proxy.
-		return nil, failed(egress.ClassTargetUnreachable, "%s: proxy reply %d to CONNECT %s", e, rep, target)
+		return nil, unreachable(reach.Timeout, "%s: proxy reply %d to CONNECT %s", e, rep, target)
 	default:
 		return nil, failed(egress.ClassProxyDown, "%s: proxy reply %d to CONNECT", e, rep)
 	}
