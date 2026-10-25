@@ -442,7 +442,7 @@ func (k *Kit) reportLocalPolicyChecks(lp *core.LocalPolicy) {
 			// Fail closed: network jobs are refused until a policy exists.
 			k.ReportCheck(core.ConfigCheck{ID: CheckLocalPolicy, Status: core.CheckFail, Code: "required_absent",
 				Keys:    []string{core.EnvLocalPolicy, core.EnvAllowedRanges, core.EnvRequireLocalPolicy},
-				Summary: "this sensor requires a sensor-local policy and has none: jobs with network targets are refused"})
+				Summary: "no local policy: network scans are refused until one is added"})
 		default:
 			k.ReportCheck(core.ConfigCheck{ID: CheckLocalPolicy, Status: core.CheckWarn, Code: "absent",
 				Keys: []string{core.EnvLocalPolicy, core.EnvRequireLocalPolicy}, Summary: "no sensor-local policy is installed"})

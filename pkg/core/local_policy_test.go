@@ -421,6 +421,27 @@ func TestLoadLocalPolicy_Shorthands(t *testing.T) {
 	if _, err := LoadLocalPolicy(LocalPolicyOptions{DefaultPath: filepath.Join(t.TempDir(), "none.yaml"),
 		LookupEnv: env(map[string]string{EnvAllowedRanges: "10.20.0.0/16"})}); err == nil {
 		t.Fatal("private shorthand range without the switch must be an error")
+	} else if msg := err.Error(); !strings.Contains(msg, EnvSensorAllowPrivateTargets+"=1") || strings.Contains(msg, "targets.allow_private") {
+		// The shorthand has no file, so the fix is the switch alone.
+		t.Fatalf("the shorthand's private-range error must name only %s: %v", EnvSensorAllowPrivateTargets, err)
+	}
+}
+
+// A sensor that requires a policy and has none says so in one short line
+// that names what is refused and where the policy goes.
+func TestLocalPolicy_AbsentRequiredWarningIsPlain(t *testing.T) {
+	lp := (*LocalPolicy)(nil).WithRequired(true)
+	w := lp.Warnings()
+	if len(w) != 1 {
+		t.Fatalf("warnings %v", w)
+	}
+	for _, want := range []string{"network scans are refused", DefaultLocalPolicyPath, EnvAllowedRanges, "console"} {
+		if !strings.Contains(w[0], want) {
+			t.Fatalf("warning lacks %q: %s", want, w[0])
+		}
+	}
+	if n := len(strings.Fields(w[0])); n > 50 {
+		t.Fatalf("warning has %d words, keep it short: %s", n, w[0])
 	}
 }
 
