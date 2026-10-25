@@ -246,6 +246,8 @@ func hostile(mode string) int {
 		}
 		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
 		return 0
+	case "egress-silent":
+		return egressSilent()
 	case "egress-pool-probe":
 		// A CONNECT to its target through the relay; the finding's title is
 		// the answer, its description everything the tool can see of its

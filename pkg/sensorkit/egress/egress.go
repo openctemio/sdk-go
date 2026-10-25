@@ -140,6 +140,10 @@ type Limits struct {
 	DialTimeout time.Duration
 	// HandshakeTimeout bounds reading a request (0: 10s).
 	HandshakeTimeout time.Duration
+	// UpstreamIdle is how long an upstream connection may stay silent
+	// before it is closed (0: DefaultUpstreamIdle; negative: no bound,
+	// only the forwarder's context closes it).
+	UpstreamIdle time.Duration
 	// MaxRecords bounds the record kept in memory (0: 10000); further
 	// records are counted, not kept.
 	MaxRecords int
@@ -160,6 +164,12 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.HandshakeTimeout <= 0 {
 		l.HandshakeTimeout = 10 * time.Second
+	}
+	switch {
+	case l.UpstreamIdle == 0:
+		l.UpstreamIdle = DefaultUpstreamIdle
+	case l.UpstreamIdle < 0:
+		l.UpstreamIdle = 0
 	}
 	if l.MaxRecords <= 0 {
 		l.MaxRecords = 10000
@@ -426,7 +436,9 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 			if ec, ok := c.(EndpointConn); ok {
 				rec.Endpoint = ec.UpstreamEndpoint()
 			}
-			return c, rec, nil
+			// The connection never outlives the forwarder's context, and a
+			// silent host cannot hold it open (conn_bound.go).
+			return bound(ctx, c, f.limits.UpstreamIdle), rec, nil
 		}
 		lastErr, targetErr = err, !proxyFault
 		if ue != nil && ue.Final {

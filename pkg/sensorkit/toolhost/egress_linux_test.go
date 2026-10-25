@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
@@ -329,5 +330,73 @@ func TestConfinedTaskKeepsToWebScope(t *testing.T) {
 	}
 	if refused != 4 {
 		t.Fatalf("egress records %+v", out.Egress)
+	}
+}
+
+// The incident (2026-10-25): the tool gave up on a host that accepted its
+// connection but never answered, and exited; the task's forwarder stayed
+// blocked on that host, so the run (and its command) never ended. A
+// confined task ends as soon as its tool exits, whatever its hosts do.
+func TestConfinedTaskEndsAfterASilentHost(t *testing.T) {
+	be, err := executor.NewProcessBackend(executor.Config{Mode: executor.ModeRequired, ConfineNetwork: true, RequireNetwork: true,
+		Limits: executor.Limits{Processes: 256}})
+	if err != nil {
+		if os.Getenv("OPENCTEM_TEST_REQUIRE_NETNS") == "1" {
+			t.Fatalf("network confinement required by the environment, not available: %v", err)
+		}
+		t.Skipf("network confinement not available here: %v", err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var mu sync.Mutex
+	var held []net.Conn
+	defer func() {
+		mu.Lock()
+		for _, c := range held {
+			_ = c.Close()
+		}
+		mu.Unlock()
+	}()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, c) // accepted, never answered, never closed
+			mu.Unlock()
+		}
+	}()
+	target := ln.Addr().String()
+	exe, _ := os.Executable()
+	m := tool.Manifest{
+		Name: "egress-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
+		Consumes: []string{"open_port"}, Produces: []string{"finding:misconfiguration"},
+		Permissions: tool.Permissions{Network: tool.NetTargets},
+		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
+	}
+	h := testHost(t)
+	h.Backend = be
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "open_port", Value: target}}}
+	done := make(chan *Outcome, 1)
+	go func() {
+		out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,
+			Env: map[string]string{"TOOLHOST_HOSTILE": "egress-silent", "TOOLHOST_TARGET": target}})
+		if err != nil {
+			t.Error(err)
+		}
+		done <- out
+	}()
+	select {
+	case out := <-done:
+		if out == nil || len(out.Report.Findings) != 1 {
+			t.Fatalf("outcome %+v", out)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the task did not end after its tool exited: the forwarder waited on a silent host")
 	}
 }

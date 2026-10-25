@@ -60,6 +60,11 @@ func (f *Forwarder) Serve(ctx context.Context, ln net.Listener) error {
 // 5, else an HTTP proxy request. It closes c.
 func (f *Forwarder) ServeConn(ctx context.Context, c net.Conn) {
 	defer c.Close()
+	// The forwarder stopping ends every connection it serves, at once: a
+	// handler blocked on either side returns, so Serve's wait (and the
+	// task waiting on the forwarder) ends.
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
 	_ = c.SetReadDeadline(time.Now().Add(f.limits.HandshakeTimeout))
 	// The handshake (a SOCKS5 greeting and request, or an HTTP request
 	// header) is bounded; lift() removes the bound once it is read.
@@ -307,12 +312,20 @@ func (f *Forwarder) pipe(c net.Conn, br *bufio.Reader, up net.Conn, rec *Record)
 	}()
 	ur := &errReader{r: up}
 	in, _ = io.Copy(c, ur)
-	closeWrite(c)
+	if ur.err != nil {
+		// The host side broke (reset, or cut on the idle bound): nothing
+		// the client sends can reach it any more, so the client side is
+		// closed too, which also ends the copy toward the host.
+		_ = c.Close()
+	} else {
+		closeWrite(c)
+	}
 	<-done
 	_ = up.Close()
 	// An opaque tunnel shows only how it ended: reset by the host, or
-	// closed after the host sent data.
-	if ur.err != nil {
+	// closed after the host sent data. A tunnel cut on the idle bound after
+	// the host answered is not a host failure.
+	if ur.err != nil && (in == 0 || !idledConn(up)) {
 		f.observeErr(rec.Host, ur.err)
 	} else if in > 0 {
 		f.hostRate.Report(normName(rec.Host), adapt.Event{Signal: adapt.Answered})
