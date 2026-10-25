@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/openctemio/sdk-go/pkg/edgeprotect"
+	"github.com/openctemio/ctis/edgeprotect"
 )
 
 // HostRate is one task's per-host rate controller: additive increase,

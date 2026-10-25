@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openctemio/sdk-go/pkg/edgeprotect"
+	"github.com/openctemio/ctis/edgeprotect"
 )
 
 // testCtl is a controller on a fake clock with no jitter.
