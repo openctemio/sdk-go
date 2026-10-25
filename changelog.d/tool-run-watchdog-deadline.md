@@ -1,0 +1,7 @@
+### Added: a run watch for every tool run, and the platform's deadline as a job budget
+
+- A tool that settled every target of its task but sends no result within `core.DefaultFinishGrace` (5 minutes) is canceled, then killed after the grace, and the run ends as its targets say: every accepted record is delivered and the task log carries a warning that the sensor stopped the tool. Before, a tool that hung after its work and kept heartbeating ran until its task timeout (24 hours for nuclei).
+- A tool that sends nothing but heartbeats while its processes use less than a second of CPU for `core.DefaultInactivity` (20 minutes, or the platform's `budget.stall_seconds` clamped to 5 minutes..2 hours) is stopped as timed out and delivers what it settled (`partial`). Linux only (process CPU time); elsewhere the check is off.
+- Both bounds are `core.RunWatch` (`toolhost.RunOptions.Watch`, or the job's through `core.WithRunWatch`); a negative field turns a check off.
+- A scan command may carry `deadline` (when the platform stops waiting for it). The job's time budget then ends `core.DeadlineMargin` before it (a tenth of the time left, 1 to 10 minutes, at least 30 seconds of budget), so a run stopped there still delivers its settled targets in time. It can only shorten a job.
+- A canceled, drained or kill-switched command whose executor does not return within 2 minutes is given up (released, or reported failed for the kill switch) instead of holding its slot until the sensor restarts. A platform stop (deliver what finished) is still waited for.

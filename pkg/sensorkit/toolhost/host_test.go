@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -89,7 +90,13 @@ var hostileManifest = tool.Manifest{
 func hostile(mode string) int {
 	in := bufio.NewReader(os.Stdin)
 	out := bufio.NewWriter(os.Stdout)
-	send := func(s string) { _, _ = out.WriteString(s + "\n"); _ = out.Flush() }
+	var sendMu sync.Mutex
+	send := func(s string) {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		_, _ = out.WriteString(s + "\n")
+		_ = out.Flush()
+	}
 	read := func() map[string]any {
 		line, err := in.ReadBytes('\n')
 		if err != nil {
@@ -159,6 +166,9 @@ func hostile(mode string) int {
 				}
 			}
 		}
+	case "settle-all-then-hang", "settle-one-then-heartbeat":
+		handshake()
+		hangAfterSettling(mode, send, read)
 	case "liar":
 		handshake()
 		send(`{"v":1,"type":"result","status":"ok"}`)

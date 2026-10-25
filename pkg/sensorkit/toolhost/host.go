@@ -155,6 +155,10 @@ type RunOptions struct {
 	// forwarder's per-host adaptive rate stays under the lowest of this,
 	// the tool's rate param and the local policy's rate.max_rps.
 	TargetRate float64
+	// Watch bounds the run (watch.go): a zero field takes the job's
+	// (core.RunWatchFrom of the task's context), then the default; a
+	// negative one turns that check off.
+	Watch core.RunWatch
 }
 
 // TargetOutcome is one target's outcome.
@@ -635,6 +639,16 @@ type session struct {
 	// stopDetail says why a stop that keeps the settled targets happened
 	// ("": the job's time budget).
 	stopDetail string
+
+	// The run watch (watch.go).
+	watch      core.RunWatch
+	cpu        *core.ProcessCPU
+	lastActive time.Time
+	cpuMark    time.Duration
+	cpuMarkAt  time.Time
+	settledAt  time.Time
+	// watchStop is why the watch stopped the tool ("": it did not).
+	watchStop string
 }
 
 // run runs an adapter-protocol task.
@@ -669,6 +683,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 		return nil, err
 	}
 	defer eg.stop()
+	cpu := &core.ProcessCPU{}
 	t, err := be.Prepare(executor.TaskSpec{
 		ID: m.Name, Argv: argv, Env: core.ScannerEnvironFor(envOwner(m), o.Env), SetEnv: o.Env, Dir: p.workdir,
 		WritePaths: append([]string{p.workdir}, o.WritePaths...), ReadPaths: p.contentPaths, Limits: o.Limits,
@@ -678,6 +693,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 			// The tool's CPU time, with the processes it starts (liveness).
 			if cmd != nil && cmd.Process != nil {
 				core.TrackProcess(ctx, cmd.Process.Pid)
+				cpu.Track(cmd.Process.Pid)
 			}
 		}, Finished: core.ReapScannerProcess},
 		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(),
@@ -710,7 +726,8 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	_ = inR.Close()
 	_ = outW.Close()
 
-	s := &session{h: h, p: p, o: o, out: &Outcome{Sandbox: be.Status()}, ctx: ctx}
+	s := &session{h: h, p: p, o: o, out: &Outcome{Sandbox: be.Status()}, ctx: ctx,
+		watch: watchFor(o.Watch, core.RunWatchFrom(ctx)), cpu: cpu}
 	_, _, maxBytes, _ := m.Resources.Limits()
 	stopReason, stopClass := s.drive(runCtx, ctx, t, toolwire.NewWriter(inW), outR, idle, maxRecords, maxBytes)
 	_ = inW.Close()
@@ -807,8 +824,26 @@ func (s *session) drive(runCtx, parent context.Context, t executor.Task, w *tool
 	}
 	canceled := false
 	var cancelAt <-chan time.Time
+	var watchTick <-chan time.Time
+	if iv := s.watchInterval(); iv > 0 {
+		tk := time.NewTicker(iv)
+		defer tk.Stop()
+		watchTick = tk.C
+	}
 	for {
 		select {
+		case now := <-watchTick:
+			if state != stRunning || canceled {
+				continue
+			}
+			if why := s.watchdog(now); why != "" {
+				// A protocol cancel first (the tool may stop cleanly and keep
+				// what it settled), then a kill after the grace.
+				s.watchStop = why
+				canceled = true
+				_ = w.Write(toolwire.Cancel{Envelope: toolwire.Env(toolwire.TypeCancel), Reason: "stopped by the sensor: " + why})
+				cancelAt = time.After(cancelGrace)
+			}
 		case <-runCtx.Done():
 			if parent.Err() != nil {
 				if !canceled && (errors.Is(parent.Err(), context.DeadlineExceeded) || errors.Is(context.Cause(parent), core.ErrStoppedByPlatform)) {
@@ -850,6 +885,10 @@ func (s *session) drive(runCtx, parent context.Context, t executor.Task, w *tool
 				reset(idle)
 			}
 			env, err := toolwire.Peek(le.line)
+			if err == nil && state == stRunning && env.Type != toolwire.TypeHeartbeat {
+				// Anything but a heartbeat is the tool doing work (watch.go).
+				s.lastActive = time.Now()
+			}
 			if err != nil || env.V != toolwire.Version {
 				if s.bad() {
 					return stop("too many invalid messages", tool.OutputRejected)
@@ -895,6 +934,7 @@ func (s *session) drive(runCtx, parent context.Context, t executor.Task, w *tool
 					return stop("the tool closed its input", tool.ToolCrashed)
 				}
 				state = stRunning
+				s.lastActive, s.cpuMarkAt = time.Now(), time.Now()
 				reset(idle)
 			case stRunning:
 				if res, stopNow, reason, class := s.handle(env, le.line); stopNow {
@@ -1109,6 +1149,9 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 	}
 	if s.budgetStop && runErr != nil && runErr.Class == tool.Canceled {
 		runErr = &tool.Error{Class: tool.Timeout, Retryable: true, Detail: cmp.Or(s.stopDetail, "the job's time budget ran out")}
+	}
+	if !s.budgetStop && s.watchStop != "" && runErr != nil && runErr.Class == tool.Canceled {
+		runErr = s.watchOutcome()
 	}
 	stoppedPartway := false
 	switch {
