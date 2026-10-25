@@ -615,8 +615,8 @@ func RequireLocalPolicyFromEnv(lookup func(string) (string, bool)) (required, se
 
 // noLocalPolicyHelp is what the operator of a sensor that requires a local
 // policy must do.
-const noLocalPolicyHelp = "this sensor requires a sensor-local policy and has none: install " + DefaultLocalPolicyPath +
-	" (or point " + EnvLocalPolicy + " at one), or set " + EnvAllowedRanges
+const noLocalPolicyHelp = "this sensor needs a local policy and has none: copy the one the console suggests (the sensor's Local policy section) to " +
+	DefaultLocalPolicyPath + " and reload with SIGHUP, or set " + EnvAllowedRanges
 
 func absentPolicy() *LocalPolicy {
 	return &LocalPolicy{
@@ -633,8 +633,7 @@ func absentPolicy() *LocalPolicy {
 func absentWarnings(required bool) []string {
 	if required {
 		return []string{
-			"no local policy: " + noLocalPolicyHelp + "; until then every job with network targets is refused (" +
-				LocalPolicyRuleNoPolicy + "), and so are custom templates and out-of-band callbacks; jobs without network targets still run",
+			"no local policy: network scans are refused until one is added (" + LocalPolicyRuleNoPolicy + "); " + noLocalPolicyHelp,
 		}
 	}
 	return []string{
@@ -708,6 +707,9 @@ func (lp *LocalPolicy) addTargets(key string, entries []string, allow, allowPriv
 					return fmt.Errorf("%s: %s is always blocked (loopback, link-local, metadata or reserved addresses)", key, n)
 				}
 				if n.IP.IsPrivate() && !allowPrivate {
+					if key == EnvAllowedRanges {
+						return fmt.Errorf("%s: %s is a private range; also set %s=1 to scan it", key, n, EnvSensorAllowPrivateTargets)
+					}
 					return fmt.Errorf("%s: %s is a private range; set targets.allow_private: true (and %s=1) to scan it", key, n, EnvSensorAllowPrivateTargets)
 				}
 				lp.allowNets = append(lp.allowNets, n)
