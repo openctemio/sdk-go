@@ -146,9 +146,13 @@ ignored, except during the handshake. A newer runtime may send more.
   A verdict may carry `requests`: one line per request the check made (at
   most 64), each `{url, status, matched, error, edge_vendor, edge_state}`. A
   check that probes several paths reports them so the platform can judge the
-  finding's own endpoint rather than whichever exchange came first. The URL
-  has no userinfo or query values; the runtime keeps at most 64 lines and
-  drops any without a URL.
+  finding's own endpoint rather than whichever exchange came first. The
+  runtime strips userinfo, query values and fragment from the URL whatever
+  the tool sends, drops a line whose URL is not absolute http(s), keeps at
+  most 64 lines, and drops an `edge_state` outside `direct`, `fronted`,
+  `challenged`, `blocked`, `rate_limited` (with its vendor). The host
+  removes the task's secrets from the URL and error of an out-of-process
+  tool's lines.
 
 ## Time and cancel
 

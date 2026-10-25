@@ -154,7 +154,8 @@ const MaxVerdictRequests = 64
 const MaxRequestURL = 2048
 
 // RequestResult is what one request of a check saw. The URL carries no
-// userinfo and no query values (the tool drops them); nothing here is a
+// userinfo, query values or fragment (the runtime strips them whatever the
+// tool sends); nothing here is a
 // response body. The platform decides on the finding's own endpoint from
 // these lines and treats them as untrusted.
 type RequestResult struct {
@@ -168,9 +169,21 @@ type RequestResult struct {
 	// the request was answered.
 	Error string `json:"error,omitempty"`
 	// EdgeVendor and EdgeState are the CDN or WAF markers the answer
-	// carried (pkg/edgeprotect vendor and state); empty when none.
+	// carried (edgeprotect vendor and state); empty when none. The runtime
+	// drops a state ValidEdgeState refuses, and the vendor with it.
 	EdgeVendor string `json:"edge_vendor,omitempty"`
 	EdgeState  string `json:"edge_state,omitempty"`
+}
+
+// ValidEdgeState reports whether s is an edge state a request result may
+// carry: the edgeprotect states direct, fronted, challenged, blocked and
+// rate_limited.
+func ValidEdgeState(s string) bool {
+	switch s {
+	case "direct", "fronted", "challenged", "blocked", "rate_limited":
+		return true
+	}
+	return false
 }
 
 // VerdictReport is a verdict with what supports it (RetestContext.Report).

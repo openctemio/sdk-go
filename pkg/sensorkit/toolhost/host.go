@@ -573,6 +573,20 @@ func (p *prepared) redact(s string) string {
 	return s
 }
 
+// redactRequests removes the task's secrets from an out-of-process tool's
+// request lines (URL and error class), as from its verdict detail.
+func (p *prepared) redactRequests(in []tool.RequestResult) []tool.RequestResult {
+	if len(in) == 0 || len(p.secrets) == 0 {
+		return in
+	}
+	out := make([]tool.RequestResult, len(in))
+	for i, r := range in {
+		r.URL, r.Error = p.redact(r.URL), p.redact(r.Error)
+		out[i] = r
+	}
+	return out
+}
+
 // failedOutcome is the outcome of a task refused before it started.
 func (h *Host) failedOutcome(m tool.Manifest, task tool.Task, e *tool.Error) *Outcome {
 	asm := toolrt.NewAssembler(m, task, toolrt.NewChecker(m))
@@ -1010,7 +1024,7 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 			return refuse("unreadable verdict")
 		}
 		if err := asm.Verdict(v.Item, tool.VerdictReport{Verdict: v.Verdict, Detail: s.p.redact(toolrt.CleanString(v.Detail)),
-			Code: wireVerdictCode(v.Code), Evidence: v.Evidence, TemplateDigest: v.TemplateDigest, Requests: v.Requests}); err != nil {
+			Code: wireVerdictCode(v.Code), Evidence: v.Evidence, TemplateDigest: v.TemplateDigest, Requests: s.p.redactRequests(v.Requests)}); err != nil {
 			return refuse(s.p.redact(err.Error()))
 		}
 	case toolwire.TypeHeartbeat:
