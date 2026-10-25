@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -33,6 +34,31 @@ var (
 	// token (malformed, unknown, expired or already used; it does not say
 	// which). Ask a super administrator for a new one.
 	ErrEnrollmentRefused = errors.New("pairing: the platform refused the instance enrollment token (unknown, expired or already used)")
+)
+
+// ClockSkewError is the platform refusing a request because its signature
+// time and the platform's clock differ by more than the tolerance (2
+// minutes): this machine's clock or the platform's is wrong.
+type ClockSkewError struct {
+	// Offset is this machine's clock minus the platform's (positive: this
+	// machine is ahead).
+	Offset time.Duration
+}
+
+func (e *ClockSkewError) Error() string {
+	d, dir := e.Offset, "ahead of"
+	if d < 0 {
+		d, dir = -d, "behind"
+	}
+	return fmt.Sprintf("pairing: the platform refused the request signature: this machine's clock is %s %s the platform's clock "+
+		"(signatures allow %s). One of the two clocks is wrong: fix NTP on it (`timedatectl` shows the state, "+
+		"`sudo chronyc makestep` steps the clock now)", d.Round(time.Second), dir, sensorsig.MaxClockSkew)
+}
+
+// Backoff of RetryTransient.
+const (
+	pairBackoffMin = 5 * time.Second
+	pairBackoffMax = 5 * time.Minute
 )
 
 // PairOptions configures Pair.
@@ -85,6 +111,14 @@ type PairOptions struct {
 	// Retry starts a new request when one expires (the daemon waits for an
 	// administrator indefinitely); off, Pair returns ErrExpired.
 	Retry bool
+	// RetryTransient retries, in process, a pairing the platform refused for
+	// a reason that can clear on its own or once an operator fixes it (a
+	// clock skew, a rate limit, the platform unavailable, a network error),
+	// with capped exponential backoff and a message each time, instead of
+	// returning (a daemon that exits is restarted by its supervisor and
+	// spends the platform's pairing budget in a loop). A refused enrollment
+	// token, a denial or a platform key mismatch still returns.
+	RetryTransient bool
 	// Out receives the lines a person reads (the code, the fingerprint).
 	Out io.Writer
 	// HTTPClient sends the requests; it is wrapped to sign them. Default:
@@ -160,17 +194,50 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 		return nil, fmt.Errorf("pairing: SENSOR_JOB_SIGNING_ROOT: %w", err)
 	}
 
+	backoff := pairBackoffMin
 	for {
 		id, err := pairOnce(ctx, pc, signer, o)
-		if errors.Is(err, ErrExpired) && o.Retry && o.EnrollmentToken == "" {
+		switch {
+		case err == nil:
+			return id, nil
+		case errors.Is(err, ErrExpired) && o.Retry && o.EnrollmentToken == "":
 			_, _ = fmt.Fprintln(o.Out, "The pairing request expired; starting a new one.")
+			backoff = pairBackoffMin
+			continue
+		case o.RetryTransient && ctx.Err() == nil && transientPairError(err, o.EnrollmentToken != ""):
+			_, _ = fmt.Fprintf(o.Out, "Pairing failed: %v\nRetrying in %s.\n", err, backoff)
+			if err := o.sleep(ctx, backoff); err != nil {
+				return nil, err
+			}
+			backoff = min(backoff*2, pairBackoffMax)
 			continue
 		}
-		if err != nil {
-			return nil, err
-		}
-		return id, nil
+		return nil, err
 	}
+}
+
+// transientPairError reports whether a pairing failure may clear without a
+// new configuration: a clock skew (once NTP is fixed), a rate limit, the
+// platform unavailable, a network error. With an enrollment token, only
+// failures from before the platform could spend it count (a 500 or a
+// generic 401 may come after).
+func transientPairError(err error, token bool) bool {
+	var ce *ClockSkewError
+	if errors.As(err, &ce) {
+		return true
+	}
+	var he *httpError
+	if errors.As(err, &he) {
+		switch he.status {
+		case http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusBadGateway, http.StatusGatewayTimeout:
+			return true
+		case http.StatusInternalServerError, http.StatusUnauthorized:
+			return !token
+		}
+		return false
+	}
+	var ue *url.Error
+	return errors.As(err, &ue) && !errors.Is(err, context.Canceled)
 }
 
 func pairOnce(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o PairOptions) (*Identity, error) {
@@ -394,6 +461,7 @@ func printInstructions(o PairOptions, start pairing.StartResponse, sas pairing.S
 	if o.Code == "" {
 		_, _ = fmt.Fprintf(w, "\nPair this sensor in OpenCTEM: Sensors > Pair a sensor\n")
 		_, _ = fmt.Fprintf(w, "  Code:        %s\n", start.UserCode)
+		_, _ = fmt.Fprintf(w, "  (Or create a code under Sensors > Expect a sensor and start the sensor with SENSOR_PAIRING_CODE set to it.)\n")
 	} else {
 		shown := pairing.FormatCode(o.Code)
 		if o.CodeLabel != "" {
@@ -471,10 +539,17 @@ func (c *pairClient) do(ctx context.Context, o PairOptions, method, path string,
 		_ = resp.Body.Close()
 		if resp.StatusCode == http.StatusTooManyRequests && attempt < 5 {
 			wait, _ := strconv.Atoi(resp.Header.Get("Retry-After"))
-			if err := o.sleep(ctx, time.Duration(min(max(wait, 1), 120))*time.Second); err != nil {
+			d := time.Duration(min(max(wait, 1), 300)) * time.Second
+			_, _ = fmt.Fprintf(o.Out, "Rate limited by the platform (HTTP 429); retrying in %s.\n", d)
+			if err := o.sleep(ctx, d); err != nil {
 				return err
 			}
 			continue
+		}
+		if resp.StatusCode == http.StatusUnauthorized {
+			if ce := clockSkewOf(resp, data, time.Now()); ce != nil {
+				return ce
+			}
 		}
 		if resp.StatusCode != want {
 			return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(data[:min(len(data), 300)]))}
@@ -486,6 +561,23 @@ func (c *pairClient) do(ctx context.Context, o PairOptions, method, path string,
 		}
 		return nil
 	}
+}
+
+// clockSkewOf reads a 401 as a clock skew: the platform's clock-skew
+// problem, or (a platform that answers only the generic 401) a Date header
+// further from this machine's clock than the signature tolerance.
+func clockSkewOf(resp *http.Response, body []byte, now time.Time) *ClockSkewError {
+	if p := protov2.ParseProblem(body); p.Name() == protov2.ProblemClockSkew && p.ClockOffsetSeconds != nil {
+		return &ClockSkewError{Offset: time.Duration(*p.ClockOffsetSeconds) * time.Second}
+	}
+	date, err := http.ParseTime(resp.Header.Get("Date"))
+	if err != nil {
+		return nil
+	}
+	if d := now.Sub(date); d > sensorsig.MaxClockSkew || d < -sensorsig.MaxClockSkew {
+		return &ClockSkewError{Offset: d.Truncate(time.Second)}
+	}
+	return nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

@@ -54,6 +54,8 @@ type fakePlatform struct {
 	// platform (no hello route here).
 	signedJobs *protov2.SignedJobs
 	helloAsked int
+	// startReplies answer the next starts, one each, before a normal start.
+	startReplies []func(w http.ResponseWriter)
 }
 
 func newFakePlatform(t *testing.T) (*fakePlatform, *httptest.Server) {
@@ -100,6 +102,12 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.lastCode = req.Code
 		f.lastToken = req.EnrollmentToken
 		f.starts++
+		if len(f.startReplies) > 0 {
+			reply := f.startReplies[0]
+			f.startReplies = f.startReplies[1:]
+			reply(w)
+			return
+		}
 		if req.EnrollmentToken != "" && f.refuseToken {
 			http.Error(w, "unauthenticated", http.StatusUnauthorized)
 			return
