@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -60,9 +61,17 @@ func TestHungProxyIsProxyDownAfterRepeatedReplyTimeouts(t *testing.T) {
 			dial := func() (net.Conn, error) {
 				return p.Dial(egress.WithTargetHost(context.Background(), "example.com"), "tcp", target.String())
 			}
-			// Below the limit: about the target, no failover.
-			for i := 1; i < replyTimeoutLimit; i++ {
-				_, err := dial()
+			// Below the limit (distinct target addresses): about the
+			// target, no failover. One address timing out again and again
+			// (one filtered host) never makes the proxy hung.
+			for range 2 * replyTimeoutLimit {
+				_, err := p.Dial(context.Background(), "tcp", "203.0.113.1:80")
+				if ue := upErr(t, err); ue.Class != egress.ClassTargetUnreachable {
+					t.Fatalf("same address: %s, want target_unreachable", ue.Class)
+				}
+			}
+			for i := 2; i < replyTimeoutLimit; i++ {
+				_, err := p.Dial(context.Background(), "tcp", fmt.Sprintf("203.0.113.%d:80", i))
 				if ue := upErr(t, err); ue.Class != egress.ClassTargetUnreachable || ue.Endpoint != "hung" {
 					t.Fatalf("timeout %d: %s via %s, want target_unreachable via hung", i, ue.Class, ue.Endpoint)
 				}
@@ -90,7 +99,7 @@ func TestHungProxyIsProxyDownAfterRepeatedReplyTimeouts(t *testing.T) {
 				t.Fatal("hung endpoint tried with its breaker open")
 			}
 			for _, e := range p.Report().Endpoints {
-				if e.EndpointID == "hung" && (e.ProxyDown != 1 || e.TargetUnreachable != int64(replyTimeoutLimit-1)) {
+				if e.EndpointID == "hung" && (e.ProxyDown != 1 || e.TargetUnreachable != int64(2*replyTimeoutLimit+replyTimeoutLimit-2)) {
 					t.Fatalf("hung endpoint report %+v", e)
 				}
 			}

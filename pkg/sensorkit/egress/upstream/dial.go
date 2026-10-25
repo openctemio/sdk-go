@@ -187,14 +187,17 @@ func httpConnect(c net.Conn, e *Endpoint, target netip.AddrPort) (net.Conn, erro
 	switch {
 	case code >= 200 && code < 300:
 		return wrap(c, br, e.ID), nil
-	case code == 407:
-		return nil, failed(egress.ClassProxyAuth, "%s: proxy answered 407", e)
+	case code == 407 || code == 401:
+		// Only the proxy can answer a CONNECT before the tunnel is up: some
+		// proxies send 401 instead of 407 for wrong credentials.
+		return nil, failed(egress.ClassProxyAuth, "%s: proxy answered %d", e, code)
 	case code == 504:
 		return nil, unreachable(reach.Timeout, "%s: proxy answered %d to CONNECT %s", e, code, hp)
-	case code == 502 || code == 503:
-		// The proxy reached no service there: a closed port and a host
-		// that does not answer look the same through most proxies, so the
-		// target is not taken as reached.
+	case code == 500 || code == 502 || code == 503:
+		// The proxy is up (it answered in HTTP) and reached no service
+		// there: a closed port and a host that does not answer look the
+		// same through most proxies (500 is what some send for "unable to
+		// connect"), so the target is not taken as reached.
 		return nil, unreachable(reach.NoRoute, "%s: proxy answered %d to CONNECT %s", e, code, hp)
 	case code >= 400 && code < 500:
 		return nil, failed(egress.ClassTargetRefused, "%s: proxy answered %d to CONNECT %s", e, code, hp)

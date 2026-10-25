@@ -635,10 +635,14 @@ arguments or environment:
   reply that is not the protocol), once per endpoint; a proxy that refuses
   the credentials is not used again in the job; an answer about the
   target (CONNECT 403/502/503/504, SOCKS refusal or unreachable) ends that
-  connection. No CONNECT reply in time after the proxy took the request is
-  about the target once the endpoint has carried a tunnel in the job;
-  before that the third such timeout is `proxy_down`, so a proxy that
-  accepts connections and never answers is taken out. A pooled connection never falls back to a direct dial. A
+  connection. A CONNECT 401 is treated like 407 (only the proxy answers
+  before the tunnel is up). A CONNECT 500 is a live proxy that could not
+  reach the target, as some proxies answer for "unable to connect", never
+  `proxy_down`. No CONNECT reply in time after the proxy took the request
+  is about the target once the endpoint has carried a tunnel in the job;
+  before that, timeouts toward three distinct target addresses make it
+  `proxy_down`, so a proxy that accepts connections and never answers is
+  taken out, and a port scan of one filtered host is not. A pooled connection never falls back to a direct dial. A
   pool sent as the organization's default applies to public targets only:
   private, ULA, CGNAT and loopback targets are dialed directly, as before.
 - A connection the pool could not carry (every usable endpoint down or

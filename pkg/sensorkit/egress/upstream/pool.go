@@ -32,10 +32,11 @@ const (
 	breakerJitter    = 0.2
 )
 
-// replyTimeoutLimit is the number of CONNECT replies that never came,
-// through an endpoint that has carried no tunnel in the job, after which
-// the endpoint is taken as hung (proxy_down) rather than every target as
-// unreachable.
+// replyTimeoutLimit is the number of distinct target addresses whose
+// CONNECT reply never came, through an endpoint that has carried no tunnel
+// in the job, after which the endpoint is taken as hung (proxy_down) rather
+// than every target as unreachable. Distinct addresses: a port scan of one
+// filtered host times out on every port through a healthy proxy.
 const replyTimeoutLimit = breakerThreshold
 
 // maxSamples bounds the handshake times kept per endpoint.
@@ -84,8 +85,10 @@ type endpointState struct {
 	probing     bool
 	authFailed  bool
 	// replyTimeouts counts CONNECT replies that never came while no tunnel
-	// through the endpoint has succeeded in the job.
+	// through the endpoint has succeeded in the job; timeoutAddrs are their
+	// distinct target addresses (at most replyTimeoutLimit).
 	replyTimeouts int
+	timeoutAddrs  []netip.Addr
 
 	// stats
 	ok, down, auth, unreach, refused int64
@@ -182,7 +185,7 @@ func (p *Pool) Dial(ctx context.Context, network, addr string) (net.Conn, error)
 		c, err := p.tunnel(actx, &e, target)
 		cancel()
 		if err == nil {
-			p.observe(i, probe, "", false, p.opts.now().Sub(start), "")
+			p.observe(i, probe, "", false, target.Addr(), p.opts.now().Sub(start), "")
 			return c, nil
 		}
 		class, cause, replyTimeout := egress.ClassProxyDown, err, false
@@ -199,7 +202,7 @@ func (p *Pool) Dial(ctx context.Context, network, addr string) (net.Conn, error)
 			}
 			return nil, &egress.UpstreamError{Class: class, Endpoint: e.ID, Final: true, Err: cause}
 		}
-		class = p.observe(i, probe, class, replyTimeout, 0, err.Error())
+		class = p.observe(i, probe, class, replyTimeout, target.Addr(), 0, err.Error())
 		last = &egress.UpstreamError{Class: class, Endpoint: e.ID, Final: class != egress.ClassTargetUnreachable, Err: cause}
 		if class == egress.ClassTargetUnreachable {
 			last.TargetClass = targetClass
@@ -317,10 +320,11 @@ func (p *Pool) release(i int) {
 // returns the attempt's class. A CONNECT reply that never came
 // (replyTimeout) is about the target while the endpoint has carried a
 // tunnel in the job. Before that it counts towards the breaker without
-// closing it, and from the replyTimeoutLimit-th one (or on a half-open
-// probe) it is proxy_down: a proxy that accepts connections and never
-// answers is quarantined like one that refuses them.
-func (p *Pool) observe(i int, wasProbe bool, class string, replyTimeout bool, handshake time.Duration, errMsg string) string {
+// closing it, and once replyTimeoutLimit distinct target addresses timed
+// out (or on a half-open probe) it is proxy_down: a proxy that accepts
+// connections and never answers is quarantined like one that refuses them,
+// and one filtered host scanned port by port is not.
+func (p *Pool) observe(i int, wasProbe bool, class string, replyTimeout bool, target netip.Addr, handshake time.Duration, errMsg string) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := &p.state[i]
@@ -331,7 +335,10 @@ func (p *Pool) observe(i int, wasProbe bool, class string, replyTimeout bool, ha
 	if replyTimeout && s.ok == 0 {
 		s.replyTimeouts++
 		hung = true
-		if wasProbe || s.replyTimeouts >= replyTimeoutLimit {
+		if !slices.Contains(s.timeoutAddrs, target) && len(s.timeoutAddrs) < replyTimeoutLimit {
+			s.timeoutAddrs = append(s.timeoutAddrs, target)
+		}
+		if wasProbe || len(s.timeoutAddrs) >= replyTimeoutLimit {
 			class = egress.ClassProxyDown
 		}
 	}

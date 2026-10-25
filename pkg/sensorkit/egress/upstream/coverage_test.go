@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/netip"
@@ -59,6 +60,7 @@ func TestPathFaultIsACoverageGapNotATargetFact(t *testing.T) {
 	}{
 		{"every endpoint down", SchemeHTTP, func(*testing.T) *testProxy { return nil }},
 		{"proxy refuses our credentials", SchemeHTTP, func(t *testing.T) *testProxy { return httpProxy(t, 407, "", "", "") }},
+		{"proxy refuses our credentials with 401", SchemeHTTP, func(t *testing.T) *testProxy { return httpProxy(t, 401, "", "", "") }},
 		{"connect proxy refuses the port", SchemeHTTP, func(t *testing.T) *testProxy { return httpProxy(t, 403, "", "", "") }},
 		{"socks ruleset refuses", SchemeSOCKS5, func(t *testing.T) *testProxy { return socksProxy(t, 2, "", "") }},
 	}
@@ -100,6 +102,7 @@ func TestProxyAnswersAboutTheTargetAreReachFacts(t *testing.T) {
 		unreached int
 	}{
 		{"connect 502", SchemeHTTP, func(t *testing.T) *testProxy { return httpProxy(t, 502, "", "", "") }, reach.NoRoute, 1},
+		{"connect 500 (unable to connect)", SchemeHTTP, func(t *testing.T) *testProxy { return httpProxy(t, 500, "", "", "") }, reach.NoRoute, 1},
 		{"connect 504", SchemeHTTP, func(t *testing.T) *testProxy { return httpProxy(t, 504, "", "", "") }, reach.Timeout, 1},
 		{"socks host unreachable", SchemeSOCKS5, func(t *testing.T) *testProxy { return socksProxy(t, 4, "", "") }, reach.NoRoute, 1},
 		{"socks general failure", SchemeSOCKS5, func(t *testing.T) *testProxy { return socksProxy(t, 1, "", "") }, reach.Timeout, 1},
@@ -123,5 +126,45 @@ func TestProxyAnswersAboutTheTargetAreReachFacts(t *testing.T) {
 				t.Fatal("an answer about the target made a path gap")
 			}
 		})
+	}
+}
+
+// A CONNECT 401 is the proxy refusing our credentials (only the proxy can
+// answer before the tunnel is up): the endpoint is out for the job and the
+// platform hears proxy_auth. A CONNECT 500 is a live proxy that could not
+// reach the target: never proxy_down, so a port scan of closed ports
+// through such a proxy does not quarantine it.
+func TestProxyStatusClasses(t *testing.T) {
+	for code, want := range map[int]string{401: egress.ClassProxyAuth, 500: egress.ClassTargetUnreachable, 501: egress.ClassProxyDown} {
+		tp := httpProxy(t, code, "", "", "")
+		n := newNetmap()
+		n.add("10.0.0.1:1", tp.addr())
+		p := newTestPool(t, Config{Mode: ModePool, PoolID: "p", AppliesTo: AppliesAll,
+			Endpoints: []Endpoint{ep("a", SchemeHTTP, "10.0.0.1", 1)}}, n)
+		for i := range breakerThreshold + 1 {
+			_, err := p.Dial(context.Background(), "tcp", "203.0.113.7:8080")
+			ue := upErr(t, err)
+			if code == 401 && i > 0 {
+				// The endpoint refused our credentials: no endpoint left.
+				if !errors.Is(err, ErrNoEndpoint) {
+					t.Fatalf("CONNECT 401, attempt %d: %v", i, err)
+				}
+				continue
+			}
+			if ue.Class != want {
+				t.Fatalf("CONNECT %d: class %s, want %s", code, ue.Class, want)
+			}
+		}
+		r := p.Report().Endpoints[0]
+		switch code {
+		case 401:
+			if r.ProxyAuth != 1 || tp.conns.Load() != 1 {
+				t.Fatalf("401: report %+v, %d connections (the endpoint must be out after the first)", r, tp.conns.Load())
+			}
+		case 500:
+			if r.ProxyDown != 0 || r.TargetUnreachable != int64(breakerThreshold+1) {
+				t.Fatalf("500: report %+v", r)
+			}
+		}
 	}
 }
