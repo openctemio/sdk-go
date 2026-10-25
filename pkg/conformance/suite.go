@@ -123,7 +123,7 @@ func RunSensorSuite(t *testing.T, start StartSensor, opts SuiteOptions) {
 		run(t, f)
 		suiteWait(t, timeout, "a heartbeat", func() bool { return len(f.Heartbeats()) > 0 })
 		if !announcesManifest(f.Heartbeats()) {
-			t.Skip("the sensor announces no manifest digest (api RFC-033); nothing to register")
+			t.Skip("the sensor announces no manifest digest; nothing to register")
 		}
 		suiteWait(t, timeout, "the manifest to be registered", func() bool { return len(f.Manifests()) > 0 })
 	})

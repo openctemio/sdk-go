@@ -8,7 +8,7 @@ Setup & health checklist shows each one's presence, never its value.
 | Setting | Type | Required | Default | Secret | Description |
 |---|---|---|---|---|---|
 | [`SENSOR_API_URL`](https://docs.openctem.io/sensors/settings/#SENSOR_API_URL) | url | yes |  |  | The platform's API URL (not the web UI origin). |
-| [`SENSOR_API_KEY`](https://docs.openctem.io/sensors/settings/#SENSOR_API_KEY) | string |  |  | yes | The sensor's bearer API key (legacy). Unset: the sensor pairs on first start and signs its requests with its own key (api RFC-052). |
+| [`SENSOR_API_KEY`](https://docs.openctem.io/sensors/settings/#SENSOR_API_KEY) | string |  |  | yes | The sensor's bearer API key (legacy). Unset: the sensor pairs on first start and signs its requests with its own key. |
 | [`SENSOR_ID`](https://docs.openctem.io/sensors/settings/#SENSOR_ID) | string |  |  |  | The sensor's id, when the key is not bound to one. |
 | [`SENSOR_NAME`](https://docs.openctem.io/sensors/settings/#SENSOR_NAME) | string |  | `sensor-<hostname>` |  | The sensor's name on the platform. |
 | [`SENSOR_PROTOCOL`](https://docs.openctem.io/sensors/settings/#SENSOR_PROTOCOL) | enum |  | `auto` |  | Sensor protocol (v2; v1 is retired and refused). |
