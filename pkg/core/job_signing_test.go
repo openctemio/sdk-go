@@ -408,6 +408,11 @@ func TestDangerousAllowUnsignedJobsFromEnv(t *testing.T) {
 func TestPollerAcceptsAMixedPriorityBatchInPlatformOrder(t *testing.T) {
 	f := newJobPollerFixture(t, true, true)
 	ids := []string{"cccccccc-0000-4000-8000-0000000000a1", "cccccccc-0000-4000-8000-0000000000a2", "cccccccc-0000-4000-8000-0000000000a3"}
+	// One slot per job: with fewer slots the last job starts only when an
+	// earlier one has already finished, and otherwise correctly stays pending
+	// for the next poll, which made this test fail about one run in six.
+	f.poller = NewCommandPoller(f.client, f.exec, &CommandPollerConfig{MaxConcurrent: len(ids), AllowedTypes: []string{"scan"}})
+	f.poller.SetJobGuard(f.g)
 	prios := []string{"low", "critical", "normal"}
 	for i, id := range ids {
 		// One host each: the per-host limit hands a shared host back.
