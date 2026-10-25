@@ -109,3 +109,53 @@ func TestPairEnrollmentTokenExcludesCodeAndRepair(t *testing.T) {
 		}
 	}
 }
+
+// An organization enrollment token: sent with the organization scope, the
+// identity must name an organization, the fingerprint is printed (an
+// administrator may have to compare it), the token never is.
+func TestPairWithOrganizationTokenJoinsTheOrganization(t *testing.T) {
+	f, srv := newFakePlatform(t) // grants a tenant identity
+	var out bytes.Buffer
+	o := opts(t, srv, &out)
+	o.EnrollmentToken = testToken
+	o.OrganizationEnrollment = true
+	id, err := Pair(context.Background(), o)
+	if err != nil {
+		t.Fatalf("pair: %v\n%s", err, out.String())
+	}
+	if f.lastToken != testToken || f.lastScope != pairing.EnrollmentScopeOrganization || !f.confirmed {
+		t.Fatalf("token %q scope %q confirmed=%v", f.lastToken, f.lastScope, f.confirmed)
+	}
+	if id.Scope != "" || id.TenantID == "" {
+		t.Fatalf("identity %+v", id)
+	}
+	if strings.Contains(out.String(), "octe_") || !strings.Contains(out.String(), "Fingerprint:") ||
+		strings.Contains(out.String(), "shared sensor") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+func TestPairWithOrganizationTokenRefusesASharedIdentity(t *testing.T) {
+	f, srv := newFakePlatform(t)
+	f.instance = true
+	o := opts(t, srv, io.Discard)
+	o.EnrollmentToken = testToken
+	o.OrganizationEnrollment = true
+	if _, err := Pair(context.Background(), o); err == nil || f.confirmed {
+		t.Fatalf("err = %v confirmed = %v", err, f.confirmed)
+	}
+}
+
+// An instance token never carries the organization scope.
+func TestPairWithInstanceTokenSendsNoScope(t *testing.T) {
+	f, srv := newFakePlatform(t)
+	f.instance = true
+	o := opts(t, srv, io.Discard)
+	o.EnrollmentToken = testToken
+	if _, err := Pair(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if f.lastScope != "" {
+		t.Fatalf("scope %q sent with an instance token", f.lastScope)
+	}
+}

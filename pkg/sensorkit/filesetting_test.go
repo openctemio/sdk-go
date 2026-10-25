@@ -114,15 +114,42 @@ func TestInstanceEnrollmentTokenFile(t *testing.T) {
 	tok := "octe_" + strings.Repeat("a", 49)
 	p := writeFile(t, t.TempDir(), "token", tok+"\n", 0o600)
 	t.Setenv(EnvInstanceEnrollmentToken, "")
+	t.Setenv(EnvEnrollmentToken, "")
+	t.Setenv(EnvEnrollmentTokenFile, "")
 	t.Setenv(EnvInstanceEnrollmentTokenFile, p)
-	got, err := instanceEnrollmentToken()
-	if err != nil || got != tok {
-		t.Fatalf("got %q %v", got, err)
+	got, org, err := enrollmentToken()
+	if err != nil || got != tok || org {
+		t.Fatalf("got %q org=%v %v", got, org, err)
 	}
 	bad := writeFile(t, t.TempDir(), "token", "not-a-token", 0o600)
 	t.Setenv(EnvInstanceEnrollmentTokenFile, bad)
-	if _, err = instanceEnrollmentToken(); err == nil || strings.Contains(err.Error(), "not-a-token") {
+	if _, _, err = enrollmentToken(); err == nil || strings.Contains(err.Error(), "not-a-token") {
 		t.Fatalf("malformed token must be refused without echoing it: %v", err)
+	}
+}
+
+// SENSOR_ENROLLMENT_TOKEN[_FILE] is an organization token; it cannot be
+// combined with an instance token.
+func TestOrganizationEnrollmentTokenFile(t *testing.T) {
+	tok := "octe_" + strings.Repeat("b", 49)
+	p := writeFile(t, t.TempDir(), "token", tok+"\n", 0o600)
+	t.Setenv(EnvInstanceEnrollmentToken, "")
+	t.Setenv(EnvInstanceEnrollmentTokenFile, "")
+	t.Setenv(EnvEnrollmentToken, "")
+	t.Setenv(EnvEnrollmentTokenFile, p)
+	got, org, err := enrollmentToken()
+	if err != nil || got != tok || !org {
+		t.Fatalf("got %q org=%v %v", got, org, err)
+	}
+	t.Setenv(EnvInstanceEnrollmentToken, "octe_"+strings.Repeat("c", 49))
+	if _, _, err := enrollmentToken(); err == nil || strings.Contains(err.Error(), "octe_") {
+		t.Fatalf("both kinds set must stop the sensor without echoing a token: %v", err)
+	}
+	t.Setenv(EnvInstanceEnrollmentToken, "")
+	t.Setenv(EnvEnrollmentTokenFile, "")
+	t.Setenv(EnvEnrollmentToken, "octe_short")
+	if _, _, err := enrollmentToken(); err == nil || strings.Contains(err.Error(), "octe_short") {
+		t.Fatalf("a malformed organization token must be refused without echoing it: %v", err)
 	}
 }
 

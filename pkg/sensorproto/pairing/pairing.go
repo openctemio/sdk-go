@@ -127,7 +127,16 @@ type StartRequest struct {
 	// nonce is revealed. An unusable token is a 401. Never with Code or
 	// SensorID.
 	EnrollmentToken string `json:"enrollment_token,omitempty"`
+	// EnrollmentScope says which kind of token EnrollmentToken is, so a
+	// token is only ever used as what the sensor's operator meant: empty
+	// (an instance token, a shared sensor) or EnrollmentScopeOrganization
+	// (an organization enrollment token, a sensor of the token's
+	// organization). Sent only with an organization token.
+	EnrollmentScope string `json:"enrollment_scope,omitempty"`
 }
+
+// EnrollmentScopeOrganization marks an organization enrollment token.
+const EnrollmentScopeOrganization = "organization"
 
 // StartResponse is the 201 answer to POST /pairings. The answer has the same
 // shape whether or not a reverse-mode code was valid.

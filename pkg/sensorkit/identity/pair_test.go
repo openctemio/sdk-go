@@ -49,6 +49,7 @@ type fakePlatform struct {
 	instance    bool
 	refuseToken bool
 	lastToken   string
+	lastScope   string
 	finalStatus string // what the poll answers after the first poll
 	// signedJobs is what the hello lists after pairing; nil: an older
 	// platform (no hello route here).
@@ -101,6 +102,7 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.nonceP, _ = pairing.NewNonce()
 		f.lastCode = req.Code
 		f.lastToken = req.EnrollmentToken
+		f.lastScope = req.EnrollmentScope
 		f.starts++
 		if len(f.startReplies) > 0 {
 			reply := f.startReplies[0]
