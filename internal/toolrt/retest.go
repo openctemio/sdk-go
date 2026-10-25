@@ -67,6 +67,7 @@ func (a *Assembler) Verdict(ref string, r tool.VerdictReport) error {
 		v = tool.RetestVerdict{Ref: ref, Verdict: tool.Unverifiable, Detail: tool.CapDetail("evidence refused: " + err.Error())}
 	} else {
 		v.TemplateDigest = r.TemplateDigest
+		v.Requests = cleanRequests(r.Requests)
 		if len(r.Evidence) > 0 {
 			v.Evidence = append([]ctis.EvidenceItem(nil), r.Evidence...)
 			ptrs := make([]*ctis.EvidenceItem, len(v.Evidence))

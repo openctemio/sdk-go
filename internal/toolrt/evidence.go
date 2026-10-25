@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
+	"unicode"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -61,4 +63,83 @@ func hasAnsweredExchange(items []ctis.EvidenceItem) bool {
 		}
 	}
 	return false
+}
+
+// cleanRequests keeps at most tool.MaxVerdictRequests request results with
+// printable, bounded text: the tool's output is hostile until checked. The
+// URL loses its userinfo, query values and fragment here whatever the tool
+// promised (a token in a query string never reaches the platform); a result
+// whose URL is not an absolute http(s) URL is dropped. Edge vendor and state
+// are short tokens, the state one tool.ValidEdgeState accepts.
+func cleanRequests(in []tool.RequestResult) []tool.RequestResult {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]tool.RequestResult, 0, min(len(in), tool.MaxVerdictRequests))
+	for _, r := range in {
+		if len(out) == tool.MaxVerdictRequests {
+			break
+		}
+		u := cleanURL(r.URL)
+		if u == "" || len(u) > tool.MaxRequestURL {
+			continue
+		}
+		if r.Status < 0 || r.Status > 999 {
+			r.Status = 0
+		}
+		state, vendor := r.EdgeState, shortToken(r.EdgeVendor)
+		if !tool.ValidEdgeState(state) {
+			state, vendor = "", ""
+		}
+		out = append(out, tool.RequestResult{URL: u, Status: r.Status, Matched: r.Matched,
+			Error: tool.CapDetail(CleanString(r.Error)), EdgeVendor: vendor, EdgeState: state})
+	}
+	return out
+}
+
+// shortToken is a lowercase identifier of at most 32 bytes ("" when it
+// holds anything else).
+func shortToken(s string) string {
+	if len(s) > 32 {
+		return ""
+	}
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			return ""
+		}
+	}
+	return s
+}
+
+// cleanURL is s as an absolute http(s) URL without whitespace, control
+// characters, userinfo, query values or fragment ("" when s is not one).
+// Query keys stay (they name the parameter the check probed); their values
+// may be credentials.
+func cleanURL(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, CleanString(s))
+	if s == "" {
+		return ""
+	}
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Opaque != "" {
+		return ""
+	}
+	u.User = nil
+	u.Fragment, u.RawFragment = "", ""
+	u.ForceQuery = false
+	if u.RawQuery != "" {
+		var keys []string
+		for _, kv := range strings.Split(u.RawQuery, "&") {
+			if k, _, _ := strings.Cut(kv, "="); k != "" {
+				keys = append(keys, k+"=")
+			}
+		}
+		u.RawQuery = strings.Join(keys, "&")
+	}
+	return u.String()
 }
