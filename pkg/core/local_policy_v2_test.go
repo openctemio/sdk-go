@@ -69,12 +69,11 @@ func TestLocalPolicy_V2(t *testing.T) {
 	}
 }
 
-// The absent-policy warning says what actually happens (api research/25
-// §0.5): callbacks only when a job asks, custom templates only with pinned
+// The absent-policy warning says what actually happens: callbacks only when a job asks, custom templates only with pinned
 // keys. It said both "are allowed".
 func TestAbsentPolicyWarningIsAccurate(t *testing.T) {
 	w := strings.Join(absentPolicy().Warnings(), "\n")
-	if !strings.Contains(w, "jobs may enable out-of-band callbacks") || !strings.Contains(w, "SENSOR_TEMPLATE_SIGNING_KEYS") || strings.Contains(w, "are allowed") {
+	if !strings.Contains(w, "jobs may use out-of-band callbacks") || !strings.Contains(w, "pinned signing key") || strings.Contains(w, "are allowed") {
 		t.Errorf("warning: %s", w)
 	}
 }

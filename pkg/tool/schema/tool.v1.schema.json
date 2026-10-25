@@ -79,7 +79,7 @@
         "max_targets": {"type": "integer", "minimum": 0, "maximum": 100000}
       }
     },
-    "config": {"type": "object", "description": "The configuration schema: the closed JSON Schema subset of api RFC-038 (x-octm-* annotations), with no secret fields."},
+    "config": {"type": "object", "description": "The configuration schema: the closed JSON Schema subset the platform accepts (x-octm-* annotations), with no secret fields."},
     "permissions": {
       "type": "object",
       "additionalProperties": false,
@@ -119,7 +119,7 @@
     "content": {
       "type": "array",
       "maxItems": 8,
-      "description": "Kinds of content the tool reads; the task gets the resolved packs as read-only paths (api RFC-061).",
+      "description": "Kinds of content the tool reads; the task gets the resolved packs as read-only paths.",
       "items": {
         "type": "object",
         "additionalProperties": false,

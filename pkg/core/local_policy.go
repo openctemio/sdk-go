@@ -638,12 +638,8 @@ func absentWarnings(required bool) []string {
 		}
 	}
 	return []string{
-		"no local policy: this sensor runs any target the platform sends outside the built-in deny list (legacy install, api RFC-040 Q3); install " +
+		"no local policy: this sensor was paired before local policies were required, so it accepts any target the platform sends outside the built-in deny list, and jobs may use out-of-band callbacks; custom templates run only when a pinned signing key signs the job. Fix: install " +
 			DefaultLocalPolicyPath + ", or set " + EnvRequireLocalPolicy + "=true to refuse network jobs without one",
-		// What actually happens (api research/25 §0.5): callbacks run
-		// only when a job asks for them, and custom templates only
-		// with pinned signing keys.
-		"no local policy: jobs may enable out-of-band callbacks (interactsh), and custom templates run when the job is signed by a pinned job signer or SENSOR_TEMPLATE_SIGNING_KEYS is set; install " + DefaultLocalPolicyPath + " with allow_interactsh and allow_custom_templates to decide",
 	}
 }
 

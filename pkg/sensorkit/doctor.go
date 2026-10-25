@@ -224,7 +224,7 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 		settingsreg.Setting{Name: EnvAPIURL, Type: settingsreg.URL, Required: true, Group: "platform",
 			Description: "The platform's API URL (not the web UI origin)."},
 		settingsreg.Setting{Name: EnvAPIKey, Type: settingsreg.String, Secret: true, Group: "platform",
-			Description: "The sensor's bearer API key (legacy). Unset: the sensor pairs on first start and signs its requests with its own key (api RFC-052)."},
+			Description: "The sensor's bearer API key (legacy). Unset: the sensor pairs on first start and signs its requests with its own key."},
 		settingsreg.Setting{Name: EnvSensorID, Type: settingsreg.String, Group: "platform",
 			Description: "The sensor's id, when the key is not bound to one."},
 		settingsreg.Setting{Name: EnvSensorName, Type: settingsreg.String, Default: "sensor-<hostname>", Group: "platform",
