@@ -136,6 +136,11 @@ type ScanCommandPayload struct {
 	// Budget is the task's layered budget (per target, per task); nil
 	// from a platform that sends none (budget.go).
 	Budget *TaskBudget `json:"budget,omitempty"`
+	// Deadline is when the platform stops waiting for this command (the
+	// scan run's deadline); zero: none. The job's time budget ends
+	// DeadlineMargin before it, so the run delivers what it settled in time
+	// (run_watch.go). It can only shorten the job.
+	Deadline time.Time `json:"deadline,omitzero"`
 	// OutcomeRevision is the highest per-target outcome revision the platform
 	// accepts (ctis outcome.Revision). Absent: 1. The sensor sends the classes
 	// that say why a target was not covered (a name that is gone, an edge
@@ -325,6 +330,8 @@ type CommandPoller struct {
 	stopCh     chan struct{}
 	mu         sync.Mutex
 	activeCmds sync.WaitGroup
+	// stopGraceNs overrides defaultStopGrace (tests; 0: the default).
+	stopGraceNs atomic.Int64
 	// sem bounds the number of commands executing concurrently to
 	// maxConcurrent. Without it a large command batch spawned an
 	// unbounded number of goroutines/scans. A slot is taken BEFORE a command
@@ -1347,14 +1354,20 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	// a result that can never arrive. Converting it to an error here routes it
 	// through the normal failure path below, so the command is reported failed
 	// with the panic message instead of vanishing.
-	result, err := func() (res *CommandExecutionResult, e error) {
-		defer func() {
-			if r := recover(); r != nil {
-				e = fmt.Errorf("executor panicked: %v", r)
-			}
-		}()
-		return p.executor.Execute(ctx, cmd)
-	}()
+	result, err, abandoned := p.runExecutor(ctx, cmd)
+	if abandoned {
+		// The executor ignored the stop (a bug in a tool runner): the
+		// command is released or reported now, so its slot and the
+		// platform's view never wait on it; the executor's goroutine is
+		// left behind and whatever it reports later is refused.
+		fmt.Printf("[command-poller] Command %s did not stop within %s of being stopped; giving it up\n", cmd.ID, p.stopGrace())
+		if cause := context.Cause(ctx); errors.Is(cause, errCanceledByPlatform) || errors.Is(cause, errDrained) {
+			p.handBack(cmd.ID, releaseReason(ctx, ReleaseReasonShutdown))
+			return
+		}
+		p.refuseCommand(context.WithoutCancel(ctx), cmd, fmt.Errorf("the job did not stop within %s of being stopped", p.stopGrace()))
+		return
+	}
 
 	// Stopped by the local kill switch: reported failed with the reason.
 	if errors.Is(context.Cause(ctx), errKilledByLocalPolicy) {
@@ -1439,6 +1452,61 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Failed to report result for command %s: %v\n", cmd.ID, err)
 		}
+	}
+}
+
+// defaultStopGrace is how long a stopped command's executor may take to
+// return before the poller gives it up (CommandPoller.runExecutor).
+const defaultStopGrace = 2 * time.Minute
+
+// stopGrace is the poller's stop grace (defaultStopGrace unless a test set
+// one).
+func (p *CommandPoller) stopGrace() time.Duration {
+	if g := time.Duration(p.stopGraceNs.Load()); g > 0 {
+		return g
+	}
+	return defaultStopGrace
+}
+
+// runExecutor runs the executor with panic recovery. Once ctx ends by a
+// cancel, a drain or the kill switch (whose results are discarded anyway)
+// the executor has stopGrace to return; abandoned reports that it did not,
+// and the command must then be settled without its result. A platform stop
+// (deliver what finished) is waited for.
+func (p *CommandPoller) runExecutor(ctx context.Context, cmd *Command) (res *CommandExecutionResult, err error, abandoned bool) {
+	type outcome struct {
+		res *CommandExecutionResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		var o outcome
+		defer func() {
+			if r := recover(); r != nil {
+				o = outcome{err: fmt.Errorf("executor panicked: %v", r)}
+			}
+			done <- o
+		}()
+		o.res, o.err = p.executor.Execute(ctx, cmd)
+	}()
+	select {
+	case o := <-done:
+		return o.res, o.err, false
+	case <-ctx.Done():
+	}
+	if errors.Is(context.Cause(ctx), ErrStoppedByPlatform) {
+		// A stop delivers what the run finished, which may take a while:
+		// it is not given up.
+		o := <-done
+		return o.res, o.err, false
+	}
+	t := time.NewTimer(p.stopGrace())
+	defer t.Stop()
+	select {
+	case o := <-done:
+		return o.res, o.err, false
+	case <-t.C:
+		return nil, nil, true
 	}
 }
 
@@ -1890,8 +1958,12 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// The job's context without its time budget (deliverCtx): a run the
 	// budget stopped part-way returns what it finished (partial), delivered
 	// under it, which a cancel still ends.
-	ctx, deliverCtx, cancelJob := withJobTimeout(ctx, local.CapTimeout(jobTimeout(payload.TimeoutSeconds, payload.Budget)))
+	// The platform's deadline for the command, when it sent one, shortens
+	// the budget so the result arrives before it (run_watch.go).
+	ctx, deliverCtx, cancelJob := withJobTimeout(ctx, capToDeadline(local.CapTimeout(jobTimeout(payload.TimeoutSeconds, payload.Budget)), payload.Deadline, time.Now()))
 	defer cancelJob()
+	// Every tool run of the job is watched (run_watch.go).
+	ctx = WithRunWatch(ctx, runWatchFor(payload.Budget))
 
 	// Run scan
 	startTime := time.Now()

@@ -161,6 +161,19 @@ ignored, except during the handshake. A newer runtime may send more.
 - On `cancel`, stop and send your `result` (`canceled`). After a 10-second
   grace the runtime sends SIGTERM, and after twice that, SIGKILL.
 - The task's `deadline` and `resources.timeout` bound the whole run.
+- Once you have settled every target, send your `result` promptly: a tool
+  that settled every target but sends no `result` within 5 minutes is sent
+  `cancel` (then stopped as above), and the run ends as its targets say,
+  with every accepted record delivered and a warning line in the task log.
+- A heartbeat keeps the tool alive, but not forever: a tool that sends
+  nothing but heartbeats while its processes use less than a second of CPU
+  for 20 minutes (or the platform's stall window for the task) is stopped as
+  timed out, keeping what it settled (`partial`). Where the sensor cannot
+  read process CPU time this check is off.
+- A scan job that carries the platform's deadline (`deadline` in the scan
+  command) runs under a time budget that ends a margin before it (a tenth of
+  the time left, between 1 and 10 minutes), so its settled targets are
+  delivered before the platform stops waiting.
 
 ## Exit codes
 
