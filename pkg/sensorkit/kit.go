@@ -1325,6 +1325,10 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	}
 	executor.SetParserRegistry(parsers)
 	executor.SetTemplateVerifier(k.s.templates)
+	// Packs a signed job pins come from the content cache.
+	if cache := k.contentCache(); cache != nil {
+		executor.SetContentResolver(cache)
+	}
 	if k.s.sensorID != "" {
 		// Configured locally (SENSOR_ID), so a template manifest signed
 		// for another sensor is refused.

@@ -103,6 +103,10 @@ func (s *toolScanner) RoutesEgress() bool { return true }
 // refuses the task on a sandbox that cannot).
 func (s *toolScanner) EnforcesScopeLimits() bool { return true }
 
+// TakesJobContent: the tool host mounts a job's packs (read-only, only the
+// job's own) and composes its wordlists.
+func (s *toolScanner) TakesJobContent() bool { return true }
+
 func (s *toolScanner) legacy() core.Scanner {
 	if b, ok := s.t.(ScannerBridge); ok {
 		return b.Scanner()
@@ -215,6 +219,7 @@ func (s *toolScanner) ScanTargets(ctx context.Context, targets []string, opts *c
 		task.Limits = opts.Limits
 		task.OrgHTTP = opts.OrgHTTP
 		task.Egress = opts.Egress
+		task.Content = taskContent(opts.Content)
 	}
 	if opts != nil && opts.Settings != nil && len(s.m.Config) > 0 {
 		raw, err := json.Marshal(opts.Settings.Values())
@@ -284,4 +289,30 @@ func firstClass(c tool.ErrorClass) tool.ErrorClass {
 		return tool.ToolError
 	}
 	return c
+}
+
+// taskContent turns a job's resolved content into the task's content per
+// slot. Paths come from the sensor's cache, never from the job.
+func taskContent(rc *core.ResolvedContent) []tool.TaskContent {
+	if rc == nil {
+		return nil
+	}
+	out := make([]tool.TaskContent, 0, len(rc.Slots))
+	for _, sl := range rc.Slots {
+		tc := tool.TaskContent{Slot: sl.Slot, Mode: tool.ContentCustom, MaxLines: sl.MaxLines}
+		for _, p := range sl.Packs {
+			tc.Packs = append(tc.Packs, tool.ContentPack{Digest: p.Digest, Source: p.Source, Path: p.Path})
+			if len(p.Files) > 0 {
+				if tc.Files == nil {
+					tc.Files = map[string][]string{}
+				}
+				tc.Files[p.Digest] = p.Files
+			}
+		}
+		for _, l := range sl.Inline {
+			tc.Inline = append(tc.Inline, tool.InlineList{Purpose: l.Purpose, SHA256: l.SHA256, Data: l.Data})
+		}
+		out = append(out, tc)
+	}
+	return out
 }

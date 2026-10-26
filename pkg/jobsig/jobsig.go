@@ -104,6 +104,14 @@ type Statement struct {
 	// of each decoded template, in the payload's order. Absent when the
 	// payload carries none.
 	Templates []string `json:"templates,omitempty"`
+	// Content are the content packs the payload's "content" members name,
+	// as the signer approved them as deliverable to the job's organization
+	// (api RFC-061): the slot and the pack's "sha256:<hex>" digest of each,
+	// in the payload's order. A sensor mounts only packs listed here. Absent
+	// when the payload names none. A verifier that predates the field
+	// refuses the statement (unknown field), so a job that pins content
+	// never runs on a sensor that cannot check the pins.
+	Content []ContentRef `json:"content,omitempty"`
 	// Limits are the port, protocol and path limits of the targets that
 	// only port- or path-limited scope entries cover, as the signer's
 	// ledger holds them (scopelimit). A sensor enforces them outside the
@@ -119,6 +127,34 @@ type Statement struct {
 	// Nonce is 16 random bytes, base64url without padding.
 	Nonce  string     `json:"nonce"`
 	Signer *SignerRef `json:"signer"`
+}
+
+// ContentRef is one content pack a signed job pins: the tool slot it is
+// for and the pack's digest.
+type ContentRef struct {
+	Slot   string `json:"slot"`
+	Digest string `json:"digest"`
+}
+
+// PayloadContentRefs are the content packs a command payload names, as the
+// platform puts them in the statement: for each element of "content", in
+// order and duplicates kept, its slot and digest. Nil when the payload
+// carries none.
+func PayloadContentRefs(payload []byte) []ContentRef {
+	var p struct {
+		Content []struct {
+			Slot   string `json:"slot"`
+			Digest string `json:"digest"`
+		} `json:"content"`
+	}
+	if len(payload) == 0 || json.Unmarshal(payload, &p) != nil || len(p.Content) == 0 {
+		return nil
+	}
+	out := make([]ContentRef, len(p.Content))
+	for i, c := range p.Content {
+		out[i] = ContentRef{Slot: c.Slot, Digest: c.Digest}
+	}
+	return out
 }
 
 // SignerRef names the key that signed a statement.

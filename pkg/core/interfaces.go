@@ -111,6 +111,10 @@ type ScanOptions struct {
 	// from its verified signed statement only (never the payload); only a
 	// ScopeLimitScanner receives them.
 	Limits []scopelimit.Limit `yaml:"-" json:"-"`
+	// Content is the content the job pins: packs held for the job by the
+	// sensor's cache and inline lists (content_job.go). Only a
+	// ContentScanner receives it.
+	Content *ResolvedContent `yaml:"-" json:"-"`
 	// ExcludeHosts are the job's exclusions (addresses, CIDR prefixes,
 	// "first-last" ranges) for a tool that can skip hosts itself (naabu
 	// -exclude-hosts). The sensor already cut the job's ranges around them.
