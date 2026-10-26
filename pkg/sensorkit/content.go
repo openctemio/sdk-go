@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/sdk-go/internal/sensorstate"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
 	"github.com/openctemio/sdk-go/pkg/localstore"
@@ -240,4 +241,24 @@ func (k *Kit) contentReport() *core.ContentReport {
 	r.DesiredVersion = cs.version
 	cs.mu.Unlock()
 	return r
+}
+
+// newDoorbell builds the heartbeat doorbell and attaches it to the sensor: the
+// heartbeat answer says when work is waiting (poll now), pauses or drains the
+// sensor, asks for key rotation, and names a new content version. It returns
+// nil when the kit has no platform client or the doorbell is disabled.
+func (k *Kit) newDoorbell(s *core.BaseSensor, renewal *sensorstate.KeyRenewManager) *core.Doorbell {
+	if k.client == nil || k.opts.DisableDoorbell {
+		return nil
+	}
+	var renewNow func()
+	if renewal != nil {
+		renewNow = renewal.RenewNow
+	}
+	doorbell := core.NewDoorbell(&core.DoorbellConfig{OnRotateKey: renewNow, Verbose: k.s.verbose})
+	s.SetDoorbell(doorbell)
+	// A heartbeat answer with a new content version refreshes the content
+	// cache now, not at the next schedule.
+	doorbell.SetContentHandler(k.wakeContent)
+	return doorbell
 }

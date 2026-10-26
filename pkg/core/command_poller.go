@@ -1886,30 +1886,8 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	}
 
 	local := e.local.Load()
-	// Add config options if provided
-	if payload.Config != nil {
-		// Out-of-band callbacks only when the command says so, as a boolean:
-		// anything else ("true", 1) leaves them off; and only when the local
-		// policy allows them.
-		if allow, ok := payload.Config["allow_interactsh"].(bool); ok && allow {
-			if !local.AllowsInteractsh() {
-				return nil, refuse("allow_interactsh", "the job asks for out-of-band callbacks (interactsh); this sensor's policy does not allow them")
-			}
-			opts.AllowInteractsh = true
-		}
-		if err := applyScanLimits(opts, payload.Config); err != nil {
-			return nil, err
-		}
-		if exclude, ok := payload.Config["exclude"].([]interface{}); ok {
-			for _, ex := range exclude {
-				if s, ok := ex.(string); ok {
-					if err := validateScanArgValue(s); err != nil {
-						return nil, fmt.Errorf("invalid exclude pattern: %w", err)
-					}
-					opts.Exclude = append(opts.Exclude, s)
-				}
-			}
-		}
+	if err := applyJobConfig(opts, payload.Config, local); err != nil {
+		return nil, err
 	}
 
 	// The rest of the config reaches the scanner only as typed settings its

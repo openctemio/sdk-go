@@ -1111,18 +1111,7 @@ func (k *Kit) Run(ctx context.Context) error {
 
 	// Heartbeat doorbell: the heartbeat answer says when work is waiting
 	// (poll now), pauses or drains the sensor, and asks for key rotation.
-	var doorbell *core.Doorbell
-	if k.client != nil && !k.opts.DisableDoorbell {
-		var renewNow func()
-		if renewal != nil {
-			renewNow = renewal.RenewNow
-		}
-		doorbell = core.NewDoorbell(&core.DoorbellConfig{OnRotateKey: renewNow, Verbose: k.s.verbose})
-		s.SetDoorbell(doorbell)
-		// A heartbeat answer with a new content version refreshes the
-		// content cache now, not at the next schedule.
-		doorbell.SetContentHandler(k.wakeContent)
-	}
+	doorbell := k.newDoorbell(s, renewal)
 	stopContentSync := k.startContentSync(ctx)
 	defer stopContentSync()
 	k.startTransport(ctx, doorbell)
