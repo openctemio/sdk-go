@@ -5,3 +5,7 @@
 - `NewWebForm` and `IsPasswordFieldName` set the password-field flag from field names, for crawlers that do not see input types.
 - `SplitSetCookie` splits a joined Set-Cookie value without splitting inside an Expires date; `SplitTechnology` splits `Name:version`.
 - `DiscoveredURL.Sanitize`, `SanitizeForms`, `SanitizeURLParams` and `SanitizeCNAMEs` bound every value a scanned server chooses (control characters, non-http(s) schemes, oversize values are dropped). Sensors call them before reporting.
+
+### Upgrade notes: core.DiscoveredURL is no longer comparable
+
+- `DiscoveredURL` now holds slices (`Params`, `Forms`), so `==` and use as a map key no longer compile. Compare the `URL` and `Method` members instead. The sensor and every other caller in the organisation build unchanged.
