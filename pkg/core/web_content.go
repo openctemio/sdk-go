@@ -366,6 +366,37 @@ func redactedURL(raw string, keepNames bool) string {
 	return u.String()
 }
 
+// IsPasswordFieldName reports whether a form field name says it holds a
+// password (password, passwd, user_pwd, pass, passcode, passphrase). Crawlers
+// that see only field names, not input types, use it to set
+// WebForm.PasswordField.
+func IsPasswordFieldName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "pass" {
+		return true
+	}
+	for _, sub := range []string{"passw", "pwd", "passcode", "passphrase"} {
+		if strings.Contains(n, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// NewWebForm builds a form from what a crawler reports: the method, the
+// action and the field names. The password flag comes from the field names.
+// The result is not yet bounded; SanitizeForms does that.
+func NewWebForm(method, action string, fields []string) WebForm {
+	f := WebForm{Method: method, Action: action}
+	for _, n := range fields {
+		f.Params = append(f.Params, URLParam{Location: ParamLocationForm, Name: n})
+		if IsPasswordFieldName(n) {
+			f.PasswordField = true
+		}
+	}
+	return f
+}
+
 // SanitizeForms bounds the forms of a page: the action is redacted (empty
 // when it is not an http(s) URL, so a javascript: action never passes),
 // the method is GET or POST and the fields are names only.

@@ -286,3 +286,20 @@ func TestNewFieldsRoundTrip(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestNewWebFormPasswordFlag(t *testing.T) {
+	for _, n := range []string{"password", "Password", "user_passwd", "pwd", "txtPWD", "pass", "passcode", "passphrase", "new-password"} {
+		if !NewWebForm("POST", "", []string{"user", n}).PasswordField {
+			t.Errorf("%q not a password field", n)
+		}
+	}
+	for _, n := range []string{"user", "email", "compas", "token", "", "pas"} {
+		if NewWebForm("POST", "", []string{n}).PasswordField {
+			t.Errorf("%q flagged", n)
+		}
+	}
+	f := NewWebForm("post", "/x", []string{"a", "b"})
+	if len(f.Params) != 2 || f.Params[0].Location != ParamLocationForm {
+		t.Errorf("%+v", f)
+	}
+}
