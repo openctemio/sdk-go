@@ -1,11 +1,14 @@
 package sensorkit
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress/upstream"
 )
 
@@ -83,4 +86,42 @@ func (s ScanEgress) policy(shared bool) core.EgressPolicy {
 // status, like executor.CapabilityNetConfined).
 func (k *Kit) AcceptsEgressPools() bool {
 	return !k.s.shared && k.s.scanEgress.AcceptsPools()
+}
+
+// EgressHostDirect reports whether this sensor's owner set
+// SENSOR_SCAN_EGRESS=direct-only (and it is not shared): the sensor reports
+// core.CapabilityEgressHostDirect, so the platform runs its scans direct
+// and shows the path as set on the sensor host, instead of holding jobs it
+// takes to be waiting for an upgrade.
+func (k *Kit) EgressHostDirect() bool {
+	return !k.s.shared && !k.s.scanEgress.AcceptsPools()
+}
+
+// PrepareEgress prepares a job's proxy pool exactly as a scan's is
+// (core.DefaultCommandExecutor.PrepareEgress): the local veto, validation
+// and the credentials fetched under the command's lease. For a command
+// handler of the sensor's own, such as a validate executor whose probes
+// must leave through the pool (the returned pool is its EgressDialer, and
+// the pool's signals reach the platform in the job's egress report). It
+// fails before the kit runs.
+func (k *Kit) PrepareEgress(ctx context.Context, cmdID string, cfg *upstream.Config) (*upstream.Pool, error) {
+	e := k.executor.Load()
+	if e == nil {
+		return nil, errors.New("sensorkit: the command executor is not running yet")
+	}
+	return e.PrepareEgress(ctx, cmdID, cfg)
+}
+
+// ServeProxyTest makes the kit serve proxy_test commands (the platform's
+// Test button of a proxy pool) and report core.CapabilityProxyTest. Not
+// for a shared sensor, which never uses an organization's pool, nor for a
+// sensor that accepts no platform pool (SENSOR_SCAN_EGRESS=direct-only).
+// It reports whether the commands are served. Call before Run.
+func (k *Kit) ServeProxyTest() bool {
+	if k.s.shared || !k.s.scanEgress.AcceptsPools() {
+		return false
+	}
+	k.HandleCommand(core.CommandTypeProxyTest, &core.ProxyTestExecutor{Egress: k, RootCAs: httpsec.APIRootCAs})
+	k.Tools().AddCapabilities(core.CapabilityProxyTest)
+	return true
 }

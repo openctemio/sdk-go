@@ -785,6 +785,17 @@ func (lp *LocalPolicy) DialContext(d *net.Dialer) func(ctx context.Context, netw
 	if d == nil {
 		d = &net.Dialer{}
 	}
+	return lp.DialContextVia(d.DialContext)
+}
+
+// DialContextVia is DialContext with the connections made by dial, which is
+// given the checked address as ip:port (never a name): a job's proxy pool
+// (EgressDialer.Dial) for a probe that must leave through it. A nil dial is
+// a zero net.Dialer.
+func (lp *LocalPolicy) DialContextVia(dial func(ctx context.Context, network, address string) (net.Conn, error)) func(ctx context.Context, network, address string) (net.Conn, error) {
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		ips, err := lp.CheckDial(ctx, network, address)
 		if err != nil {
@@ -796,7 +807,7 @@ func (lp *LocalPolicy) DialContext(d *net.Dialer) func(ctx context.Context, netw
 		var last error
 		for _, ip := range ips {
 			addr, _ := netip.AddrFromSlice(ip)
-			conn, err := d.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			conn, err := dial(ctx, network, net.JoinHostPort(ip.String(), port))
 			rec.RecordErr(host, addr, portNum, err)
 			if err == nil {
 				return conn, nil
