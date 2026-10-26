@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/openctemio/sdk-go/pkg/tool/wordlist"
 )
 
 // ContentSlot is a kind of content a tool reads: templates, rules,
@@ -33,6 +35,14 @@ type ContentSlot struct {
 	Selectors []string `json:"selectors,omitempty"`
 	// MaxBytes bounds a pack of this slot (0: the sensor's limit).
 	MaxBytes int64 `json:"max_bytes,omitempty"`
+	// Purpose is what a wordlist slot is for (wordlist.DNSLabels, ...):
+	// the platform picks the list for it and the runtime normalises and
+	// composes the job's lists into one file whose path the tool reads
+	// ({{content.<slot>}}). Only for kind wordlist.
+	Purpose string `json:"purpose,omitempty"`
+	// MaxLines bounds the composed wordlist (0: the runtime's default).
+	// Only for kind wordlist.
+	MaxLines int `json:"max_lines,omitempty"`
 }
 
 // Content compositions (api RFC-061 §3.3).
@@ -51,6 +61,30 @@ type TaskContent struct {
 	Packs []ContentPack `json:"packs,omitempty"`
 	// Selectors filter the content (tags, ids, severities, paths).
 	Selectors map[string][]string `json:"selectors,omitempty"`
+	// Files are the files of each pack a wordlist slot uses, by pack digest:
+	// relative to the pack, clean, no ".." (from the signed job). A pack of
+	// a wordlist slot with no entry here is handed to the tool as a
+	// directory.
+	Files map[string][]string `json:"files,omitempty"`
+	// MaxLines is the job's cap on a composed wordlist (0: none beyond the
+	// slot's).
+	MaxLines int `json:"max_lines,omitempty"`
+	// Inline are lists the platform generated for this job (wordlist
+	// slots): carried in the signed job, written only to the task's own
+	// directory, never to the content cache. The tool host composes them
+	// with the packs' Files into the one file the tool reads and clears
+	// them; they never reach the tool's process.
+	Inline []InlineList `json:"-"`
+}
+
+// InlineList is one list that travels inside the job.
+type InlineList struct {
+	// Purpose is the list's purpose (wordlist.Known).
+	Purpose string
+	// SHA256 is the lower-case hex SHA-256 of Data.
+	SHA256 string
+	// Data is the list, one entry per line.
+	Data []byte
 }
 
 // ContentPack is one immutable pack.
@@ -135,6 +169,15 @@ func validateContent(slots []ContentSlot, add func(ptr, format string, args ...a
 		if c.MaxBytes < 0 || c.MaxBytes > 16<<30 {
 			add(ptr+"/max_bytes", "must be between 0 and 16 GiB")
 		}
+		if c.Kind != "wordlist" && (c.Purpose != "" || c.MaxLines != 0) {
+			add(ptr+"/purpose", "purpose and max_lines are for kind wordlist only")
+		}
+		if c.Purpose != "" && !wordlist.Known(c.Purpose) {
+			add(ptr+"/purpose", "must be one of %s", strings.Join(wordlist.Purposes, ", "))
+		}
+		if c.MaxLines < 0 || c.MaxLines > 10_000_000 {
+			add(ptr+"/max_lines", "must be between 0 and 10000000")
+		}
 	}
 }
 
@@ -147,6 +190,10 @@ func (m Manifest) Slot(name string) (ContentSlot, bool) {
 	}
 	return ContentSlot{}, false
 }
+
+// CleanPackFile reports whether f is a relative, slash-separated path that
+// stays inside the pack (wordlist.CleanFilePath).
+func CleanPackFile(f string) bool { return wordlist.CleanFilePath(f) }
 
 // CheckTaskContent checks a task's content against the manifest: every
 // slot declared, its mode supported, its selectors understood, every pack
@@ -165,6 +212,27 @@ func CheckTaskContent(m Manifest, task Task, root string) ([]string, error) {
 		for sel := range c.Selectors {
 			if !slices.Contains(slot.Selectors, sel) {
 				return nil, Invalid("content slot %q does not take the %q selector", c.Slot, sel)
+			}
+		}
+		if len(c.Inline) > 0 && slot.Kind != "wordlist" {
+			return nil, Invalid("content slot %q: only a wordlist slot takes lists from the job", c.Slot)
+		}
+		for _, l := range c.Inline {
+			if l.Purpose != "" && !wordlist.Known(l.Purpose) {
+				return nil, Invalid("content slot %q: unknown wordlist purpose %q", c.Slot, l.Purpose)
+			}
+		}
+		if len(c.Files) > 0 && slot.Kind != "wordlist" {
+			return nil, Invalid("content slot %q: only a wordlist slot names files of a pack", c.Slot)
+		}
+		for d, files := range c.Files {
+			if !packDigestRE.MatchString(d) {
+				return nil, Invalid("content slot %q: %q is not a sha256 digest", c.Slot, d)
+			}
+			for _, f := range files {
+				if !CleanPackFile(f) {
+					return nil, Invalid("content slot %q: %q is not a clean file path inside the pack", c.Slot, f)
+				}
 			}
 		}
 		for _, p := range c.Packs {

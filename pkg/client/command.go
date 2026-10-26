@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/openctemio/ctis/outcome"
 	"github.com/openctemio/sdk-go/pkg/core"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
@@ -127,15 +128,69 @@ func (c *Client) FailCommand(ctx context.Context, cmdID string, errorMsg string)
 	return c.failCommand(ctx, cmdID, errorMsg, nil, c.maxRetries)
 }
 
-// failCommand fails a command. A policy refusal goes along structured
-// (protov2.FailRequest.Refusal) when the platform lists FeatureRefusal; the
-// error message carries the text form either way.
+// failCommand fails a command with a message and, when there is one, a
+// structured policy refusal.
 func (c *Client) failCommand(ctx context.Context, cmdID string, errorMsg string, refusal *core.Refusal, retries int) error {
-	req := protov2.FailRequest{ErrorMessage: errorMsg}
-	if refusal != nil && c.PlatformSupports(ctx, protov2.FeatureRefusal) {
-		req.Refusal = &protov2.Refusal{Layer: refusal.Layer, Rule: refusal.Rule, Detail: refusal.Detail}
+	return c.failCommandResult(ctx, cmdID, &core.CommandResult{Error: errorMsg, Refusal: refusal}, retries)
+}
+
+// failCommandResult fails a command from its result. The error code goes
+// along always (a platform that does not know it records COMMAND_FAILED). A
+// policy refusal goes structured (protov2.FailRequest.Refusal) when the
+// platform lists FeatureRefusal, and the failure class with the targets
+// settled before it (Failure, TargetOutcomes) when it lists
+// FeatureFailureClass; the error message carries the text form either way.
+func (c *Client) failCommandResult(ctx context.Context, cmdID string, result *core.CommandResult, retries int) error {
+	req := protov2.FailRequest{ErrorMessage: result.Error, ErrorCode: result.ErrorCode}
+	if result.Refusal != nil && c.PlatformSupports(ctx, protov2.FeatureRefusal) {
+		req.Refusal = &protov2.Refusal{Layer: result.Refusal.Layer, Rule: result.Refusal.Rule, Detail: result.Refusal.Detail}
+	}
+	if (result.Failure != nil || len(result.TargetOutcomes) > 0) && result.Refusal == nil && c.PlatformSupports(ctx, protov2.FeatureFailureClass) {
+		req.Failure = failureToWire(result.Failure)
+		if outs := outcomesToWire(result.TargetOutcomes); len(outs) > 0 {
+			req.TargetOutcomes = &outs
+		}
 	}
 	return c.commandV2(ctx, cmdID, protov2.FailAction, req, retries)
+}
+
+// failureToWire converts a failure to its wire form, bounded again on the way
+// out (an outbox item written by another version is not trusted either).
+func failureToWire(f *core.Failure) *protov2.Failure {
+	f = f.Bounded()
+	if f == nil {
+		return nil
+	}
+	w := &protov2.Failure{Class: string(f.Class), Scope: f.Scope, RetryAfterSeconds: f.RetryAfterSeconds,
+		Evidence: protov2.FailureEvidence{
+			Tool: f.Evidence.Tool, ToolDigest: f.Evidence.ToolDigest, ContentDigest: f.Evidence.ContentDigest,
+			Stage: f.Evidence.Stage, Reason: f.Evidence.Reason, ExitCode: f.Evidence.ExitCode, Signal: f.Evidence.Signal,
+			OOMKilled: f.Evidence.OOMKilled, Errno: f.Evidence.Errno,
+		}}
+	if p := f.Evidence.Probe; p != nil {
+		w.Evidence.Probe = &protov2.FailureProbe{Path: p.Path, DNS: p.DNS}
+	}
+	if e := f.Evidence.Egress; e != nil {
+		w.Evidence.Egress = &protov2.FailureEgress{ProxyDown: e.ProxyDown, ProxyAuth: e.ProxyAuth, PoolExhausted: e.PoolExhausted}
+	}
+	return w
+}
+
+// outcomesToWire converts the settled targets, at most MaxFailureTargets
+// (the platform reads the rest of the job's targets as unfinished).
+func outcomesToWire(in []outcome.Target) []protov2.TargetOutcome {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]protov2.TargetOutcome, 0, min(len(in), protov2.MaxFailureTargets))
+	for _, o := range in {
+		if len(out) == protov2.MaxFailureTargets {
+			break
+		}
+		out = append(out, protov2.TargetOutcome{Target: o.Target, State: string(o.State), Class: string(o.Class),
+			Cause: string(o.Cause), Reason: o.Reason, Vendor: o.Vendor})
+	}
+	return out
 }
 
 // ReleaseCommand hands a claimed command back to the platform, which
@@ -231,7 +286,7 @@ func (c *Client) reportCommandResult(ctx context.Context, cmdID string, result *
 		resultJSON, _ := json.Marshal(result)
 		return c.completeCommand(ctx, cmdID, resultJSON, retries)
 	}
-	return c.failCommand(ctx, cmdID, result.Error, result.Refusal, retries)
+	return c.failCommandResult(ctx, cmdID, result, retries)
 }
 
 // ReportCommandProgress reports progress of command execution.

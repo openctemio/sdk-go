@@ -488,6 +488,15 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		dir = r
 	}
 	p.workdir = dir
+	// A wordlist slot becomes one file in the task directory (the task's
+	// own copy of the content list: the caller's is not changed).
+	p.task.Content = slices.Clone(p.task.Content)
+	consumed, werr := composeWordlists(m, &p.task, dir, &p.notes)
+	if werr != nil {
+		_ = os.RemoveAll(dir)
+		return nil, werr, nil
+	}
+	p.contentPaths = withoutPaths(p.contentPaths, consumed)
 	p.asm = toolrt.NewAssembler(m, p.task, toolrt.NewChecker(m))
 	return p, nil, nil
 }

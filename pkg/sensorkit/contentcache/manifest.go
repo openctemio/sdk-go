@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
 
@@ -24,13 +25,13 @@ const ManifestVersion = 1
 // ErrUnavailable marks a pack the platform could not deliver (network,
 // timeout, HTTP error). The task fails fast with content_unavailable and is
 // requeued; verification failures are ErrVerify, not this.
-var ErrUnavailable = errors.New("content unavailable")
+var ErrUnavailable = core.NewClassedError("content unavailable", core.FailureContentUnavailable, "")
 
 // ErrUnsupported marks a manifest that requires a feature this SDK version
 // does not know (RequiredFeatures). The task fails with content_unsupported,
 // distinct from content_unavailable: requeueing to the same sensor cannot
 // help, only a sensor or CI client that understands the feature can run it.
-var ErrUnsupported = errors.New("content unsupported")
+var ErrUnsupported = core.NewClassedError("content unsupported", core.FailureContentUnavailable, core.ReasonContentUnsupported)
 
 // KnownFeatures is the set of RequiredFeatures this SDK version understands.
 // It is empty: version 1 has no optional behavior a reader must honor yet.
@@ -38,7 +39,7 @@ var ErrUnsupported = errors.New("content unsupported")
 var KnownFeatures = map[string]struct{}{}
 
 // ErrManifest marks a manifest that is malformed or of an unknown version.
-var ErrManifest = errors.New("content manifest refused")
+var ErrManifest = core.NewClassedError("content manifest refused", core.FailureContentUnavailable, core.ReasonVerificationRefused)
 
 // Manifest limits.
 const (

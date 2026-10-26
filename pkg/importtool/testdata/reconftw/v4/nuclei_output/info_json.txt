@@ -1,0 +1,1 @@
+{"template-id":"tech-detect","info":{"name":"Nginx detected","severity":"info"},"type":"http","host":"https://shop.example.net","matched-at":"https://shop.example.net/","matcher-status":true}

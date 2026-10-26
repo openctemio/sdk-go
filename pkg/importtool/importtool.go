@@ -15,6 +15,14 @@
 // with the importer's limits (no XML entities or external resources, depth,
 // size and record caps).
 //
+// A reconFTW results directory (format reconftw) is one input that is a
+// directory of the task: its files are joined by importer.ParseBundle into one
+// report (hosts, services, endpoints, nuclei results). It is partial coverage
+// by nature, people and credential files (osint/) are never opened, and a
+// link, a special file or a name outside the directory refuses the whole
+// bundle. Files the importer did not read are logged (skipped on purpose,
+// unmapped).
+//
 // A VEX document (CSAF, OpenVEX, a CycloneDX VEX) holds statements about
 // products, not records of the task; they are written to the artifact
 // vex-statements.json for the platform to apply, never emitted as findings.
@@ -50,7 +58,7 @@ const VEXArtifact = "vex-statements.json"
 type Config struct {
 	// Format of every input; auto detects it per input from its first
 	// bytes.
-	Format string `json:"format" default:"auto" enum:"auto,nessus,qualys,defectdojo,cyclonedx,spdx,osv,csaf,openvex" description:"Format of the inputs; auto detects it per input."`
+	Format string `json:"format" default:"auto" enum:"auto,nessus,qualys,defectdojo,cyclonedx,spdx,osv,csaf,openvex,reconftw" description:"Format of the inputs; auto detects it per input. reconftw reads the one input, a reconFTW results directory, as a bundle."`
 	// MinSeverity drops findings below it.
 	MinSeverity string `json:"min_severity" default:"info" enum:"info,low,medium,high,critical" description:"Findings below this severity are left out."`
 }
@@ -58,14 +66,15 @@ type Config struct {
 // Manifest describes the tool.
 var Manifest = tool.Manifest{
 	Name:        Name,
-	Version:     "1.0.0",
-	Description: "Converts exported scanner, SBOM, VEX and findings files to CTIS (Nessus, Qualys with KnowledgeBase, DefectDojo Generic JSON, CycloneDX, SPDX, osv-scanner, CSAF, OpenVEX).",
+	Version:     "1.1.0",
+	Description: "Converts exported scanner, SBOM, VEX and findings files to CTIS (Nessus, Qualys with KnowledgeBase, DefectDojo Generic JSON, CycloneDX, SPDX, osv-scanner, CSAF, OpenVEX) and a reconFTW results directory.",
 	Class:       tool.Parser,
 	Tier:        tool.T0,
 	Consumes:    []string{"file:application/xml", "file:application/json", "file:application/zip"},
 	Produces: []string{
 		"asset:host", "asset:ip_address", "asset:domain", "asset:repository", "asset:container",
-		"asset:unclassified", "finding:vulnerability", "finding:compliance", "dependency",
+		"asset:unclassified", "asset:subdomain", "asset:http_service", "asset:certificate", "asset:storage", "endpoint",
+		"finding:vulnerability", "finding:compliance", "dependency",
 	},
 	Permissions: tool.Permissions{Network: tool.NetNone, Filesystem: tool.FSWorkdir},
 	Resources: tool.Resources{
@@ -81,6 +90,9 @@ func New() tool.Tool { return tool.New(Manifest, run) }
 func run(ctx tool.Context, task tool.Task, cfg Config) error {
 	if len(task.Inputs) == 0 {
 		return tool.Invalid("file-import: the task has no input file")
+	}
+	if importer.Format(cfg.Format) == importer.FormatReconFTW {
+		return runBundle(ctx, task, cfg)
 	}
 	inputs := make([]resolved, 0, len(task.Inputs))
 	for _, in := range task.Inputs {

@@ -40,7 +40,7 @@ without a tier fails the job.
 | `pkg/blobsig` | Offline check of a cosign keyless signature bundle for a downloaded file: Fulcio chain, Rekor inclusion proof and an exact signer identity, against the embedded Sigstore public good trust root | Beta |
 | `pkg/webscope` | The web scope of a job: hosts, path prefixes, deny paths and methods a web tool may request; `Allows` checks a request as the server sees its path | Beta |
 | `pkg/testkit` | Run a tool in-process with the runtime's rules; golden CTIS | Stable |
-| `pkg/importtool` | The file importer as a parser-class tool: Nessus, Qualys with KnowledgeBase, DefectDojo Generic JSON, CycloneDX, SPDX, osv-scanner, CSAF and OpenVEX files to CTIS (the `ctis/importer` package), sandboxed with no network | Beta |
+| `pkg/importtool` | The file importer as a parser-class tool: Nessus, Qualys with KnowledgeBase, DefectDojo Generic JSON, CycloneDX, SPDX, osv-scanner, CSAF and OpenVEX files, and a reconFTW results directory, to CTIS (the `ctis/importer` package), sandboxed with no network | Beta |
 | `pkg/sensorkit/toolhost` | The runtime side of the tool contract: runs one task out of process and checks, assembles and stamps its output | Beta |
 | `pkg/sensorkit/identity` | A key-bound sensor's identity on disk (permission-checked) and the interactive pairing client (api RFC-052) | Beta |
 | `pkg/sensorkit/egress` | A task's forwarder (HTTP CONNECT, absolute-form HTTP, SOCKS5, DNS): every destination checked against the task's scope, pinned, rate-limited (adaptive per host) and recorded (api RFC-060) | Experimental |

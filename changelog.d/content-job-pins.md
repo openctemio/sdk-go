@@ -1,0 +1,11 @@
+### Added: jobs pin content by digest in the signed statement and the payload
+
+- `jobsig.Statement.Content` (`[]ContentRef{slot, digest}`) lists the packs the signer approved for the job. The verifier requires the payload's `content` members to match it exactly, in order (`ReasonContent`).
+- `ScanCommandPayload.Content` (`JobContent`: slot, kind, scope, pack, digest, size, files, max_lines, DSSE signature) and `Inputs` (`JobInput`: lists the platform generated for the job, gzip, at most 256 KiB compressed, at most 8 MiB expanded, with the sha256 of the expanded list). The executor mounts a pack only when the verified signed statement lists it: a job that names packs without a verified statement is refused, and so is one whose packs differ from the statement (`job_content`).
+- A pack is checked against the pinned keys, its digest and the archive rules before a task reads it, also when it is already held; a missing one is fetched at claim (bounded by two minutes) and a delivery failure fails the command with `content_unavailable` so the platform can requeue it. A shared sensor mounts platform packs only; tenant packs are refused there.
+- A tool with a `wordlist` content slot declares a `purpose` (`dns-labels`, `web-paths`, `web-files`, `api-routes`, `params`, `extensions`, `vhosts`) and an optional `max_lines`. The tool host composes the job's lists into one file in the task's own directory (`pkg/tool/wordlist`: normalise per purpose, drop repeats, first occurrence ranks first, cap) and the tool reads that one path (`{{content.<slot>}}`). Inline lists are written only there, never to the content cache, and go with the task directory; the packs' own read grants are dropped for a composed slot.
+- `core.ContentResolver`, `core.ContentScanner`, `ScanOptions.Content`, `DefaultCommandExecutor.SetContentResolver`, `tool.ContentSlot.Purpose/MaxLines`, `tool.TaskContent.Files/Inline/MaxLines`.
+
+### Behaviour change: a verifier that predates `content` refuses a statement that carries it
+
+- A signed statement with a `content` member is refused by an SDK that does not know the member (unknown statement fields are refused), so a job that pins content never runs on a sensor that cannot check the pins. Statements without `content` are unchanged.

@@ -133,6 +133,24 @@ then the executor and the tool. A refusal at any step fails the command
 with its layer and rule (`job_signature`, `targets.allow`, …) and nothing
 after it runs.
 
+**A failure that is not a refusal** is classified by the sensor and decided
+by the platform (`core.ClassifyFailure`, openctem research 302). The fail
+call carries `error_code` and, to a platform that lists the `failure_class`
+feature, `failure` (a class of the closed set: `infra.tool_crashed`,
+`infra.tool_unavailable`, `infra.resource.memory`, `infra.resource.disk`,
+`infra.content_unavailable`, `infra.egress.pool_exhausted`,
+`infra.sensor_network`, `target.*`, `config.*`, `unknown`, …, with the
+stage, exit code, signal, tool and content digests, control-probe states
+and proxy failure counts as evidence) and `target_outcomes`: the targets
+settled before the failure, each done, failed on the sensor's side, failed
+on the target's side, or unfinished (a failed command never marks a target
+done). Evidence holds closed values and numbers only, checked again where
+the request is built, so no tool output, path, address or credential can
+travel in it; the failure message is redacted and cut. The sensor never
+chooses where the job goes next. A package `core` cannot import (the
+content cache, the proxy pool, `tool.Error`) tags its errors with
+`core.FailureClassifier`.
+
 ### The local store and the janitor
 
 A daemon opens `pkg/localstore` beside its outbox (`SENSOR_STORE_DIR`; the
@@ -166,6 +184,41 @@ generation and whether it was reset), only to a platform that lists the
 of the sealed items, and an outbox that survives without it cannot be read.
 `doctor` reports the store directory's privacy, the key
 file's mode and where the key lives, and the volume's free space.
+
+### The content cache and jobs that pin content
+
+The sensor holds content packs (wordlists, templates, rules) in a
+digest-keyed cache, `content/` next to the local store: one directory per
+pack digest, so a pack that two organizations' jobs need on a shared sensor
+is downloaded and stored once. Only platform packs are ever cached on a
+shared sensor; an organization's own packs exist only on that organization's
+sensors; a list generated for one job is never cached (see below).
+
+- **Trust.** The pairing pins the content-signing keys (platform; and the
+  organization's own for its sensors) in `identity.json`. A pack is stored only
+  when its bytes hash to the digest, its DSSE statement verifies against a
+  pinned key and names that digest (and this organization, for a tenant pack),
+  and the archive passes the canonical rules. It is verified again on every
+  load (cached for six hours on an unchanged fingerprint); a pack that fails is
+  removed and fetched again. A key the platform merely sends is never trusted.
+- **One budget.** The janitor prunes the cache under the same quota as the
+  outbox, journal and workspaces (policy `pack_budget_bytes`, default 2 GiB;
+  `SENSOR_CONTENT_BUDGET_MB` can only lower it). A pack a running task holds is
+  never removed. At the high watermark the cold packs go first.
+- **Refresh.** On a schedule (15 minutes, jittered) and at once when a heartbeat
+  answer carries a new `content_version`; the heartbeat reports the digests held.
+- **Jobs pin content.** The signed statement lists `content: [{slot, digest}]`
+  and the payload carries the matching `content` members. The verifier requires
+  them to be equal; the executor mounts a pack only when the verified statement
+  lists it. A missing pack is fetched at claim (one download however many jobs
+  claim it at once); if it cannot be delivered the command fails with
+  `content_unavailable` and is requeued.
+- **Wordlists.** The tool host composes the lists a job names (named files of
+  its packs, and lists the platform generated for the job, carried inline in
+  the signed payload) into one normalised, de-duplicated, capped file in the
+  task's own directory (`pkg/tool/wordlist`). The tool reads that one path. An
+  inline list is held in memory, written only to the task directory and removed
+  with it; it never reaches the cache.
 
 ### Results delivery: protocol v2 and the durable outbox
 

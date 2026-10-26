@@ -135,6 +135,13 @@ const (
 	// (FailRequest.Refusal). The platform re-queues a refused routed job to
 	// another sensor and never offers it to the refuser again.
 	FeatureRefusal = "refusal"
+	// FeatureFailureClass: POST /commands/{id}/fail takes a structured
+	// failure (FailRequest.Failure: a closed class and bounded evidence)
+	// and the per-target outcomes settled before the failure
+	// (FailRequest.TargetOutcomes). The platform, not the sensor, decides
+	// whether the job moves to another sensor. Without the feature a sensor
+	// sends the error code and message only.
+	FeatureFailureClass = "failure_class"
 	// FeatureLogs: POST /commands/{id}/logs takes a command's log lines
 	// (CommandLogsRequest), kept with the task on the platform for a
 	// limited time. Without it a sensor keeps its logs local.
@@ -462,11 +469,100 @@ type CompleteRequest struct {
 // FailRequest is the body of POST /commands/{id}/fail.
 type FailRequest struct {
 	ErrorMessage string `json:"error_message"`
+	// ErrorCode names the failure in the platform's vocabulary
+	// (SCANNER_NOT_FOUND, TARGET_REFUSED, TARGET_UNREACHABLE, NO_TARGETS,
+	// POLICY_REFUSED, TOOL_EXIT, PARSE_ERROR, TIMEOUT). A platform that
+	// does not know a code records COMMAND_FAILED, so it is always safe to
+	// send.
+	ErrorCode string `json:"error_code,omitempty"`
 	// Refusal says the command was refused by a policy, never run (or
 	// stopped by the kill switch). Sent only to a platform that lists
 	// FeatureRefusal; ErrorMessage keeps the text form older platforms parse
 	// ("refused by local policy: <rule>: <detail>").
 	Refusal *Refusal `json:"refusal,omitempty"`
+	// Failure is the sensor's classification of a failure that is not a
+	// refusal. Sent only to a platform that lists FeatureFailureClass.
+	Failure *Failure `json:"failure,omitempty"`
+	// TargetOutcomes are the targets settled before the failure and how each
+	// ended (finished, failed on the sensor's side, failed on the target's
+	// side). Sent only to a platform that lists FeatureFailureClass.
+	//
+	// A pointer to the list, not the list: a slice member would make
+	// FailRequest non-comparable, which is a breaking change for a sensor
+	// that compares or map-keys it.
+	TargetOutcomes *[]TargetOutcome `json:"target_outcomes,omitempty"`
+}
+
+// Failure scopes.
+const (
+	FailureScopeCommand = "command"
+	FailureScopeTargets = "targets"
+)
+
+// MaxFailureTargets bounds FailRequest.TargetOutcomes.
+const MaxFailureTargets = 10000
+
+// Failure is a structured failure (api research/302 §6.1). Class is one of
+// the closed set of the research note ("infra.tool_crashed",
+// "target.unreachable", "unknown", ...); the platform decides what to do
+// with it. Everything in Evidence is a closed value or a number: no free
+// text, path, host name or credential ever travels in it.
+type Failure struct {
+	Class string `json:"class"`
+	// Scope is FailureScopeCommand or FailureScopeTargets.
+	Scope string `json:"scope,omitempty"`
+	// RetryAfterSeconds is an optional hint; the platform may ignore it.
+	RetryAfterSeconds int             `json:"retry_after_seconds,omitempty"`
+	Evidence          FailureEvidence `json:"evidence"`
+}
+
+// FailureEvidence is the bounded evidence of a Failure. Every member is
+// optional.
+type FailureEvidence struct {
+	Tool          string `json:"tool,omitempty"`
+	ToolDigest    string `json:"tool_digest,omitempty"`
+	ContentDigest string `json:"content_digest,omitempty"`
+	// Stage: prepare, fetch_content, start, handshake, run, parse, upload.
+	Stage string `json:"stage,omitempty"`
+	// Reason refines the class (tool_missing, tool_version, digest_mismatch,
+	// not_executable, verification_refused, ...).
+	Reason   string `json:"reason,omitempty"`
+	ExitCode *int   `json:"exit_code,omitempty"`
+	// Signal is the signal that ended the tool (SIGSEGV, SIGKILL, ...).
+	Signal    string `json:"signal,omitempty"`
+	OOMKilled bool   `json:"oom_killed,omitempty"`
+	// Probe is the sensor's control check (reach): "ok", "failed" or
+	// "skipped" for the path and for DNS.
+	Probe  *FailureProbe  `json:"probe,omitempty"`
+	Egress *FailureEgress `json:"egress,omitempty"`
+	// Errno names a system error (ENOSPC, EMFILE, ...).
+	Errno string `json:"errno,omitempty"`
+}
+
+// FailureProbe is the control check of a failed job.
+type FailureProbe struct {
+	Path string `json:"path"`
+	DNS  string `json:"dns"`
+}
+
+// FailureEgress counts the job's proxy-pool connection failures. It holds
+// counts only: never an endpoint address or a credential.
+type FailureEgress struct {
+	ProxyDown     int64 `json:"proxy_down"`
+	ProxyAuth     int64 `json:"proxy_auth"`
+	PoolExhausted bool  `json:"pool_exhausted"`
+}
+
+// TargetOutcome is how one target of a failed command ended (ctis outcome):
+// state done, failed, skipped or unfinished; class and cause (target,
+// sensor, platform) say whose side a failed target is on.
+type TargetOutcome struct {
+	Target string `json:"target"`
+	State  string `json:"state"`
+	Class  string `json:"class,omitempty"`
+	Cause  string `json:"cause,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Vendor string `json:"vendor,omitempty"`
 }
 
 // Refusal is a structured policy refusal (api research/25 §3.6, D8): the

@@ -49,11 +49,14 @@ type fakePlatform struct {
 	instance    bool
 	refuseToken bool
 	lastToken   string
+	lastScope   string
 	finalStatus string // what the poll answers after the first poll
 	// signedJobs is what the hello lists after pairing; nil: an older
 	// platform (no hello route here).
 	signedJobs *protov2.SignedJobs
-	helloAsked int
+	// contentSigning is what the granted identity lists (nil: none).
+	contentSigning *pairing.ContentSigning
+	helloAsked     int
 	// startReplies answer the next starts, one each, before a normal start.
 	startReplies []func(w http.ResponseWriter)
 }
@@ -101,6 +104,7 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.nonceP, _ = pairing.NewNonce()
 		f.lastCode = req.Code
 		f.lastToken = req.EnrollmentToken
+		f.lastScope = req.EnrollmentScope
 		f.starts++
 		if len(f.startReplies) > 0 {
 			reply := f.startReplies[0]
@@ -160,6 +164,7 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			st.Identity = &pairing.Identity{SensorID: "11111111-2222-3333-4444-555555555555", TenantID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 				TenantName: "Acme", Name: "dmz-01", KeyID: kid}
+			st.Identity.ContentSigning = f.contentSigning
 			if f.instance {
 				st.Identity.TenantID, st.Identity.TenantName, st.Identity.Scope = "", "", pairing.ScopeInstance
 			}

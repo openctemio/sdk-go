@@ -632,9 +632,11 @@ arguments or environment:
   to port 443 only: a port scan or a non-HTTPS service through such a
   proxy needs it to allow CONNECT to the scanned ports; SOCKS5 has no such
   limit.
-- Failover only when a proxy is down (TCP/TLS failed or timed out, or a
-  reply that is not the protocol), once per endpoint; a proxy that refuses
-  the credentials is not used again in the job; an answer about the
+- Failover only when the proxy itself fails: it is down (TCP/TLS failed or
+  timed out, or a reply that is not the protocol), or it refuses our
+  credentials. Either way the same connection goes to the next endpoint,
+  once per endpoint; an endpoint that refuses the credentials is not used
+  again in the job and is reported as `proxy_auth`. An answer about the
   target (CONNECT 403/502/503/504, SOCKS refusal or unreachable) ends that
   connection. A CONNECT 401 is treated like 407 (only the proxy answers
   before the tunnel is up). A CONNECT 500 is a live proxy that could not

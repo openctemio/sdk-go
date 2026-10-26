@@ -1,0 +1,3 @@
+https://www.example.com
+https://api.example.com:8443
+https://dev.example.com

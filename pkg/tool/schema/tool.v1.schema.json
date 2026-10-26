@@ -131,7 +131,9 @@
           "default": {"enum": ["bundled", "none"]},
           "modes": {"type": "array", "uniqueItems": true, "items": {"enum": ["default", "custom", "merge"]}},
           "selectors": {"type": "array", "uniqueItems": true, "items": {"enum": ["tags", "ids", "severities", "paths"]}},
-          "max_bytes": {"type": "integer", "minimum": 0, "maximum": 17179869184}
+          "max_bytes": {"type": "integer", "minimum": 0, "maximum": 17179869184},
+          "purpose": {"enum": ["dns-labels", "web-paths", "web-files", "api-routes", "params", "extensions", "vhosts"], "description": "What a wordlist slot is for (kind wordlist only): the platform picks the list, the runtime composes one file."},
+          "max_lines": {"type": "integer", "minimum": 0, "maximum": 10000000, "description": "Most entries the composed wordlist may hold (kind wordlist only)."}
         }
       }
     },
