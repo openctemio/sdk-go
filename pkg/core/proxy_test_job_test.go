@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress/upstream"
 )
 
@@ -77,6 +78,11 @@ func TestProxyTestExecutorCompletesWithPerEndpointResults(t *testing.T) {
 // DialContextVia checks the policy first, then hands the dial function the
 // checked ip:port, never the name.
 func TestDialContextViaChecksThenDialsThroughTheGivenDialer(t *testing.T) {
+	// The loopback refusal is the built-in deny list; a harness that allows
+	// loopback globally must not change what this test asserts.
+	prev := httpsec.AllowLoopback
+	httpsec.AllowLoopback = false
+	t.Cleanup(func() { httpsec.AllowLoopback = prev })
 	var lp *LocalPolicy
 	var got []string
 	dial := lp.DialContextVia(func(_ context.Context, network, addr string) (net.Conn, error) {

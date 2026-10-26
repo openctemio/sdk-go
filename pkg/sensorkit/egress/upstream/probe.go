@@ -62,7 +62,7 @@ type TestSpec struct {
 
 	// allowDenied lets the echo be a loopback address (tests): otherwise
 	// an echo address a proxy must never be (Denied: loopback, link-local,
-	// metadata, multicast, reserved) is not tunnelled to, so a job cannot
+	// metadata, multicast, reserved) is not tunneled to, so a job cannot
 	// aim a tenant's proxy at the proxy's own host or a metadata service.
 	allowDenied bool
 }
@@ -140,7 +140,7 @@ func (p *Pool) indexOf(endpointID string) int {
 }
 
 // Test tests every endpoint of the pool, one after the other, and returns
-// one result per endpoint in the pool's order. A cancelled ctx ends the
+// one result per endpoint in the pool's order. A canceled ctx ends the
 // test; endpoints not reached are reported as failed with that error.
 func (p *Pool) Test(ctx context.Context, spec TestSpec) []EndpointResult {
 	echo, err := parseEcho(spec)
@@ -156,7 +156,7 @@ func (p *Pool) Test(ctx context.Context, spec TestSpec) []EndpointResult {
 		case err != nil:
 			out = append(out, EndpointResult{EndpointID: id, Class: ClassEchoFailed, Error: err.Error()})
 		case ctx.Err() != nil:
-			out = append(out, EndpointResult{EndpointID: id, Class: egress.ClassProxyDown, Error: "test cancelled"})
+			out = append(out, EndpointResult{EndpointID: id, Class: egress.ClassProxyDown, Error: "test canceled"})
 		default:
 			out = append(out, p.testEndpoint(ctx, id, echo))
 		}
