@@ -1119,7 +1119,12 @@ func (k *Kit) Run(ctx context.Context) error {
 		}
 		doorbell = core.NewDoorbell(&core.DoorbellConfig{OnRotateKey: renewNow, Verbose: k.s.verbose})
 		s.SetDoorbell(doorbell)
+		// A heartbeat answer with a new content version refreshes the
+		// content cache now, not at the next schedule.
+		doorbell.SetContentHandler(k.wakeContent)
 	}
+	stopContentSync := k.startContentSync(ctx)
+	defer stopContentSync()
 	k.startTransport(ctx, doorbell)
 
 	if cs, ok := k.opts.Content.(ContentStarter); ok {

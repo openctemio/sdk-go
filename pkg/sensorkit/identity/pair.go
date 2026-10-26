@@ -335,6 +335,7 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 	if id.JobSigningKeys, id.JobSigningRoot, err = pc.jobSigning(ctx, o); err != nil {
 		return nil, err
 	}
+	id.ContentPlatformKeys, id.ContentTenantKeys = contentKeys(o, granted)
 	if err := o.Store.Save(id); err != nil {
 		return nil, err
 	}
@@ -358,6 +359,9 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 		}
 		_, _ = fmt.Fprintf(o.Out, "Job signer pinned: %s; this sensor runs only jobs the platform's signer signed.\n", strings.Join(ids, ", "))
 	}
+	if n := len(id.ContentPlatformKeys) + len(id.ContentTenantKeys); n > 0 {
+		_, _ = fmt.Fprintf(o.Out, "Content keys pinned: %d platform, %d organization; content packs are accepted only when signed by them.\n", len(id.ContentPlatformKeys), len(id.ContentTenantKeys))
+	}
 	if id.JobSigningRoot != "" {
 		how := "named by the platform's key set"
 		if o.JobSigningRoot != "" {
@@ -369,6 +373,33 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 		_, _ = fmt.Fprintf(o.Out, "WARNING: the platform served no job signer: this sensor requires signed jobs and will not start until SENSOR_JOB_SIGNING_ROOT (shown in the console) is set or the platform runs its job signer and the sensor is paired again.\n")
 	}
 	return id, nil
+}
+
+// contentKeys are the content-signing keys the pairing granted, each one's
+// id recomputed; a key that is not valid is left out with a warning. A shared
+// sensor takes no tenant key.
+func contentKeys(o PairOptions, granted *pairing.Identity) (platform, tenant []jobsig.PublicKey) {
+	cs := granted.ContentSigning
+	if cs == nil {
+		return nil, nil
+	}
+	conv := func(in []pairing.ContentKey, what string) []jobsig.PublicKey {
+		var out []jobsig.PublicKey
+		for _, k := range in {
+			pk := jobsig.PublicKey{KeyID: k.KeyID, Algorithm: k.Algorithm, PublicKey: k.PublicKey}
+			if _, err := pk.Decode(); err != nil {
+				_, _ = fmt.Fprintf(o.Out, "WARNING: the platform granted a %s content-signing key that is not valid; not pinned: %v\n", what, err)
+				continue
+			}
+			out = append(out, pk)
+		}
+		return out
+	}
+	platform = conv(cs.Platform, "platform")
+	if granted.Scope != pairing.ScopeInstance {
+		tenant = conv(cs.Tenant, "organization")
+	}
+	return platform, tenant
 }
 
 // ErrJobSigningRootMismatch: the key set the platform serves is not signed
