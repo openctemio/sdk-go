@@ -1,3 +1,0 @@
-### Added: `file-import` reads a reconFTW results directory
-
-- `file-import` accepts `format: reconftw`: the one input is a results directory of the task (the runtime has already extracted the archive), read as a bundle by the ctis importer. It emits the subdomains, addresses, ports, live web services, endpoints and nuclei findings as partial-coverage records. Files under `osint/` are never opened and are logged as skipped on purpose; unknown files are logged. A link, a special file or a directory that is not a recon layout refuses the task. The manifest (version 1.1.0) now produces `asset:subdomain`, `asset:http_service`, `asset:certificate`, `asset:storage` and `endpoint`.
