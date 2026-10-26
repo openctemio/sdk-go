@@ -467,3 +467,64 @@ func (u DiscoveredURL) Sanitize() (DiscoveredURL, bool) {
 	u.Forms = SanitizeForms(u.Forms)
 	return u, true
 }
+
+// SplitSetCookie splits the Set-Cookie value some tools report as one string
+// (header values joined with ", ") into one line per cookie. A comma inside
+// an Expires date does not split: a new cookie starts only where ", " is
+// followed by a cookie name and "=". The result is not bounded; pass each
+// line to CookieFlagsFrom.
+func SplitSetCookie(joined string) []string {
+	if len(joined) > 8*MaxHeaderValueBytes {
+		return nil
+	}
+	var out []string
+	start := 0
+	for i := 0; i+1 < len(joined); i++ {
+		if joined[i] != ',' {
+			continue
+		}
+		j := i + 1
+		for j < len(joined) && joined[j] == ' ' {
+			j++
+		}
+		k := j
+		for k < len(joined) && isTokenByte(joined[k]) {
+			k++
+		}
+		if k > j && k < len(joined) && joined[k] == '=' {
+			out = append(out, strings.TrimSpace(joined[start:i]))
+			start = j
+		}
+	}
+	if s := strings.TrimSpace(joined[start:]); s != "" {
+		out = append(out, s)
+	}
+	return out
+}
+
+func isTokenByte(c byte) bool {
+	return c > 0x20 && c < 0x7f && strings.IndexByte("()<>@,;:\\\"/[]?={}", c) < 0
+}
+
+// SplitTechnology splits a detected technology written "Name:version" (the
+// form httpx uses) into its name and version. Without a version-like suffix
+// (it starts with a digit and has only letters, digits and . _ + -, at most
+// 64 bytes) the whole string is the name.
+func SplitTechnology(s string) (name, version string) {
+	s = strings.TrimSpace(s)
+	i := strings.LastIndexByte(s, ':')
+	if i <= 0 || i == len(s)-1 {
+		return s, ""
+	}
+	v := s[i+1:]
+	if len(v) > 64 || v[0] < '0' || v[0] > '9' {
+		return s, ""
+	}
+	for j := 0; j < len(v); j++ {
+		c := v[j]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '.' || c == '_' || c == '+' || c == '-') {
+			return s, ""
+		}
+	}
+	return strings.TrimSpace(s[:i]), v
+}

@@ -303,3 +303,39 @@ func TestNewWebFormPasswordFlag(t *testing.T) {
 		t.Errorf("%+v", f)
 	}
 }
+
+func TestSplitSetCookie(t *testing.T) {
+	got := SplitSetCookie("a=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Secure, b=2; HttpOnly,c=3")
+	want := []string{"a=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Secure", "b=2; HttpOnly", "c=3"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("%q", got)
+	}
+	var names []string
+	for _, l := range got {
+		c, ok := CookieFlagsFrom(l)
+		if !ok {
+			t.Fatalf("%q", l)
+		}
+		names = append(names, c.Name)
+	}
+	if strings.Join(names, ",") != "a,b,c" {
+		t.Errorf("%v", names)
+	}
+	if len(SplitSetCookie("")) != 0 || SplitSetCookie(strings.Repeat("a=1, ", 1<<20)) != nil {
+		t.Error("empty or oversize")
+	}
+}
+
+func TestSplitTechnology(t *testing.T) {
+	for in, want := range map[string][2]string{
+		"Nginx:1.25.3": {"Nginx", "1.25.3"}, "PHP:8.2": {"PHP", "8.2"}, "HTTP/3": {"HTTP/3", ""},
+		"jQuery:3.6.0-rc.1": {"jQuery", "3.6.0-rc.1"}, "Foo:bar": {"Foo:bar", ""}, "Foo:": {"Foo:", ""},
+		":1.0": {":1.0", ""}, "A:1:2": {"A:1", "2"}, "X:1\r\nY": {"X:1\r\nY", ""}, " Apache:2.4.58 ": {"Apache", "2.4.58"},
+		"X:" + strings.Repeat("1", 65): {"X:" + strings.Repeat("1", 65), ""},
+	} {
+		n, v := SplitTechnology(in)
+		if n != want[0] || v != want[1] {
+			t.Errorf("%q: %q %q, want %q", in, n, v, want)
+		}
+	}
+}
