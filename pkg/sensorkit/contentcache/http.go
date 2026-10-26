@@ -181,3 +181,11 @@ func (c *Cache) Prefetch(ctx context.Context, f *HTTPFetcher, every time.Duratio
 		next = every*4/5 + time.Duration(rand.Int64N(int64(every)*2/5+1)) //nolint:gosec // jitter, not a secret
 	}
 }
+
+// Version is the desired-state document's version (its ETag) as last
+// fetched, "" before the first fetch.
+func (f *HTTPFetcher) Version() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.etag
+}

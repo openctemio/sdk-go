@@ -48,6 +48,8 @@ type localStore struct {
 	policy   localstore.Policy
 	mu       sync.Mutex
 	recovery int // jobs reported at start
+	// content is the content pack cache (content.go).
+	content contentState
 }
 
 // resolveStorePaths decides the store and workspace directories: the
@@ -188,7 +190,15 @@ func (k *Kit) startJanitor(ctx context.Context) (stop func()) {
 	if ls == nil || ls.store == nil {
 		return func() {}
 	}
-	cfg := localstore.JanitorConfig{Store: ls.store, Policy: ls.policy}
+	ls.mu.Lock()
+	pol := effectivePackPolicy(ls.policy)
+	ls.mu.Unlock()
+	cfg := localstore.JanitorConfig{Store: ls.store, Policy: pol}
+	// One disk budget: the cache is pruned by the janitor under the same
+	// quota as the outbox, journal and workspaces.
+	if cache := k.contentCache(); cache != nil {
+		cfg.Packs = cache
+	}
 	if k.client != nil {
 		if ob := k.client.Outbox(); ob != nil {
 			cfg.Outbox = ob
@@ -234,8 +244,12 @@ func (k *Kit) SetStorePolicy(p localstore.Policy) {
 	k.ls.policy = p
 	j := k.ls.janitor
 	k.ls.mu.Unlock()
+	eff := effectivePackPolicy(p)
 	if j != nil {
-		j.SetPolicy(p)
+		j.SetPolicy(eff)
+	}
+	if c := k.contentCache(); c != nil {
+		c.SetBudget(eff.PackBudgetBytes)
 	}
 }
 
@@ -281,6 +295,7 @@ func (k *Kit) localStoreReport() *core.LocalStoreReport {
 			r.LastSweepRemoved += n
 		}
 	}
+	r.Content = k.contentReport()
 	if ok, why := k.acceptsWork(); !ok {
 		r.StopClaiming, r.Reason = true, firstNonEmpty(r.Reason, why)
 	}

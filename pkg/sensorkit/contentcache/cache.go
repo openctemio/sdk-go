@@ -100,8 +100,11 @@ type Options struct {
 	TenantID string
 	// TenantKeys and PlatformKeys are the pinned content-signing keys.
 	TenantKeys, PlatformKeys []ed25519.PublicKey
-	// Budget is the bytes the cache may hold (0: 8 GiB). Least recently
-	// used packs outside the desired set and not in use go first.
+	// Budget is the bytes the cache may hold (0: localstore.DefaultPackBudget,
+	// the one disk budget the sensor's janitor also applies: the sensor
+	// passes its policy's pack budget here, so the cache and the janitor
+	// never disagree). Least recently used packs outside the desired set
+	// and not in use go first.
 	Budget int64
 	// Limits bound one archive (zero: DefaultLimits).
 	Limits Limits
@@ -136,14 +139,23 @@ type Cache struct {
 	verified             map[string]verified
 	// desired is the digest set of the last Sync (nil before the first).
 	desired map[string]bool
+	// flights are the installs in progress by digest: concurrent callers
+	// for one digest share a single download.
+	flights map[string]*flight
 	now     func() time.Time
 	stats   statsBox
+}
+
+// flight is one install in progress.
+type flight struct {
+	done chan struct{}
+	err  error
 }
 
 // Open opens (creating) a cache rooted at root, private to the sensor.
 func Open(root string, opts Options) (*Cache, error) {
 	if opts.Budget <= 0 {
-		opts.Budget = 8 << 30
+		opts.Budget = localstore.DefaultPackBudget
 	}
 	if opts.Limits == (Limits{}) {
 		opts.Limits = DefaultLimits
@@ -160,7 +172,7 @@ func Open(root string, opts Options) (*Cache, error) {
 		}
 	}
 	c := &Cache{root: root, opts: opts, inUse: map[string]int{}, used: map[string]time.Time{}, banned: map[string]bool{},
-		verified: map[string]verified{}, now: time.Now}
+		verified: map[string]verified{}, flights: map[string]*flight{}, now: time.Now}
 	c.loadRevocations()
 	// Leftover staging from an interrupted install goes.
 	entries, _ := os.ReadDir(filepath.Join(root, "packs"))
@@ -273,11 +285,60 @@ func (c *Cache) Acquire(digest string) (string, func(), error) {
 	}, nil
 }
 
+// SetBudget sets the bytes the cache may hold (the sensor's pack budget; a
+// value <= 0 keeps the current one). Sync trims to it and the janitor prunes
+// to its own copy of the same policy.
+func (c *Cache) SetBudget(n int64) {
+	if n <= 0 {
+		return
+	}
+	c.mu.Lock()
+	c.opts.Budget = n
+	c.mu.Unlock()
+}
+
 // Install downloads, verifies and stores one pack; a held pack is kept.
+// Concurrent calls for the same digest share one download and one stored
+// copy: the others wait for the first and return its result.
 func (c *Cache) Install(ctx context.Context, p Pack) (string, error) {
 	if !digestRE.MatchString(p.Digest) {
 		return "", fmt.Errorf("%w: invalid digest", ErrVerify)
 	}
+	for {
+		c.mu.Lock()
+		if f, ok := c.flights[p.Digest]; ok {
+			c.mu.Unlock()
+			select {
+			case <-f.done:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			// The first caller's own deadline is not ours: try again.
+			if f.err != nil && (errors.Is(f.err, context.Canceled) || errors.Is(f.err, context.DeadlineExceeded)) && ctx.Err() == nil {
+				continue
+			}
+			if f.err != nil {
+				return "", f.err
+			}
+			if d, ok := c.Path(p.Digest); ok {
+				return d, nil
+			}
+			continue // removed again at once: install it again
+		}
+		f := &flight{done: make(chan struct{})}
+		c.flights[p.Digest] = f
+		c.mu.Unlock()
+		dir, err := c.install(ctx, p)
+		c.mu.Lock()
+		delete(c.flights, p.Digest)
+		c.mu.Unlock()
+		f.err = err
+		close(f.done)
+		return dir, err
+	}
+}
+
+func (c *Cache) install(ctx context.Context, p Pack) (string, error) {
 	c.mu.Lock()
 	banned := c.banned[p.Digest]
 	c.mu.Unlock()
@@ -576,7 +637,7 @@ func (c *Cache) collect(keep map[string]bool) []string {
 	sort.Slice(all, func(i, j int) bool { return all[i].used.Before(all[j].used) })
 	var removed []string
 	for _, e := range all {
-		if total <= c.opts.Budget {
+		if total <= c.budget() {
 			break
 		}
 		if keep[e.digest] {
@@ -601,4 +662,10 @@ func dirSize(root string) int64 {
 		return nil
 	})
 	return n
+}
+
+func (c *Cache) budget() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.opts.Budget
 }

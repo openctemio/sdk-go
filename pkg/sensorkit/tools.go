@@ -61,6 +61,9 @@ func (k *Kit) toolHost() *toolhost.Host {
 			RuntimeVersion: k.opts.Version,
 			Policy:         kitPolicy{k},
 			Shared:         k.s.shared,
+			// The content cache: a task reads only the packs its signed job
+			// pins, wordlists as one composed file in its own directory.
+			ContentRoot: k.contentRoot(),
 		}
 	})
 	return k.host

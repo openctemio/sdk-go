@@ -89,6 +89,9 @@ type Command struct {
 	signedTemplates []string
 	// signedLimits are the scope limits of the verified statement.
 	signedLimits []scopelimit.Limit
+	// signedContent are the content packs of the verified statement: the
+	// only packs the job may mount (content_job.go).
+	signedContent []jobsig.ContentRef
 	// jobTenant is the organization of a verified shared (instance) job:
 	// its results are bound to it. Only JobGuard.Check sets it.
 	jobTenant string
@@ -195,6 +198,14 @@ type ScanCommandPayload struct {
 	// (egress_job.go): set by the platform for the claiming sensor, never
 	// with credentials. Absent: no proxy (direct, as before).
 	Egress *upstream.Config `json:"egress,omitempty"`
+	// Content are the content packs the job runs with, pinned by digest
+	// and named in the signed statement (content_job.go). A job that names
+	// packs runs only when its signed statement lists exactly these.
+	Content []JobContent `json:"content,omitempty"`
+	// Inputs are lists the platform generated for this job from the
+	// organization's own data. They are carried in the signed payload,
+	// written only to the task directory and erased with it.
+	Inputs []JobInput `json:"inputs,omitempty"`
 }
 
 // CapabilityScanner is a scanner that runs capability jobs: it takes the
@@ -1566,6 +1577,8 @@ type DefaultCommandExecutor struct {
 	// templates verifies custom template manifests; nil refuses every
 	// command that carries custom templates (SetTemplateVerifier).
 	templates atomic.Pointer[TemplateVerifier]
+	// content delivers the packs a job pins (SetContentResolver).
+	content atomic.Pointer[ContentResolver]
 	// sensorID is this sensor's own id, when known: a template manifest
 	// must name it (SetSensorID).
 	sensorID atomic.Pointer[string]
@@ -1852,6 +1865,12 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	if err != nil {
 		return nil, err
 	}
+	// The packs and inline lists the signed job pins, held for the job.
+	releaseContent, err := e.prepareJobContent(ctx, cmd, &payload, scanner, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseContent()
 	// A pooled job: every tool connection goes through the organization's
 	// proxy pool, or the job does not run (never direct).
 	if payload.Egress != nil {
@@ -1867,30 +1886,8 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	}
 
 	local := e.local.Load()
-	// Add config options if provided
-	if payload.Config != nil {
-		// Out-of-band callbacks only when the command says so, as a boolean:
-		// anything else ("true", 1) leaves them off; and only when the local
-		// policy allows them.
-		if allow, ok := payload.Config["allow_interactsh"].(bool); ok && allow {
-			if !local.AllowsInteractsh() {
-				return nil, refuse("allow_interactsh", "the job asks for out-of-band callbacks (interactsh); this sensor's policy does not allow them")
-			}
-			opts.AllowInteractsh = true
-		}
-		if err := applyScanLimits(opts, payload.Config); err != nil {
-			return nil, err
-		}
-		if exclude, ok := payload.Config["exclude"].([]interface{}); ok {
-			for _, ex := range exclude {
-				if s, ok := ex.(string); ok {
-					if err := validateScanArgValue(s); err != nil {
-						return nil, fmt.Errorf("invalid exclude pattern: %w", err)
-					}
-					opts.Exclude = append(opts.Exclude, s)
-				}
-			}
-		}
+	if err := applyJobConfig(opts, payload.Config, local); err != nil {
+		return nil, err
 	}
 
 	// The rest of the config reaches the scanner only as typed settings its
