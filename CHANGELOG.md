@@ -8,6 +8,229 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.38.0 — 2026-10-26
+
+### Security: Go 1.26.10
+
+- CI builds and checks with Go 1.26.10, which fixes GO-2026-6809 in the Go standard library (reported by govulncheck).
+
+### Security: a tool directory is owner-checked file by file
+
+- The sensor checked the adapter directory, the tool directory, `tool.yaml` and the program only; a helper module next to the program (for example `openctem_tool.py`), a mapping or a wordlist could be group/world-writable or owned by another user and be swapped by a local user.
+- Every file and directory of a tool's directory (to 4 levels and 1024 entries) must now be owned by root or the sensor's user, not group/world-writable and not a symbolic link. For a manifest placed directly in the adapter directory, the program and the output mapping it references are checked.
+- Operators: a tool directory with such a file is now refused and the `adapter_refused` check names the file; fix the permissions (`chmod go-w`, `chown`) and keep only what the tool needs in the directory.
+
+### Security: one template check for every command type
+
+- Delivered retest templates pass exactly the scan path's checks before anything is written: the local policy's `allow_custom_templates`, the signed job's template digests (else the per-tenant template manifest bound to this sensor and command) and `core.CheckCustomTemplate`. An item naming a template the command does not carry, a template of another tool's type, or a tool that did not opt in fails the command.
+- `core.DefaultCommandExecutor.VerifyCustomTemplates` and `core.CommandTemplates` expose that check; `core.WriteCustomTemplates` writes verified templates to a private temporary directory (0700, files 0600) and returns each file and the cleanup.
+
+### Upgrade notes: core.DiscoveredURL is no longer comparable
+
+- `DiscoveredURL` now holds slices (`Params`, `Forms`), so `==` and use as a map key no longer compile. Compare the `URL` and `Method` members instead. The sensor and every other caller in the organisation build unchanged.
+
+### Behaviour change: a verifier that predates `content` refuses a statement that carries it
+
+- A signed statement with a `content` member is refused by an SDK that does not know the member (unknown statement fields are refused), so a job that pins content never runs on a sensor that cannot check the pins. Statements without `content` are unchanged.
+
+### Behaviour change: the classes that say why are sent only to a platform that accepts them
+
+- The scan command payload has a new optional `outcome_revision` (the highest ctis `outcome.Revision` the platform accepts). Absent or 1: every outcome is sent as before, with the new classes mapped to the closest class a revision 1 platform knows (`unreachable` or `tool_error`, never `done`) and an unresolvable name still `skipped` as `refused`. A platform that sends 2 receives the new classes. Older platforms that ignore the field see no new class and no new field.
+- Re-pins `github.com/openctemio/ctis` to its main commit that adds the classes (outcome revision 2).
+
+### Removed: `pkg/edgeprotect` moved to ctis
+
+- The edge protection detector now lives in `github.com/openctemio/ctis/edgeprotect` (ctis v1.6.3), so a platform can use it without depending on the sensor SDK. Import that package in place of `pkg/edgeprotect`; the API is unchanged. `adapt.Event.Edge`, `adapt.HostRate.ReportResponse` and the egress signals use the ctis types.
+- Raises `github.com/openctemio/ctis` to v1.6.3.
+
+### Added: signed `openctem` CLI binaries on each release, and `openctem version`
+
+- Each release now attaches `openctem_<version>_<os>_<arch>.tar.gz` for linux and darwin on amd64 and arm64, a `SHA256SUMS` file and its keyless cosign bundle `SHA256SUMS.sigstore.json`, so authors of Python or shell tools no longer need the Go toolchain. Verification steps are in docs/tools/cli.md.
+- `openctem version` (also `openctem --version` and `openctem tool version`) prints `openctem <version>`.
+
+### Added: the sensor runs on its content cache (packs by digest, one disk budget, refresh on the heartbeat)
+
+- The kit opens the digest-keyed content cache (`contentcache`) on the local store, in `content/` next to the store directory, and hands it to the janitor. Packs are now counted in the one local-store quota and pruned by the janitor (revoked first, then unused, then least recently used over the budget); a pack a running task holds is never removed. There is one pack budget: the policy's `pack_budget_bytes` (default 2 GiB), also the cache's default (the cache's own 8 GiB default is gone). `SENSOR_CONTENT_BUDGET_MB` lowers it on the host; it can never raise it.
+- The pairing pins the content-signing keys. `pairing.Identity.ContentSigning` lists the platform key and, for a sensor of one organization, that organization's key; `identity.Identity` keeps them (`ContentPlatformKeys`, `ContentTenantKeys`). A shared sensor takes the platform key only. A key is never taken from a content route. A sensor paired before this has no content keys and no cache: it runs no job that names packs until it is paired again.
+- The cache refreshes on a schedule and at once when a heartbeat answer carries a new `content_version` (`HeartbeatHints.ContentVersion`, `Doorbell.SetContentHandler`).
+- The heartbeat's local-store report carries `content` (`core.ContentReport`): the digests held (at most 200, with the count and a SHA-256 of the whole set), the bytes, the hit, miss, download and saved-byte counters, verification failures and the desired-set version last synced. No tenant names, paths or file names.
+- `Cache.Install` is single-flight per digest: concurrent claims of one missing pack share one download and one stored copy.
+- The tool host's `ContentRoot` is the cache root: a task's content packs must lie beneath it.
+
+### Added: jobs pin content by digest in the signed statement and the payload
+
+- `jobsig.Statement.Content` (`[]ContentRef{slot, digest}`) lists the packs the signer approved for the job. The verifier requires the payload's `content` members to match it exactly, in order (`ReasonContent`).
+- `ScanCommandPayload.Content` (`JobContent`: slot, kind, scope, pack, digest, size, files, max_lines, DSSE signature) and `Inputs` (`JobInput`: lists the platform generated for the job, gzip, at most 256 KiB compressed, at most 8 MiB expanded, with the sha256 of the expanded list). The executor mounts a pack only when the verified signed statement lists it: a job that names packs without a verified statement is refused, and so is one whose packs differ from the statement (`job_content`).
+- A pack is checked against the pinned keys, its digest and the archive rules before a task reads it, also when it is already held; a missing one is fetched at claim (bounded by two minutes) and a delivery failure fails the command with `content_unavailable` so the platform can requeue it. A shared sensor mounts platform packs only; tenant packs are refused there.
+- A tool with a `wordlist` content slot declares a `purpose` (`dns-labels`, `web-paths`, `web-files`, `api-routes`, `params`, `extensions`, `vhosts`) and an optional `max_lines`. The tool host composes the job's lists into one file in the task's own directory (`pkg/tool/wordlist`: normalise per purpose, drop repeats, first occurrence ranks first, cap) and the tool reads that one path (`{{content.<slot>}}`). Inline lists are written only there, never to the content cache, and go with the task directory; the packs' own read grants are dropped for a composed slot.
+- `core.ContentResolver`, `core.ContentScanner`, `ScanOptions.Content`, `DefaultCommandExecutor.SetContentResolver`, `tool.ContentSlot.Purpose/MaxLines`, `tool.TaskContent.Files/Inline/MaxLines`.
+
+### Added: content manifest and acquire-by-digest before a task
+
+- `contentcache.ContentManifest` (versioned JSON, version 1): per tool slot, the ordered rule-source snapshots (source slug, digest, scope, size, DSSE signature), disabled rule ids, quarantined rule ids, and revoked digests. `ParseManifest` validates it and refuses a newer version; unknown fields are ignored.
+- `Cache.Ensure` fetches the manifest's missing packs by digest, verifies the pinned-key DSSE signature, the digest and the canonical archive, and installs them keyed by digest. A held digest is never fetched again, revoked digests are refused before any network use, and a pack that cannot be delivered fails with `ErrUnavailable`. `Cache.Prepare` also sets the task's content and paths; `Cache.Revoke` bans digests.
+- `HTTPFetcher.Manifest` fetches a manifest with ETag and 304 support. The same fetcher serves the sensor routes and the CI routes (different base URL and credentials). Library only: the sensor and CI adopt it separately.
+
+### Added: content manifest `required_features`
+
+- `ContentManifest.RequiredFeatures` (`required_features`, optional, `version` stays 1): behavior a reader must understand to run the task. `ParseManifest`, `Validate` and `Cache.Ensure` refuse a manifest that lists a feature missing from `contentcache.KnownFeatures` (empty in this release) with the new `ErrUnsupported`; the task fails with reason `content_unsupported`, not `content_unavailable`, because requeueing to the same sensor cannot help. Unknown fields are still ignored, so later optional fields never break an older reader.
+
+### Added: scan and retest jobs run through the organization's proxy pool they carry
+
+- A scan or retest command may carry `egress` (`upstream.Config`: pool id, revision, strategy, `applies_to`, endpoints with weights; never credentials). The executor checks the sensor's veto, validates the pool, fetches the credentials once per job only when an endpoint has some (`POST /api/v2/sensor/commands/{id}/egress-credentials`, under the lease, v2 HTTPS only), and hands the pool to the scanner (`ScanOptions.Egress`, `tool.Task.Egress`, and the job context: `core.EgressDialerFrom`). The tool host makes it the task forwarder's `Dial` hook in the sensor's process; a tool never sees the pool or its credentials.
+- A pooled job never runs direct: it is refused (`egress_unavailable`) for a scanner that does not route its tools through the tool host (`core.EgressScanner`), and the tool host refuses a pooled task on a sandbox that does not confine the network (a tool with network `none` still runs). An empty pool is refused with `egress_unavailable`.
+- New settings `SENSOR_SCAN_EGRESS` (`platform`, the default, or `direct-only`) and `SENSOR_SCAN_EGRESS_ALLOW` (allowed `host:port` or `host` endpoints): a job the sensor's settings do not accept is refused with `egress_refused_by_host`. A shared sensor refuses every pooled job.
+- At the end of a pooled job, completed or failed, the poller sends the pool's per-endpoint signals (`POST /api/v2/sensor/commands/{id}/egress-report`, v2 HTTPS only) before the result, best-effort.
+- `core.CapabilityEgressUpstream` (`egress.upstream@1`) and `Kit.AcceptsEgressPools`: a sensor reports the capability when its tool tasks run confined and its settings accept pools; the platform sends pooled jobs only to such sensors. Platforms that send no `egress` see no change.
+
+### Added: the task forwarder can send connections through an organization proxy pool
+
+- New package `pkg/sensorkit/egress/upstream` (Experimental): `upstream.New(cfg, opts)` returns a `*Pool` whose `Dial` is the task forwarder's `Dial` hook. The forwarder still checks the destination against the job's scope, pins its address and paces the target before anything is dialed; the pool only chooses the path.
+- Tunnels: HTTP CONNECT (Basic `Proxy-Authorization` only when the endpoint has credentials), HTTP CONNECT over TLS to an `https` proxy (certificate verified against the system roots, TLS 1.2 or later, never skipped) and SOCKS5 with optional username/password (`socks5h` is treated as `socks5`). The tunnel is always opened to the IP address and port the scope check allowed, never to a name.
+- Selection: `sticky` (default) ranks endpoints by a weighted rendezvous hash of (job, target host), so a host keeps one endpoint for the job and removing an endpoint moves only its hosts; `priority` keeps the given order.
+- Failover only when a proxy is down (TCP/TLS failed, timed out, or the proxy answered garbage), at most once per endpoint; a 407 or SOCKS authentication failure makes that endpoint unusable for the rest of the job; a CONNECT 403/502/503/504 or a SOCKS refusal is about the target and ends the connection. A connection never falls back to a direct dial while a pool applies to it. A pool that applies to public targets only dials private, ULA, CGNAT and loopback targets directly.
+- A CONNECT reply that never comes is about the target once the endpoint has carried a tunnel in the job. Before that, it counts towards the endpoint's breaker, and the third one is `proxy_down` (the connection fails over and the breaker opens): a proxy that accepts connections and never answers is taken out like one that refuses them. A dial the caller gave up on (its context ended or reached its deadline) is never counted.
+- Each endpoint has a breaker local to the job (3 consecutive proxy failures open it for 30 s, doubling to 10 min, ±20 % jitter, one half-open probe) and counters (`Pool.Report`) for the platform's health score.
+- Endpoint addresses are checked when the pool is built and again at every dial for each address a host name resolves to: loopback, link-local, cloud metadata, multicast, unspecified, broadcast, 0.0.0.0/8 and 240.0.0.0/4 are refused; private addresses are allowed. `upstream.ParseAllow` reads a sensor's allow list of endpoints.
+- `egress.Record` gains `endpoint` (the endpoint id that carried the connection); `egress.TargetHost(ctx)` gives a Dial hook the host the tool asked for; `egress.UpstreamError` classifies upstream failures (`proxy_down`, `proxy_auth`, `target_unreachable`, `target_refused`). A proxy failure is not counted against the target's rate or reachability.
+
+### Added: a failed command reports a failure class, bounded evidence and per-target results
+
+- `POST /commands/{id}/fail` now carries `error_code` always (`TOOL_EXIT` for a crash, `TIMEOUT` for the job budget, `PARSE_ERROR` for a parse failure, `TARGET_UNREACHABLE`; the other classes send none, so the platform keeps classifying the message), and, to a platform that lists the new `failure_class` feature, `failure` (`class`, `scope`, `retry_after_seconds`, `evidence`) and `target_outcomes` (the targets settled before the failure: done, failed on the sensor's side, failed on the target's side, or unfinished). The sensor classifies and shows evidence; the platform decides where the job goes next.
+- Classes (`core.FailureClass`): `infra.tool_crashed`, `infra.tool_unavailable` (reasons `tool_missing`, `not_executable`, `tool_version`), `infra.resource.memory`, `infra.resource.disk`, `infra.resource.output_limit`, `infra.budget_exceeded`, `infra.sensor_network`, `infra.dns_resolver`, `infra.egress.proxy_auth`, `infra.egress.proxy_down`, `infra.egress.pool_exhausted`, `infra.content_unavailable` (reasons `verification_refused`, `content_revoked`, `content_unsupported`), `infra.job_signature`, `infra.transient`, `target.*`, `config.*` and `unknown`. A policy refusal keeps its own structured form and gets no class.
+- Evidence holds closed values and numbers only (tool name, digests, stage, exit code, signal, errno, control-probe states, proxy failure counts); a value outside its set is dropped before it leaves the sensor, and no proxy address or credential can enter it. The failure message is redacted (URL credentials, authorization headers, bearer tokens, secret-named values), stripped of control characters and cut at 4096 bytes.
+- `tool.Error`, the content cache's errors and `upstream.ErrNoEndpoint` name their own class through `core.FailureClassifier`. A scan that fails lists the targets it settled (coverage gaps, unreached targets with the control check deciding whose side) and marks every other target unfinished, never done.
+
+### Added: hermetic self-test fixtures served by the conformance kit
+
+- A fixture task file may carry a `serve` member (default response, per-path overrides, optional self-signed TLS) and `{{fixture.url}}`, `{{fixture.host}}`, `{{fixture.port}}`, `{{fixture.host_port}}` placeholders in its target values. `openctem tool test` serves it on 127.0.0.1 for the run and normalizes the port in the expected CTIS. The member is read only by the kit and never reaches a sensor or `tool.yaml`.
+- `openctem tool init` writes such a fixture for tools that take URLs, services or hosts, so a fresh scaffold's self-test no longer sends traffic to an internet host, and writes a `.gitignore`. The kit runs python tools with `PYTHONDONTWRITEBYTECODE=1`.
+
+### Added: `file-import` reads a reconFTW results directory
+
+- `file-import` accepts `format: reconftw`: the one input is a results directory of the task (the runtime has already extracted the archive), read as a bundle by the ctis importer. It emits the subdomains, addresses, ports, live web services, endpoints and nuclei findings as partial-coverage records. Files under `osint/` are never opened and are logged as skipped on purpose; unknown files are logged. A link, a special file or a directory that is not a recon layout refuses the task. The manifest (version 1.1.0) now produces `asset:subdomain`, `asset:http_service`, `asset:certificate`, `asset:storage` and `endpoint`.
+
+### Added: `sensorkit.InspectAdapterDirs`
+
+- `InspectAdapterDirs(dirs, builtin)` reports the tools the sensor would load from `SENSOR_ADAPTER_DIRS` (name, version, manifest path, digest, capabilities, class, tier, network) and the manifests it refuses with the reason, without a platform. The kit loads from the same function, so the two cannot disagree.
+
+### Added: organization enrollment tokens (SENSOR_ENROLLMENT_TOKEN)
+
+- A sensor with no identity and `SENSOR_ENROLLMENT_TOKEN` (or `SENSOR_ENROLLMENT_TOKEN_FILE`) set enrolls in the organization that created the token (platform: Sensors > Enrollment tokens), through the usual key-bound pairing. The start request carries `enrollment_scope: "organization"`; the identity must name an organization (a shared-sensor answer is refused), and the sensor prints its fingerprint in case the token requires an administrator's approval. The token is never printed, is taken out of the environment once used, and cannot be combined with `SENSOR_PAIRING_CODE` or `SENSOR_INSTANCE_ENROLLMENT_TOKEN`.
+- An expired request is retried with the same key (the platform counts a token use per key), so a sensor waiting for approval keeps waiting instead of exiting.
+- `SENSOR_INSTANCE_ENROLLMENT_TOKEN` is unchanged: an instance token only, and only a shared-sensor identity is accepted for it.
+- The pairing instructions name the console's current place: Sensors > Add sensor.
+
+### Added: host direct-only is reported, validate jobs go through the pool, and a pool can be tested
+
+- `core.CapabilityEgressHostDirect` (`egress.host-direct@1`) and `Kit.EgressHostDirect`: a sensor with `SENSOR_SCAN_EGRESS=direct-only` is marked, so the platform runs its scans direct and shows the path as set on the sensor host instead of holding its jobs.
+- `core.CapabilityEgressValidate` (`egress.validate@1`) and `Kit.PrepareEgress`: a command handler of the sensor's own (the validate executor) prepares the job's pool exactly as a scan does and sends its probes through it; the pool's signals reach the platform in the job's egress report. `LocalPolicy.DialContextVia` checks the policy and then dials the checked address with the given dialer (a pool), never the name.
+- `core.CommandTypeProxyTest`, `core.CapabilityProxyTest` (`proxy.test@1`), `core.ProxyTestExecutor` and `Kit.ServeProxyTest`: the platform's Test button asks a sensor to test each endpoint of a pool (`upstream.Pool.Test`: handshake time, exit address through the platform's echo, IPv4 and IPv6, a port-restricted proxy). `upstream.Pool.DialEndpoint` tunnels through one named endpoint, also one whose breaker is open. The request through the proxy carries only the test's token; the echo address is refused when it is loopback, link-local or a metadata address.
+
+### Added: a target that was not covered says why, and an edge protection is recognised
+
+- The detector is the package `github.com/openctemio/ctis/edgeprotect`: `Classify(status, headers, title, body)` tells a challenge, a block, a rate limit or only fronting from the signs a vendor's own edge leaves (Cloudflare, AWS CloudFront and AWS WAF, Akamai, Fastly, Azure Front Door, Imperva, F5). A challenge or block needs a vendor marker next to the status: a bare 403 is the origin's own answer and stays `direct`. The rules are data (`Rule`, `DefaultRules`, `ClassifyWith`) so a newer table can be shipped without new code. Inputs are bounded (16 KiB of body, 512 bytes of title, 1 KiB per header value) and the classifier sends nothing and solves nothing.
+- The task forwarder reads the vendor markers in a response's headers: a challenge or block page is a block from the first answer (before, a 403 counted only after the host had answered something else, and only after a run of 20). The host becomes a `blocked` coverage gap with the new additive `edge` (`challenged` or `blocked`) and `vendor` members. `adapt.HostRate.ReportResponse` and `Event.Edge` carry the verdict.
+- `reach.ClassifyDNS` splits a DNS failure into `name_gone` (the resolver answered NXDOMAIN or NODATA) and `resolver_failed` (SERVFAIL, REFUSED, a resolver timeout). The class stays `dns_failure` on the wire; the refinement is the new additive `reason` of an unreached target and `dns` of a refused target. `reach.Recorder.Lookup` and `reach.HostOf` find what was recorded for a target under another spelling.
+- New `reach.Control`, the network-path self-check: one cheap TCP connection to a platform-owned endpoint through the task's egress path and one lookup of a platform-owned name, cached for the task. `ControlResult.SensorFault(class)` says whether an unreached target is the sensor's own network (the path probe failed) or DNS (the control lookup failed) rather than a fact about the target. A probe that is not configured, or a canceled job, never charges the sensor.
+- `core.TargetOutcomesFor` no longer marks a target done when nothing covered it: a host the rate controller gave up on (blocked by an edge, pushing back at the lowest rate, stopped answering) and a target every attempt to reach failed are settled `failed` with the new ctis outcome classes `edge_challenged`, `edge_blocked`, `rate_limited`, `name_gone`, `resolver_failed`, `sensor_network_fault` and `unreachable` with a `reason`, each with its `cause` (`target` or `sensor`). `TargetOutcomes` keeps its report-only meaning.
+- A name that does not resolve at admission is `failed` as `name_gone` or `resolver_failed` instead of `skipped` as `refused`.
+
+### Added: retests can run a check the platform delivers
+
+- A retest command may carry custom templates (`custom_templates`, optionally `custom_templates_envelope`) and items that name one (`"template": "<id>"`). `Kit.HandleRetestTemplates(name, run)` serves such retests for a tool and reports capability `retest-templates:<tool>` (`toolcompat.RetestTemplatesCapability`) beside `retest:<tool>`; sensors that do not opt in are unchanged and never receive such a command.
+- `tool.RetestItem.TemplatePath`: the file of the delivered check for that item, set by the sensor only. The tool runs exactly that file and reports its digest; a templated `fixed` or `still_present` verdict under another digest becomes `unverifiable`.
+
+### Added: a retest verdict can report each request the check made
+
+- `tool.RetestVerdict`, `tool.VerdictReport` and the adapter `verdict` message carry optional `requests` (`tool.RequestResult`: URL, status, matched, error class, edge vendor and state), at most `tool.MaxVerdictRequests`. A check that probes several paths reports them so the platform can judge the finding's own endpoint. Additive and wire-compatible: older platforms ignore the field, and older tools simply omit it.
+
+### Added: a retest verdict says why an item could not be verified
+
+- `tool.VerdictReport.Code` (and `tool.RetestVerdict.Code`, the wire verdict's `code`) is an optional reason of an unverifiable verdict from a closed set: `template_not_found`, `excluded_by_policy`, `target_unreachable`, `egress_refused`, `no_verdict`. An unknown code, a code on a conclusive verdict, or `egress_refused` from an out-of-process tool (only the runtime or a built-in tool can prove the confinement refused a target) is dropped by the runtime.
+
+### Added: a run watch for every tool run, and the platform's deadline as a job budget
+
+- A tool that settled every target of its task but sends no result within `core.DefaultFinishGrace` (5 minutes) is canceled, then killed after the grace, and the run ends as its targets say: every accepted record is delivered and the task log carries a warning that the sensor stopped the tool. Before, a tool that hung after its work and kept heartbeating ran until its task timeout (24 hours for nuclei).
+- A tool that sends nothing but heartbeats while its processes use less than a second of CPU for `core.DefaultInactivity` (20 minutes, or the platform's `budget.stall_seconds` clamped to 5 minutes..2 hours) is stopped as timed out and delivers what it settled (`partial`). Linux only (process CPU time); elsewhere the check is off.
+- Both bounds are `core.RunWatch` (`toolhost.RunOptions.Watch`, or the job's through `core.WithRunWatch`); a negative field turns a check off.
+- A scan command may carry `deadline` (when the platform stops waiting for it). The job's time budget then ends `core.DeadlineMargin` before it (a tenth of the time left, 1 to 10 minutes, at least 30 seconds of budget), so a run stopped there still delivers its settled targets in time. It can only shorten a job.
+- A canceled, drained or kill-switched command whose executor does not return within 2 minutes is given up (released, or reported failed for the kill switch) instead of holding its slot until the sensor restarts. A platform stop (deliver what finished) is still waited for.
+
+### Added: probes and crawlers can report web content facts, bounded
+
+- `core.DiscoveredURL` gains `ContentType`, `Params` and `Forms` (field names and a password-field flag, never values); `Parent` is now redacted by `Sanitize`.
+- `core.LiveHost` gains `ResponseHeaders` and `CNAMEs`. `core.ResponseHeadersFrom` keeps only HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy and the two CORS allow headers, plus the names and flags of cookies; cookie values and every other header never pass.
+- `NewWebForm` and `IsPasswordFieldName` set the password-field flag from field names, for crawlers that do not see input types.
+- `SplitSetCookie` splits a joined Set-Cookie value without splitting inside an Expires date; `SplitTechnology` splits `Name:version`.
+- `DiscoveredURL.Sanitize`, `SanitizeForms`, `SanitizeURLParams` and `SanitizeCNAMEs` bound every value a scanned server chooses (control characters, non-http(s) schemes, oversize values are dropped). Sensors call them before reporting.
+
+### Changed: plain local policy messages
+
+- A sensor that needs a local policy and has none logs one short line: network scans are refused until one is added, copy the policy the console suggests to `/etc/openctem/sensor-policy.yaml` and reload with SIGHUP, or set `SENSOR_ALLOWED_RANGES`. The same help ends every `no_local_policy` refusal.
+- A private range in `SENSOR_ALLOWED_RANGES` without the private switch now says to also set `SENSOR_ALLOW_PRIVATE_TARGETS=1`; it no longer points at `targets.allow_private`, a key of the policy file the shorthand does not use.
+
+### Changed: sensor warnings and descriptions no longer cite internal design documents
+
+- The "no local policy" warning is now one sentence with its fix: this sensor was paired before local policies were required, so it accepts any target outside the built-in deny list; install the policy file or set `SENSOR_REQUIRE_LOCAL_POLICY=true`. The second, near-duplicate warning is folded into it.
+- The `SENSOR_API_KEY` description, the manifest conformance skip message and the tool schema descriptions no longer cite RFC numbers.
+- A test (`internal/refgate`) fails when a Go string or shipped schema cites an RFC number, research note or decision id.
+
+### Changed: tool.yaml errors say how to fix them
+
+- An unknown capability names the nearest taxonomy ids (`did you mean scan.ports@1?`), or the majors that exist when only the major is wrong.
+- An unknown CTIS asset or finding type is quoted, with the nearest type and, for finding types, the allowed set; common words (`url`, `ip`, `port`, `repo`, `image`) map to the CTIS type.
+- An unknown key is reported at its JSON pointer with the nearest known key, or where it belongs (`/timeout: unknown key; did you mean /resources/timeout?`).
+- A value of the wrong type says what it must be in plain words (`/version: must be a string; quote it ("1.0.0")`), never a Go type name.
+- Only the wording changed: nothing newly accepted or refused. Echoed input is quoted and cut to 64 bytes.
+
+### Fixed: the tool and adapter JSON Schema `$id`s resolve
+
+- `pkg/tool/schema/tool.v1.schema.json` and `adapter.v1.schema.json` now use their raw.githubusercontent.com URL as `$id`, so editors and validators can fetch them. Schemas that referenced the old `https://openctem.io/schema/...` ids must use the new ones.
+
+### Fixed: a silent host can no longer keep a finished task (and its command) open
+
+- The egress forwarder closes every connection it serves, on both sides, when it stops; before, a plain HTTP request or a tunnel to a host that accepted the connection but never answered kept its handler blocked after the tool gave up and exited, the tool host waited for the forwarder forever, and the command never reported its result or honoured a cancel.
+- An upstream connection whose host sends nothing for `egress.Limits.UpstreamIdle` (new, default 2 minutes, negative turns it off) is closed while the task runs. A tunnel cut this way after the host answered is not counted as a host failure by the adaptive rate.
+- The tool host waits at most 10 seconds for a task's forwarder to stop, and at most another grace period for a killed tool to be reaped, then finishes the task with a warning line instead of hanging.
+- A repeated platform cancel for the same command is a no-op: the command poller logs "Canceling command" once, not on every heartbeat. A cancel that arrives before the command's context exists is no longer swallowed.
+
+### Fixed: a connection the proxy pool could not carry no longer reads as "nothing found"
+
+- When a job's proxy pool cannot carry a connection (every usable endpoint is down or refuses the credentials, or the proxy's own rules refuse the destination, such as a CONNECT proxy that allows port 443 only), the task forwarder now marks the host as a coverage gap with the new reason `adapt.GapProxyUnavailable` (`proxy_unavailable`). The scan ends partial (`coverage_type` partial), so the platform never closes findings because a run that reached nothing through a dead proxy reported none. The host's target outcome is `sensor_network_fault` with cause `sensor` and reason `proxy_unavailable`. Before, such a run declared full coverage.
+- A path failure no longer moves the target's rate: a proxy's CONNECT 403 or SOCKS ruleset refusal was counted as the target's failure.
+- What a proxy says about the target is now a reach fact: CONNECT 502/503 and SOCKS network or host unreachable are `no_route`, CONNECT 504 and SOCKS general failure or TTL expired are `timeout`, SOCKS connection refused is `port_closed`. A host that does not answer through the pool is unreached, as on the direct path. The reach detail never carries the proxy's address. `egress.UpstreamError` gains `TargetClass` and `PathFault()`; `adapt.HostRate` gains `MarkGap`.
+
+### Fixed: proxies that answer 401 or 500 to CONNECT are classified right
+
+- A CONNECT 401 (some proxies send it instead of 407 for wrong credentials) is now `proxy_auth`: the endpoint is out for the job and the platform hears it. It was `target_refused`, so a pool with wrong credentials was retried on every connection and never flagged.
+- A CONNECT 500 (what some proxies answer when they cannot connect to the target) is now `target_unreachable` (`no_route`). It was `proxy_down`, so a port scan of closed ports through such a proxy opened its breaker, failed over and got a healthy proxy quarantined by the platform.
+- A proxy that takes the request and never replies is taken as hung (`proxy_down`) only after timeouts toward three distinct target addresses with no tunnel in the job; three timeouts toward one filtered host scanned port by port no longer quarantine it.
+
+### Fixed: a proxy that refuses our credentials hands the connection to the next proxy
+
+- In the proxy pool a 407 or a refused SOCKS login on one endpoint now moves the same connection on to the next endpoint (the endpoint stays out for the rest of the job and is reported as `proxy_auth`), as a proxy that is down already did. Before, the host was lost for the job as a coverage gap while healthy endpoints stood by. The connection still never goes direct: when every endpoint is down or refuses our credentials it fails, and a target's answer is never retried through another proxy.
+
+### Fixed: pairing explains clock skew and rate limits, and waits them out in process
+
+- `identity.Pair` returns a `*identity.ClockSkewError` when the platform refuses a request signature for clock skew: from the platform's `clock-skew` problem (`server_time`, `clock_offset_seconds`; new `protov2.ProblemClockSkew` and `Problem` fields), or, from a platform that answers only the generic 401, when its `Date` header is more than 2 minutes from this machine's clock. The message names the offset, which clock is ahead, and the fix (NTP, `sudo chronyc makestep`).
+- A 429 during pairing prints "Rate limited by the platform (HTTP 429); retrying in N s." before it waits (it was silent), and honours a `Retry-After` up to 5 minutes (was 2).
+- New `PairOptions.RetryTransient`: a clock skew, a rate limit after 5 tries, an unavailable platform (502, 503, 504, 500 and a generic 401 without an enrollment token) or a network error is retried in process with exponential backoff (5 s doubling to 5 minutes) and a message each time, instead of returning. `sensorkit` sets it, so a daemon no longer exits into its supervisor's restart loop and spends the platform's pairing budget. A refused enrollment token, a denial, a 400 and a platform key mismatch still return.
+- The codeless pairing instructions also say how to pair with a code created under Sensors > Expect a sensor (`SENSOR_PAIRING_CODE`).
+
+### Fixed: an item the tool never judged is no longer a bare "no verdict"
+
+- When a retest item gets no verdict, the runtime now says what it knows: its target did not answer or was refused by the network confinement (`target_unreachable`, `egress_refused`), the target was skipped or never reached, or the run stopped (`no_verdict` with the error class in the detail).
+- A retest item on a target the sensor's network confinement refused every connection toward is now unverifiable (`egress_refused`) whatever the tool concluded: a tool that never reached the target cannot call a finding fixed or still present.
+
+### Fixed: signed jobs are no longer refused after platform aging reorders a batch
+
+- The command poller re-sorted a claimed batch by priority before verifying job signatures, while the signer numbers jobs in the platform's order and a sensor accepts only strictly increasing sequence numbers. When aging put a lower-priority job first, valid jobs were refused as replays. The poller now handles a batch in the order the platform returned it (the platform owns ordering); replay protection is unchanged.
+
+### Documentation: organization proxy pools for scan traffic
+
+- `docs/SECURITY.md` explains how a job's proxy pool is applied (scope check first, tunnels by address, failover rules, breaker, endpoint validation, credential handling, where pooled jobs are refused), the `SENSOR_SCAN_EGRESS` veto and `SENSOR_SCAN_EGRESS_ALLOW`, and that HTTP proxies must allow CONNECT to the scanned ports; the README settings table lists both settings.
+
 ## v0.37.0 — 2026-10-19
 
 ### Security: custom template check covers request-level self-contained and include directives
