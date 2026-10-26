@@ -1257,6 +1257,31 @@ func (p *CommandPoller) journalJob(cmd *Command) func() {
 	}
 }
 
+// giveUpAbandoned handles an executor that ignored the stop (a bug in a tool
+// runner): the command is released or reported now, so its slot and the
+// platform's view never wait on it; the executor's goroutine is left behind
+// and whatever it reports later is refused.
+func (p *CommandPoller) giveUpAbandoned(ctx context.Context, cmd *Command) {
+	fmt.Printf("[command-poller] Command %s did not stop within %s of being stopped; giving it up\n", cmd.ID, p.stopGrace())
+	if cause := context.Cause(ctx); errors.Is(cause, errCanceledByPlatform) || errors.Is(cause, errDrained) {
+		p.handBack(cmd.ID, releaseReason(ctx, ReleaseReasonShutdown))
+		return
+	}
+	p.refuseCommand(context.WithoutCancel(ctx), cmd, fmt.Errorf("the job did not stop within %s of being stopped", p.stopGrace()))
+}
+
+// refuseByGate reports a command the gate refused, failed and never started.
+func (p *CommandPoller) refuseByGate(ctx context.Context, cmd *Command, err error) {
+	fmt.Printf("[command-poller] Refusing command %s: %v\n", cmd.ID, err)
+	p.clog(ctx, cmd.ID, "error", "Refused before running: "+err.Error(), refusalFields(err))
+	p.finishLog(ctx, cmd.ID)
+	if rerr := p.client.ReportCommandResult(ctx, cmd.ID, &CommandResult{
+		Status: "failed", Error: err.Error(), CompletedAt: time.Now(), Refusal: RefusalOf(err),
+	}); rerr != nil && p.verbose.Load() {
+		fmt.Printf("[command-poller] Failed to report refused command %s: %v\n", cmd.ID, rerr)
+	}
+}
+
 func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr error) {
 	defer p.releaseCommandSlot(cmd)
 
@@ -1355,14 +1380,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 
 	if g := p.gate.Load(); g != nil {
 		if err := (*g)(cmd); err != nil {
-			fmt.Printf("[command-poller] Refusing command %s: %v\n", cmd.ID, err)
-			p.clog(ctx, cmd.ID, "error", "Refused before running: "+err.Error(), refusalFields(err))
-			p.finishLog(ctx, cmd.ID)
-			if rerr := p.client.ReportCommandResult(ctx, cmd.ID, &CommandResult{
-				Status: "failed", Error: err.Error(), CompletedAt: time.Now(), Refusal: RefusalOf(err),
-			}); rerr != nil && p.verbose.Load() {
-				fmt.Printf("[command-poller] Failed to report refused command %s: %v\n", cmd.ID, rerr)
-			}
+			p.refuseByGate(ctx, cmd, err)
 			return
 		}
 	}
@@ -1375,16 +1393,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	// with the panic message instead of vanishing.
 	result, err, abandoned := p.runExecutor(ctx, cmd)
 	if abandoned {
-		// The executor ignored the stop (a bug in a tool runner): the
-		// command is released or reported now, so its slot and the
-		// platform's view never wait on it; the executor's goroutine is
-		// left behind and whatever it reports later is refused.
-		fmt.Printf("[command-poller] Command %s did not stop within %s of being stopped; giving it up\n", cmd.ID, p.stopGrace())
-		if cause := context.Cause(ctx); errors.Is(cause, errCanceledByPlatform) || errors.Is(cause, errDrained) {
-			p.handBack(cmd.ID, releaseReason(ctx, ReleaseReasonShutdown))
-			return
-		}
-		p.refuseCommand(context.WithoutCancel(ctx), cmd, fmt.Errorf("the job did not stop within %s of being stopped", p.stopGrace()))
+		p.giveUpAbandoned(ctx, cmd)
 		return
 	}
 
@@ -1838,6 +1847,36 @@ func (e *DefaultCommandExecutor) Execute(ctx context.Context, cmd *Command) (*Co
 	}
 }
 
+// applyCustomTemplates writes the templates the platform signed for the command
+// and points the options at them. The returned cleanup is never nil.
+func (e *DefaultCommandExecutor) applyCustomTemplates(cmd *Command, payload *ScanCommandPayload, opts *ScanOptions, local *LocalPolicy) (func(), error) {
+	noop := func() {}
+	if len(payload.CustomTemplates) == 0 {
+		return noop, nil
+	}
+	if !local.AllowsCustomTemplates() {
+		return noop, refuse("allow_custom_templates", "the job carries %d custom template(s); this sensor's policy does not allow platform-supplied templates", len(payload.CustomTemplates))
+	}
+	// SECURITY: only templates the platform signed for this command are
+	// written (see verifyCustomTemplates); nothing is written before.
+	if err := e.verifyCustomTemplates(cmd, payload); err != nil {
+		return noop, err
+	}
+	templateDir, cleanup, err := e.writeCustomTemplates(payload.Scanner, payload.CustomTemplates)
+	if err != nil {
+		return noop, fmt.Errorf("write custom templates: %w", err)
+	}
+	if cleanup == nil {
+		cleanup = noop
+	}
+	// Set template dir in options for scanner to use
+	opts.CustomTemplateDir = templateDir
+	if e.verbose.Load() {
+		fmt.Printf("[executor] Using custom templates from %s\n", templateDir)
+	}
+	return cleanup, nil
+}
+
 func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) (*CommandExecutionResult, error) {
 	var payload ScanCommandPayload
 	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
@@ -1941,31 +1980,11 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	opts.RuleSources = ruleSources
 
 	// Handle custom templates if provided
-	var templateDir string
-	var cleanupTemplates func()
-	if len(payload.CustomTemplates) > 0 {
-		if !local.AllowsCustomTemplates() {
-			return nil, refuse("allow_custom_templates", "the job carries %d custom template(s); this sensor's policy does not allow platform-supplied templates", len(payload.CustomTemplates))
-		}
-		// SECURITY: only templates the platform signed for this command are
-		// written (see verifyCustomTemplates); nothing is written before.
-		if err := e.verifyCustomTemplates(cmd, &payload); err != nil {
-			return nil, err
-		}
-		var err error
-		templateDir, cleanupTemplates, err = e.writeCustomTemplates(payload.Scanner, payload.CustomTemplates)
-		if err != nil {
-			return nil, fmt.Errorf("write custom templates: %w", err)
-		}
-		if cleanupTemplates != nil {
-			defer cleanupTemplates()
-		}
-		// Set template dir in options for scanner to use
-		opts.CustomTemplateDir = templateDir
-		if e.verbose.Load() {
-			fmt.Printf("[executor] Using custom templates from %s\n", templateDir)
-		}
+	cleanupTemplates, err := e.applyCustomTemplates(cmd, &payload, opts, local)
+	if err != nil {
+		return nil, err
 	}
+	defer cleanupTemplates()
 
 	// Create context with timeout if specified: never above MaxScanTimeout
 	// or the local policy's rate.max_job_seconds (which also applies when
