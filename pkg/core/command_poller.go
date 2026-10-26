@@ -113,9 +113,17 @@ type CommandResult struct {
 	// Refusal is set when a policy refused the command (RefusalOf): it was
 	// never run, or was stopped by the kill switch.
 	Refusal *Refusal `json:"refusal,omitempty"`
+	// ErrorCode is the platform's code for a failure (Failure.ErrorCode);
+	// empty when the class has none.
+	ErrorCode string `json:"error_code,omitempty"`
+	// Failure is the structured class and bounded evidence of a failure that
+	// is not a refusal (ClassifyFailure).
+	Failure *Failure `json:"failure,omitempty"`
 	// TargetOutcomes is how each target of a completed scan command ended
 	// (ctis outcome.ResultKey): the platform settles the targets with an
 	// outcome and hands out only the unfinished ones again.
+	// On a failed command they are the targets settled before the failure
+	// (FailureTargetOutcomes).
 	TargetOutcomes []outcome.Target `json:"target_outcomes,omitempty"`
 }
 
@@ -1249,6 +1257,31 @@ func (p *CommandPoller) journalJob(cmd *Command) func() {
 	}
 }
 
+// giveUpAbandoned handles an executor that ignored the stop (a bug in a tool
+// runner): the command is released or reported now, so its slot and the
+// platform's view never wait on it; the executor's goroutine is left behind
+// and whatever it reports later is refused.
+func (p *CommandPoller) giveUpAbandoned(ctx context.Context, cmd *Command) {
+	fmt.Printf("[command-poller] Command %s did not stop within %s of being stopped; giving it up\n", cmd.ID, p.stopGrace())
+	if cause := context.Cause(ctx); errors.Is(cause, errCanceledByPlatform) || errors.Is(cause, errDrained) {
+		p.handBack(cmd.ID, releaseReason(ctx, ReleaseReasonShutdown))
+		return
+	}
+	p.refuseCommand(context.WithoutCancel(ctx), cmd, fmt.Errorf("the job did not stop within %s of being stopped", p.stopGrace()))
+}
+
+// refuseByGate reports a command the gate refused, failed and never started.
+func (p *CommandPoller) refuseByGate(ctx context.Context, cmd *Command, err error) {
+	fmt.Printf("[command-poller] Refusing command %s: %v\n", cmd.ID, err)
+	p.clog(ctx, cmd.ID, "error", "Refused before running: "+err.Error(), refusalFields(err))
+	p.finishLog(ctx, cmd.ID)
+	if rerr := p.client.ReportCommandResult(ctx, cmd.ID, &CommandResult{
+		Status: "failed", Error: err.Error(), CompletedAt: time.Now(), Refusal: RefusalOf(err),
+	}); rerr != nil && p.verbose.Load() {
+		fmt.Printf("[command-poller] Failed to report refused command %s: %v\n", cmd.ID, rerr)
+	}
+}
+
 func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr error) {
 	defer p.releaseCommandSlot(cmd)
 
@@ -1347,14 +1380,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 
 	if g := p.gate.Load(); g != nil {
 		if err := (*g)(cmd); err != nil {
-			fmt.Printf("[command-poller] Refusing command %s: %v\n", cmd.ID, err)
-			p.clog(ctx, cmd.ID, "error", "Refused before running: "+err.Error(), refusalFields(err))
-			p.finishLog(ctx, cmd.ID)
-			if rerr := p.client.ReportCommandResult(ctx, cmd.ID, &CommandResult{
-				Status: "failed", Error: err.Error(), CompletedAt: time.Now(), Refusal: RefusalOf(err),
-			}); rerr != nil && p.verbose.Load() {
-				fmt.Printf("[command-poller] Failed to report refused command %s: %v\n", cmd.ID, rerr)
-			}
+			p.refuseByGate(ctx, cmd, err)
 			return
 		}
 	}
@@ -1367,16 +1393,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	// with the panic message instead of vanishing.
 	result, err, abandoned := p.runExecutor(ctx, cmd)
 	if abandoned {
-		// The executor ignored the stop (a bug in a tool runner): the
-		// command is released or reported now, so its slot and the
-		// platform's view never wait on it; the executor's goroutine is
-		// left behind and whatever it reports later is refused.
-		fmt.Printf("[command-poller] Command %s did not stop within %s of being stopped; giving it up\n", cmd.ID, p.stopGrace())
-		if cause := context.Cause(ctx); errors.Is(cause, errCanceledByPlatform) || errors.Is(cause, errDrained) {
-			p.handBack(cmd.ID, releaseReason(ctx, ReleaseReasonShutdown))
-			return
-		}
-		p.refuseCommand(context.WithoutCancel(ctx), cmd, fmt.Errorf("the job did not stop within %s of being stopped", p.stopGrace()))
+		p.giveUpAbandoned(ctx, cmd)
 		return
 	}
 
@@ -1419,6 +1436,18 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		// The executor's own policy checks (allow_interactsh, custom
 		// templates, targets) refuse with a *LocalPolicyError too.
 		reportResult.Refusal = RefusalOf(err)
+		if reportResult.Refusal == nil {
+			// Not a refusal: say what kind of failure it was and what the
+			// job settled before it, for the platform to decide where the
+			// work goes next. The message is redacted (a dial error can
+			// carry a proxy address with its credentials).
+			reportResult.Error = RedactFailureText(reportResult.Error)
+			reportResult.Failure = ClassifyFailure(p.failureInput(ctx, cmd, err, usage, egressUsed))
+			reportResult.ErrorCode = reportResult.Failure.ErrorCode()
+			if result != nil {
+				reportResult.TargetOutcomes = result.TargetOutcomes
+			}
+		}
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Command %s failed: %v\n", cmd.ID, err)
 		}
@@ -1446,7 +1475,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		for k, v := range RefusedTargetsMetadata(refused) {
 			reportResult.Metadata[k] = v
 		}
-		if err == nil && reportResult.TargetOutcomes != nil {
+		if reportResult.TargetOutcomes != nil {
 			reportResult.TargetOutcomes = append(skippedOutcomes(admission.Refused, outcomeRevisionOf(cmd.Payload)), reportResult.TargetOutcomes...)
 		}
 	}
@@ -1818,6 +1847,36 @@ func (e *DefaultCommandExecutor) Execute(ctx context.Context, cmd *Command) (*Co
 	}
 }
 
+// applyCustomTemplates writes the templates the platform signed for the command
+// and points the options at them. The returned cleanup is never nil.
+func (e *DefaultCommandExecutor) applyCustomTemplates(cmd *Command, payload *ScanCommandPayload, opts *ScanOptions, local *LocalPolicy) (func(), error) {
+	noop := func() {}
+	if len(payload.CustomTemplates) == 0 {
+		return noop, nil
+	}
+	if !local.AllowsCustomTemplates() {
+		return noop, refuse("allow_custom_templates", "the job carries %d custom template(s); this sensor's policy does not allow platform-supplied templates", len(payload.CustomTemplates))
+	}
+	// SECURITY: only templates the platform signed for this command are
+	// written (see verifyCustomTemplates); nothing is written before.
+	if err := e.verifyCustomTemplates(cmd, payload); err != nil {
+		return noop, err
+	}
+	templateDir, cleanup, err := e.writeCustomTemplates(payload.Scanner, payload.CustomTemplates)
+	if err != nil {
+		return noop, fmt.Errorf("write custom templates: %w", err)
+	}
+	if cleanup == nil {
+		cleanup = noop
+	}
+	// Set template dir in options for scanner to use
+	opts.CustomTemplateDir = templateDir
+	if e.verbose.Load() {
+		fmt.Printf("[executor] Using custom templates from %s\n", templateDir)
+	}
+	return cleanup, nil
+}
+
 func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) (*CommandExecutionResult, error) {
 	var payload ScanCommandPayload
 	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
@@ -1921,31 +1980,11 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	opts.RuleSources = ruleSources
 
 	// Handle custom templates if provided
-	var templateDir string
-	var cleanupTemplates func()
-	if len(payload.CustomTemplates) > 0 {
-		if !local.AllowsCustomTemplates() {
-			return nil, refuse("allow_custom_templates", "the job carries %d custom template(s); this sensor's policy does not allow platform-supplied templates", len(payload.CustomTemplates))
-		}
-		// SECURITY: only templates the platform signed for this command are
-		// written (see verifyCustomTemplates); nothing is written before.
-		if err := e.verifyCustomTemplates(cmd, &payload); err != nil {
-			return nil, err
-		}
-		var err error
-		templateDir, cleanupTemplates, err = e.writeCustomTemplates(payload.Scanner, payload.CustomTemplates)
-		if err != nil {
-			return nil, fmt.Errorf("write custom templates: %w", err)
-		}
-		if cleanupTemplates != nil {
-			defer cleanupTemplates()
-		}
-		// Set template dir in options for scanner to use
-		opts.CustomTemplateDir = templateDir
-		if e.verbose.Load() {
-			fmt.Printf("[executor] Using custom templates from %s\n", templateDir)
-		}
+	cleanupTemplates, err := e.applyCustomTemplates(cmd, &payload, opts, local)
+	if err != nil {
+		return nil, err
 	}
+	defer cleanupTemplates()
 
 	// Create context with timeout if specified: never above MaxScanTimeout
 	// or the local policy's rate.max_job_seconds (which also applies when
@@ -1971,7 +2010,12 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		scanResult, err = scanner.Scan(ctx, target, opts)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("scan failed: %w", err)
+		// What the run settled before it failed (a target it could not
+		// reach, a host its coverage gaps name) goes with the failure; every
+		// other target is unfinished.
+		failed := &CommandExecutionResult{DurationMs: time.Since(startTime).Milliseconds()}
+		failed.TargetOutcomes = payload.outcomes(FailureTargetOutcomes(ctx, targets, payload.evidence(ctx, nil, scanResult), nil), refusedTargets)
+		return failed, atStage(StageRun, fmt.Errorf("scan failed: %w", err))
 	}
 	ctx = deliveryContext(ctx, deliverCtx)
 
@@ -2027,7 +2071,7 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 	if e.pusher != nil && len(bytes.TrimSpace(scanResult.RawOutput)) > 0 {
 		parser, err := e.parsers.ForScanner(scanner.Name(), scanResult.RawOutput)
 		if err != nil {
-			return fmt.Errorf("parse failed: %w", err)
+			return atStage(StageParse, fmt.Errorf("parse failed: %w", err))
 		}
 		parseOpts := &ParseOptions{ToolName: scanner.Name()}
 		if target != "" && filepath.IsAbs(target) {
@@ -2043,7 +2087,7 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 		}
 		report, err := parser.Parse(ctx, scanResult.RawOutput, parseOpts)
 		if err != nil {
-			return fmt.Errorf("parse failed (%s parser): %w", parser.Name(), err)
+			return atStage(StageParse, fmt.Errorf("parse failed (%s parser): %w", parser.Name(), err))
 		}
 		if report.Tool == nil || report.Tool.Name == "" {
 			if report.Tool == nil {
@@ -2060,13 +2104,13 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 		// Push findings
 		_, err = e.pusher.PushFindings(ctx, report)
 		if err != nil {
-			return fmt.Errorf("push failed: %w", err)
+			return atStage(StageUpload, fmt.Errorf("push failed: %w", err))
 		}
 	} else if e.pusher != nil && src != nil {
 		// A full scan of a branch that found nothing still reports, so the
 		// platform marks what this tool no longer sees there as fixed.
 		if _, err := e.pusher.PushFindings(ctx, src.emptyReport(scanner.Name())); err != nil {
-			return fmt.Errorf("push failed: %w", err)
+			return atStage(StageUpload, fmt.Errorf("push failed: %w", err))
 		}
 	}
 
@@ -2390,7 +2434,7 @@ func (e *DefaultCommandExecutor) executeCollect(ctx context.Context, cmd *Comman
 			report.Metadata.CoverageType = collectCoverageType(report)
 			_, err := e.pusher.PushFindings(ctx, report)
 			if err != nil {
-				return result, fmt.Errorf("push failed: %w", err)
+				return result, atStage(StageUpload, fmt.Errorf("push failed: %w", err))
 			}
 		}
 	}

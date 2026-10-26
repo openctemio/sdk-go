@@ -207,14 +207,19 @@ func (p *Pool) Dial(ctx context.Context, network, addr string) (net.Conn, error)
 		if class == egress.ClassTargetUnreachable {
 			last.TargetClass = targetClass
 		}
-		if class != egress.ClassProxyDown {
+		// Only the proxy's own failures move on to the next endpoint: down,
+		// or refusing our credentials (the endpoint is out for the rest of
+		// the job and reported). A target's answer is the same through any
+		// proxy and is never retried through another one.
+		if class != egress.ClassProxyDown && class != egress.ClassProxyAuth {
 			return nil, last
 		}
 	}
 	if last == nil {
 		return nil, &egress.UpstreamError{Class: egress.ClassProxyDown, Final: true, Err: ErrNoEndpoint}
 	}
-	// Every usable endpoint is down: the connection fails, never direct.
+	// Every usable endpoint is down or refused our credentials: the
+	// connection fails, never direct.
 	last.Final = true
 	return nil, last
 }
@@ -232,7 +237,21 @@ func callerDone(ctx context.Context) bool {
 
 // ErrNoEndpoint is the error of a connection when no endpoint is usable
 // (each one's breaker is open or it refused our credentials).
-var ErrNoEndpoint = errors.New("upstream: no usable proxy endpoint (all down or refusing our credentials)")
+var ErrNoEndpoint error = noEndpointError{}
+
+// noEndpointError is ErrNoEndpoint's type. It names its failure class for
+// the sensor's failure report (core.FailureClassifier; core imports this
+// package, so the method is structural).
+type noEndpointError struct{}
+
+func (noEndpointError) Error() string {
+	return "upstream: no usable proxy endpoint (all down or refusing our credentials)"
+}
+
+// FailureClass is the class "infra.egress.pool_exhausted".
+func (noEndpointError) FailureClass() (class, reason string) {
+	return "infra.egress.pool_exhausted", "pool_all_down"
+}
 
 // isPublic reports whether a target address is public: not private, ULA,
 // CGNAT, loopback or any other internal range (ctis addrscope).

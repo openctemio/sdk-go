@@ -151,7 +151,7 @@ func TestProxyDownFailoverIsBoundedByEndpoints(t *testing.T) {
 	}
 }
 
-func TestProxyAuthDoesNotFailOver(t *testing.T) {
+func TestProxyAuthFailsOverToTheNextEndpoint(t *testing.T) {
 	target := echoServer(t)
 	bad := httpProxy(t, 200, "alice", "right", "")
 	good := httpProxy(t, 200, "", "", "")
@@ -159,25 +159,71 @@ func TestProxyAuthDoesNotFailOver(t *testing.T) {
 	n.add("10.0.0.1:3128", bad.addr())
 	n.add("10.0.0.2:3128", good.addr())
 	a := ep("a", SchemeHTTP, "10.0.0.1", 3128)
-	a.Username, a.Password = "alice", "wrong"
+	a.Username, a.Password = "alice", "wrong-secret-pw"
 	p := newTestPool(t, Config{Mode: ModePool, PoolID: "p1", Strategy: StrategyPriority, AppliesTo: AppliesAll,
 		Endpoints: []Endpoint{a, ep("b", SchemeHTTP, "10.0.0.2", 3128)}}, n)
-	_, err := p.Dial(context.Background(), "tcp", target.String())
-	if ue := upErr(t, err); ue.Class != egress.ClassProxyAuth || !ue.Final || ue.Endpoint != "a" {
-		t.Fatalf("got %+v", ue)
-	}
-	if good.conns.Load() != 0 {
-		t.Fatal("a 407 failed over to the next endpoint")
-	}
-	// The endpoint is unusable for the rest of the job: the next
-	// connection goes to b.
+	// The connection that met the 407 is carried by the next endpoint.
 	c, err := p.Dial(context.Background(), "tcp", target.String())
+	if err != nil {
+		t.Fatalf("a 407 on one endpoint lost the connection: %v", err)
+	}
+	if got := roundTrip(t, c); got != "echo:ping\n" {
+		t.Fatalf("got %q", got)
+	}
+	if good.conns.Load() != 1 {
+		t.Fatalf("next endpoint carried %d connections", good.conns.Load())
+	}
+	// The endpoint is unusable for the rest of the job.
+	c, err = p.Dial(context.Background(), "tcp", target.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = c.Close()
 	if bad.conns.Load() != 1 {
 		t.Fatalf("the endpoint that refused our credentials was tried %d times", bad.conns.Load())
+	}
+	// It is reported with the auth class and no credential.
+	var rep *EndpointReport
+	r := p.Report()
+	for i := range r.Endpoints {
+		if r.Endpoints[i].EndpointID == "a" {
+			rep = &r.Endpoints[i]
+		}
+	}
+	if rep == nil || rep.ProxyAuth != 1 || rep.OK != 0 {
+		t.Fatalf("report %+v", r)
+	}
+	if strings.Contains(rep.LastError, "wrong-secret-pw") || strings.Contains(rep.LastError, "alice") {
+		t.Fatalf("credentials in the report: %q", rep.LastError)
+	}
+}
+
+func TestEveryEndpointRefusingCredentialsFailsClosed(t *testing.T) {
+	target := echoServer(t)
+	p1 := httpProxy(t, 200, "alice", "right", "")
+	p2 := httpProxy(t, 200, "bob", "right", "")
+	n := newNetmap()
+	n.add("10.0.0.1:3128", p1.addr())
+	n.add("10.0.0.2:3128", p2.addr())
+	a, b := ep("a", SchemeHTTP, "10.0.0.1", 3128), ep("b", SchemeHTTP, "10.0.0.2", 3128)
+	a.Username, a.Password = "alice", "wrong"
+	b.Username, b.Password = "bob", "wrong"
+	p := newTestPool(t, Config{Mode: ModePool, PoolID: "p1", Strategy: StrategyPriority, AppliesTo: AppliesAll,
+		Endpoints: []Endpoint{a, b}}, n)
+	_, err := p.Dial(context.Background(), "tcp", target.String())
+	if ue := upErr(t, err); ue.Class != egress.ClassProxyAuth || !ue.Final {
+		t.Fatalf("got %+v", ue)
+	}
+	if n.count(target.String()) != 0 {
+		t.Fatal("the target was dialed directly")
+	}
+	if p1.conns.Load() != 1 || p2.conns.Load() != 1 {
+		t.Fatalf("attempts %d, %d", p1.conns.Load(), p2.conns.Load())
+	}
+	// Both are out for the job: the next connection has no endpoint.
+	_, err = p.Dial(context.Background(), "tcp", target.String())
+	if ue := upErr(t, err); !errors.Is(ue.Err, ErrNoEndpoint) {
+		t.Fatalf("got %+v", ue)
 	}
 }
 
