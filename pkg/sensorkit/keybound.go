@@ -52,7 +52,8 @@ func pairingCode() (string, error) {
 // SENSOR_INSTANCE_ENROLLMENT_TOKEN) had no effect (the sensor already has
 // credentials) so it can be removed.
 func (k *Kit) notePairingCodeIgnored(why string) {
-	for _, env := range []string{EnvPairingCode, EnvInstanceEnrollmentToken, EnvInstanceEnrollmentTokenFile} {
+	for _, env := range []string{EnvPairingCode, EnvInstanceEnrollmentToken, EnvInstanceEnrollmentTokenFile,
+		EnvEnrollmentToken, EnvEnrollmentTokenFile} {
 		if strings.TrimSpace(os.Getenv(env)) == "" {
 			continue
 		}
@@ -60,12 +61,11 @@ func (k *Kit) notePairingCodeIgnored(why string) {
 	}
 }
 
-// instanceEnrollmentToken is SENSOR_INSTANCE_ENROLLMENT_TOKEN or the content
-// of SENSOR_INSTANCE_ENROLLMENT_TOKEN_FILE ("" when neither is set). A value
-// that is not octe_ and 49 letters or digits stops the sensor; the error
-// never carries the value.
-func instanceEnrollmentToken() (string, error) {
-	v, _, err := settingValue("", EnvInstanceEnrollmentToken)
+// enrollmentTokenSetting is env or the content of env_FILE ("" when
+// neither is set). A value that is not octe_ and 49 letters or digits stops
+// the sensor; the error never carries the value.
+func enrollmentTokenSetting(env string) (string, error) {
+	v, _, err := settingValue("", env)
 	if err != nil {
 		return "", err
 	}
@@ -73,9 +73,31 @@ func instanceEnrollmentToken() (string, error) {
 		return "", nil
 	}
 	if !wellFormedEnrollmentToken(v) {
-		return "", usageError(fmt.Errorf("%s is not an enrollment token (octe_ and 49 letters or digits)", EnvInstanceEnrollmentToken))
+		return "", usageError(fmt.Errorf("%s is not an enrollment token (octe_ and 49 letters or digits)", env))
 	}
 	return v, nil
+}
+
+// enrollmentToken is the token the sensor enrolls with: an organization
+// token (SENSOR_ENROLLMENT_TOKEN[_FILE]) or an instance token
+// (SENSOR_INSTANCE_ENROLLMENT_TOKEN[_FILE]); both set stops the sensor.
+func enrollmentToken() (token string, organization bool, err error) {
+	org, err := enrollmentTokenSetting(EnvEnrollmentToken)
+	if err != nil {
+		return "", false, err
+	}
+	inst, err := enrollmentTokenSetting(EnvInstanceEnrollmentToken)
+	if err != nil {
+		return "", false, err
+	}
+	switch {
+	case org != "" && inst != "":
+		return "", false, usageError(fmt.Errorf("set %s or %s, not both", EnvEnrollmentToken, EnvInstanceEnrollmentToken))
+	case org != "":
+		return org, true, nil
+	default:
+		return inst, false, nil
+	}
 }
 
 func wellFormedEnrollmentToken(v string) bool {
@@ -160,12 +182,16 @@ func (k *Kit) resolveIdentity() error {
 	if err != nil {
 		return err
 	}
-	token, err := instanceEnrollmentToken()
+	token, organization, err := enrollmentToken()
 	if err != nil {
 		return err
 	}
 	if token != "" && code != "" {
-		return usageError(fmt.Errorf("set %s or %s, not both", EnvPairingCode, EnvInstanceEnrollmentToken))
+		tokenEnv := EnvInstanceEnrollmentToken
+		if organization {
+			tokenEnv = EnvEnrollmentToken
+		}
+		return usageError(fmt.Errorf("set %s or %s, not both", EnvPairingCode, tokenEnv))
 	}
 	if k.opts.NoAutoPair {
 		return usageError(fmt.Errorf("the sensor has no API key and is not paired: run `openctemio-sensor pair`, " +
@@ -189,14 +215,17 @@ func (k *Kit) resolveIdentity() error {
 		Code:            code,
 		CodeLabel:       EnvPairingCode,
 		EnrollmentToken: token,
-		Host:            identity.DefaultHostFacts(k.opts.ProductName, k.opts.Version, name),
-		PlatformKeyPin:  envOr(k.opts.PlatformKey, EnvPlatformKey),
+		// An organization token's sensor joins that organization.
+		OrganizationEnrollment: organization,
+		Host:                   identity.DefaultHostFacts(k.opts.ProductName, k.opts.Version, name),
+		PlatformKeyPin:         envOr(k.opts.PlatformKey, EnvPlatformKey),
 		// The job-signing root from the install snippet (out of band),
 		// checked against what the platform serves before it is pinned.
 		JobSigningRoot:    pinRoot,
 		AllowUnsignedJobs: allowUnsigned,
-		// A spent enrollment token cannot start another request.
-		Retry: token == "",
+		// A spent instance token cannot start another request; an
+		// organization token counts the key once, so asking again is free.
+		Retry: token == "" || organization,
 		// A clock skew, a rate limit or an unavailable platform is waited
 		// out here with backoff, not by exiting into a restart loop.
 		RetryTransient: true,
@@ -207,6 +236,7 @@ func (k *Kit) resolveIdentity() error {
 	// the environment so scanner processes the sensor starts do not inherit
 	// it. A _FILE token was never in the environment.
 	_ = os.Unsetenv(EnvInstanceEnrollmentToken)
+	_ = os.Unsetenv(EnvEnrollmentToken)
 	if err != nil {
 		return fmt.Errorf("pairing: %w", err)
 	}

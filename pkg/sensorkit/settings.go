@@ -50,6 +50,11 @@ const (
 	// (octe_…, api RFC-100 §7): a sensor with no identity enrolls with it as
 	// a shared sensor of the instance, without an administrator's approval.
 	EnvInstanceEnrollmentToken = "SENSOR_INSTANCE_ENROLLMENT_TOKEN"
+	// EnvEnrollmentToken is an organization enrollment token (octe_…) an
+	// organization administrator created for unattended installs: a sensor
+	// with no identity joins that organization with it, at trust level New,
+	// with or without an administrator's approval as the token says.
+	EnvEnrollmentToken = "SENSOR_ENROLLMENT_TOKEN"
 	// EnvPlatformKey pins the platform's pairing key (its thumbprint).
 	EnvPlatformKey  = "SENSOR_PLATFORM_KEY"
 	EnvKeyAutoRenew = "SENSOR_KEY_AUTORENEW" // true | false; unset: on when the state directory persists
