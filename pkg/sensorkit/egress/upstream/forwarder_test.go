@@ -137,3 +137,52 @@ func TestForwarderPassesTheTargetHostAndStopsOnProxyFailure(t *testing.T) {
 		t.Fatal("target dialed directly")
 	}
 }
+
+func TestForwarderCarriesAConnectionPastAProxyThatRefusesCredentials(t *testing.T) {
+	target := echoServer(t)
+	bad := httpProxy(t, 200, "alice", "right", "")
+	good := httpProxy(t, 200, "", "", "")
+	n := newNetmap()
+	n.add("10.0.0.1:3128", bad.addr())
+	n.add("10.0.0.2:3128", good.addr())
+	a := ep("a", SchemeHTTP, "10.0.0.1", 3128)
+	a.Username, a.Password = "alice", "wrong"
+	p := newTestPool(t, Config{Mode: ModePool, PoolID: "p", Strategy: StrategyPriority, AppliesTo: AppliesAll,
+		Endpoints: []Endpoint{a, ep("b", SchemeHTTP, "10.0.0.2", 3128)}}, n)
+	scope := egress.Scope{Prefixes: []netip.Prefix{netip.PrefixFrom(target.Addr(), 32)}, Ports: []int{int(target.Port())}}
+	fw, addr := startForwarder(t, scope, p)
+	c, resp := connectVia(t, addr, target.String())
+	defer func() { _ = c.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: the connection was lost to a 407 on one endpoint", resp.StatusCode)
+	}
+	if _, total := fw.TargetRate().Gaps(); total != 0 {
+		t.Fatalf("%d coverage gaps for a host that was carried", total)
+	}
+	if n.count(target.String()) != 0 {
+		t.Fatal("target dialed directly")
+	}
+}
+
+func TestForwarderMarksAGapWhenEveryProxyRefusesCredentials(t *testing.T) {
+	target := echoServer(t)
+	bad := httpProxy(t, 200, "alice", "right", "")
+	n := newNetmap()
+	n.add("10.0.0.1:3128", bad.addr())
+	a := ep("a", SchemeHTTP, "10.0.0.1", 3128)
+	a.Username, a.Password = "alice", "wrong"
+	p := newTestPool(t, Config{Mode: ModePool, PoolID: "p", AppliesTo: AppliesAll, Endpoints: []Endpoint{a}}, n)
+	scope := egress.Scope{Prefixes: []netip.Prefix{netip.PrefixFrom(target.Addr(), 32)}, Ports: []int{int(target.Port())}}
+	fw, addr := startForwarder(t, scope, p)
+	c, resp := connectVia(t, addr, target.String())
+	_ = c.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("tunnel up with every endpoint refusing")
+	}
+	if _, total := fw.TargetRate().Gaps(); total != 1 {
+		t.Fatalf("%d gaps, want 1", total)
+	}
+	if n.count(target.String()) != 0 {
+		t.Fatal("target dialed directly")
+	}
+}

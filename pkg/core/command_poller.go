@@ -110,9 +110,17 @@ type CommandResult struct {
 	// Refusal is set when a policy refused the command (RefusalOf): it was
 	// never run, or was stopped by the kill switch.
 	Refusal *Refusal `json:"refusal,omitempty"`
+	// ErrorCode is the platform's code for a failure (Failure.ErrorCode);
+	// empty when the class has none.
+	ErrorCode string `json:"error_code,omitempty"`
+	// Failure is the structured class and bounded evidence of a failure that
+	// is not a refusal (ClassifyFailure).
+	Failure *Failure `json:"failure,omitempty"`
 	// TargetOutcomes is how each target of a completed scan command ended
 	// (ctis outcome.ResultKey): the platform settles the targets with an
 	// outcome and hands out only the unfinished ones again.
+	// On a failed command they are the targets settled before the failure
+	// (FailureTargetOutcomes).
 	TargetOutcomes []outcome.Target `json:"target_outcomes,omitempty"`
 }
 
@@ -1408,6 +1416,18 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		// The executor's own policy checks (allow_interactsh, custom
 		// templates, targets) refuse with a *LocalPolicyError too.
 		reportResult.Refusal = RefusalOf(err)
+		if reportResult.Refusal == nil {
+			// Not a refusal: say what kind of failure it was and what the
+			// job settled before it, for the platform to decide where the
+			// work goes next. The message is redacted (a dial error can
+			// carry a proxy address with its credentials).
+			reportResult.Error = RedactFailureText(reportResult.Error)
+			reportResult.Failure = ClassifyFailure(p.failureInput(ctx, cmd, err, usage, egressUsed))
+			reportResult.ErrorCode = reportResult.Failure.ErrorCode()
+			if result != nil {
+				reportResult.TargetOutcomes = result.TargetOutcomes
+			}
+		}
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Command %s failed: %v\n", cmd.ID, err)
 		}
@@ -1435,7 +1455,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		for k, v := range RefusedTargetsMetadata(refused) {
 			reportResult.Metadata[k] = v
 		}
-		if err == nil && reportResult.TargetOutcomes != nil {
+		if reportResult.TargetOutcomes != nil {
 			reportResult.TargetOutcomes = append(skippedOutcomes(admission.Refused, outcomeRevisionOf(cmd.Payload)), reportResult.TargetOutcomes...)
 		}
 	}
@@ -1974,7 +1994,12 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		scanResult, err = scanner.Scan(ctx, target, opts)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("scan failed: %w", err)
+		// What the run settled before it failed (a target it could not
+		// reach, a host its coverage gaps name) goes with the failure; every
+		// other target is unfinished.
+		failed := &CommandExecutionResult{DurationMs: time.Since(startTime).Milliseconds()}
+		failed.TargetOutcomes = payload.outcomes(FailureTargetOutcomes(ctx, targets, payload.evidence(ctx, nil, scanResult), nil), refusedTargets)
+		return failed, atStage(StageRun, fmt.Errorf("scan failed: %w", err))
 	}
 	ctx = deliveryContext(ctx, deliverCtx)
 
@@ -2030,7 +2055,7 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 	if e.pusher != nil && len(bytes.TrimSpace(scanResult.RawOutput)) > 0 {
 		parser, err := e.parsers.ForScanner(scanner.Name(), scanResult.RawOutput)
 		if err != nil {
-			return fmt.Errorf("parse failed: %w", err)
+			return atStage(StageParse, fmt.Errorf("parse failed: %w", err))
 		}
 		parseOpts := &ParseOptions{ToolName: scanner.Name()}
 		if target != "" && filepath.IsAbs(target) {
@@ -2046,7 +2071,7 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 		}
 		report, err := parser.Parse(ctx, scanResult.RawOutput, parseOpts)
 		if err != nil {
-			return fmt.Errorf("parse failed (%s parser): %w", parser.Name(), err)
+			return atStage(StageParse, fmt.Errorf("parse failed (%s parser): %w", parser.Name(), err))
 		}
 		if report.Tool == nil || report.Tool.Name == "" {
 			if report.Tool == nil {
@@ -2063,13 +2088,13 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 		// Push findings
 		_, err = e.pusher.PushFindings(ctx, report)
 		if err != nil {
-			return fmt.Errorf("push failed: %w", err)
+			return atStage(StageUpload, fmt.Errorf("push failed: %w", err))
 		}
 	} else if e.pusher != nil && src != nil {
 		// A full scan of a branch that found nothing still reports, so the
 		// platform marks what this tool no longer sees there as fixed.
 		if _, err := e.pusher.PushFindings(ctx, src.emptyReport(scanner.Name())); err != nil {
-			return fmt.Errorf("push failed: %w", err)
+			return atStage(StageUpload, fmt.Errorf("push failed: %w", err))
 		}
 	}
 
@@ -2393,7 +2418,7 @@ func (e *DefaultCommandExecutor) executeCollect(ctx context.Context, cmd *Comman
 			report.Metadata.CoverageType = collectCoverageType(report)
 			_, err := e.pusher.PushFindings(ctx, report)
 			if err != nil {
-				return result, fmt.Errorf("push failed: %w", err)
+				return result, atStage(StageUpload, fmt.Errorf("push failed: %w", err))
 			}
 		}
 	}

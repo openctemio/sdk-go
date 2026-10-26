@@ -133,6 +133,24 @@ then the executor and the tool. A refusal at any step fails the command
 with its layer and rule (`job_signature`, `targets.allow`, …) and nothing
 after it runs.
 
+**A failure that is not a refusal** is classified by the sensor and decided
+by the platform (`core.ClassifyFailure`, openctem research 302). The fail
+call carries `error_code` and, to a platform that lists the `failure_class`
+feature, `failure` (a class of the closed set: `infra.tool_crashed`,
+`infra.tool_unavailable`, `infra.resource.memory`, `infra.resource.disk`,
+`infra.content_unavailable`, `infra.egress.pool_exhausted`,
+`infra.sensor_network`, `target.*`, `config.*`, `unknown`, …, with the
+stage, exit code, signal, tool and content digests, control-probe states
+and proxy failure counts as evidence) and `target_outcomes`: the targets
+settled before the failure, each done, failed on the sensor's side, failed
+on the target's side, or unfinished (a failed command never marks a target
+done). Evidence holds closed values and numbers only, checked again where
+the request is built, so no tool output, path, address or credential can
+travel in it; the failure message is redacted and cut. The sensor never
+chooses where the job goes next. A package `core` cannot import (the
+content cache, the proxy pool, `tool.Error`) tags its errors with
+`core.FailureClassifier`.
+
 ### The local store and the janitor
 
 A daemon opens `pkg/localstore` beside its outbox (`SENSOR_STORE_DIR`; the

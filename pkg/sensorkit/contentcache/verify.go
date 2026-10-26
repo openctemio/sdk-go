@@ -13,6 +13,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/localstore"
 )
 
@@ -73,7 +74,7 @@ const maxRevocations = 100_000
 
 // ErrRevocationsUnknown: the persisted revocation set failed
 // authentication; nothing loads until the platform's next Sync.
-var ErrRevocationsUnknown = errors.New("content pack revocations unknown (refusing until the next sync)")
+var ErrRevocationsUnknown = core.NewClassedError("content pack revocations unknown (refusing until the next sync)", core.FailureContentUnavailable, core.ReasonVerificationRefused)
 
 // verified is the outcome of the last full check of a held pack.
 type verified struct {

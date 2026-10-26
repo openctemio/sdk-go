@@ -57,10 +57,10 @@ var digestRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // Errors.
 var (
-	ErrNotHeld  = errors.New("content pack not in the cache")
-	ErrRevoked  = errors.New("content pack revoked")
-	ErrVerify   = errors.New("content pack refused")
-	ErrTooLarge = errors.New("content pack larger than allowed")
+	ErrNotHeld  = core.NewClassedError("content pack not in the cache", core.FailureContentUnavailable, "")
+	ErrRevoked  = core.NewClassedError("content pack revoked", core.FailureContentUnavailable, core.ReasonContentRevoked)
+	ErrVerify   = core.NewClassedError("content pack refused", core.FailureContentUnavailable, core.ReasonVerificationRefused)
+	ErrTooLarge = core.NewClassedError("content pack larger than allowed", core.FailureContentUnavailable, "")
 )
 
 // Pack is one pack of the platform's desired set.
