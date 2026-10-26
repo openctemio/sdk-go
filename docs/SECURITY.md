@@ -692,6 +692,27 @@ the named endpoints (a host without a port allows any port). A sensor
 reports `egress.upstream@1` only when its tasks run confined
 (`net.confined@1`) and the veto is not `direct-only`.
 
+A `direct-only` sensor reports the marker `egress.host-direct@1` (not for a
+shared sensor): the platform then runs its scans direct and shows the path
+as set on the sensor host, unless the organization requires a proxy, in
+which case its jobs wait with a stated reason.
+
+Validate jobs (finding re-checks) leave through the job's pool like scans:
+the sensor reports `egress.validate@1` when its tasks run confined and the
+veto is not `direct-only`, and the pool carries the safe-check's connection
+and the nuclei re-verification. An empty or unusable pool fails the job; a
+probe never goes direct.
+
+A sensor that accepts pools also serves `proxy_test` commands
+(`proxy.test@1`): the platform never connects to a proxy, it asks up to three
+sensors to test each endpoint of a pool through the platform's echo (exit
+address, handshake time, IPv4 and IPv6, a second port to tell a proxy that
+only allows 443). The request through the proxy carries a one-test token in
+its URL and nothing else, never the sensor's key and never a credential. The
+sensor refuses an echo address a proxy must never be asked to reach
+(loopback, link-local, metadata) and applies `SENSOR_SCAN_EGRESS_ALLOW` as for
+a scan.
+
 #### Shared mode (`SENSOR_SHARED_MODE=1`, `sensorkit.Options.Shared`)
 
 A sensor that runs jobs of many tenants (an instance's shared sensors, api

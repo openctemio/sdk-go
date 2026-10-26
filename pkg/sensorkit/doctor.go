@@ -312,7 +312,7 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 		settingsreg.Setting{Name: core.EnvScannerProxy, Type: settingsreg.URL, Secret: true, Group: "network",
 			Description: "SDK name of the scanner proxy setting."},
 		settingsreg.Setting{Name: EnvScanEgress, Type: settingsreg.Enum, Enum: []string{"", ScanEgressPlatform, ScanEgressDirectOnly}, Default: ScanEgressPlatform, Group: "network",
-			Description: "Organization proxy pools for scan traffic: platform accepts the pool a job carries (its tools' connections go through it, never direct); direct-only refuses every pooled job (egress_refused_by_host) and does not report egress.upstream@1."},
+			Description: "Organization proxy pools for scan traffic: platform accepts the pool a job carries (its tools' connections go through it, never direct); direct-only refuses every pooled job (egress_refused_by_host), does not report egress.upstream@1 and reports egress.host-direct@1, so the platform runs this sensor's scans direct."},
 		settingsreg.Setting{Name: EnvScanEgressAllow, Type: settingsreg.List, Group: "network",
 			Description: "Comma list of host:port (or host, any port) proxy endpoints this sensor accepts in a job's pool; a job naming another endpoint is refused (egress_refused_by_host). Empty: any endpoint that passes validation."},
 		settingsreg.Setting{Name: "HTTPS_PROXY", Type: settingsreg.URL, Secret: true, Group: "network",
