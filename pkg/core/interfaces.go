@@ -1040,6 +1040,13 @@ type LiveHost struct {
 	FaviconMMH3 string   `json:"favicon_mmh3,omitempty"` // mmh3 favicon hash (signed 32-bit decimal)
 	JARM        string   `json:"jarm,omitempty"`         // JARM TLS server fingerprint
 	ASN         *ASN     `json:"asn,omitempty"`          // Autonomous system of the host's address
+
+	// ResponseHeaders is the posture subset of the response headers
+	// (see ResponseHeadersFrom): an allow-list of header values and the
+	// names and flags of the cookies, never a cookie value.
+	ResponseHeaders *ResponseHeaders `json:"response_headers,omitempty"`
+	// CNAMEs is the DNS alias chain of the host, bounded by SanitizeCNAMEs.
+	CNAMEs []string `json:"cnames,omitempty"`
 }
 
 // TLSLeaf is the leaf certificate an HTTP probe saw in a TLS handshake.
@@ -1075,6 +1082,14 @@ type DiscoveredURL struct {
 	Parent     string `json:"parent,omitempty"`    // Parent URL
 	Type       string `json:"type,omitempty"`      // endpoint, form, api, static
 	Extension  string `json:"extension,omitempty"` // File extension
+
+	// ContentType is the media type of the response, without parameters.
+	ContentType string `json:"content_type,omitempty"`
+	// Params are the parameters seen besides the query string (form
+	// fields). Names only, never values.
+	Params []URLParam `json:"params,omitempty"`
+	// Forms are the HTML forms found on the page this URL names.
+	Forms []WebForm `json:"forms,omitempty"`
 }
 
 // Technology represents a detected technology.
