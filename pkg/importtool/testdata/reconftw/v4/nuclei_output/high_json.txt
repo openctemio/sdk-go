@@ -1,0 +1,1 @@
+{"template-id":"exposed-panel","info":{"name":"Admin panel exposed","severity":"high","tags":["panel"]},"type":"http","host":"https://www.example.com","matched-at":"https://www.example.com/admin","matcher-status":true}

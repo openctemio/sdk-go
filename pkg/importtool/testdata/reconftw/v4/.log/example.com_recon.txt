@@ -1,0 +1,2 @@
+[1;32mreconFTW version: v4.0[0m
+started
