@@ -10,7 +10,7 @@ import (
 )
 
 // DataDirDocsURL is where the data directory problem is explained.
-const DataDirDocsURL = "https://docs.openctem.io/sensors/troubleshooting/#permission-denied-on-varlibopenctem"
+const DataDirDocsURL = "https://docs.openctem.io/sensors/run-the-sensor/#permission-denied-on-varlibopenctem"
 
 // DataDirProblem is a data directory the sensor cannot use. Its Error is the
 // message to print: the path, who owns it, who the sensor runs as and the
