@@ -1,0 +1,1 @@
+https://example-assets.s3.amazonaws.com [open]

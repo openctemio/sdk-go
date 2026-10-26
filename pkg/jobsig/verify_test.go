@@ -564,3 +564,54 @@ func TestUnknownStatementFieldRefused(t *testing.T) {
 		t.Fatalf("err = %v, want malformed", err)
 	}
 }
+
+// A statement binds the payload's content packs by slot and digest, in
+// order: dropping, adding, swapping or changing one is refused even under a
+// valid signature, so a job can mount only the packs its statement lists.
+func TestVerifyBindsContentPacks(t *testing.T) {
+	d1 := "sha256:" + strings.Repeat("1", 64)
+	d2 := "sha256:" + strings.Repeat("2", 64)
+	payload := []byte(`{"scanner":"dnsx","targets":["a.example.com"],"content":[{"slot":"labels","digest":"` + d1 + `","files":["dns/s.txt"]},{"slot":"paths","digest":"` + d2 + `"}]}`)
+	refs := []ContentRef{{"labels", d1}, {"paths", d2}}
+	if got := PayloadContentRefs(payload); !slices.Equal(got, refs) {
+		t.Fatalf("PayloadContentRefs = %v", got)
+	}
+	cases := map[string]struct {
+		content []ContentRef
+		reason  string
+	}{
+		"exact":   {refs, ""},
+		"omitted": {nil, ReasonContent},
+		"one":     {refs[:1], ReasonContent},
+		"extra":   {append(slices.Clone(refs), refs[0]), ReasonContent},
+		"swapped": {[]ContentRef{refs[1], refs[0]}, ReasonContent},
+		"other":   {[]ContentRef{refs[0], {"paths", "sha256:" + strings.Repeat("3", 64)}}, ReasonContent},
+		"slot":    {[]ContentRef{refs[0], {"words", d2}}, ReasonContent},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, "")
+			f.b.Payload = payload
+			st := f.statement()
+			st.PayloadSHA256, st.Targets, st.Content = PayloadDigest(payload), []string{"a.example.com"}, tc.content
+			st.Tool = "dnsx"
+			got, err := f.ver.Verify(context.Background(), f.envelope(t, st), f.b)
+			if tc.reason == "" {
+				if err != nil || !slices.Equal(got.Content, refs) {
+					t.Fatalf("valid job refused: %v", err)
+				}
+				return
+			}
+			if ReasonOf(err) != tc.reason {
+				t.Fatalf("err = %v, want reason %q", err, tc.reason)
+			}
+		})
+	}
+	// Content named for a payload that carries none.
+	f := newFixture(t, "")
+	st := f.statement()
+	st.Content = refs
+	if ReasonOf(func() error { _, err := f.ver.Verify(context.Background(), f.envelope(t, st), f.b); return err }()) != ReasonContent {
+		t.Fatal("content named for a payload without content was accepted")
+	}
+}

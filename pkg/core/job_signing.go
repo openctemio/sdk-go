@@ -236,6 +236,7 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 	// The statement binds the payload's custom templates (Verify checked
 	// they are the payload's): the executor trusts them through it.
 	cmd.jobVerified, cmd.signedTemplates, cmd.signedLimits = true, st.Templates, st.Limits
+	cmd.signedContent = st.Content
 	if g.shared {
 		cmd.jobTenant = st.TenantID
 		// The zone's private ranges come only from the verified statement.

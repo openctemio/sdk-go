@@ -127,7 +127,16 @@ type StartRequest struct {
 	// nonce is revealed. An unusable token is a 401. Never with Code or
 	// SensorID.
 	EnrollmentToken string `json:"enrollment_token,omitempty"`
+	// EnrollmentScope says which kind of token EnrollmentToken is, so a
+	// token is only ever used as what the sensor's operator meant: empty
+	// (an instance token, a shared sensor) or EnrollmentScopeOrganization
+	// (an organization enrollment token, a sensor of the token's
+	// organization). Sent only with an organization token.
+	EnrollmentScope string `json:"enrollment_scope,omitempty"`
 }
+
+// EnrollmentScopeOrganization marks an organization enrollment token.
+const EnrollmentScopeOrganization = "organization"
 
 // StartResponse is the 201 answer to POST /pairings. The answer has the same
 // shape whether or not a reverse-mode code was valid.
@@ -163,6 +172,29 @@ type Identity struct {
 	// also in the confirmation transcript); empty for a sensor of the
 	// organization TenantID.
 	Scope string `json:"scope,omitempty"`
+	// ContentSigning are the public keys the sensor pins to verify content
+	// packs (api RFC-061): the platform's key for platform packs and, for a
+	// sensor of one organization, that organization's key for its own packs.
+	// Pinned here, over the pairing connection, and never taken later from
+	// a content route. Absent from a platform without content delivery.
+	ContentSigning *ContentSigning `json:"content_signing,omitempty"`
+}
+
+// ContentSigning lists the content-pack verification keys of an identity.
+type ContentSigning struct {
+	Platform []ContentKey `json:"platform,omitempty"`
+	// Tenant is empty for a shared sensor (Scope "instance"): it never
+	// holds an organization's packs.
+	Tenant []ContentKey `json:"tenant,omitempty"`
+}
+
+// ContentKey is one Ed25519 verification key: KeyID is "SHA256:" + lower-case
+// hex of the SHA-256 of the raw key and PublicKey the raw 32-byte key in
+// standard base64. A sensor recomputes the id; it never trusts it.
+type ContentKey struct {
+	KeyID     string `json:"keyid"`
+	Algorithm string `json:"algorithm"`
+	PublicKey string `json:"public_key"`
 }
 
 // ScopeInstance is Identity.Scope of a shared sensor.

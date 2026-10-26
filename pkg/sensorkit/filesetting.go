@@ -16,6 +16,7 @@ import (
 // the variable and its _FILE form stops the sensor.
 const (
 	EnvInstanceEnrollmentTokenFile = EnvInstanceEnrollmentToken + "_FILE"
+	EnvEnrollmentTokenFile         = EnvEnrollmentToken + "_FILE"
 	EnvJobSigningKeysFile          = EnvJobSigningKeys + "_FILE"
 	EnvJobSigningRootFile          = EnvJobSigningRoot + "_FILE"
 )

@@ -40,6 +40,7 @@ const (
 	ReasonTargets       = "targets"
 	ReasonTemplates     = "templates"
 	ReasonLimits        = "limits"
+	ReasonContent       = "content"
 	ReasonNonce         = "nonce"
 	ReasonReplay        = "replay"
 	ReasonSeq           = "seq"
@@ -383,6 +384,11 @@ func (v *Verifier) checkStatement(st *Statement, keyID string, b Binding) error 
 	}
 	if !slices.Equal(st.Templates, tmpl) {
 		return refusef(ReasonTemplates, "statement names %d custom template(s), the payload %d, or they differ", len(st.Templates), len(tmpl))
+	}
+	// The content packs too: the signer approved exactly these digests as
+	// deliverable to the job's organization, so a sensor mounts no other.
+	if got := PayloadContentRefs(b.Payload); !slices.Equal(st.Content, got) {
+		return refusef(ReasonContent, "statement names %d content pack(s), the payload %d, or they differ", len(st.Content), len(got))
 	}
 	// The limits must name the statement's own targets and be well formed:
 	// a limit the sensor cannot read is refused, never dropped.

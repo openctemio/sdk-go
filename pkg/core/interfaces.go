@@ -111,6 +111,10 @@ type ScanOptions struct {
 	// from its verified signed statement only (never the payload); only a
 	// ScopeLimitScanner receives them.
 	Limits []scopelimit.Limit `yaml:"-" json:"-"`
+	// Content is the content the job pins: packs held for the job by the
+	// sensor's cache and inline lists (content_job.go). Only a
+	// ContentScanner receives it.
+	Content *ResolvedContent `yaml:"-" json:"-"`
 	// ExcludeHosts are the job's exclusions (addresses, CIDR prefixes,
 	// "first-last" ranges) for a tool that can skip hosts itself (naabu
 	// -exclude-hosts). The sensor already cut the job's ranges around them.
@@ -629,6 +633,40 @@ type LocalStoreReport struct {
 	BootReset bool   `json:"boot_reset,omitempty"`
 	// Tampered counts records that failed authentication since start.
 	Tampered int64 `json:"tampered,omitempty"`
+	// Content is the content packs the sensor holds (nil without a content
+	// cache).
+	Content *ContentReport `json:"content,omitempty"`
+}
+
+// MaxReportedPackDigests bounds ContentReport.Held.
+const MaxReportedPackDigests = 200
+
+// ContentReport is what the heartbeat says about the content packs a sensor
+// holds (api RFC-061): the digests, so the platform sees drift and can place
+// work where its content already is, and the cache's delivery counters. It
+// carries no tenant names, paths or file names.
+type ContentReport struct {
+	// Held are the pack digests held, sorted, at most
+	// MaxReportedPackDigests; HeldCount is how many are held in all and
+	// HeldSetSHA256 the hex SHA-256 of the whole sorted list joined by
+	// newlines (compare it, not the list, when HeldCount is larger).
+	Held          []string `json:"held,omitempty"`
+	HeldCount     int      `json:"held_count"`
+	HeldSetSHA256 string   `json:"held_set_sha256,omitempty"`
+	// Bytes is what the packs occupy.
+	Bytes int64 `json:"bytes"`
+	// Hits, Misses, BytesDownloaded and BytesSaved are the cache's delivery
+	// counters since start.
+	Hits            int64 `json:"hits"`
+	Misses          int64 `json:"misses"`
+	BytesDownloaded int64 `json:"bytes_downloaded"`
+	BytesSaved      int64 `json:"bytes_saved"`
+	// VerifyFailures counts packs that failed a check on load or install
+	// since start (tampering or a bad delivery).
+	VerifyFailures int64 `json:"verify_failures,omitempty"`
+	// DesiredVersion is the desired-set version last synced ("" before the
+	// first sync).
+	DesiredVersion string `json:"desired_version,omitempty"`
 }
 
 // =============================================================================
@@ -1040,6 +1078,13 @@ type LiveHost struct {
 	FaviconMMH3 string   `json:"favicon_mmh3,omitempty"` // mmh3 favicon hash (signed 32-bit decimal)
 	JARM        string   `json:"jarm,omitempty"`         // JARM TLS server fingerprint
 	ASN         *ASN     `json:"asn,omitempty"`          // Autonomous system of the host's address
+
+	// ResponseHeaders is the posture subset of the response headers
+	// (see ResponseHeadersFrom): an allow-list of header values and the
+	// names and flags of the cookies, never a cookie value.
+	ResponseHeaders *ResponseHeaders `json:"response_headers,omitempty"`
+	// CNAMEs is the DNS alias chain of the host, bounded by SanitizeCNAMEs.
+	CNAMEs []string `json:"cnames,omitempty"`
 }
 
 // TLSLeaf is the leaf certificate an HTTP probe saw in a TLS handshake.
@@ -1075,6 +1120,14 @@ type DiscoveredURL struct {
 	Parent     string `json:"parent,omitempty"`    // Parent URL
 	Type       string `json:"type,omitempty"`      // endpoint, form, api, static
 	Extension  string `json:"extension,omitempty"` // File extension
+
+	// ContentType is the media type of the response, without parameters.
+	ContentType string `json:"content_type,omitempty"`
+	// Params are the parameters seen besides the query string (form
+	// fields). Names only, never values.
+	Params []URLParam `json:"params,omitempty"`
+	// Forms are the HTML forms found on the page this URL names.
+	Forms []WebForm `json:"forms,omitempty"`
 }
 
 // Technology represents a detected technology.

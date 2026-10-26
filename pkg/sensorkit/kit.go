@@ -1111,15 +1111,9 @@ func (k *Kit) Run(ctx context.Context) error {
 
 	// Heartbeat doorbell: the heartbeat answer says when work is waiting
 	// (poll now), pauses or drains the sensor, and asks for key rotation.
-	var doorbell *core.Doorbell
-	if k.client != nil && !k.opts.DisableDoorbell {
-		var renewNow func()
-		if renewal != nil {
-			renewNow = renewal.RenewNow
-		}
-		doorbell = core.NewDoorbell(&core.DoorbellConfig{OnRotateKey: renewNow, Verbose: k.s.verbose})
-		s.SetDoorbell(doorbell)
-	}
+	doorbell := k.newDoorbell(s, renewal)
+	stopContentSync := k.startContentSync(ctx)
+	defer stopContentSync()
 	k.startTransport(ctx, doorbell)
 
 	if cs, ok := k.opts.Content.(ContentStarter); ok {
@@ -1320,6 +1314,10 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	}
 	executor.SetParserRegistry(parsers)
 	executor.SetTemplateVerifier(k.s.templates)
+	// Packs a signed job pins come from the content cache.
+	if cache := k.contentCache(); cache != nil {
+		executor.SetContentResolver(cache)
+	}
 	if k.s.sensorID != "" {
 		// Configured locally (SENSOR_ID), so a template manifest signed
 		// for another sensor is refused.

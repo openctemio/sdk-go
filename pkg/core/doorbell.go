@@ -97,6 +97,11 @@ type HeartbeatHints struct {
 	// and complete with what they finished (stop_command_ids: the task
 	// stalled). See ErrStoppedByPlatform.
 	StopCommandIDs []string
+	// ContentVersion is the opaque version of the content the platform wants
+	// this sensor to hold (the desired set's ETag, content_version), or ""
+	// when absent or malformed. A change makes the sensor refresh its
+	// content at once instead of waiting for its schedule.
+	ContentVersion string
 }
 
 // heartbeatHintsWire is the JSON shape of the hints in a heartbeat response.
@@ -107,6 +112,7 @@ type heartbeatHintsWire struct {
 	ConfigVersion        *string  `json:"config_version"`
 	CancelCommandIDs     []string `json:"cancel_command_ids"`
 	StopCommandIDs       []string `json:"stop_command_ids"`
+	ContentVersion       *string  `json:"content_version"`
 }
 
 // ParseHeartbeatHints reads the doorbell hints from a heartbeat response
@@ -143,6 +149,12 @@ func ParseHeartbeatHints(body []byte) *HeartbeatHints {
 			h.ConfigVersion = *w.ConfigVersion
 		}
 	}
+	if w.ContentVersion != nil {
+		h.Present = true
+		if validContentVersion(*w.ContentVersion) {
+			h.ContentVersion = *w.ContentVersion
+		}
+	}
 	for _, id := range w.CancelCommandIDs {
 		if id != "" && len(id) <= maxCancelIDLen && len(h.CancelCommandIDs) < maxCancelIDs {
 			h.CancelCommandIDs = append(h.CancelCommandIDs, id)
@@ -154,6 +166,21 @@ func ParseHeartbeatHints(body []byte) *HeartbeatHints {
 		}
 	}
 	return h
+}
+
+// maxHintContentVersionLen bounds a content version (an ETag, possibly quoted).
+const maxHintContentVersionLen = 128
+
+func validContentVersion(v string) bool {
+	if v == "" || len(v) > maxHintContentVersionLen {
+		return false
+	}
+	for _, r := range v {
+		if !strings.ContainsRune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_:.\"/", r) {
+			return false
+		}
+	}
+	return true
 }
 
 func validConfigVersion(v string) bool {
@@ -221,9 +248,13 @@ type Doorbell struct {
 	onStop        func(ids []string)
 	draining      bool
 	configVersion string
-	pendingJobs   int
-	updateLogged  bool
-	unknownLogged map[string]bool
+	// contentVersion is the last content version seen; onContent is told
+	// when it changes (SetContentHandler).
+	contentVersion string
+	onContent      func(version string)
+	pendingJobs    int
+	updateLogged   bool
+	unknownLogged  map[string]bool
 
 	// wake carries at most one pending "poll now".
 	wake chan struct{}
@@ -340,7 +371,16 @@ func (d *Doorbell) Handle(h *HeartbeatHints) {
 	takingJobs := !d.paused && !d.draining
 	d.pendingJobs = h.PendingJobs
 	onCancel, onStop := d.onCancel, d.onStop
+	var onContent func(string)
+	if h.ContentVersion != "" && h.ContentVersion != d.contentVersion {
+		d.contentVersion = h.ContentVersion
+		onContent = d.onContent
+	}
 	d.mu.Unlock()
+
+	if onContent != nil {
+		onContent(h.ContentVersion)
+	}
 
 	if len(h.CancelCommandIDs) > 0 && onCancel != nil {
 		onCancel(h.CancelCommandIDs)
@@ -360,6 +400,15 @@ func (d *Doorbell) Handle(h *HeartbeatHints) {
 			d.logf("platform asks for key rotation, but key renewal is not enabled on this sensor")
 		}
 	}
+}
+
+// SetContentHandler sets what runs when a heartbeat answer carries a content
+// version different from the last one seen (the first answer included): the
+// sensor refreshes its content at once. f must not block.
+func (d *Doorbell) SetContentHandler(f func(version string)) {
+	d.mu.Lock()
+	d.onContent = f
+	d.mu.Unlock()
 }
 
 func (d *Doorbell) setCancelHandler(f func(ids []string)) {

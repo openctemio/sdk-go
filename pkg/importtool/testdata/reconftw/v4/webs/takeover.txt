@@ -1,0 +1,1 @@
+[azure-takeover] [http] [high] https://old.example.com

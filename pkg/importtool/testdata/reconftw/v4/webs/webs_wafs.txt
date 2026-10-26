@@ -1,0 +1,2 @@
+The site https://www.example.com is behind Cloudflare (Cloudflare Inc.) WAF.
+No WAF detected by the generic detection

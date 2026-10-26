@@ -113,6 +113,14 @@ type Identity struct {
 	// it. False on an identity written by an older SDK, or paired with that
 	// development flag.
 	RequireSignedJobs bool `json:"require_signed_jobs,omitempty"`
+	// ContentPlatformKeys and ContentTenantKeys are the content-signing
+	// keys the pairing granted (api RFC-061): the sensor verifies platform
+	// packs with the first and its organization's own packs with the
+	// second. A shared sensor has no tenant key. Empty on an identity paired
+	// before content delivery or with a platform without it: the sensor
+	// then runs no job that names content packs.
+	ContentPlatformKeys []jobsig.PublicKey `json:"content_platform_keys,omitempty"`
+	ContentTenantKeys   []jobsig.PublicKey `json:"content_tenant_keys,omitempty"`
 }
 
 // TLSPin parses the platform TLS pin: the element and the SHA-256
