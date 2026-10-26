@@ -1,3 +1,0 @@
-### Added: `sensorkit.PreflightDataDirs` checks the sensor's data directories at start
-
-- `PreflightDataDirs(contentDir)` (and `DataDirs`, `CheckDataDirs`) makes sure the outbox, state, store, workspaces and content directories exist and can be written, and returns a `*DataDirProblem` whose message names the path, the owner uid:gid, the sensor's own uid:gid and the two fixes (`chown -R` for a bind mount, a named volume). A sensor calls it before anything else so a bind mount owned by another user stops it with that message instead of a crash loop. Without `/var/lib/openctem` and without `SENSOR_*_DIR` settings nothing is checked, so a sensor run as a plain binary still falls back to `~/.openctem`.
