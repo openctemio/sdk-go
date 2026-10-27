@@ -182,6 +182,25 @@ func TestDefaultCommandExecutor_GuardRefusesPerTarget(t *testing.T) {
 		}
 	}
 
+	// Every target is a name that does not resolve: the command completes
+	// with each target skipped as unresolvable, instead of failing.
+	gone := []string{"a.gone.example.net", "b.gone.example.net"}
+	sc3 := &listRecorder{}
+	e3 := NewDefaultCommandExecutor(nil)
+	e3.AddScanner(sc3)
+	e3.SetScanTargetPolicy(byScannerPolicy())
+	if res, err := e3.Execute(ctx, scanCommand(t, ScanCommandPayload{Scanner: "nuclei", Targets: gone})); err != nil {
+		t.Fatalf("all unresolvable: %v", err)
+	} else {
+		listed, _ := res.Metadata[MetaRefusedTargets].([]RefusedTarget)
+		if len(listed) != 2 || res.Metadata[MetaRefusedTargetsTotal] != 2 || res.Metadata[MetaPartial] != true || listed[0].Reason != RefusedTargetUnresolvable {
+			t.Fatalf("metadata %+v", res.Metadata)
+		}
+		if sc3.list != nil {
+			t.Errorf("scanner ran on %v", sc3.list)
+		}
+	}
+
 	sc2 := &listRecorder{}
 	e2 := NewDefaultCommandExecutor(nil)
 	e2.AddScanner(sc2)

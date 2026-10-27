@@ -1908,6 +1908,16 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// filesystem targets, and no leading '-' (flag injection).
 	targets, refusedTargets, err := e.validateScanTargets(ctx, &payload)
 	if err != nil {
+		// Every target is a name that does not resolve: nothing was wrong
+		// with the job, the names are gone. The command completes with each
+		// target skipped (reason unresolvable), not failed.
+		var rerr *refusedTargetsError
+		if errors.As(err, &rerr) && allUnresolvable(rerr.refused) {
+			return &CommandExecutionResult{
+				Metadata:       RefusedTargetsMetadata(rerr.refused),
+				TargetOutcomes: payload.outcomes(nil, rerr.refused),
+			}, nil
+		}
 		return nil, err
 	}
 	// target is the single target, or "" for a multi-target run.
@@ -2209,6 +2219,20 @@ func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payloa
 		return nil, details, &refusedTargetsError{err: err, refused: details}
 	}
 	return out, details, nil
+}
+
+// allUnresolvable reports whether every refused target is a name that does
+// not resolve.
+func allUnresolvable(refused []RefusedTarget) bool {
+	if len(refused) == 0 {
+		return false
+	}
+	for _, r := range refused {
+		if r.Reason != RefusedTargetUnresolvable {
+			return false
+		}
+	}
+	return true
 }
 
 // refusedTargetsError is the error of a command whose every target was
