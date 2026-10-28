@@ -269,6 +269,11 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "Run the one platform command with this id and exit (RunJob; a Kubernetes Job) instead of polling for work. The -job flag wins over it."},
 		settingsreg.Setting{Name: EnvScannerPriority, Type: settingsreg.Enum, Enum: []string{"low", "normal"}, Default: "low",
 			Group: "runtime", Description: "Priority of scanner processes."},
+		settingsreg.Setting{Name: EnvToolCgroups, Type: settingsreg.Enum, Enum: []string{"auto", "off"}, Default: "auto",
+			Group: "runtime", Description: "Per-task cgroup limits for tools where the sensor's cgroup is delegated (auto), or rlimits only (off).",
+			// The reference page has no row for it yet (openctemio/docs #180):
+			// link the page until it does, then drop this for the default anchor.
+			Docs: settingsreg.DocsBase},
 		settingsreg.Setting{Name: EnvProtectFromOOM, Type: settingsreg.Bool, Default: "false", Group: "runtime",
 			Description: "Protect the sensor itself from the OOM killer (needs CAP_SYS_RESOURCE)."},
 		settingsreg.Setting{Name: EnvTools, Type: settingsreg.List, Group: "tools",

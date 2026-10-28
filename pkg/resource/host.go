@@ -40,6 +40,9 @@ type HostResources struct {
 	// DiskFreeBytes is the space available to the sensor on its work
 	// directory's file system.
 	DiskFreeBytes int64 `json:"disk_free_bytes"`
+	// Pressure is the host's pressure as the governor rates it (nil: not
+	// rated; a Manager's snapshot always sets it).
+	Pressure *Pressure `json:"pressure,omitempty"`
 }
 
 // ProbeResult is one probe: the snapshot plus the pressure signals seen
@@ -52,6 +55,8 @@ type ProbeResult struct {
 	// OOMKills is how many processes the cgroup's OOM killer ended since the
 	// previous probe.
 	OOMKills uint64
+	// Signals are the host pressure readings (research/318).
+	Signals PressureSignals
 }
 
 // Prober reads the host's resources. The zero value probes the running
@@ -71,6 +76,10 @@ type Prober struct {
 	DiskFree func(dir string) int64
 	// Now is the clock (default time.Now).
 	Now func() time.Time
+	// FDLimit returns the process's soft limit on open descriptors
+	// (default: getrlimit). Tests that set Root set it to read the
+	// fixture's proc/self/fd.
+	FDLimit func() uint64
 
 	mu   sync.Mutex
 	prev *cpuSample
@@ -86,6 +95,12 @@ type cpuSample struct {
 	oomKills  uint64
 	hasOOM    bool
 }
+
+// EnvelopeSelfLeaf is the child cgroup a sensor moves itself into when it
+// places each tool task in a cgroup of its own (cgroup v2 forbids processes
+// in a cgroup whose controllers are enabled for children). The prober reads
+// the parent: the sensor's whole share.
+const EnvelopeSelfLeaf = "openctem-sensor"
 
 // noLimit is what cgroup v1 reports for "no memory limit" (a page-rounded
 // MaxInt64); anything at or above it is no limit.
@@ -144,6 +159,10 @@ func (p *Prober) Probe() ProbeResult {
 		}
 	}
 	out.Resources = res
+	out.Signals = p.signals(cg, res, cur, prev)
+	if prev != nil && cur.periods > prev.periods {
+		out.Signals.CPUThrottledPct, out.Signals.ThrottleKnown = pct(out.ThrottledRatio), true
+	}
 	return out
 }
 
@@ -276,7 +295,14 @@ func (p *Prober) cgroup() cgroup {
 		if s, ok := p.read("proc", "self", "cgroup"); ok {
 			for line := range strings.SplitSeq(s, "\n") {
 				if rest, ok := strings.CutPrefix(line, "0::"); ok && rest != "/" && rest != "" {
-					cand := filepath.Join(base, filepath.Clean("/"+rest))
+					rest = filepath.Clean("/" + rest)
+					// A sensor that applies per-task cgroups lives in a leaf
+					// of its own cgroup (EnvelopeSelfLeaf); what it may use,
+					// and what it and its tools use, is the parent's.
+					if filepath.Base(rest) == EnvelopeSelfLeaf {
+						rest = filepath.Dir(rest)
+					}
+					cand := filepath.Join(base, rest)
 					if _, err := os.Stat(cand); err == nil {
 						dir = cand
 					}

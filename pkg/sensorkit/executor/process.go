@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -193,6 +194,16 @@ func (b *ProcessBackend) Name() string { return "process" }
 func (b *ProcessBackend) Status() Status {
 	s := b.status
 	s.Missing = slices.Clone(s.Missing)
+	envMu.Lock()
+	tried := envTried
+	envMu.Unlock()
+	if tried {
+		if m, why := currentEnvelopes(); m != nil {
+			s.Envelope = EnvelopeCgroup
+		} else {
+			s.Envelope, s.EnvelopeMissing = EnvelopeRlimit, why
+		}
+	}
 	return s
 }
 
@@ -258,6 +269,9 @@ func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 	limits := spec.Limits
 	if limits == (Limits{}) {
 		limits = b.cfg.Limits
+	}
+	if m, _ := currentEnvelopes(); m == nil {
+		limits = rlimitEnvelope(limits.withDefaults(), spec.Limits, spec.Envelope)
 	}
 	ls := launchSpec{
 		Workdir:    dir,
@@ -383,6 +397,7 @@ type processTask struct {
 	cmd    *exec.Cmd
 	start  time.Time
 	killed string
+	cg     *taskCgroup
 }
 
 func (t *processTask) Workdir() string { return t.workdir }
@@ -397,11 +412,26 @@ func (t *processTask) Start(ctx context.Context) error {
 	if h := t.spec.Hooks.Configure; h != nil {
 		h(cmd)
 	}
+	var cg *taskCgroup
+	if m, _ := currentEnvelopes(); m != nil && t.spec.Envelope != nil {
+		c, err := m.create(cmp.Or(t.spec.ID, "task"), *t.spec.Envelope)
+		if err != nil {
+			return err
+		}
+		cg = c
+		cg.configure(cmd)
+	}
 	t.mu.Lock()
-	t.cmd, t.start = cmd, time.Now()
+	t.cmd, t.start, t.cg = cmd, time.Now(), cg
 	t.mu.Unlock()
 	if err := cmd.Start(); err != nil {
+		if cg != nil {
+			cg.close()
+		}
 		return err
+	}
+	if cg != nil {
+		cg.started()
 	}
 	if h := t.spec.Hooks.Started; h != nil {
 		h(cmd)
@@ -423,7 +453,13 @@ func (t *processTask) Wait() (*Result, error) {
 	t.mu.Lock()
 	res := &Result{ExitCode: -1, State: cmd.ProcessState, Killed: t.killed, Duration: time.Since(t.start),
 		Sandbox: t.b.Status(), Network: t.spec.Network}
+	cg := t.cg
+	t.cg = nil
 	t.mu.Unlock()
+	if cg != nil {
+		res.EnvelopeOOM = cg.oomKilled()
+		cg.close()
+	}
 	if cmd.ProcessState != nil {
 		res.ExitCode = cmd.ProcessState.ExitCode()
 	}
@@ -450,6 +486,13 @@ func (t *processTask) Kill(reason string) {
 }
 
 func (t *processTask) Cleanup() error {
+	t.mu.Lock()
+	cg := t.cg
+	t.cg = nil
+	t.mu.Unlock()
+	if cg != nil {
+		cg.close()
+	}
 	if t.workdir == "" {
 		return nil
 	}

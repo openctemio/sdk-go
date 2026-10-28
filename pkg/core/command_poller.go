@@ -365,6 +365,11 @@ type CommandPoller struct {
 	// without waiting for the next tick or doorbell ring.
 	slotFreed chan struct{}
 	backlog   atomic.Bool
+	// skippedTypes is how many commands of a type this sensor does not
+	// run the last poll returned: the next poll asks for that many more,
+	// so with one free slot such a command at the head of the queue does
+	// not hide the sensor's own work behind it on every poll.
+	skippedTypes atomic.Int32
 
 	// verbose is atomic: SetVerbose may be called concurrently with the
 	// poll/execute goroutines that read it.
@@ -931,6 +936,10 @@ func (p *CommandPoller) MaxJobs() int {
 	return p.maxConcurrent
 }
 
+// maxSkippedTypesAsk bounds the extra commands a poll asks for after a poll
+// returned commands of types this sensor does not run.
+const maxSkippedTypesAsk = 8
+
 // slotLimit is the live slot count: MaxConcurrent, or the resource
 // manager's dynamic slots.
 func (p *CommandPoller) slotLimit() int {
@@ -1015,7 +1024,8 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 	if p.verbose.Load() && p.doorbell != nil {
 		fmt.Printf("[command-poller] %s Polling for commands (%d free slots)\n", time.Now().Format("15:04:05.000"), free)
 	}
-	resp, err := p.getCommands(ctx, free)
+	ask := free + min(int(p.skippedTypes.Load()), maxSkippedTypesAsk)
+	resp, err := p.getCommands(ctx, ask)
 	if gate != nil {
 		gate.MarkRejected(err, p.keyHint())
 	} else if backoff := p.ownGate.Observe(err, p.keyHint()); backoff > 0 {
@@ -1033,8 +1043,9 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 
 	// A full page means the platform may hold more for us: poll again as
 	// soon as a slot frees.
-	p.backlog.Store(len(resp.Commands) >= free)
+	p.backlog.Store(len(resp.Commands) >= ask)
 	if len(resp.Commands) == 0 {
+		p.skippedTypes.Store(0)
 		return
 	}
 
@@ -1051,8 +1062,11 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 
 	// started and declined decide the claim backoff: a poll that started
 	// nothing and handed commands back (declined) only churns.
-	started, declined := 0, 0
-	defer func() { p.settleClaims(started, declined) }()
+	started, declined, skipped := 0, 0, 0
+	defer func() {
+		p.settleClaims(started, declined)
+		p.skippedTypes.Store(int32(min(skipped, maxSkippedTypesAsk))) //nolint:gosec // bounded
+	}()
 
 	for i, cmd := range resp.Commands {
 		// Paused while this batch was being claimed: leave the rest pending
@@ -1071,6 +1085,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 			}
 			p.dropClaimed(cmd, "command type not allowed on this sensor")
 			declined++
+			skipped++
 			continue
 		}
 
