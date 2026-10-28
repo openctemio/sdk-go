@@ -35,11 +35,16 @@ const usage = `usage: openctem tool <command> [flags]
 
 commands:
   init      --kind exec-sarif|exec-ctis|exec-json|go|python --capability <id@major> [--name n] [dir]
-  validate  [dir|tool.yaml]
+  validate  [dir|tool.yaml|pack.yaml]
   run       [dir|tool.yaml] --target value[@type] [--capability id@major] [--param k=json] [--config k=v] [--format table|ctis] [--sandbox auto]
-  test      [dir|tool.yaml] [--update] [--capability] [--scope] [--fuzz 30s] [--timeout 30s] [--sandbox auto]
+  test      [dir|tool.yaml|pack.yaml] [--update] [--capability] [--scope] [--fuzz 30s] [--timeout 30s] [--sandbox auto]
   diff      <old tool.yaml> <new tool.yaml>
-  describe  [--json] [dir|tool.yaml]
+  describe  [--json] [dir|tool.yaml|pack.yaml]
+  build     [dir|pack.yaml] (--output <oci-layout-dir> | --push <repository[:tag]>) [--platform linux/amd64,...] [--base name@sha256:...]
+
+A directory with a pack.yaml is a tool pack: validate, test and describe
+work on the pack and every tool it lists, and build makes the pack image
+(docs/tool-packs.md).
   version   (also: openctem version)
 `
 
@@ -63,6 +68,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return cmdDiff(rest, stdout, stderr)
 	case "describe":
 		return cmdDescribe(rest, stdout, stderr)
+	case "build":
+		return cmdBuild(rest, stdout, stderr)
 	case "help", "-h", "--help":
 		_, _ = fmt.Fprint(stdout, usage)
 		return ExitOK
@@ -115,6 +122,9 @@ func cmdValidate(args []string, stdout, stderr io.Writer) int {
 	if err != nil || len(pos) > 1 {
 		_, _ = fmt.Fprint(stderr, usage)
 		return ExitUsage
+	}
+	if dir, ok := packDir(first(pos)); ok {
+		return validatePack(dir, stdout)
 	}
 	path := manifestPath(first(pos))
 	m, err := tool.LoadManifestFile(path)
@@ -348,7 +358,11 @@ func cmdTest(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, err)
 		return ExitUsage
 	}
-	return Test(manifestPath(first(pos)), conformance.ContractOptions{Timeout: *timeout, Capability: *capSuites, Scope: *scope, Fuzz: *fuzz}, *update, stdout)
+	opts := conformance.ContractOptions{Timeout: *timeout, Capability: *capSuites, Scope: *scope, Fuzz: *fuzz}
+	if dir, ok := packDir(first(pos)); ok {
+		return testPack(dir, opts, *update, stdout)
+	}
+	return Test(manifestPath(first(pos)), opts, *update, stdout)
 }
 
 func cmdDiff(args []string, stdout, stderr io.Writer) int {
@@ -394,6 +408,9 @@ func cmdDescribe(args []string, stdout, stderr io.Writer) int {
 	if err != nil || len(pos) > 1 {
 		_, _ = fmt.Fprint(stderr, usage)
 		return ExitUsage
+	}
+	if dir, ok := packDir(first(pos)); ok {
+		return describePack(dir, *asJSON, stdout, stderr)
 	}
 	m, err := tool.LoadManifestFile(manifestPath(first(pos)))
 	if err != nil {

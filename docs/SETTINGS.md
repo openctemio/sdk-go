@@ -30,6 +30,7 @@ Setup & health checklist shows each one's presence, never its value.
 | [`SENSOR_DRAIN_GRACE`](https://docs.openctem.io/sensors/settings/#SENSOR_DRAIN_GRACE) | duration |  | `30s` |  | How long running jobs may finish on shutdown. |
 | [`SENSOR_JOB_ID`](https://docs.openctem.io/sensors/settings/#SENSOR_JOB_ID) | string |  |  |  | Run the one platform command with this id and exit (RunJob; a Kubernetes Job) instead of polling for work. The -job flag wins over it. |
 | [`SENSOR_SCANNER_PRIORITY`](https://docs.openctem.io/sensors/settings/#SENSOR_SCANNER_PRIORITY) | enum |  | `low` |  | Priority of scanner processes. |
+| [`SENSOR_TOOL_CGROUPS`](https://docs.openctem.io/sensors/settings/) | enum |  | `auto` |  | Per-task cgroup limits for tools where the sensor's cgroup is delegated (auto), or rlimits only (off). |
 | [`SENSOR_PROTECT_FROM_OOM`](https://docs.openctem.io/sensors/settings/#SENSOR_PROTECT_FROM_OOM) | bool |  | `false` |  | Protect the sensor itself from the OOM killer (needs CAP_SYS_RESOURCE). |
 | [`SENSOR_TOOLS`](https://docs.openctem.io/sensors/settings/#SENSOR_TOOLS) | list |  |  |  | Deprecated: narrows the installed tools to this comma-separated list (built-ins such as the reachability probe are kept). Unset: every installed tool. Narrow with the local policy's tools.allow instead. |
 | [`SENSOR_ADAPTER_DIRS`](https://docs.openctem.io/sensors/settings/#SENSOR_ADAPTER_DIRS) | string |  |  |  | Directories of operator-installed tools (tool.yaml with its program), separated by the OS path list separator. |

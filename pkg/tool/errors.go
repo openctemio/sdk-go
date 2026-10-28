@@ -89,6 +89,14 @@ type Error struct {
 	Detail string
 	// Err is the cause, for local logs only; it is never sent.
 	Err error
+	// Attempts, Pressure and StartFailure are set by the runtime, never by
+	// a tool, when a task failed to start under host pressure (research/
+	// 318): how many starts ran, the host's pressure level ("elevated",
+	// "overloaded") and the start failure kind (slow_start,
+	// handshake_timeout, oom_kill, start_eagain).
+	Attempts     int
+	Pressure     string
+	StartFailure string
 }
 
 func (e *Error) Error() string {

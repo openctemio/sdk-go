@@ -147,6 +147,11 @@ func (c *Client) failCommandResult(ctx context.Context, cmdID string, result *co
 	}
 	if (result.Failure != nil || len(result.TargetOutcomes) > 0) && result.Refusal == nil && c.PlatformSupports(ctx, protov2.FeatureFailureClass) {
 		req.Failure = failureToWire(result.Failure)
+		if req.Failure != nil && req.Failure.Class == string(core.FailureHostPressure) && !c.PlatformSupports(ctx, protov2.FeatureHostPressure) {
+			// An older platform does not know the class: what it knew
+			// before (the evidence still says attempts and pressure).
+			req.Failure.Class = string(core.HostPressureFallback)
+		}
 		if outs := outcomesToWire(result.TargetOutcomes); len(outs) > 0 {
 			req.TargetOutcomes = &outs
 		}
@@ -166,6 +171,7 @@ func failureToWire(f *core.Failure) *protov2.Failure {
 			Tool: f.Evidence.Tool, ToolDigest: f.Evidence.ToolDigest, ContentDigest: f.Evidence.ContentDigest,
 			Stage: f.Evidence.Stage, Reason: f.Evidence.Reason, ExitCode: f.Evidence.ExitCode, Signal: f.Evidence.Signal,
 			OOMKilled: f.Evidence.OOMKilled, Errno: f.Evidence.Errno,
+			Attempts: f.Evidence.Attempts, Pressure: f.Evidence.Pressure,
 		}}
 	if p := f.Evidence.Probe; p != nil {
 		w.Evidence.Probe = &protov2.FailureProbe{Path: p.Path, DNS: p.DNS}

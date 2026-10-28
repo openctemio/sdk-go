@@ -161,6 +161,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "profile": {"enum": ["light", "standard", "heavy"], "description": "Sizes the task's resource envelope (CPU, memory, processes); cpu and memory win when set. Default standard."},
         "cpu": {"type": "number", "minimum": 0, "maximum": 256},
         "memory": {"type": ["integer", "string"], "description": "Bytes, or a size such as \"512Mi\" or \"1Gi\" (at most 64Gi)."},
         "timeout": {"type": ["number", "string"], "description": "A duration such as \"20m\" or a number of seconds (at most 24h)."},

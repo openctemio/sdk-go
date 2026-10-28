@@ -82,6 +82,11 @@ const launcherExit = 126
 // program that uses a sandboxing backend calls it first thing in main,
 // before flags or anything else.
 func RunLauncherIfRequested() {
+	if len(os.Args) == 2 && os.Args[1] == EnvelopeProbeArg {
+		// The envelope probe (EnableEnvelopes): started inside a task
+		// cgroup to prove that works, nothing to do.
+		os.Exit(0)
+	}
 	if len(os.Args) < 3 || os.Args[1] != LauncherArg {
 		launcherWired.Store(true)
 		return

@@ -161,6 +161,13 @@ ignored, except during the handshake. A newer runtime may send more.
 - On `cancel`, stop and send your `result` (`canceled`). After a 10-second
   grace the runtime sends SIGTERM, and after twice that, SIGKILL.
 - The task's `deadline` and `resources.timeout` bound the whole run.
+- Answer `hello` as soon as you start: the runtime waits 30 seconds for it,
+  longer on a host under pressure (up to 120 seconds). A start that misses it
+  while starved of CPU, or under host pressure, is tried once more; see
+  [Resource governance](resource-governance.md).
+- `resources.profile` (`light`, `standard`, `heavy`) sizes the CPU, memory and
+  process limits your task runs under; `resources.cpu` and `resources.memory`
+  override them.
 - Once you have settled every target, send your `result` promptly: a tool
   that settled every target but sends no `result` within 5 minutes is sent
   `cancel` (then stopped as above), and the run ends as its targets say,
@@ -293,6 +300,7 @@ content:
 
 ## Installing
 
+A tool is shipped in a [tool pack](tool-packs.md) (`pack.yaml`), the same format our own tools use.
 An operator installs the tool's directory (its `tool.yaml` and program) in one
 of the sensor's adapter directories (`SENSOR_ADAPTER_DIRS`). The directory and
 files must not be writable by another user, and must not be symbolic links.

@@ -20,3 +20,10 @@ func AdapterProtocolJSONSchema() []byte { return slices.Clone(adapterSchema) }
 // more than the schema can express (class against permissions, placeholders
 // against the config schema, no secrets in config).
 func ManifestJSONSchema() []byte { return slices.Clone(manifestSchema) }
+
+//go:embed schema/pack.v1.schema.json
+var packSchema []byte
+
+// PackJSONSchema returns the JSON Schema of pack.yaml (draft 2020-12), the
+// manifest of a tool pack (package pack).
+func PackJSONSchema() []byte { return slices.Clone(packSchema) }
