@@ -1,0 +1,33 @@
+apiVersion: openctem.io/playbook/v1
+name: web-vuln-triage
+version: 1.0.0
+title: Triage a web application finding
+kind: triage.v1
+output: openctem.ai.triage/v1
+model_tier: small
+match:
+  categories: [web]
+tools: [http.probe]
+required_evidence: [bundle:finding.evidence]
+budgets:
+  steps: 6
+  tool_calls: 3
+  tokens: 40000
+  seconds: 180
+steps:
+  - id: read
+    goal: Read the finding, its evidence and the asset context. Note what the scanner claims and what it observed.
+  - id: verify
+    goal: When the evidence is ambiguous, re-request the affected URL once on the subject host and compare the response with the evidence.
+    tools: [http.probe]
+  - id: decide
+    goal: Decide true_positive, likely_false_positive or needs_info, and whether the severity fits the asset's exposure.
+rules:
+  - Never return likely_false_positive without citing an observation that contradicts the scanner's claim.
+  - A response that differs only in timestamps or session values is the same response.
+  - If the subject host does not answer, the verdict is needs_info, not likely_false_positive.
+instructions: |
+  You triage one web application finding for this organization. Confirm it when the evidence
+  shows the reported behaviour; refute it only with an observation; otherwise ask for more
+  information. Keep the reason short and factual. Propose a severity only when the asset's
+  exposure or criticality makes the scanner's severity clearly wrong.
