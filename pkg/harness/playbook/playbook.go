@@ -1,12 +1,12 @@
-// Package playbook is the analyst playbook format (openctem.io/playbook/v1):
+// Package playbook is the AI playbook format (openctem.io/playbook/v1):
 // a versioned, reviewable file that tells the harness how to work one kind
 // of job (for example triage of a web finding): its instructions, the steps
 // and evidence it needs, the tools it may use (a subset of the grant) and
 // its budgets (never above the grant). The same file runs on the platform's
-// analyst pool and on an organization's own worker; the platform pins it by
+// AI worker pool and on an organization's own worker; the platform pins it by
 // digest in the job.
 //
-// Design: openctem api/docs/rfcs/RFC-133-ai-analyst-harness.md.
+// Design: openctem api/docs/rfcs/RFC-133-ai-harness.md.
 //
 // Stability: Experimental (docs/STABILITY.md).
 package playbook
@@ -24,8 +24,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/openctemio/sdk-go/pkg/analyst"
-	"github.com/openctemio/sdk-go/pkg/analyst/contract"
+	"github.com/openctemio/sdk-go/pkg/harness"
+	"github.com/openctemio/sdk-go/pkg/harness/contract"
 )
 
 // APIVersion of this format.
@@ -143,8 +143,8 @@ func (p *Playbook) validate() error {
 	if _, ok := contract.OutputSchemaID(p.Output); !ok {
 		return invalid("output %q is not a known output schema", p.Output)
 	}
-	switch analyst.ModelTier(p.ModelTier) {
-	case analyst.TierSmall, analyst.TierLarge:
+	switch harness.ModelTier(p.ModelTier) {
+	case harness.TierSmall, harness.TierLarge:
 	default:
 		return invalid("model_tier must be small or large")
 	}
@@ -192,7 +192,7 @@ func (p *Playbook) ID() string { return p.Name + "@" + p.Version }
 func (p *Playbook) Digest() string { return p.digest }
 
 // Render turns the playbook into the instructions of one run.
-func (p *Playbook) Render() analyst.Instructions {
+func (p *Playbook) Render() harness.Instructions {
 	var b strings.Builder
 	b.WriteString(p.Title)
 	b.WriteString("\n\n")
@@ -222,9 +222,9 @@ func (p *Playbook) Render() analyst.Instructions {
 	if tools == nil {
 		tools = []string{}
 	}
-	return analyst.Instructions{
+	return harness.Instructions{
 		ID: p.ID(), Digest: p.digest, Text: b.String(), Tools: tools,
-		Budgets: analyst.Budgets{Steps: p.Budgets.Steps, ToolCalls: p.Budgets.ToolCalls, Tokens: p.Budgets.Tokens,
+		Budgets: harness.Budgets{Steps: p.Budgets.Steps, ToolCalls: p.Budgets.ToolCalls, Tokens: p.Budgets.Tokens,
 			Seconds: p.Budgets.Seconds, CostMicroUSD: p.Budgets.CostMicroUSD},
 	}
 }
@@ -238,7 +238,7 @@ func (p *Playbook) Matches(source, category string) bool {
 
 // RequireEvidence returns a verifier that refuses an answer whose verdict
 // does not cite every required bundle field.
-func (p *Playbook) RequireEvidence() analyst.Verifier {
+func (p *Playbook) RequireEvidence() harness.Verifier {
 	required := slices.Clone(p.RequiredEvidence)
 	return requireEvidence(required)
 }

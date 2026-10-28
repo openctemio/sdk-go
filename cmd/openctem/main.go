@@ -9,6 +9,12 @@
 //	openctem tool describe --json ./acme-lint
 //	openctem version
 //
+// Its playbook commands scaffold an AI playbook and run its golden set
+// offline, as the platform's eval gate does:
+//
+//	openctem playbook init --kind triage.v1 ./my-triage
+//	openctem playbook test ./my-triage
+//
 // Every task runs through the sensor runtime's host and sandbox
 // (pkg/sensorkit/toolhost); nothing talks to a platform. Exit status: 0 ok,
 // 1 a check failed, 2 a usage error.
@@ -19,6 +25,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/openctemio/sdk-go/internal/playbookcli"
 	"github.com/openctemio/sdk-go/internal/toolcli"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/useragent"
@@ -36,8 +43,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 2 && args[0] == "tool" && args[1] == "version" {
 		return printVersion(stdout)
 	}
+	if len(args) > 0 && args[0] == "playbook" {
+		return playbookcli.Main(args[1:], stdout, stderr)
+	}
 	if len(args) == 0 || args[0] != "tool" {
-		_, _ = fmt.Fprintln(stderr, "usage: openctem <version | tool <init|validate|run|test|diff|describe|version> ...> (openctem tool help)")
+		_, _ = fmt.Fprintln(stderr, "usage: openctem <version | tool <init|validate|run|test|diff|describe|version> ... | playbook <init|test> ...> (openctem tool help, openctem playbook help)")
 		return toolcli.ExitUsage
 	}
 	return toolcli.Main(args[1:], stdout, stderr)

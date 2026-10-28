@@ -1,4 +1,4 @@
-package analyst
+package harness
 
 import (
 	"crypto/rand"
@@ -19,7 +19,7 @@ type Fence struct{ nonce string }
 func NewFence() Fence {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		panic("analyst: no randomness: " + err.Error())
+		panic("harness: no randomness: " + err.Error())
 	}
 	return Fence{nonce: hex.EncodeToString(b)}
 }

@@ -1,4 +1,4 @@
-package analyst
+package harness
 
 import (
 	"fmt"
@@ -63,7 +63,7 @@ func minSet[T int | int64](a, b T) T {
 // BudgetError says which budget a run hit. Which is a fixed code.
 type BudgetError struct{ Which string }
 
-func (e *BudgetError) Error() string { return "analyst: budget exhausted: " + e.Which }
+func (e *BudgetError) Error() string { return "harness: budget exhausted: " + e.Which }
 
 // Meter counts what a run used against its budgets. Safe for concurrent use
 // (parallel tool calls).

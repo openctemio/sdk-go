@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openctemio/sdk-go/pkg/analyst"
-	"github.com/openctemio/sdk-go/pkg/analyst/contract"
+	"github.com/openctemio/sdk-go/pkg/harness"
+	"github.com/openctemio/sdk-go/pkg/harness/contract"
 )
 
 const samplePath = "../../../examples/playbooks/web-vuln-triage/playbook.yaml"
@@ -79,7 +79,7 @@ func TestDigestChangesWithAnyByte(t *testing.T) {
 func TestPlaybookNarrowsTheGrantInARun(t *testing.T) {
 	p, _ := Parse(sample(t))
 	in := p.Render()
-	reg, err := analyst.NewRegistry(analyst.Grant{Tools: []string{"http.probe", "port.scan"}, TierCeiling: analyst.TierSafe}, in.Tools,
+	reg, err := harness.NewRegistry(harness.Grant{Tools: []string{"http.probe", "port.scan"}, TierCeiling: harness.TierSafe}, in.Tools,
 		stub("http.probe"), stub("port.scan"))
 	if err != nil {
 		t.Fatal(err)
@@ -94,16 +94,16 @@ func TestRequiredEvidenceVerifier(t *testing.T) {
 	v := p.RequireEvidence()
 	refs := map[string]bool{"bundle:finding.evidence": true, "bundle:finding.title": true}
 	missing := &contract.Output{Suggestions: []contract.Suggestion{{Kind: "verdict", Evidence: []contract.Evidence{{Ref: "bundle:finding.title"}}}}}
-	var ve *analyst.VerifyError
-	if err := v(context.Background(), analyst.Job{}, missing, refs); !errors.As(err, &ve) || ve.Code != CodeMissingEvidence {
+	var ve *harness.VerifyError
+	if err := v(context.Background(), harness.Job{}, missing, refs); !errors.As(err, &ve) || ve.Code != CodeMissingEvidence {
 		t.Fatalf("got %v", err)
 	}
 	ok := &contract.Output{Suggestions: []contract.Suggestion{{Kind: "verdict", Evidence: []contract.Evidence{{Ref: "bundle:finding.evidence"}}}}}
-	if err := v(context.Background(), analyst.Job{}, ok, refs); err != nil {
+	if err := v(context.Background(), harness.Job{}, ok, refs); err != nil {
 		t.Fatal(err)
 	}
 	// A withheld field is not required.
-	if err := v(context.Background(), analyst.Job{}, missing, map[string]bool{"bundle:finding.title": true}); err != nil {
+	if err := v(context.Background(), harness.Job{}, missing, map[string]bool{"bundle:finding.title": true}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -112,8 +112,8 @@ type stubTool struct{ name string }
 
 func stub(n string) stubTool { return stubTool{name: n} }
 
-func (s stubTool) Def() analyst.ToolDef {
-	return analyst.ToolDef{Spec: analyst.ToolSpec{Name: s.name}, Class: analyst.ClassSensorJob, Tier: analyst.TierSafe}
+func (s stubTool) Def() harness.ToolDef {
+	return harness.ToolDef{Spec: harness.ToolSpec{Name: s.name}, Class: harness.ClassSensorJob, Tier: harness.TierSafe}
 }
 
 func (s stubTool) Call(context.Context, json.RawMessage) (string, error) { return "", nil }

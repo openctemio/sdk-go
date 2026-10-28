@@ -36,7 +36,6 @@ without a tier fails the job.
 | `pkg/sensorkit/settings` | The settings registry: every setting declared once (name, type, required, default, secret, description, docs link, validation); `docs/SETTINGS.md` is generated from it | Stable |
 | `pkg/tool` | The tool contract: `tool.yaml` manifest, `Run(ctx, task)`, emitter, categorized errors, the `Define` builder for simple tools (docs/rfcs/sensor-sdk-v2.md) | Stable |
 | `pkg/tool/adapter` | Adapter protocol v1, the tool side (`Serve`, `Dispatch`) | Stable |
-| `pkg/tool/pack` | Tool packs: the `pack.yaml` manifest, its loader and the checks against the pack's tools (docs/tool-packs.md) | Beta |
 | `pkg/tool/toolcompat` | Transitional bridges: a `core.Scanner` or `core.Collector` run as a tool of the contract (`FromScanner`, `FromCollector`), out of process; a contract tool served to the command executor (`AsScanner`) | Beta; removed once every in-tree scanner is ported |
 | `pkg/blobsig` | Offline check of a cosign keyless signature bundle for a downloaded file: Fulcio chain, Rekor inclusion proof and an exact signer identity, against the embedded Sigstore public good trust root | Beta |
 | `pkg/webscope` | The web scope of a job: hosts, path prefixes, deny paths and methods a web tool may request; `Allows` checks a request as the server sees its path | Beta |
@@ -53,9 +52,10 @@ without a tier fails the job.
 | `pkg/localstore` | The sensor's encrypted, crash-safe local store: master key off the data volume, per-tenant data keys with crypto-erase, sealed records bound to tenant/namespace/name, records that fail authentication quarantined and reported, expiry that fails closed, disk-space levels, boot generation | Experimental |
 | `pkg/sensorkit/workspace` | Per-job private working directories (`<root>/<tenant>/<job>-<random>`, 0700, owner-checked, no symbolic links), byte quota watch, crash sweep, tenant erasure, noexec report | Experimental |
 | `pkg/sensorkit/contentcache` | The sensor cache of content packs: digest, pinned-key statement and canonical archive verified before storing; read-only packs per task; desired-set sync, revocation and budget (api RFC-061) | Experimental |
-| `pkg/analyst` | The analyst harness for one `openctem.analyze/v1` job: provider interface, tool registry bound to the signed grant, grant policy and hooks before every tool call, budgets, fenced untrusted text, closed output schema with evidence checks, run record and replay (api RFC-133) | Experimental |
-| `pkg/analyst/contract` | Digest-pinned copies of the platform's `openctem.analyze/v1` JSON Schemas and their validation | Experimental |
-| `pkg/analyst/playbook` | The analyst playbook format `openctem.io/playbook/v1`: strict loading, digest, rendering, required-evidence verifier | Experimental |
+| `pkg/harness` | The AI harness for one `openctem.analyze/v1` job: provider interface, tool registry bound to the signed grant, grant policy and hooks before every tool call, budgets, fenced untrusted text, closed output schema with evidence checks, run record and replay (api RFC-133) | Experimental |
+| `pkg/harness/contract` | Digest-pinned copies of the platform's `openctem.analyze/v1` JSON Schemas and their validation | Experimental |
+| `pkg/harness/playbook` | The AI playbook format `openctem.io/playbook/v1`: strict loading, digest, rendering, required-evidence verifier | Experimental |
+| `pkg/harness/eval` | Runs a playbook over a golden set offline (replayed model turns, recorded tool outputs) and scores agreement, risk-lowering precision and injection cases; the gate behind `openctem playbook test` | Experimental |
 | `pkg/sensorkit/executor` | Per-task tool sandbox behind a small backend interface (`Backend`, `TaskSpec`, `Status`) | Beta |
 | `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries, the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | Stable; its runtime internals are Internal-bound and its overlapping tool interfaces are replaced by the tool contract (RFC) |
 | `pkg/client` | Platform protocol client (protocol v2; v1 is retired) | Stable; its protocol internals are Internal-bound |

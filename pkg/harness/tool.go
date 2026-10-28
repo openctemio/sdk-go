@@ -1,4 +1,4 @@
-package analyst
+package harness
 
 import (
 	"context"
@@ -115,10 +115,10 @@ func NewRegistry(g Grant, allow []string, available ...Tool) (*Registry, error) 
 	for _, t := range available {
 		d := t.Def()
 		if !toolName.MatchString(d.Spec.Name) {
-			return nil, fmt.Errorf("analyst: invalid tool name %q", d.Spec.Name)
+			return nil, fmt.Errorf("harness: invalid tool name %q", d.Spec.Name)
 		}
 		if _, dup := have[d.Spec.Name]; dup {
-			return nil, fmt.Errorf("analyst: tool %q registered twice", d.Spec.Name)
+			return nil, fmt.Errorf("harness: tool %q registered twice", d.Spec.Name)
 		}
 		have[d.Spec.Name] = t
 	}
