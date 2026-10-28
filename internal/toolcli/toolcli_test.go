@@ -11,6 +11,7 @@ import (
 	"github.com/openctemio/ctis/capability"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/tool"
+	"github.com/openctemio/sdk-go/pkg/tool/pack"
 )
 
 func TestMain(m *testing.M) {
@@ -104,8 +105,17 @@ func TestScaffoldIsValidForEveryCapability(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s %s: %v", kind, c.Ref(), err)
 			}
-			if _, err := tool.LoadManifest([]byte(files["tool.yaml"].content)); err != nil {
+			loaded, err := tool.LoadManifest([]byte(files["tool.yaml"].content))
+			if err != nil {
 				t.Errorf("%s %s: %v\n%s", kind, c.Ref(), err, files["tool.yaml"].content)
+			}
+			// The scaffold's pack.yaml is valid and agrees with its tool.
+			p, err := pack.Load([]byte(files["pack.yaml"].content))
+			if err == nil {
+				err = p.Check([]tool.Manifest{loaded})
+			}
+			if err != nil {
+				t.Errorf("%s %s pack.yaml: %v\n%s", kind, c.Ref(), err, files["pack.yaml"].content)
 			}
 			if m.MinimumTier() != tool.Tier("T"+string(rune('0'+c.TierFloor))) && c.TierFloor > 0 {
 				t.Errorf("%s: tier %s, floor T%d", c.Ref(), m.MinimumTier(), c.TierFloor)
@@ -138,8 +148,33 @@ func TestCommands(t *testing.T) {
 	if code, out := run(t, "describe", "--json", dir); code != ExitOK || !strings.Contains(out, `"digest":"sha256:`) {
 		t.Fatalf("describe: %d %s", code, out)
 	}
-	if code, out := run(t, "describe", dir); code != ExitOK || !strings.Contains(out, "implements scan.ports@1") {
+	if code, out := run(t, "describe", filepath.Join(dir, "tool.yaml")); code != ExitOK || !strings.Contains(out, "implements scan.ports@1") {
 		t.Fatalf("describe: %d %s", code, out)
+	}
+	// The scaffold is a pack of one tool: a directory with pack.yaml is a pack.
+	if code, out := run(t, "describe", dir); code != ExitOK || !strings.Contains(out, "pack acme-ports 0.1.0 by example (T1)") ||
+		!strings.Contains(out, "tool acme-ports 0.1.0 (T1) scan.ports@1") {
+		t.Fatalf("describe pack: %d %s", code, out)
+	}
+	if code, out := run(t, "validate", dir); code != ExitOK || !strings.Contains(out, "pack acme-ports 0.1.0 (T1, 1 tools): valid (sha256:") {
+		t.Fatalf("validate pack: %d %s", code, out)
+	}
+	if code, out := run(t, "test", dir); code != ExitOK || !strings.Contains(out, "== acme-ports") || !strings.Contains(out, "PASS") {
+		t.Fatalf("test pack: %d %s", code, out)
+	}
+	// SECURITY: a pack that labels an active tool passive is refused.
+	packDoc, _ := os.ReadFile(filepath.Join(dir, "pack.yaml"))
+	passiveDir := filepath.Join(t.TempDir(), "passive")
+	_ = os.MkdirAll(passiveDir, 0o755)
+	for _, f := range []string{"tool.yaml", "pack.yaml"} {
+		b, _ := os.ReadFile(filepath.Join(dir, f))
+		if f == "pack.yaml" {
+			b = []byte(strings.Replace(string(packDoc), "tier: T1", "tier: T0", 1))
+		}
+		_ = os.WriteFile(filepath.Join(passiveDir, f), b, 0o600)
+	}
+	if code, out := run(t, "validate", passiveDir); code != ExitFail || !strings.Contains(out, "/tier: is T0 but the pack's tools need T1 (acme-ports)") {
+		t.Fatalf("validate passive label: %d %s", code, out)
 	}
 	// diff: a narrowed produces without a major bump fails.
 	newDir := filepath.Join(t.TempDir(), "new")
@@ -199,5 +234,25 @@ func TestToYAMLRoundTrips(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}
+	}
+}
+
+// The sample third-party pack passes the whole kit through the same
+// commands an author runs: pack checks, its self-test, the probe.http
+// suite and the scope check.
+func TestExamplePack(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+	dir := filepath.Join("..", "..", "examples", "packs", "http-title")
+	// The example ships the helper init writes; keep it the same file.
+	if b, err := os.ReadFile(filepath.Join(dir, "openctem_tool.py")); err != nil || string(b) != PythonHelper() {
+		t.Fatalf("examples/packs/http-title/openctem_tool.py differs from the helper init writes (copy internal/toolcli/templates/openctem_tool.py): %v", err)
+	}
+	if code, out := run(t, "validate", dir); code != ExitOK || !strings.Contains(out, "pack http-title 0.1.0 (T1, 1 tools): valid") {
+		t.Fatalf("validate: %d %s", code, out)
+	}
+	if code, out := run(t, "test", "--capability", "--scope", dir); code != ExitOK || !strings.Contains(out, "PASS") {
+		t.Fatalf("test: %d %s", code, out)
 	}
 }

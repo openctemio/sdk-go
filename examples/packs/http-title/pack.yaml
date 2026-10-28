@@ -1,0 +1,22 @@
+# A sample third-party pack: one Python tool, built into its own image.
+# The pack is what is versioned, built into an image, signed and delivered
+# to sensors (docs/tool-packs.md). Each tool keeps its facts in tool.yaml.
+apiVersion: openctem.io/pack/v1
+name: http-title
+version: 0.1.0
+description: Status code, server header and title of HTTP services.
+# Your namespace in a catalog, and the license of the pack's own files.
+publisher: example
+license: Apache-2.0
+# The highest minimum tier of the tools (T0 passive, T1 active, T2 intrusive);
+# openctem tool validate says when it no longer matches.
+tier: T1
+tools:
+  - name: http-title
+    path: .
+platforms: [linux/amd64, linux/arm64]
+requires:
+  sdk: 0.39.0
+  protocol: 1
+image:
+  base: public.ecr.aws/docker/library/python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1

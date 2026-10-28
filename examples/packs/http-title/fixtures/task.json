@@ -1,0 +1,18 @@
+{
+  "serve": {
+    "body": "<html><head><title>fixture</title></head><body>ok</body></html>",
+    "headers": {
+      "Content-Type": "text/html",
+      "Server": "fixture"
+    },
+    "status": 200
+  },
+  "id": "selftest-sample",
+  "targets": [
+    {
+      "ref": "t1",
+      "type": "http_service",
+      "value": "{{fixture.url}}"
+    }
+  ]
+}

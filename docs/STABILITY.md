@@ -36,6 +36,7 @@ without a tier fails the job.
 | `pkg/sensorkit/settings` | The settings registry: every setting declared once (name, type, required, default, secret, description, docs link, validation); `docs/SETTINGS.md` is generated from it | Stable |
 | `pkg/tool` | The tool contract: `tool.yaml` manifest, `Run(ctx, task)`, emitter, categorized errors, the `Define` builder for simple tools (docs/rfcs/sensor-sdk-v2.md) | Stable |
 | `pkg/tool/adapter` | Adapter protocol v1, the tool side (`Serve`, `Dispatch`) | Stable |
+| `pkg/tool/pack` | Tool packs: the `pack.yaml` manifest, its loader and the checks against the pack's tools (docs/tool-packs.md) | Beta |
 | `pkg/tool/toolcompat` | Transitional bridges: a `core.Scanner` or `core.Collector` run as a tool of the contract (`FromScanner`, `FromCollector`), out of process; a contract tool served to the command executor (`AsScanner`) | Beta; removed once every in-tree scanner is ported |
 | `pkg/blobsig` | Offline check of a cosign keyless signature bundle for a downloaded file: Fulcio chain, Rekor inclusion proof and an exact signer identity, against the embedded Sigstore public good trust root | Beta |
 | `pkg/webscope` | The web scope of a job: hosts, path prefixes, deny paths and methods a web tool may request; `Allows` checks a request as the server sees its path | Beta |
