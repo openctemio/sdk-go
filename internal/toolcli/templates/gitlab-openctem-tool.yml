@@ -1,7 +1,9 @@
 # OpenCTEM tool checks: validate the descriptor, run the conformance kit
 # (self-tests, the capability's suites on local fixtures, the scope check,
 # parser fuzzing) and refuse a descriptor change without the right version
-# bump. Include it from .gitlab-ci.yml.
+# bump. On a version tag, build the pack image, push it to the project's
+# registry and sign its digest (docs/tool-packs.md). Include it from
+# .gitlab-ci.yml.
 openctem-tool:
   image: golang:latest
   stage: test
@@ -18,3 +20,26 @@ openctem-tool:
           openctem tool diff /tmp/old/tool.yaml tool.yaml
         fi
       fi
+
+openctem-tool-publish:
+  # A version tag vX.Y.Z of a pack whose pack.yaml says X.Y.Z. Register the
+  # printed digest in the console, never the tag.
+  image: golang:latest
+  stage: deploy
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]/
+  needs: [openctem-tool]
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  script:
+    - go install github.com/openctemio/sdk-go/cmd/openctem@latest
+    - go install github.com/sigstore/cosign/v2/cmd/cosign@v2.5.0
+    - export PATH="$PATH:$(go env GOPATH)/bin"
+    - test "v$(openctem tool describe --json . | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' | head -1)" = "$CI_COMMIT_TAG"
+    - mkdir -p ~/.docker
+    - printf '{"auths":{"%s":{"auth":"%s"}}}' "$CI_REGISTRY" "$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 -w0)" > ~/.docker/config.json
+    - out=$(openctem tool build . --push "$CI_REGISTRY_IMAGE:$CI_COMMIT_TAG") && echo "$out"
+    - digest=$(printf '%s\n' "$out" | sed -n 's/^built .*@\(sha256:[0-9a-f]\{64\}\)$/\1/p') && test -n "$digest"
+    - cosign sign --yes --recursive "$CI_REGISTRY_IMAGE@$digest"
+    - echo "Pack image: $CI_REGISTRY_IMAGE@$digest"
