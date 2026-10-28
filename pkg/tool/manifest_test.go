@@ -323,3 +323,21 @@ func TestContractNamesTheManifest(t *testing.T) {
 		t.Fatalf("contract %+v", c)
 	}
 }
+
+func TestResourceProfiles(t *testing.T) {
+	if e := (Resources{}).Envelope(); e.CPU != 2 || e.MemoryMax != 2<<30 || e.Pids != 512 {
+		t.Fatalf("default envelope %+v", e)
+	}
+	if e := (Resources{Profile: ProfileLight, CPU: 0.5}).Envelope(); e.CPU != 0.5 || e.MemoryMax != 512<<20 {
+		t.Fatalf("light with cpu %+v", e)
+	}
+	m := loadPortScan(t)
+	m.Resources.Profile = "huge"
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "/resources/profile") {
+		t.Fatalf("bad profile accepted: %v", err)
+	}
+	m.Resources.Profile = ProfileHeavy
+	if err := m.Validate(); err != nil {
+		t.Fatalf("heavy refused: %v", err)
+	}
+}

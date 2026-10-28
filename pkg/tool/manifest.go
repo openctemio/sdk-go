@@ -217,7 +217,13 @@ var credentialKinds = []string{"api_key", "token", "password", "basic", "private
 // Resources bound one task of the tool. Zero fields take the runtime's
 // defaults.
 type Resources struct {
-	CPU            float64  `json:"cpu,omitempty"`
+	// Profile sizes the task's resource envelope (research/318): light,
+	// standard (the default) or heavy. CPU and Memory, when set, win over
+	// the profile's values.
+	Profile string `json:"profile,omitempty"`
+	// CPU is the cores one task may use (its envelope's CPU ceiling).
+	CPU float64 `json:"cpu,omitempty"`
+	// Memory is the memory one task may use (its envelope's hard limit).
 	Memory         ByteSize `json:"memory,omitempty"`
 	Timeout        Duration `json:"timeout,omitempty"`
 	IdleTimeout    Duration `json:"idle_timeout,omitempty"`
@@ -225,6 +231,51 @@ type Resources struct {
 	MaxRecords     int      `json:"max_records,omitempty"`
 	// Cost is the slot cost for the sensor's capacity model.
 	Cost int `json:"cost,omitempty"`
+}
+
+// Resource profiles (Resources.Profile).
+const (
+	ProfileLight    = "light"
+	ProfileStandard = "standard"
+	ProfileHeavy    = "heavy"
+)
+
+// ResourceProfiles are the valid profiles.
+var ResourceProfiles = []string{ProfileLight, ProfileStandard, ProfileHeavy}
+
+// Envelope is the resource envelope of one task: what the runtime bounds
+// the tool's processes to (cgroup v2 limits where the sensor's cgroup is
+// delegated, rlimits otherwise).
+type Envelope struct {
+	// CPU is the CPU ceiling in cores.
+	CPU float64
+	// MemoryMax is the hard memory limit.
+	MemoryMax int64
+	// Pids bounds the task's processes and threads.
+	Pids int
+}
+
+// profileEnvelopes are the profiles' defaults (research/318 §6.2).
+var profileEnvelopes = map[string]Envelope{
+	ProfileLight:    {CPU: 1, MemoryMax: 512 << 20, Pids: 256},
+	ProfileStandard: {CPU: 2, MemoryMax: 2 << 30, Pids: 512},
+	ProfileHeavy:    {CPU: 4, MemoryMax: 4 << 30, Pids: 1024},
+}
+
+// Envelope is the task's envelope: the profile's defaults (standard when
+// unset), with CPU and Memory overriding them when set.
+func (r Resources) Envelope() Envelope {
+	e, ok := profileEnvelopes[r.Profile]
+	if !ok {
+		e = profileEnvelopes[ProfileStandard]
+	}
+	if r.CPU > 0 {
+		e.CPU = r.CPU
+	}
+	if r.Memory > 0 {
+		e.MemoryMax = int64(r.Memory)
+	}
+	return e
 }
 
 // Defaults of Resources.

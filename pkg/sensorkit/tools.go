@@ -64,6 +64,8 @@ func (k *Kit) toolHost() *toolhost.Host {
 			// The content cache: a task reads only the packs its signed job
 			// pins, wordlists as one composed file in its own directory.
 			ContentRoot: k.contentRoot(),
+			// Launches wait while the host is overloaded (research/318).
+			Governor: k.ToolGovernor(),
 		}
 	})
 	return k.host

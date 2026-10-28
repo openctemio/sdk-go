@@ -84,7 +84,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		WritePaths: append([]string{p.workdir}, o.WritePaths...), ReadPaths: p.contentPaths, Limits: o.Limits,
 		Network: networkClass(m.Permissions.Network), Stdout: stdout, Stderr: stderr,
 		Hooks:       executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: core.ApplyScannerPriority, Finished: core.ReapScannerProcess},
-		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(),
+		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(), Envelope: envelopeFor(m),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("toolhost: %w", err)
@@ -92,12 +92,14 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	defer func() { _ = t.Cleanup() }()
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if err := t.Start(runCtx); err != nil {
-		return nil, fmt.Errorf("toolhost: start %s: %w", m.Name, err)
+	res, err := h.startAndWait(ctx, runCtx, m, t)
+	if err != nil {
+		return nil, err
 	}
-	res, _ := t.Wait()
 
-	out := &Outcome{Sandbox: be.Status(), ExitCode: -1}
+	oom, oomKind := execOOM(ctx, runCtx, res)
+	// Only the host's OOM kill is a transient start failure.
+	out := &Outcome{Sandbox: be.Status(), ExitCode: -1, startKind: strings.TrimPrefix(oomKind, "oom_envelope")}
 	if res != nil {
 		out.ExitCode, out.Sandbox = res.ExitCode, res.Sandbox
 	}
@@ -109,6 +111,8 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		runErr = &tool.Error{Class: tool.Canceled, Detail: "canceled"}
 	case runCtx.Err() != nil:
 		runErr = &tool.Error{Class: tool.Timeout, Retryable: true, Detail: "task timeout"}
+	case oom != "":
+		runErr = &tool.Error{Class: tool.ToolCrashed, Retryable: true, Detail: oom, StartFailure: oomKind}
 	case stdout.Overflowed():
 		runErr = &tool.Error{Class: tool.ResourceExhausted, Retryable: true, Detail: "output larger than the limit"}
 	default:

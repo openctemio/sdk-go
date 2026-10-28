@@ -161,6 +161,7 @@ one, the new key wins. Every heartbeat also carries the process's
 | Tool allowlist (deprecated) | `SENSOR_TOOLS` (comma-separated): only narrows the installed tools; built-ins (`sensorkit.Builtin()`) are kept. Use the local policy's `tools.allow` instead | none |
 | Drain grace | `SENSOR_DRAIN_GRACE` (1s-1h) | 30s |
 | Scanner priority | `SENSOR_SCANNER_PRIORITY` = `low`, `normal` | `low`: scanners at nice +10, lowest best-effort I/O, `oom_score_adj` 500 (Linux) |
+| Tool envelope | `SENSOR_TOOL_CGROUPS` = `auto`, `off` | `auto`: a cgroup per tool task (CPU, memory, processes from the tool's `resources`) where the sensor's cgroup is delegated; rlimits elsewhere. Launches wait while the host is overloaded ([resource governance](docs/resource-governance.md)) |
 | Sensor OOM protection | `SENSOR_PROTECT_FROM_OOM=true\|false`: the sensor sets its own `oom_score_adj` to -500 (Linux; needs `CAP_SYS_RESOURCE`, e.g. `docker run --cap-add SYS_RESOURCE`; without it, one warning and the sensor runs unprotected). Scanners never inherit it | off |
 | Outbox | `SENSOR_OUTBOX`, `SENSOR_OUTBOX_DIR`, `_MAX_BYTES`, `_MAX_AGE`, `_KEY_FILE` | on, `/var/lib/openctem/outbox` |
 | Local store (sealed outbox items, job journal, janitor) | `SENSOR_STORE_DIR`, `SENSOR_STORE_KEY_FILE` (a mounted secret kept off the data volume; 0600), `SENSOR_WORKSPACE_DIR` | `store/` and `workspaces/` next to the outbox directory; `master.key` (0600) created in the store directory |

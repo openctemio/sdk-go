@@ -13,6 +13,25 @@ import (
 // contract has no failure for (a plain tool error, a cancel) is "unknown".
 func (e *Error) FailureClass() (class, reason string) {
 	detail := strings.ToLower(e.Detail)
+	// Attempts, Pressure and StartFailure are the runtime's own (a tool
+	// cannot set them), so a tool cannot pass its failure off as the
+	// host's.
+	switch {
+	case e.Pressure != "":
+		// The start failed under host pressure, also after one more
+		// attempt (research/318): a fact about the host.
+		switch e.StartFailure {
+		case "slow_start":
+			return string(core.FailureHostPressure), core.ReasonSlowStart
+		case "oom_kill":
+			return string(core.FailureHostPressure), core.ReasonOOMHost
+		case "start_eagain":
+			return string(core.FailureHostPressure), core.ReasonStartEAGAIN
+		}
+		return string(core.FailureHostPressure), core.ReasonNoHandshake
+	case e.StartFailure == "oom_kill", e.StartFailure == "oom_envelope":
+		return string(core.FailureMemory), ""
+	}
 	switch e.Class {
 	case ToolCrashed:
 		switch {
@@ -46,6 +65,11 @@ func (e *Error) FailureClass() (class, reason string) {
 	}
 	return string(core.FailureUnknown), ""
 }
+
+// FailureStart is how many times the runtime started the task and the
+// host's pressure level when it failed (core.ClassifyFailure puts them in
+// the failure's evidence).
+func (e *Error) FailureStart() (attempts int, pressure string) { return e.Attempts, e.Pressure }
 
 // FailureRetryAfter is the tool's retry hint (core.ClassifyFailure sends it
 // as a hint the platform may ignore).

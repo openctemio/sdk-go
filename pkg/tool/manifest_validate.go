@@ -346,6 +346,9 @@ func checkVendorHost(h string, schema *core.SettingsSchema) string {
 
 func (m Manifest) validateResources(add func(p, format string, args ...any)) {
 	r := m.Resources
+	if r.Profile != "" && !slices.Contains(ResourceProfiles, r.Profile) {
+		add("/resources/profile", "must be one of %s", strings.Join(ResourceProfiles, ", "))
+	}
 	if r.CPU < 0 || r.CPU > 256 {
 		add("/resources/cpu", "must be between 0 and 256")
 	}

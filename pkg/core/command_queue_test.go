@@ -646,3 +646,37 @@ func TestReportStatus_CeilingNotHardMax(t *testing.T) {
 		})
 	}
 }
+
+// With one free slot (an operator cap of 1, or a host under pressure), a
+// command of a type the sensor does not run at the head of the queue must
+// not hide the sensor's own work on every poll: the next poll asks for one
+// more.
+func TestPoller_OneSlotLooksPastSkippedTypes(t *testing.T) {
+	unknown := scanCmd("u1", "normal", map[string]any{"target": "a.example.com"})
+	unknown.Type = "x_not_ours"
+	c := newQueueClient(unknown, scanCmd("k1", "normal", map[string]any{"target": "b.example.com"}))
+	e := newCtxExecutor()
+	close(e.release)
+	p := NewCommandPoller(c, e, &CommandPollerConfig{MaxConcurrent: 1})
+	deadline := time.Now().Add(15 * time.Second)
+	ran := ""
+	for ran == "" {
+		if time.Now().After(deadline) {
+			t.Fatalf("the sensor's own command never ran; poll limits %v", c.limits)
+		}
+		p.pollAndExecute(context.Background()) // waits out the claim backoff
+		select {
+		case ran = <-e.started:
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if ran != "k1" {
+		t.Fatalf("ran %s", ran)
+	}
+	p.activeCmds.Wait()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.limits) < 2 || c.limits[0] != 1 || c.limits[1] != 2 {
+		t.Fatalf("poll limits %v, want 1 then 2", c.limits)
+	}
+}
