@@ -1,8 +1,8 @@
-// Package agentcli implements "openctem agent": scaffold and test an analyst
+// Package analystcli implements "openctem analyst": scaffold and test an analyst
 // playbook offline, the way the platform's eval gate runs it. Nothing here
 // talks to a platform, a model or a target: tests replay recorded turns and
 // recorded tool outputs.
-package agentcli
+package analystcli
 
 import (
 	"context"
@@ -27,13 +27,13 @@ const (
 	ExitUsage = 2
 )
 
-const usage = `usage: openctem agent <command> [flags]
+const usage = `usage: openctem analyst <command> [flags]
 
   init  [--name my-triage] [--kind triage.v1] <dir>   scaffold a playbook and one golden case
   test  [--json] [--min-agreement 0.9] [dir]          validate the playbook and run its golden set offline
 `
 
-// Main runs "openctem agent <args>".
+// Main runs "openctem analyst <args>".
 func Main(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprint(stderr, usage)
@@ -96,7 +96,7 @@ func cmdInit(args []string, stdout, stderr io.Writer) int {
 			return ExitFail
 		}
 	}
-	_, _ = fmt.Fprintf(stdout, "wrote %s/playbook.yaml and %s/golden/01-example.json\nnext: edit them, then run: openctem agent test %s\n", dir, dir, dir)
+	_, _ = fmt.Fprintf(stdout, "wrote %s/playbook.yaml and %s/golden/01-example.json\nnext: edit them, then run: openctem analyst test %s\n", dir, dir, dir)
 	return ExitOK
 }
 

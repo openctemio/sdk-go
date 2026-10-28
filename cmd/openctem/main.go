@@ -9,11 +9,11 @@
 //	openctem tool describe --json ./acme-lint
 //	openctem version
 //
-// Its agent commands scaffold an analyst playbook and run its golden set
+// Its analyst commands scaffold an analyst playbook and run its golden set
 // offline, as the platform's eval gate does:
 //
-//	openctem agent init --kind triage.v1 ./my-triage
-//	openctem agent test ./my-triage
+//	openctem analyst init --kind triage.v1 ./my-triage
+//	openctem analyst test ./my-triage
 //
 // Every task runs through the sensor runtime's host and sandbox
 // (pkg/sensorkit/toolhost); nothing talks to a platform. Exit status: 0 ok,
@@ -25,7 +25,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/openctemio/sdk-go/internal/agentcli"
+	"github.com/openctemio/sdk-go/internal/analystcli"
 	"github.com/openctemio/sdk-go/internal/toolcli"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/useragent"
@@ -43,11 +43,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 2 && args[0] == "tool" && args[1] == "version" {
 		return printVersion(stdout)
 	}
-	if len(args) > 0 && args[0] == "agent" {
-		return agentcli.Main(args[1:], stdout, stderr)
+	if len(args) > 0 && args[0] == "analyst" {
+		return analystcli.Main(args[1:], stdout, stderr)
 	}
 	if len(args) == 0 || args[0] != "tool" {
-		_, _ = fmt.Fprintln(stderr, "usage: openctem <version | tool <init|validate|run|test|diff|describe|version> ... | agent <init|test> ...> (openctem tool help, openctem agent help)")
+		_, _ = fmt.Fprintln(stderr, "usage: openctem <version | tool <init|validate|run|test|diff|describe|version> ... | analyst <init|test> ...> (openctem tool help, openctem analyst help)")
 		return toolcli.ExitUsage
 	}
 	return toolcli.Main(args[1:], stdout, stderr)
