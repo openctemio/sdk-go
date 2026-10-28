@@ -95,8 +95,34 @@ contains no program that can actively touch a target.
 | `openctem tool validate dir` | validates `pack.yaml`, every tool and the rules above |
 | `openctem tool test dir [--capability] [--scope] [--fuzz 30s]` | runs the conformance kit on every tool |
 | `openctem tool describe [--json] dir` | prints the pack view: tier, capabilities, credentials, network, engines, tool digests |
+| `openctem tool build dir (--output oci-dir \| --push repo:tag) [--platform ...] [--base name@sha256:...]` | builds the pack image (below) and prints its digest |
 
 A directory with a `pack.yaml` is a pack for every command; name the `tool.yaml` file to work on one tool.
+
+## The pack image
+
+`openctem tool build` makes a multi-platform OCI image without a container daemon:
+
+- for each platform of the pack, the base image's manifest for that platform plus **one layer** holding the pack
+  directory at `/opt/openctem/pack` (`pack.yaml` at `/opt/openctem/pack/pack.yaml`);
+- files under `.build/<os>-<arch>/` (for example a compiled program per architecture) replace or add files at the same
+  paths in that platform's layer; `.build` itself, `.git` and `__pycache__` never enter the image;
+- only regular files and directories are packed: a symbolic link or special file anywhere in the pack fails the build;
+  at most 10,000 files and 512 MiB;
+- the layer is reproducible (sorted entries, owned by root, no timestamps, modes 0644 or 0755), the image has no
+  creation time, no entrypoint or command (the sensor starts each tool from its `tool.yaml`), runs as user
+  65532, and carries the labels `io.openctem.pack.name`, `.version`, `.publisher`, `.tier` and `.digest` (the
+  `pack.yaml` digest, which a sensor checks against the file it finds); the index carries the same annotations.
+
+The same pack and base always give the same index digest. That digest is what you sign, what a catalog lists and what
+a job pins: never a tag.
+
+## Sign and publish
+
+The CI templates ([GitHub](../ci/github/openctem-tool.yml), [GitLab](../ci/gitlab/openctem-tool.yml)) run the checks
+on every change and, on a tag `vX.Y.Z` equal to the pack version, build and push the pack image and sign its digest
+keylessly with cosign (Sigstore) under the CI job's own identity. No key to manage: the signature names the
+repository and workflow that built the image, and that identity is what a tenant pins when it registers the pack.
 
 ## Versioning
 

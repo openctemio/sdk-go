@@ -51,6 +51,9 @@ Exit status:
 | `test [dir] [--update] [--capability] [--scope] [--fuzz 30s] [--timeout 30s]` | Runs the conformance kit (below). `--update` rewrites the fixtures' expected CTIS. |
 | `diff <old> <new>` | Compares two versions of a descriptor and fails when the change needs a larger version bump than the one made. |
 | `describe [--json] [dir]` | Prints the canonical descriptor and its digest, which is what the platform sees. |
+| `build [dir] (--output oci-dir \| --push repo[:tag]) [--platform p,...] [--base name@sha256:...]` | Builds the pack image of a pack directory, reproducibly and without a container daemon, and prints its digest ([tool-packs.md](../tool-packs.md#the-pack-image)). Registry credentials come from the Docker config (`docker login`). |
+
+A directory with a `pack.yaml` is a [tool pack](../tool-packs.md): `validate`, `test` and `describe` then work on the pack and every tool it lists (`describe` prints the pack's tier, capabilities, credentials, network and engines). Name the `tool.yaml` file to work on one tool of it.
 
 A directory with a `pack.yaml` is a [tool pack](../tool-packs.md): `validate`, `test` and `describe` then work on the pack and every tool it lists (`describe` prints the pack's tier, capabilities, credentials, network and engines). Name the `tool.yaml` file to work on one tool of it.
 
@@ -128,7 +131,7 @@ The port changes on every run, so before comparing with the expect file (and bef
 
 ## CI
 
-[`ci/github/openctem-tool.yml`](../../ci/github/openctem-tool.yml) and [`ci/gitlab/openctem-tool.yml`](../../ci/gitlab/openctem-tool.yml) run the same three steps, and the actions they use are pinned by commit:
+[`ci/github/openctem-tool.yml`](../../ci/github/openctem-tool.yml) and [`ci/gitlab/openctem-tool.yml`](../../ci/gitlab/openctem-tool.yml) run the same three steps on every change, and on a version tag build, push and sign the pack image (`openctem tool build --push`, then a keyless `cosign sign` of the digest), and the actions they use are pinned by commit:
 1. `validate`;
 2. `test --capability --scope --fuzz 30s`;
 3. `diff` against the target branch's `tool.yaml`.

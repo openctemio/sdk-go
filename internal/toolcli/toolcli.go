@@ -40,9 +40,11 @@ commands:
   test      [dir|tool.yaml|pack.yaml] [--update] [--capability] [--scope] [--fuzz 30s] [--timeout 30s] [--sandbox auto]
   diff      <old tool.yaml> <new tool.yaml>
   describe  [--json] [dir|tool.yaml|pack.yaml]
+  build     [dir|pack.yaml] (--output <oci-layout-dir> | --push <repository[:tag]>) [--platform linux/amd64,...] [--base name@sha256:...]
 
 A directory with a pack.yaml is a tool pack: validate, test and describe
-work on the pack and every tool it lists (docs/tool-packs.md).
+work on the pack and every tool it lists, and build makes the pack image
+(docs/tool-packs.md).
   version   (also: openctem version)
 `
 
@@ -66,6 +68,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return cmdDiff(rest, stdout, stderr)
 	case "describe":
 		return cmdDescribe(rest, stdout, stderr)
+	case "build":
+		return cmdBuild(rest, stdout, stderr)
 	case "help", "-h", "--help":
 		_, _ = fmt.Fprint(stdout, usage)
 		return ExitOK
