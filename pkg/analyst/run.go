@@ -173,8 +173,11 @@ func (r *Run) Execute(ctx context.Context) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, st.meter.Wall())
 	defer cancel()
 	if !r.Job.Deadline.IsZero() {
+		// The time left is measured on the run's own clock (r.now), the same
+		// clock the refusal above used, so an injected clock and the context
+		// deadline always agree.
 		var cancelDeadline context.CancelFunc
-		ctx, cancelDeadline = context.WithDeadline(ctx, r.Job.Deadline)
+		ctx, cancelDeadline = context.WithTimeout(ctx, r.Job.Deadline.Sub(now))
 		defer cancelDeadline()
 	}
 	for k := range r.Job.Bundle {
