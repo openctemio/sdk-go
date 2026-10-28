@@ -34,14 +34,6 @@ func pressureHostile(mode string) (code int, ok bool) {
 	case "slow-always":
 		time.Sleep(time.Minute)
 		return 0, true
-	case "spin":
-		// Busy, and never answers hello: a tool bug, not a starved start.
-		deadline := time.Now().Add(time.Minute)
-		x := 0
-		for time.Now().Before(deadline) {
-			x++
-		}
-		return x & 1, true
 	case "exit-at-once":
 		return 3, true
 	}
@@ -100,6 +92,29 @@ func shortHandshake(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { handshakeTimeout, retryBackoff = old, oldBackoff })
 }
 
+// childCPU fixes the CPU time a task reports at the handshake deadline.
+// The real reading counts the test binary's own runtime start-up, which
+// under -race and coverage on a slow runner can pass slowStartCPU even for
+// a child that only sleeps; the tests decide starved or busy themselves.
+func childCPU(t *testing.T, used time.Duration) {
+	t.Helper()
+	old := startCPU
+	startCPU = func(*core.ProcessCPU) (time.Duration, bool) { return used, true }
+	t.Cleanup(func() { startCPU = old })
+}
+
+// recoverHandshake is the handshake timeout of the tests whose second
+// attempt must really start: a race-instrumented test binary on a loaded
+// runner can take well over a second to reach its handshake. The first,
+// starved attempt sleeps through it either way.
+const recoverHandshake = 3 * time.Second
+
+// starved and busy are the two CPU readings the tests use.
+const (
+	starved = 0
+	busy    = time.Second
+)
+
 func pressureRun(t *testing.T, h *Host, mode string, env map[string]string) *Outcome {
 	t.Helper()
 	exe, _ := os.Executable()
@@ -122,7 +137,8 @@ func pressureRun(t *testing.T, h *Host, mode string, env map[string]string) *Out
 // The prod incident: a tool starved at start missed the 30 s handshake and
 // was reported as crashed. A starved start is retried once and recovers.
 func TestStarvedStartIsRetriedOnceAndRecovers(t *testing.T) {
-	shortHandshake(t, 400*time.Millisecond)
+	shortHandshake(t, recoverHandshake)
+	childCPU(t, starved)
 	g := &fakeGov{p: resource.Pressure{Level: resource.PressureOverloaded, Reasons: []string{"cpu"}}, factor: 1}
 	h := testHost(t)
 	h.Governor = g
@@ -150,7 +166,8 @@ func TestStarvedStartIsRetriedOnceAndRecovers(t *testing.T) {
 // Without a governor the same starved start is still told apart from a
 // crash and retried.
 func TestStarvedStartWithoutGovernor(t *testing.T) {
-	shortHandshake(t, 400*time.Millisecond)
+	shortHandshake(t, recoverHandshake)
+	childCPU(t, starved)
 	out := pressureRun(t, testHost(t), "slow-once", map[string]string{"TOOLHOST_MARK": filepath.Join(t.TempDir(), "mark")})
 	if out.Status == tool.StatusFailed || out.Attempts != 2 {
 		t.Fatalf("status %s attempts %d err %v", out.Status, out.Attempts, out.Err)
@@ -161,6 +178,7 @@ func TestStarvedStartWithoutGovernor(t *testing.T) {
 // the class says so, and so do the attempts and the level.
 func TestStarvedTwiceFailsAsHostPressure(t *testing.T) {
 	shortHandshake(t, 300*time.Millisecond)
+	childCPU(t, starved)
 	g := &fakeGov{p: resource.Pressure{Level: resource.PressureOverloaded, Reasons: []string{"cpu", "io"}}, factor: 1}
 	h := testHost(t)
 	h.Governor = g
@@ -197,15 +215,14 @@ func TestHandshakeScalesWithPressure(t *testing.T) {
 // A busy tool that never answers is a tool bug: with an ok host it is
 // not retried and stays a crash.
 func TestBusyNoHandshakeOnAQuietHostIsNotRetried(t *testing.T) {
-	// Long enough that the spinning tool gets well over the slow-start
-	// CPU mark even on a loaded test machine.
-	shortHandshake(t, 1500*time.Millisecond)
+	shortHandshake(t, 300*time.Millisecond)
+	childCPU(t, busy)
 	g := &fakeGov{p: resource.Pressure{Level: resource.PressureOK}, factor: 1}
 	h := testHost(t)
 	h.Governor = g
-	out := pressureRun(t, h, "spin", nil)
-	if out.Attempts != 1 || out.Status != tool.StatusFailed {
-		t.Fatalf("attempts %d status %s", out.Attempts, out.Status)
+	out := pressureRun(t, h, "slow-always", nil)
+	if out.Attempts != 1 || out.Status != tool.StatusFailed || g.kinds() != "" {
+		t.Fatalf("attempts %d status %s kinds %q", out.Attempts, out.Status, g.kinds())
 	}
 	f := core.ClassifyFailure(core.FailureInput{Err: out.Err, Tool: "hostile"})
 	if f.Class != core.FailureToolCrashed || f.Evidence.Reason != core.ReasonNoHandshake {
@@ -213,20 +230,21 @@ func TestBusyNoHandshakeOnAQuietHostIsNotRetried(t *testing.T) {
 	}
 }
 
-// The same busy tool under host pressure gets its one retry.
+// The same busy tool under host pressure gets its one retry, and its
+// failure is host pressure but not a slow start.
 func TestNoHandshakeUnderPressureIsRetried(t *testing.T) {
-	shortHandshake(t, 1500*time.Millisecond)
+	shortHandshake(t, 300*time.Millisecond)
+	childCPU(t, busy)
 	g := &fakeGov{p: resource.Pressure{Level: resource.PressureElevated, Reasons: []string{"cpu"}}, factor: 1}
 	h := testHost(t)
 	h.Governor = g
-	out := pressureRun(t, h, "spin", nil)
-	// On a loaded test machine the spinning tool may also look starved:
-	// either way it is retried once.
-	if out.Attempts != 2 || !strings.Contains(g.kinds(), ",retried") {
+	out := pressureRun(t, h, "slow-always", nil)
+	if out.Attempts != 2 || g.kinds() != startHandshake+",retried,"+startHandshake {
 		t.Fatalf("attempts %d kinds %q", out.Attempts, g.kinds())
 	}
 	f := core.ClassifyFailure(core.FailureInput{Err: out.Err, Tool: "hostile"})
-	if f.Class != core.FailureHostPressure || f.Evidence.Pressure != "elevated" {
+	if f.Class != core.FailureHostPressure || f.Evidence.Reason != core.ReasonNoHandshake ||
+		f.Evidence.Pressure != "elevated" {
 		t.Fatalf("failure %+v", f)
 	}
 }

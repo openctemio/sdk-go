@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -52,6 +53,12 @@ const HostOverloaded = "sensor host overloaded"
 // slowStartCPU is the CPU time below which a process that has not shaken
 // hands is starved rather than busy.
 const slowStartCPU = 50 * time.Millisecond
+
+// startCPU reads the CPU time a task used so far at the handshake deadline.
+// Tests replace it: a test binary's own runtime start-up (race detector,
+// coverage) can use more CPU than slowStartCPU on a slow runner, which would
+// make a sleeping child look busy.
+var startCPU = func(c *core.ProcessCPU) (time.Duration, bool) { return c.Read() }
 
 var retryBackoff = 2 * time.Second
 
@@ -322,7 +329,7 @@ func oomLike(res *executor.Result) bool {
 // noHandshake records how a start without a handshake failed and returns
 // the stop reason: a starved process (slow start) or a silent busy one.
 func (s *session) noHandshake(hs time.Duration) string {
-	used, readable := s.cpu.Read()
+	used, readable := startCPU(s.cpu)
 	s.out.startKind = startKindAtHandshake(used, readable)
 	if s.out.startKind == startSlow {
 		return "no handshake within " + hs.String() + ": the process is alive but got almost no CPU (slow start)"
