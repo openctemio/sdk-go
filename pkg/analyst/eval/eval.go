@@ -294,7 +294,7 @@ type Gate struct {
 	MinRiskLoweringPrecision float64
 }
 
-// DefaultGate is the bar `openctem analyst test` applies.
+// DefaultGate is the bar `openctem playbook test` applies.
 var DefaultGate = Gate{MinAgreement: 0.9, MinRiskLoweringPrecision: 1}
 
 // ErrGate matches a failed gate (errors.Is).

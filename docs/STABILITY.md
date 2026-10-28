@@ -55,7 +55,7 @@ without a tier fails the job.
 | `pkg/analyst` | The analyst harness for one `openctem.analyze/v1` job: provider interface, tool registry bound to the signed grant, grant policy and hooks before every tool call, budgets, fenced untrusted text, closed output schema with evidence checks, run record and replay (api RFC-133) | Experimental |
 | `pkg/analyst/contract` | Digest-pinned copies of the platform's `openctem.analyze/v1` JSON Schemas and their validation | Experimental |
 | `pkg/analyst/playbook` | The analyst playbook format `openctem.io/playbook/v1`: strict loading, digest, rendering, required-evidence verifier | Experimental |
-| `pkg/analyst/eval` | Runs a playbook over a golden set offline (replayed model turns, recorded tool outputs) and scores agreement, risk-lowering precision and injection cases; the gate behind `openctem analyst test` | Experimental |
+| `pkg/analyst/eval` | Runs a playbook over a golden set offline (replayed model turns, recorded tool outputs) and scores agreement, risk-lowering precision and injection cases; the gate behind `openctem playbook test` | Experimental |
 | `pkg/sensorkit/executor` | Per-task tool sandbox behind a small backend interface (`Backend`, `TaskSpec`, `Status`) | Beta |
 | `pkg/core` | Interfaces (`Scanner`, `Collector`, `Parser`, `CommandExecutor`, `Pusher`, …), registries, the command runtime (`BaseSensor`, `CommandPoller`), the safe-exec helpers (section 5), `ScanTargetPolicy` | Stable; its runtime internals are Internal-bound and its overlapping tool interfaces are replaced by the tool contract (RFC) |
 | `pkg/client` | Platform protocol client (protocol v2; v1 is retired) | Stable; its protocol internals are Internal-bound |

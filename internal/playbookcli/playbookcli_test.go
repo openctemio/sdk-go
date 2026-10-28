@@ -1,4 +1,4 @@
-package analystcli
+package playbookcli
 
 import (
 	"bytes"
