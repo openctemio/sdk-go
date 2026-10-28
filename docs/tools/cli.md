@@ -52,6 +52,8 @@ Exit status:
 | `diff <old> <new>` | Compares two versions of a descriptor and fails when the change needs a larger version bump than the one made. |
 | `describe [--json] [dir]` | Prints the canonical descriptor and its digest, which is what the platform sees. |
 
+A directory with a `pack.yaml` is a [tool pack](../tool-packs.md): `validate`, `test` and `describe` then work on the pack and every tool it lists (`describe` prints the pack's tier, capabilities, credentials, network and engines). Name the `tool.yaml` file to work on one tool of it.
+
 `openctem-conformance tool <tool.yaml>` is the older name of `openctem tool test` and is kept for one minor release.
 
 ## What `init` writes
@@ -68,6 +70,7 @@ It also writes:
 - a stub program that emits nothing (for `python`, a `run(ctx, task)` on the `openctem_tool.py` helper it also writes; see [adapter-protocol.md](../adapter-protocol.md));
 - a self-test fixture with its expected CTIS (for tools that take URLs, services or hosts, a hermetic one: see "Hermetic fixtures");
 - a `.gitignore` (`__pycache__/`, `fuzz/crashers/`, and `bin/` for `go`);
+- a `pack.yaml` that makes the directory a pack of this one tool ([tool-packs.md](../tool-packs.md)), with the tier the tool needs and, for `python` and `go`, a base image pinned by digest;
 - a `Makefile` (`validate`, `test`, `conformance`);
 - the CI workflow `.github/workflows/openctem-tool.yml`.
 

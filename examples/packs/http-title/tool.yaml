@@ -1,0 +1,21 @@
+{
+  "apiVersion": "openctem.io/tool/v1",
+  "name": "http-title",
+  "version": "0.1.0",
+  "description": "Fetches the root page of an HTTP service and reports its status code, server header and title.",
+  "publisher": "example",
+  "license": "Apache-2.0",
+  "presentation": {"display_name": "HTTP title"},
+  "class": "target-scan",
+  "tier": "T1",
+  "implements": [{"capability": "probe.http@1"}],
+  "consumes": ["http_service", "website", "discovered_url"],
+  "produces": ["asset:http_service"],
+  "permissions": {"network": "targets"},
+  "resources": {"timeout": "5m", "max_records": 10000},
+  "run": {"argv": ["./http-title.py"]},
+  "selftest": [
+    {"name": "title", "task": "fixtures/task.json", "expect": "fixtures/expect.ctis.json"}
+  ],
+  "protocol": {"min": 1}
+}

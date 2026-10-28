@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "assets": [
+    {
+      "properties": {
+        "server": "fixture",
+        "status_code": 200,
+        "title": "fixture"
+      },
+      "type": "http_service",
+      "value": "{{fixture.url}}"
+    }
+  ],
+  "metadata": {
+    "properties": {
+      "provenance": "<provenance>"
+    },
+    "source_type": "scanner"
+  },
+  "tool": {
+    "name": "http-title"
+  },
+  "version": "1.6"
+}

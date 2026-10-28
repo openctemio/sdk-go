@@ -284,6 +284,7 @@ func Scaffold(kind, capRef, name string) (map[string]scaffoldFile, tool.Manifest
 		return nil, tool.Manifest{}, err
 	}
 	files["tool.yaml"] = scaffoldFile{doc, 0o644}
+	files["pack.yaml"] = scaffoldFile{packYAML(kind, m), 0o644}
 	return files, m, nil
 }
 

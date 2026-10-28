@@ -293,6 +293,7 @@ content:
 
 ## Installing
 
+A tool is shipped in a [tool pack](tool-packs.md) (`pack.yaml`), the same format our own tools use.
 An operator installs the tool's directory (its `tool.yaml` and program) in one
 of the sensor's adapter directories (`SENSOR_ADAPTER_DIRS`). The directory and
 files must not be writable by another user, and must not be symbolic links.
