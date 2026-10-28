@@ -8,6 +8,61 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.40.0 — 2026-10-28
+
+### Added: an eval harness for AI playbooks, and `openctem playbook init|test`
+
+- `pkg/harness/eval` runs a playbook over a golden set and scores it: agreement with the expected answers, precision of risk-lowering verdicts (a wrong false positive hides a real issue), and injection cases, which pass only when no risk-lowering output comes out and no tool outside the grant ran. Offline runs replay recorded model turns and tool outputs, so they are deterministic and need no network. A live provider can answer instead, while tools still return the recorded outputs, so an eval never reaches a target.
+- `openctem playbook init [--kind triage.v1] <dir>` scaffolds a playbook and one golden case. `openctem playbook test [dir]` validates the playbook and runs its golden set with the default gate: injection cases all pass, agreement at least 0.9, risk-lowering precision 1. It exits 1 when the gate fails, so it works as a CI step.
+- `examples/playbooks/web-vuln-triage/golden` holds four cases: confirmed, false positive, unreachable host, and instructions planted in evidence.
+
+### Added: the analyst harness core (`pkg/analyst`)
+
+- `pkg/analyst` is the loop an analyst worker runs for one `openctem.analyze/v1` job: a provider interface (one adapter per model API), a tool registry that offers only the tools the signed grant and the playbook allow, a grant policy that checks every tool call before it runs (granted tool, input schema, target placeholders bound in the grant, tier ceiling; intrusive tools always need a person), pre and post tool hooks that can only deny or redact, budgets on steps, tool calls, tokens, wall time and cost with one final answer after a budget stop, parallel tool calls with a limit, untrusted text fenced with a per-run nonce, a closed output schema with evidence that must resolve and one repair turn, and an append-only run record whose digest binds the result. A `Replay` provider replays a recorded run deterministically and plays scripted models in tests.
+- `pkg/analyst/contract` carries byte-identical, digest-pinned copies of the platform's `openctem.analyze/v1` JSON Schemas and validates jobs, results and model output against them.
+- `pkg/analyst/playbook` is the playbook format `openctem.io/playbook/v1` (versioned YAML: kind, output schema, model tier, tools that narrow the grant, steps, required evidence, rules, budgets), with strict loading and a digest; `examples/playbooks/web-vuln-triage` is a sample.
+- New dependency: `github.com/santhosh-tekuri/jsonschema/v6` (Apache-2.0), the validator the platform already uses for the same schemas.
+
+### Added: provider state and a fallback signal in `pkg/harness`
+
+- `Message.ProviderState` is an opaque, provider-owned field (thinking blocks, signatures) that the harness copies into the run record and a resume (`Run.Resume`). The harness stamps it with the producing provider's name (`Message.StateProvider`), sends it only to that provider and drops it when the provider changes, for example after a fallback. It is capped per message (`Run.MaxProviderStateBytes`, default 64 KiB); state over the cap or not valid JSON is dropped. It is part of the request and record digests, and a replay stays deterministic because it returns the recorded state.
+- `Result.FallbackEligible` is true when an answer failed schema or evidence validation and the one repair turn on the same provider and model failed too. A model refusal, a verifier refusal marked `VerifyError.Policy`, a provider error, a budget stop and the deadline never set it. The provider layer reacts by running the job again on the next chain target.
+
+### Added: host pressure governs tool launches; a starved start is retried instead of reported as a crash
+
+- The SDK reads Linux pressure stall information (CPU, memory, I/O), CPU quota throttling, load per CPU, available memory and open descriptors, and rates the host `ok`, `elevated` or `overloaded` with hysteresis. Elevated halves the job slots; overloaded leaves no free slot while a job runs. Tool launches wait while the host is overloaded (one tool always runs). The heartbeat reports `resources.pressure` (level, reasons, readings, `noisy_neighbor`) and `capacity.launches_held`, `tools_running` and `transient` counters. All new fields are optional for the platform.
+- The start handshake timeout grows with the measured stall (30 s up to 120 s). A tool that is alive but got almost no CPU is a slow start, not a crash. One automatic retry for transient start failures (slow start; no handshake or an OOM kill under host pressure; a refused fork); never for policy refusals, protocol or manifest mismatches, a tool's own memory limit, or after results. The outcome carries `Attempts` and `Transient`.
+- A start that fails again under pressure is reported as `infra.resource.host_pressure` with `attempts` and `pressure` in the evidence, only to a platform that lists the new `host_pressure` feature; older platforms receive `infra.tool_crashed` as before.
+- Tool contract: `resources.profile` (`light`, `standard`, `heavy`) sizes each task's envelope; `resources.cpu` and `resources.memory` now apply. Where the sensor's cgroup v2 is delegated and holds the sensor alone, each task runs in a cgroup of its own (`cpu.max`, `cpu.weight`, `memory.max`, `pids.max`, created with `CLONE_INTO_CGROUP`); elsewhere rlimits. `SENSOR_TOOL_CGROUPS=off` turns cgroups off. The sandbox status reports `envelope`.
+- With one free slot, a command of a type the sensor does not run at the head of the queue no longer hides the sensor's own work: the next poll asks for more.
+- New `scripts/fault-injection.sh` runs CPU-hog, memory-pressure and cgroup-envelope tests in throwaway containers. See `docs/resource-governance.md`.
+
+### Added: `openctem tool build` makes the pack image; CI templates publish and sign it
+
+- `openctem tool build <pack> (--output <oci-dir> | --push <repo[:tag]>)` builds a multi-platform OCI image of a tool pack without a container daemon: the base image pinned by digest plus one reproducible layer holding the pack at `/opt/openctem/pack`, per-architecture files from `.build/<os>-<arch>/`, no entrypoint, user 65532, no timestamps, and the labels `io.openctem.pack.{name,version,publisher,tier,digest}`. The same pack and base give the same digest; the command prints it.
+- Symbolic links and special files are never packed (the build fails), nor are `.git`, `.build` and `__pycache__`; a pack that does not validate is not built.
+- The GitHub and GitLab CI templates gain a publish job: on a tag equal to the pack version, build, push and sign the image digest keylessly with cosign.
+
+### Added: tool packs (pack.yaml) and pack support in `openctem tool`
+
+- `pkg/tool/pack` reads `pack.yaml` (`openctem.io/pack/v1`, JSON Schema `pkg/tool/schema/pack.v1.schema.json`): the unit in which tools are versioned, built, signed and delivered. It lists the pack's tools, the third-party engines they bundle (version, license, a sha256 per platform), the platforms, the SDK and protocol the pack needs, and the base image of a pack image (pinned by digest).
+- The pack's tier is checked, not trusted: it must equal the highest minimum tier of its tools (declared tier, capability tier floors, side effects), so a pack cannot label an active tool passive. Unlisted tools, unlisted engines, tool paths that leave the pack or pass through a symbolic link, and an SDK requirement below a tool's `sdk.min` are refused.
+- `openctem tool validate|test|describe` work on a pack directory (every tool it lists); `openctem tool init` writes a one-tool `pack.yaml` next to the new tool.
+- `examples/packs/http-title`: a Python pack for `probe.http@1`, tested in CI with the capability suite and the scope check.
+- Spec: `docs/tool-packs.md`.
+
+### Changed: `pkg/analyst` is now `pkg/harness`
+
+- The AI runtime package is renamed to `pkg/harness` (with `pkg/harness/contract` and `pkg/harness/playbook`), because later AI roles (remediation, reports, hunting) run on the same loop. The package is Experimental, so there is no alias: change the import path.
+
+### Changed: a scan whose every target does not resolve completes with each target skipped
+
+- When every target of a scan job is a name that does not resolve, the command now completes (partial) with the refused-target list (reason `unresolvable`, `refused_targets_total`) instead of failing with "invalid scan target: N of N targets refused". Mixed refusals (a denied or invalid target among them) still fail. The platform already handles the old failed form, so sensor and platform versions stay independent.
+
+### Fixed: an analyst run measures its job deadline on its own clock
+
+- `pkg/analyst` applied the job deadline as a wall-clock context deadline while the refusal check used the run's injected clock, so a run with an injected clock could end early, and the harness tests failed for good once the wall clock passed their fixed test time. The context now uses the time left on the run's own clock.
+
 ## v0.39.0 — 2026-10-26
 
 ### Added: `sensorkit.PreflightDataDirs` checks the sensor's data directories at start
