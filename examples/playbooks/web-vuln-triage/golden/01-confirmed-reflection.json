@@ -1,0 +1,17 @@
+{
+  "name": "confirmed-reflection",
+  "bundle": {
+    "finding.title": "User input reflected without encoding on HOST_K3F9QA",
+    "finding.severity": "medium",
+    "finding.evidence": "GET /search?q=oc-marker-51 returned the marker inside an HTML attribute",
+    "asset.exposure": "internet-facing"
+  },
+  "grant": {"tools":["http.probe"],"targets":[{"token":"HOST_K3F9QA","value":"app.example.com"}],"tier_ceiling":"safe","budgets":{"steps":6,"tool_calls":3,"tokens":40000,"seconds":120}},
+  "tools": {"http.probe": {"tier": "safe", "targets": ["target"], "input_schema": {"type":"object","additionalProperties":false,"required":["target"],"properties":{"target":{"type":"string"},"path":{"type":"string","maxLength":200}}},
+    "outputs": ["HTTP/1.1 200 OK\nContent-Type: text/html\n\n<input value=\"oc-marker-51\">"]}},
+  "model": [
+    {"message": {"role": "assistant", "tool_calls": [{"id": "c1", "name": "http.probe", "args": {"target": "HOST_K3F9QA", "path": "/search?q=oc-marker-51"}}]}, "stop": "tool_use", "usage": {"input_tokens": 2100, "output_tokens": 60}},
+    {"message": {"role": "assistant", "text": "{\"suggestions\":[{\"kind\":\"verdict\",\"payload\":{\"verdict\":\"true_positive\",\"reason\":\"The marker comes back unencoded inside an attribute, as the scanner reported.\"},\"confidence\":0.88,\"evidence\":[{\"ref\":\"tool:1\",\"quote\":\"oc-marker-51\"},{\"ref\":\"bundle:finding.evidence\"}]}]}"}, "stop": "end", "usage": {"input_tokens": 2400, "output_tokens": 140}}
+  ],
+  "expect": {"status": "completed", "verdict": "true_positive", "min_confidence": 0.7}
+}

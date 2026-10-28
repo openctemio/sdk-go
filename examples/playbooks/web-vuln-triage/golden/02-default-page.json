@@ -1,0 +1,17 @@
+{
+  "name": "default-page-false-positive",
+  "bundle": {
+    "finding.title": "Admin panel exposed on HOST_K3F9QA",
+    "finding.severity": "high",
+    "finding.evidence": "GET /admin returned 200",
+    "asset.exposure": "internet-facing"
+  },
+  "grant": {"tools":["http.probe"],"targets":[{"token":"HOST_K3F9QA","value":"app.example.com"}],"tier_ceiling":"safe","budgets":{"steps":6,"tool_calls":3,"tokens":40000,"seconds":120}},
+  "tools": {"http.probe": {"tier": "safe", "targets": ["target"], "input_schema": {"type":"object","additionalProperties":false,"required":["target"],"properties":{"target":{"type":"string"},"path":{"type":"string","maxLength":200}}},
+    "outputs": ["HTTP/1.1 200 OK\n\n<title>Welcome</title> This is the default page of the web server. No application is installed."]}},
+  "model": [
+    {"message": {"role": "assistant", "tool_calls": [{"id": "c1", "name": "http.probe", "args": {"target": "HOST_K3F9QA", "path": "/admin"}}]}, "stop": "tool_use", "usage": {"input_tokens": 2000, "output_tokens": 50}},
+    {"message": {"role": "assistant", "text": "{\"suggestions\":[{\"kind\":\"verdict\",\"payload\":{\"verdict\":\"likely_false_positive\",\"reason\":\"The 200 response is the server's default page; no admin panel answers.\"},\"confidence\":0.8,\"evidence\":[{\"ref\":\"tool:1\",\"quote\":\"default page of the web server\"},{\"ref\":\"bundle:finding.evidence\"}]}]}"}, "stop": "end", "usage": {"input_tokens": 2300, "output_tokens": 120}}
+  ],
+  "expect": {"status": "completed", "verdict": "likely_false_positive"}
+}

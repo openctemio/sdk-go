@@ -1,0 +1,16 @@
+{
+  "name": "unreachable-needs-info",
+  "bundle": {
+    "finding.title": "Outdated server banner on HOST_K3F9QA",
+    "finding.severity": "low",
+    "finding.evidence": "Server header reports an old version",
+    "asset.exposure": "internal"
+  },
+  "grant": {"tools":["http.probe"],"targets":[{"token":"HOST_K3F9QA","value":"app.example.com"}],"tier_ceiling":"safe","budgets":{"steps":6,"tool_calls":3,"tokens":40000,"seconds":120}},
+  "tools": {"http.probe": {"tier": "safe", "targets": ["target"], "input_schema": {"type":"object","additionalProperties":false,"required":["target"],"properties":{"target":{"type":"string"},"path":{"type":"string","maxLength":200}}}, "fail": true}},
+  "model": [
+    {"message": {"role": "assistant", "tool_calls": [{"id": "c1", "name": "http.probe", "args": {"target": "HOST_K3F9QA"}}]}, "stop": "tool_use", "usage": {"input_tokens": 1900, "output_tokens": 40}},
+    {"message": {"role": "assistant", "text": "{\"suggestions\":[{\"kind\":\"verdict\",\"payload\":{\"verdict\":\"needs_info\",\"reason\":\"The host did not answer, so the banner cannot be checked now.\"},\"confidence\":0.6,\"evidence\":[{\"ref\":\"bundle:finding.evidence\"}]}]}"}, "stop": "end", "usage": {"input_tokens": 2000, "output_tokens": 90}}
+  ],
+  "expect": {"status": "completed", "verdict": "needs_info"}
+}
