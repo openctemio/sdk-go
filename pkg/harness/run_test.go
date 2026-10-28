@@ -1,4 +1,4 @@
-package analyst
+package harness
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openctemio/sdk-go/pkg/analyst/contract"
+	"github.com/openctemio/sdk-go/pkg/harness/contract"
 )
 
 type fakeTool struct {

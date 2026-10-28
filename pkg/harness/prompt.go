@@ -1,9 +1,9 @@
-package analyst
+package harness
 
 import (
 	"strings"
 
-	"github.com/openctemio/sdk-go/pkg/analyst/contract"
+	"github.com/openctemio/sdk-go/pkg/harness/contract"
 )
 
 // The platform's rules come first in the system prompt and are the same for

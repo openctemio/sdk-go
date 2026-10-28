@@ -1,4 +1,4 @@
-// Package playbookcli implements "openctem playbook": scaffold and test an analyst
+// Package playbookcli implements "openctem playbook": scaffold and test an AI
 // playbook offline, the way the platform's eval gate runs it. Nothing here
 // talks to a platform, a model or a target: tests replay recorded turns and
 // recorded tool outputs.
@@ -16,8 +16,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/openctemio/sdk-go/pkg/analyst/eval"
-	"github.com/openctemio/sdk-go/pkg/analyst/playbook"
+	"github.com/openctemio/sdk-go/pkg/harness/eval"
+	"github.com/openctemio/sdk-go/pkg/harness/playbook"
 )
 
 // Exit codes (same as openctem tool).

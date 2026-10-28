@@ -6,8 +6,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/openctemio/sdk-go/pkg/analyst"
-	"github.com/openctemio/sdk-go/pkg/analyst/playbook"
+	"github.com/openctemio/sdk-go/pkg/harness"
+	"github.com/openctemio/sdk-go/pkg/harness/playbook"
 )
 
 const sampleDir = "../../../examples/playbooks/web-vuln-triage"
@@ -92,7 +92,7 @@ func TestWrongVerdictLowersAgreementAndPrecision(t *testing.T) {
 
 func TestLiveProviderStillUsesRecordedTools(t *testing.T) {
 	pb, cases := load(t)
-	live := &analyst.Replay{ProviderName: "live-stand-in", Turns: cases[0].Model}
+	live := &harness.Replay{ProviderName: "live-stand-in", Turns: cases[0].Model}
 	rep, err := Run(context.Background(), pb, cases[:1], Options{Provider: live, Model: "m"})
 	if err != nil || !rep.Results[0].Pass {
 		t.Fatalf("%v %+v", err, rep.Results)

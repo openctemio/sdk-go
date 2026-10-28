@@ -1,4 +1,4 @@
-// Package eval runs an analyst playbook over a golden set and scores it: the
+// Package eval runs an AI playbook over a golden set and scores it: the
 // regression gate for a playbook, prompt or model change, and the conformance
 // check of an organization's own playbook before it goes live.
 //
@@ -10,7 +10,7 @@
 // data, never from an organization's findings unless that organization runs
 // the eval on its own worker.
 //
-// Design: openctem api/docs/rfcs/RFC-133-ai-analyst-harness.md.
+// Design: openctem api/docs/rfcs/RFC-133-ai-harness.md.
 //
 // Stability: Experimental (docs/STABILITY.md).
 package eval
@@ -28,9 +28,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openctemio/sdk-go/pkg/analyst"
-	"github.com/openctemio/sdk-go/pkg/analyst/contract"
-	"github.com/openctemio/sdk-go/pkg/analyst/playbook"
+	"github.com/openctemio/sdk-go/pkg/harness"
+	"github.com/openctemio/sdk-go/pkg/harness/contract"
+	"github.com/openctemio/sdk-go/pkg/harness/playbook"
 )
 
 // Category of a golden case. Injection cases carry instructions in the data;
@@ -44,7 +44,7 @@ const (
 // FixtureTool is a tool of a case: its definition and the outputs it
 // returns, in order (the last one repeats). Fail makes every call fail.
 type FixtureTool struct {
-	Tier        analyst.Tier    `json:"tier"`
+	Tier        harness.Tier    `json:"tier"`
 	Targets     []string        `json:"targets,omitempty"`
 	InputSchema json.RawMessage `json:"input_schema,omitempty"`
 	Outputs     []string        `json:"outputs,omitempty"`
@@ -64,9 +64,9 @@ type Case struct {
 	Name     string                 `json:"name"`
 	Category string                 `json:"category,omitempty"`
 	Bundle   map[string]string      `json:"bundle"`
-	Grant    analyst.Grant          `json:"grant"`
+	Grant    harness.Grant          `json:"grant"`
 	Tools    map[string]FixtureTool `json:"tools,omitempty"`
-	Model    []analyst.Response     `json:"model,omitempty"`
+	Model    []harness.Response     `json:"model,omitempty"`
 	Expect   Expect                 `json:"expect"`
 }
 
@@ -109,9 +109,9 @@ func LoadDir(dir string) ([]Case, error) {
 
 // Options of an eval run. Provider nil replays each case's recorded turns.
 type Options struct {
-	Provider analyst.Provider
+	Provider harness.Provider
 	Model    string
-	Pricer   analyst.Pricer
+	Pricer   harness.Pricer
 }
 
 // CaseResult is the outcome of one case.
@@ -198,22 +198,22 @@ func runCase(ctx context.Context, pb *playbook.Playbook, c Case, idx int, opt Op
 	tools, counter := fixtures(c)
 	provider := opt.Provider
 	if provider == nil {
-		provider = &analyst.Replay{ProviderName: "replay", Turns: c.Model}
+		provider = &harness.Replay{ProviderName: "replay", Turns: c.Model}
 	}
 	model := opt.Model
 	if model == "" {
 		model = "replay"
 	}
 	in := pb.Render()
-	run := &analyst.Run{
-		Job: analyst.Job{
+	run := &harness.Run{
+		Job: harness.Job{
 			ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", idx+1), TenantID: "eval", Kind: pb.Kind,
 			OutputSchema: pb.Output, Bundle: c.Bundle, Grant: c.Grant,
 		},
 		Instructions: in, Provider: provider, Model: model, Tools: tools, Pricer: opt.Pricer,
-		Verifiers: []analyst.Verifier{pb.RequireEvidence()},
-		Recorder:  analyst.NewJSONLRecorder(&bytes.Buffer{}),
-		Fence:     analyst.FenceWithNonce(fmt.Sprintf("eval%012d", idx+1)),
+		Verifiers: []harness.Verifier{pb.RequireEvidence()},
+		Recorder:  harness.NewJSONLRecorder(&bytes.Buffer{}),
+		Fence:     harness.FenceWithNonce(fmt.Sprintf("eval%012d", idx+1)),
 		Now:       func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
 	}
 	res, err := run.Execute(ctx)
@@ -329,7 +329,7 @@ func (c *callCounter) add(name string) {
 	c.calls[name]++
 }
 
-func (c *callCounter) outside(g analyst.Grant) int {
+func (c *callCounter) outside(g harness.Grant) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	n := 0
@@ -353,24 +353,24 @@ type fixtureTool struct {
 	next    int
 }
 
-func fixtures(c Case) ([]analyst.Tool, *callCounter) {
+func fixtures(c Case) ([]harness.Tool, *callCounter) {
 	counter := &callCounter{calls: map[string]int{}}
 	names := make([]string, 0, len(c.Tools))
 	for n := range c.Tools {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	out := make([]analyst.Tool, 0, len(names))
+	out := make([]harness.Tool, 0, len(names))
 	for _, n := range names {
 		out = append(out, &fixtureTool{name: n, def: c.Tools[n], counter: counter})
 	}
 	return out, counter
 }
 
-func (f *fixtureTool) Def() analyst.ToolDef {
-	return analyst.ToolDef{
-		Spec:  analyst.ToolSpec{Name: f.name, Description: "recorded tool " + f.name, InputSchema: f.def.InputSchema},
-		Class: analyst.ClassSensorJob, Tier: f.def.Tier, Targets: f.def.Targets,
+func (f *fixtureTool) Def() harness.ToolDef {
+	return harness.ToolDef{
+		Spec:  harness.ToolSpec{Name: f.name, Description: "recorded tool " + f.name, InputSchema: f.def.InputSchema},
+		Class: harness.ClassSensorJob, Tier: f.def.Tier, Targets: f.def.Targets,
 	}
 }
 

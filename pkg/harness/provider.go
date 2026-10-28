@@ -1,4 +1,4 @@
-package analyst
+package harness
 
 import (
 	"context"
@@ -113,7 +113,7 @@ type Pricer interface {
 }
 
 // ErrReplayExhausted is returned by Replay when the script has no more turns.
-var ErrReplayExhausted = errors.New("analyst: replay script exhausted")
+var ErrReplayExhausted = errors.New("harness: replay script exhausted")
 
 // Replay is a Provider that answers from a recorded script, in order. It is
 // how a run is replayed from its record, how the eval harness runs a golden

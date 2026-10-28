@@ -1,4 +1,4 @@
-package analyst
+package harness
 
 import "errors"
 
@@ -26,7 +26,7 @@ type Router interface {
 }
 
 // ErrNoModel is returned when no model is configured for a tier.
-var ErrNoModel = errors.New("analyst: no model for this tier")
+var ErrNoModel = errors.New("harness: no model for this tier")
 
 // TierRouter maps each tier to one model. A missing large model falls back
 // to the small one (never the other way round: a hard case must not silently

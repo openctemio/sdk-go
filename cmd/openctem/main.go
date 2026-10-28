@@ -9,7 +9,7 @@
 //	openctem tool describe --json ./acme-lint
 //	openctem version
 //
-// Its playbook commands scaffold an analyst playbook and run its golden set
+// Its playbook commands scaffold an AI playbook and run its golden set
 // offline, as the platform's eval gate does:
 //
 //	openctem playbook init --kind triage.v1 ./my-triage
