@@ -55,6 +55,8 @@ Exit status:
 
 A directory with a `pack.yaml` is a [tool pack](../tool-packs.md): `validate`, `test` and `describe` then work on the pack and every tool it lists (`describe` prints the pack's tier, capabilities, credentials, network and engines). Name the `tool.yaml` file to work on one tool of it.
 
+A directory with a `pack.yaml` is a [tool pack](../tool-packs.md): `validate`, `test` and `describe` then work on the pack and every tool it lists (`describe` prints the pack's tier, capabilities, credentials, network and engines). Name the `tool.yaml` file to work on one tool of it.
+
 `openctem-conformance tool <tool.yaml>` is the older name of `openctem tool test` and is kept for one minor release.
 
 ## What `init` writes

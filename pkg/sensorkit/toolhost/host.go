@@ -122,6 +122,12 @@ type Host struct {
 	// rule (core.CheckSharedAddr), at admission and again for each address
 	// pinned for the task's forwarder.
 	Shared bool
+	// Governor admits every tool launch under host pressure, scales the
+	// start handshake to the measured stall and counts transient start
+	// failures (research/318; resource.Manager.Governor). nil: launches
+	// start at once and the handshake waits the base 30 s. Either way a
+	// transient start failure is tried once more.
+	Governor Governor
 }
 
 // RunOptions adjust one task.
@@ -241,6 +247,14 @@ type Outcome struct {
 	// job result carries it (reach.Recorder.Metadata). Nil when the task's
 	// network was not confined or it dialed nothing.
 	Reach *reach.Report
+	// Attempts is how many times the task was started (1, or 2 after a
+	// transient start failure); Transient is why the first start failed
+	// ("" when it did not): slow_start, handshake_timeout, oom_kill or
+	// start_eagain.
+	Attempts  int
+	Transient string
+	// startKind is how this attempt's start failed ("" when it did not).
+	startKind string
 }
 
 // ReportJSON is the report as JSON (a scanner's raw output for the
@@ -260,7 +274,9 @@ func (h *Host) RunBuiltin(ctx context.Context, t tool.Tool, task tool.Task, o Ru
 	}
 	m := t.Manifest().Normalized()
 	return h.lifecycle(ctx, m, task, func() (*Outcome, error) {
-		return h.run(ctx, m, task, o, []string{self, adapter.ToolArg, m.Name}, "built-in (re-executed, adapter protocol v1)")
+		return h.withRetry(ctx, m, func() (*Outcome, error) {
+			return h.run(ctx, m, task, o, []string{self, adapter.ToolArg, m.Name}, "built-in (re-executed, adapter protocol v1)")
+		})
 	})
 }
 
@@ -321,10 +337,12 @@ func (h *Host) RunManifest(ctx context.Context, m tool.Manifest, task tool.Task,
 		argv[0] = filepath.Join(o.Dir, argv[0])
 	}
 	return h.lifecycle(ctx, m, task, func() (*Outcome, error) {
-		if m.Run.Profile == tool.ProfileExec {
-			return h.runExec(ctx, m, task, o, argv)
-		}
-		return h.run(ctx, m, task, o, argv, "adapter (adapter protocol v1)")
+		return h.withRetry(ctx, m, func() (*Outcome, error) {
+			if m.Run.Profile == tool.ProfileExec {
+				return h.runExec(ctx, m, task, o, argv)
+			}
+			return h.run(ctx, m, task, o, argv, "adapter (adapter protocol v1)")
+		})
 	})
 }
 
@@ -658,6 +676,11 @@ type session struct {
 	settledAt  time.Time
 	// watchStop is why the watch stopped the tool ("": it did not).
 	watchStop string
+	// handshake is the start handshake timeout of this task.
+	handshake time.Duration
+	// oom is set when the kernel killed the tool for memory: "oom_kill"
+	// (the host's) or "oom_envelope" (the task's own limit).
+	oom string
 }
 
 // run runs an adapter-protocol task.
@@ -705,7 +728,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 				cpu.Track(cmd.Process.Pid)
 			}
 		}, Finished: core.ReapScannerProcess},
-		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(),
+		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(), Envelope: envelopeFor(m),
 	})
 	if err != nil {
 		_ = inR.Close()
@@ -727,6 +750,17 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	// first (the tool may stop cleanly within the grace), then a kill.
 	procCtx, procCancel := context.WithTimeout(context.WithoutCancel(ctx), timeout+3*cancelGrace)
 	defer procCancel()
+	// The launch waits while the sensor's host is overloaded (Governor).
+	release, err := h.admit(ctx, m)
+	if err != nil {
+		_ = inR.Close()
+		_ = outW.Close()
+		return nil, err
+	}
+	defer release()
+	// Measured after the admission: the start handshake waits longer on a
+	// host that stalls.
+	handshake := h.handshakeTimeout()
 	if err := t.Start(procCtx); err != nil {
 		_ = inR.Close()
 		_ = outW.Close()
@@ -736,7 +770,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	_ = outW.Close()
 
 	s := &session{h: h, p: p, o: o, out: &Outcome{Sandbox: be.Status()}, ctx: ctx,
-		watch: watchFor(o.Watch, core.RunWatchFrom(ctx)), cpu: cpu}
+		watch: watchFor(o.Watch, core.RunWatchFrom(ctx)), cpu: cpu, handshake: handshake}
 	_, _, maxBytes, _ := m.Resources.Limits()
 	stopReason, stopClass := s.drive(runCtx, ctx, t, toolwire.NewWriter(inW), outR, idle, maxRecords, maxBytes)
 	_ = inW.Close()
@@ -816,7 +850,8 @@ func (s *session) drive(runCtx, parent context.Context, t executor.Task, w *tool
 		stRunning
 	)
 	state := stHello
-	timer := time.NewTimer(handshakeTimeout)
+	hs := cmp.Or(s.handshake, handshakeTimeout)
+	timer := time.NewTimer(hs)
 	defer timer.Stop()
 	reset := func(d time.Duration) {
 		if !timer.Stop() {
@@ -877,7 +912,7 @@ func (s *session) drive(runCtx, parent context.Context, t executor.Task, w *tool
 			return stop("canceled (did not stop within the grace period)", tool.Canceled)
 		case <-timer.C:
 			if state != stRunning {
-				return stop("no handshake within "+handshakeTimeout.String(), tool.ToolCrashed)
+				return stop(s.noHandshake(hs), tool.ToolCrashed)
 			}
 			return stop("no message for "+idle.String()+" (idle timeout)", tool.Timeout)
 		case le, ok := <-lines:
@@ -888,7 +923,7 @@ func (s *session) drive(runCtx, parent context.Context, t executor.Task, w *tool
 				if canceled {
 					return "canceled", tool.Canceled
 				}
-				return "exited without a result", tool.ToolCrashed
+				return exitedNoResult, tool.ToolCrashed
 			}
 			if state == stRunning {
 				reset(idle)
@@ -1140,6 +1175,19 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 	if res != nil {
 		out.ExitCode = res.ExitCode
 		out.Sandbox = res.Sandbox
+		if (stopReason == "" || stopReason == exitedNoResult) && s.result == nil && oomLike(res) {
+			// Killed by nobody we know of: the kernel's OOM killer. Its own
+			// envelope's limit is no transient (the tool needs more memory).
+			out.startKind = startOOM
+			stopReason, stopClass = "killed for lack of memory (SIGKILL)", tool.ToolCrashed
+			if res.EnvelopeOOM {
+				out.startKind = ""
+				s.oom = "oom_envelope"
+				stopReason = "killed at its memory limit (the tool's resources.memory)"
+			} else {
+				s.oom = "oom_kill"
+			}
+		}
 	}
 	out.Stderr = p.redact(toolrt.CleanString(stderr.String()))
 	var runErr *tool.Error
@@ -1180,6 +1228,9 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 		if runErr == nil && s.result != nil && s.result.Status == tool.StatusPartial {
 			out.Status = tool.StatusPartial
 		}
+	}
+	if runErr != nil && s.oom != "" {
+		runErr.StartFailure = s.oom
 	}
 	out.Err = runErr
 	out.Report = p.asm.Report(time.Now().UTC())

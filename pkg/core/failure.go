@@ -69,6 +69,13 @@ const (
 	FailureJobSignature FailureClass = "infra.job_signature"
 	// FailureTransient: the tool reported a temporary error.
 	FailureTransient FailureClass = "infra.transient"
+	// FailureHostPressure: the tool could not start, or was killed for
+	// memory, while the sensor's host was overloaded (research/318), also
+	// after one more attempt. A fact about this host, not about the tool:
+	// the platform may move the task, never hold it against the tool. Sent
+	// only to a platform that lists the host_pressure feature; others get
+	// FailureToolCrashed (HostPressureFallback).
+	FailureHostPressure FailureClass = "infra.resource.host_pressure"
 
 	// FailureTargetUnreachable and the classes after it are about the
 	// target and are never retried elsewhere in the run.
@@ -123,7 +130,21 @@ const (
 	ReasonOutputLimit            = "output_limit"
 	ReasonPoolAllDown            = "pool_all_down"
 	ReasonPoolCredentialsRefused = "pool_credentials_refused"
+	// Start failures under host pressure (FailureHostPressure).
+	ReasonSlowStart   = "slow_start"
+	ReasonOOMHost     = "oom_host"
+	ReasonStartEAGAIN = "start_eagain"
 )
+
+// Host pressure levels a failure's evidence may name.
+var pressureSet = map[string]bool{"elevated": true, "overloaded": true}
+
+// maxAttempts bounds FailureEvidence.Attempts.
+const maxAttempts = 16
+
+// HostPressureFallback is the class a platform without the host_pressure
+// feature receives in place of FailureHostPressure.
+const HostPressureFallback = FailureToolCrashed
 
 // Bounds of a Failure on the wire.
 const (
@@ -162,6 +183,12 @@ type FailureEvidence struct {
 	Probe  *FailureProbe  `json:"probe,omitempty"`
 	Egress *FailureEgress `json:"egress,omitempty"`
 	Errno  string         `json:"errno,omitempty"`
+	// Attempts is how many times the tool was started on this sensor (2
+	// after an automatic retry of a transient start failure).
+	Attempts int `json:"attempts,omitempty"`
+	// Pressure is the sensor host's pressure level when the task failed
+	// ("elevated" or "overloaded"; "" when it was not pressured).
+	Pressure string `json:"pressure,omitempty"`
 }
 
 // FailureProbe is the control check of a failed job: "ok", "failed" or
@@ -322,6 +349,12 @@ func classifyError(in FailureInput, f *Failure) bool {
 			if errors.As(err, &ra) {
 				f.RetryAfterSeconds = int(min(ra.FailureRetryAfter().Seconds(), maxRetryAfter))
 			}
+			var se interface {
+				FailureStart() (attempts int, pressure string)
+			}
+			if errors.As(err, &se) {
+				ev.Attempts, ev.Pressure = se.FailureStart()
+			}
 			return !weakFailureClass(c)
 		}
 	}
@@ -444,7 +477,7 @@ func knownFailureClass(c FailureClass) bool {
 	switch c {
 	case FailureToolCrashed, FailureToolUnavailable, FailureMemory, FailureDisk, FailureOutputLimit,
 		FailureBudgetExceeded, FailureSensorNetwork, FailureDNSResolver, FailureProxyAuth, FailureProxyDown,
-		FailurePoolExhausted, FailureContentUnavailable, FailureJobSignature, FailureTransient,
+		FailurePoolExhausted, FailureContentUnavailable, FailureJobSignature, FailureTransient, FailureHostPressure,
 		FailureTargetUnreachable, FailureTargetRefused, FailureTargetTimeout, FailureTargetEdgeBlocked,
 		FailureTargetEdgeChallenge, FailureTargetRateLimited, FailureTargetNameGone,
 		FailureConfigInvalid, FailureConfigAuth, FailureConfigPermission, FailureUnknown:
@@ -462,7 +495,7 @@ func (f *Failure) ErrorCode() string {
 		return ""
 	}
 	switch {
-	case f.Class == FailureToolCrashed:
+	case f.Class == FailureToolCrashed, f.Class == FailureHostPressure:
 		return "TOOL_EXIT"
 	case f.Class == FailureBudgetExceeded:
 		return "TIMEOUT"
@@ -539,6 +572,10 @@ func (f *Failure) Bounded() *Failure {
 	}
 	if errnoSet[e.Errno] {
 		o.Errno = e.Errno
+	}
+	o.Attempts = max(0, min(e.Attempts, maxAttempts))
+	if pressureSet[e.Pressure] {
+		o.Pressure = e.Pressure
 	}
 	return out
 }

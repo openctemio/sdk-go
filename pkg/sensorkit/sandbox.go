@@ -95,6 +95,7 @@ func (k *Kit) setupSandbox() error {
 	for _, m := range st.Missing {
 		_, _ = fmt.Fprintf(k.errw, "Warning: tool sandbox: %s\n", m)
 	}
+	k.setupEnvelopes()
 	k.sandboxNetworkCheck(mode, netMode, st)
 	switch {
 	case st.NetworkEnforced:
@@ -103,6 +104,21 @@ func (k *Kit) setupSandbox() error {
 		_, _ = fmt.Fprintf(k.errw, "Warning: tool network not confined (%s=%s): %s\n", EnvSandboxNetwork, netMode, st.NetworkMissing)
 	}
 	return nil
+}
+
+// setupEnvelopes turns on per-task cgroup envelopes where the sensor's
+// cgroup is delegated (research/318 §6.2) and logs which envelope tasks get.
+func (k *Kit) setupEnvelopes() {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv(EnvToolCgroups)), "off") {
+		_, _ = fmt.Fprintf(k.out, "  Tool envelope: rlimits (%s=off)\n", EnvToolCgroups)
+		return
+	}
+	switch mode, why := executor.EnableEnvelopes(); mode {
+	case executor.EnvelopeCgroup:
+		_, _ = fmt.Fprintf(k.out, "  Tool envelope: a cgroup per task (CPU, memory and process limits from each tool's resources)\n")
+	default:
+		_, _ = fmt.Fprintf(k.out, "  Tool envelope: rlimits and priorities (no per-task cgroup: %s)\n", why)
+	}
 }
 
 // protectedPaths are the files no tool may read: the renewable API key, the

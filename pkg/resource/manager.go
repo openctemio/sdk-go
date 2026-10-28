@@ -17,6 +17,13 @@ type Capacity struct {
 	ActiveJobs int `json:"active_jobs"`
 	// PerTool is the per-job cost of each tool the sensor runs.
 	PerTool map[string]ToolEstimate `json:"per_tool,omitempty"`
+	// LaunchesHeld is how many tool launches wait now for the host's
+	// pressure to drop; ToolsRunning how many tool processes run.
+	LaunchesHeld int `json:"launches_held,omitempty"`
+	ToolsRunning int `json:"tools_running,omitempty"`
+	// Transient counts transient start failures since the sensor started
+	// (nil when there were none).
+	Transient *TransientCounts `json:"transient,omitempty"`
 }
 
 // ManagerConfig configures a Manager.
@@ -50,6 +57,8 @@ type ManagerConfig struct {
 	ReservedMemBytes int64
 	// OnError receives non-fatal errors (loading or saving the history).
 	OnError func(error)
+	// Governor configures the host pressure governor (research/318).
+	Governor GovernorConfig
 }
 
 // Manager turns the sensor's resources and its tools' learned costs into a
@@ -62,6 +71,7 @@ type Manager struct {
 	prober *Prober
 	book   *CostBook
 	aimd   *AIMD
+	gov    *Governor
 
 	mu       sync.Mutex
 	tools    []string
@@ -97,13 +107,26 @@ func NewManager(cfg ManagerConfig) *Manager {
 	for tool, h := range cfg.CostHints {
 		book.SetPrior(tool, h)
 	}
-	return &Manager{
+	m := &Manager{
 		cfg:    cfg,
 		prober: p,
 		book:   book,
 		aimd:   NewAIMD(cfg.MaxSlots()),
 		tools:  append([]string(nil), cfg.Tools...),
 	}
+	m.gov = newGovernor(cfg.Governor, func() ProbeResult { return m.probe(false) }, p.now, m.currentSlots, cfg.ProbeInterval)
+	return m
+}
+
+// Governor is the host pressure governor: tool hosts call its Admit before
+// each launch (toolhost.Host.Governor).
+func (m *Manager) Governor() *Governor { return m.gov }
+
+// currentSlots is the last slot count computed (at least 1).
+func (m *Manager) currentSlots() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return max(m.lastSlots, 1)
 }
 
 // MaxSlots is the most slots there can be: the cap, else HardMax.
@@ -148,10 +171,14 @@ func (m *Manager) probe(force bool) ProbeResult {
 	m.mu.Unlock()
 
 	r := m.prober.Probe()
+	// Rate the host's pressure before the slots read it (never under m.mu:
+	// the governor calls back into the manager).
+	m.gov.observe(r.Signals)
+	overloaded := m.gov.Level() == PressureOverloaded
 
 	m.mu.Lock()
 	m.last, m.lastAt, m.probed = r, now, true
-	congested := r.OOMKills > 0 || r.ThrottledRatio > 0.5
+	congested := r.OOMKills > 0 || r.ThrottledRatio > 0.5 || overloaded
 	// One decrease per probe interval, however many signals.
 	if congested && now.Sub(m.lastCong) >= m.cfg.ProbeInterval {
 		m.lastCong = now
@@ -199,6 +226,15 @@ func (m *Manager) slots(r ProbeResult, active int) int {
 	}
 	n := ComputeSlots(m.cfg.Cap, m.cfg.HardMax, res.CPUCores, budget, cores, mem)
 	n = max(min(n, m.aimd.Limit()), 1)
+	// Host pressure narrows further (research/318 §6.1): half the slots
+	// when elevated; when overloaded no free slot while anything runs, and
+	// one when nothing does, so the sensor still makes progress.
+	switch m.gov.Level() {
+	case PressureElevated:
+		n = max(n/2, 1)
+	case PressureOverloaded:
+		n = max(min(n, active), 1)
+	}
 	m.mu.Lock()
 	m.lastSlots = n
 	m.mu.Unlock()
@@ -259,7 +295,13 @@ func (m *Manager) Observe(s JobSample) {
 func (m *Manager) Snapshot(active int) (HostResources, Capacity) {
 	r := m.probe(true)
 	total := m.slots(r, active)
-	c := Capacity{SlotsTotal: total, SlotsFree: max(total-active, 0), ActiveJobs: active}
+	c := Capacity{SlotsTotal: total, SlotsFree: max(total-active, 0), ActiveJobs: active,
+		LaunchesHeld: m.gov.Held(), ToolsRunning: m.gov.Running()}
+	if t := m.gov.TransientCounts(); t != (TransientCounts{}) {
+		c.Transient = &t
+	}
+	p := m.gov.Pressure()
+	r.Resources.Pressure = &p
 
 	m.mu.Lock()
 	names := append([]string(nil), m.tools...)

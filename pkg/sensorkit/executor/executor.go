@@ -192,6 +192,9 @@ type TaskSpec struct {
 	// not confined.
 	EgressProxy string
 	EgressDNS   string
+	// Envelope bounds the task's CPU, memory and processes (nil: the
+	// default limits only). See Envelope.
+	Envelope *Envelope
 }
 
 // ProcessHooks are the caller's process-level adjustments, called by the
@@ -218,6 +221,10 @@ type Result struct {
 	Sandbox Status
 	// Network is the task's network class.
 	Network NetworkClass
+	// EnvelopeOOM is set when the kernel killed a process of the task for
+	// reaching its envelope's memory limit (cgroup envelope only): the
+	// tool needs more memory, which a retry on the same host cannot give.
+	EnvelopeOOM bool
 }
 
 // Task is a prepared task: Start it, Wait for it, Kill it, then Cleanup
@@ -268,6 +275,12 @@ type Status struct {
 	NetworkMissing string `json:"network_missing,omitempty"`
 	// Missing lists the controls this host could not enforce, and why.
 	Missing []string `json:"missing,omitempty"`
+	// Envelope is how a task's resource envelope is enforced:
+	// EnvelopeCgroup or EnvelopeRlimit ("" before EnableEnvelopes ran or
+	// for a backend without one). EnvelopeMissing says why cgroups are not
+	// used.
+	Envelope        string `json:"envelope,omitempty"`
+	EnvelopeMissing string `json:"envelope_missing,omitempty"`
 }
 
 // Complete reports whether every control is enforced.

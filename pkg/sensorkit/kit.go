@@ -375,6 +375,8 @@ type Kit struct {
 	// logs ships per-command logs to the platform (set by Run); the
 	// poller sends a command's last lines before its result.
 	logs atomic.Pointer[logShipper]
+	// gov is the host pressure governor of the running kit (ToolGovernor).
+	gov atomic.Pointer[resource.Governor]
 
 	// ls is the local store and what runs on it (nil with the outbox off);
 	// janitorRef is its janitor while Run runs.
@@ -1400,7 +1402,10 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	if hints := k.sensor.Tools().CostHints(); len(hints) > 0 {
 		rcfg.CostHints = hints
 	}
+	// A launch held for the host's pressure says so in its command's log.
+	rcfg.Governor.OnHold = k.logLaunchHeld
 	resources := resource.NewManager(rcfg)
+	k.gov.Store(resources.Governor())
 
 	poller := core.NewCommandPoller(k.client, exec, &core.CommandPollerConfig{
 		DrainGrace:    k.s.drainGrace,

@@ -142,6 +142,10 @@ const (
 	// whether the job moves to another sensor. Without the feature a sensor
 	// sends the error code and message only.
 	FeatureFailureClass = "failure_class"
+	// FeatureHostPressure: the platform knows the failure class
+	// infra.resource.host_pressure (research/318). Without it the sensor
+	// reports such a failure as infra.tool_crashed.
+	FeatureHostPressure = "host_pressure"
 	// FeatureLogs: POST /commands/{id}/logs takes a command's log lines
 	// (CommandLogsRequest), kept with the task on the platform for a
 	// limited time. Without it a sensor keeps its logs local.
@@ -537,6 +541,12 @@ type FailureEvidence struct {
 	Egress *FailureEgress `json:"egress,omitempty"`
 	// Errno names a system error (ENOSPC, EMFILE, ...).
 	Errno string `json:"errno,omitempty"`
+	// Attempts is how many times the tool was started on the sensor (2
+	// after an automatic retry of a transient start failure); Pressure the
+	// sensor host's pressure level when it failed ("elevated",
+	// "overloaded"). Both optional (research/318).
+	Attempts int    `json:"attempts,omitempty"`
+	Pressure string `json:"pressure,omitempty"`
 }
 
 // FailureProbe is the control check of a failed job.
