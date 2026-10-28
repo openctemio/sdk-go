@@ -69,6 +69,10 @@ type Instructions struct {
 type VerifyError struct {
 	Code     string
 	Location string
+	// Policy marks a refusal by policy (not a malformed or unsupported
+	// answer): a different model would not change it, so it never makes the
+	// run fallback-eligible.
+	Policy bool
 }
 
 func (e *VerifyError) Error() string { return e.Code + " at " + e.Location }
@@ -101,6 +105,13 @@ type Run struct {
 	MaxToolOutputBytes int
 	MaxTokensPerCall   int
 	Now                func() time.Time
+	// Resume holds the turns of an earlier run of this job, read back from its
+	// run record, that continue after the bundle message. ProviderState on
+	// them survives only when it came from this run's provider.
+	Resume []Message
+	// MaxProviderStateBytes caps ProviderState per message (zero: 64 KiB).
+	// State over the cap, or not valid JSON, is dropped, not truncated.
+	MaxProviderStateBytes int
 	// Fence is set only to replay a recorded run (zero: a fresh nonce).
 	Fence Fence
 }
@@ -123,7 +134,14 @@ type Result struct {
 	Denials       []Denial
 	BudgetStopped bool
 	Repairs       int
-	RecordDigest  string
+	// FallbackEligible is true when the model's answer failed schema or
+	// evidence validation, the same provider and model got its one repair
+	// turn, and that failed too. The provider layer may then run the job on
+	// the next target of its fallback chain (a new Run: a Run is used once).
+	// It is never set after a model refusal, a policy refusal (VerifyError
+	// with Policy), a provider error, a budget stop or the deadline.
+	FallbackEligible bool
+	RecordDigest     string
 	// ToolOutputs maps "tool:<n>" to the digest of that output.
 	ToolOutputs map[string]string
 }
@@ -204,6 +222,11 @@ func (r *Run) check() error {
 	case r.Instructions.ID == "" || r.Instructions.Digest == "":
 		return errors.New("harness: instructions id and digest are required")
 	}
+	for _, m := range r.Resume {
+		if m.Role != RoleUser && m.Role != RoleAssistant && m.Role != RoleTool {
+			return errors.New("harness: resumed message has an unknown role")
+		}
+	}
 	return nil
 }
 
@@ -235,6 +258,7 @@ func (r *Run) recorder() (Recorder, func() string) {
 func (st *runState) loop(ctx context.Context, schemaID string) Result {
 	r := st.r
 	msgs := []Message{{Role: RoleUser, Text: st.bundleText()}}
+	msgs = append(msgs, st.sanitizeResume(r.Resume)...)
 	system := systemPrompt(r.Instructions, schemaID)
 	cacheKey := digestString(r.Job.TenantID + "|" + r.Instructions.Digest)
 	repairsLeft, repairs := 1, 0
@@ -245,7 +269,7 @@ func (st *runState) loop(ctx context.Context, schemaID string) Result {
 			msgs = append(msgs, Message{Role: RoleUser, Text: finalNowText})
 		}
 		if finalOnly && st.meter.finalStep() != nil {
-			return st.finish(StatusIncomplete, ErrCodeBudget, nil, finalOnly, repairs)
+			return st.finish(StatusIncomplete, ErrCodeBudget, nil, finalOnly, repairs, false)
 		}
 		st.step++
 		req := Request{Model: r.Model, System: system, Messages: msgs, MaxTokens: r.maxTokens(), CacheKey: cacheKey,
@@ -257,11 +281,11 @@ func (st *runState) loop(ctx context.Context, schemaID string) Result {
 		resp, err := r.Provider.Complete(ctx, req)
 		if err != nil {
 			if ctx.Err() != nil {
-				return st.finish(StatusIncomplete, ErrCodeDeadline, nil, finalOnly, repairs)
+				return st.finish(StatusIncomplete, ErrCodeDeadline, nil, finalOnly, repairs, false)
 			}
-			return st.finish(StatusFailed, ErrCodeProvider, nil, finalOnly, repairs)
+			return st.finish(StatusFailed, ErrCodeProvider, nil, finalOnly, repairs, false)
 		}
-		resp.Message.Role = RoleAssistant
+		resp.Message = st.stampState(resp.Message)
 		var cost int64
 		if r.Pricer != nil {
 			cost = r.Pricer.CostMicroUSD(r.Model, resp.Usage)
@@ -280,11 +304,11 @@ func (st *runState) loop(ctx context.Context, schemaID string) Result {
 			continue
 		}
 		if resp.Stop == StopRefusal {
-			return st.finish(StatusIncomplete, ErrCodeModelRefused, nil, finalOnly, repairs)
+			return st.finish(StatusIncomplete, ErrCodeModelRefused, nil, finalOnly, repairs, false)
 		}
-		out, code, loc := st.accept(ctx, resp.Message.Text)
+		out, code, loc, policy := st.accept(ctx, resp.Message.Text)
 		if out != nil {
-			return st.finish(StatusCompleted, "", out, finalOnly, repairs)
+			return st.finish(StatusCompleted, "", out, finalOnly, repairs, false)
 		}
 		_ = st.rec.Record(Event{Type: EventOutputInvalid, At: r.now(), Step: st.step, Code: code, Ref: loc})
 		if repairsLeft > 0 && budgetErr == nil {
@@ -293,7 +317,10 @@ func (st *runState) loop(ctx context.Context, schemaID string) Result {
 			msgs = append(msgs, Message{Role: RoleUser, Text: fmt.Sprintf(repairText, code, loc)})
 			continue
 		}
-		return st.finish(StatusIncomplete, code, nil, finalOnly, repairs)
+		// A failed repair on the same provider and model is the only fallback
+		// signal; a policy refusal or a budget stop is not.
+		fallback := repairs > 0 && !policy && budgetErr == nil
+		return st.finish(StatusIncomplete, code, nil, finalOnly, repairs, fallback)
 	}
 }
 
@@ -306,27 +333,27 @@ func (r *Run) maxTokens() int {
 
 // accept validates a final answer: closed schema, then the evidence rule,
 // then the run's verifiers. It returns the refusal code and location.
-func (st *runState) accept(ctx context.Context, text string) (*contract.Output, string, string) {
+func (st *runState) accept(ctx context.Context, text string) (out *contract.Output, code, loc string, policy bool) {
 	raw := []byte(strings.TrimSpace(stripFence(text)))
 	out, err := contract.ParseOutput(st.r.Job.OutputSchema, raw)
 	if err != nil {
 		var ie *contract.InvalidError
 		if errors.As(err, &ie) {
-			return nil, ErrCodeInvalidOutput, ie.Location
+			return nil, ErrCodeInvalidOutput, ie.Location, false
 		}
-		return nil, ErrCodeInvalidOutput, "/"
+		return nil, ErrCodeInvalidOutput, "/", false
 	}
 	verifiers := append([]Verifier{VerifyEvidence}, st.r.Verifiers...)
 	for _, v := range verifiers {
 		if err := v(ctx, st.r.Job, out, st.refs); err != nil {
 			var ve *VerifyError
 			if errors.As(err, &ve) {
-				return nil, ve.Code, ve.Location
+				return nil, ve.Code, ve.Location, ve.Policy
 			}
-			return nil, ErrCodeInvalidOutput, "/"
+			return nil, ErrCodeInvalidOutput, "/", false
 		}
 	}
-	return out, "", ""
+	return out, "", "", false
 }
 
 // VerifyEvidence is always on: every citation must name a bundle field of
@@ -351,12 +378,12 @@ func VerifyEvidence(_ context.Context, _ Job, out *contract.Output, refs map[str
 	return nil
 }
 
-func (st *runState) finish(status Status, code string, out *contract.Output, budgetStopped bool, repairs int) Result {
+func (st *runState) finish(status Status, code string, out *contract.Output, budgetStopped bool, repairs int, fallback bool) Result {
 	_ = st.rec.Record(Event{Type: EventStop, At: st.r.now(), Step: st.step, Code: code, Decision: string(status)})
 	return Result{
 		Status: status, ErrorCode: code, Output: out, Provider: st.r.Provider.Name(), Model: st.r.Model,
 		Usage: st.meter.Snapshot(), Denials: st.denials, BudgetStopped: budgetStopped && status == StatusCompleted,
-		Repairs: repairs, RecordDigest: st.digest(), ToolOutputs: st.outputs,
+		Repairs: repairs, FallbackEligible: fallback, RecordDigest: st.digest(), ToolOutputs: st.outputs,
 	}
 }
 
