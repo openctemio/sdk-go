@@ -1,4 +1,4 @@
-package analyst
+package harness
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openctemio/sdk-go/pkg/analyst/contract"
+	"github.com/openctemio/sdk-go/pkg/harness/contract"
 )
 
 // Status of a finished run (the result/v1 statuses).
@@ -198,11 +198,11 @@ func (r *Run) Execute(ctx context.Context) (Result, error) {
 func (r *Run) check() error {
 	switch {
 	case r.Provider == nil:
-		return errors.New("analyst: run has no provider")
+		return errors.New("harness: run has no provider")
 	case r.Job.ID == "" || r.Job.TenantID == "":
-		return errors.New("analyst: job id and tenant are required")
+		return errors.New("harness: job id and tenant are required")
 	case r.Instructions.ID == "" || r.Instructions.Digest == "":
-		return errors.New("analyst: instructions id and digest are required")
+		return errors.New("harness: instructions id and digest are required")
 	}
 	return nil
 }

@@ -1,9 +1,9 @@
-package analyst
+package harness
 
 import (
 	"encoding/json"
 
-	"github.com/openctemio/sdk-go/pkg/analyst/contract"
+	"github.com/openctemio/sdk-go/pkg/harness/contract"
 )
 
 type wireUsage struct {

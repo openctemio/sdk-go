@@ -1,4 +1,4 @@
-// Package contract holds the openctem.analyze/v1 JSON Schemas an analyst
+// Package contract holds the openctem.analyze/v1 JSON Schemas an AI
 // worker validates against: the job it receives, the result it returns, the
 // typed suggestions and the output schema of each kind.
 //
@@ -6,7 +6,7 @@
 // files; this package carries byte-identical copies, pinned by digest in
 // contract_test.go, so a change on either side is a deliberate, reviewed
 // update and never silent drift. Design: openctem
-// api/docs/rfcs/RFC-131-ai-analysis.md and RFC-133-ai-analyst-harness.md.
+// api/docs/rfcs/RFC-131-ai-analysis.md and RFC-133-ai-harness.md.
 //
 // Stability: Experimental (docs/STABILITY.md).
 package contract

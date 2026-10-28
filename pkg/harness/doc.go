@@ -1,5 +1,5 @@
-// Package analyst is the AI analyst harness: the loop an analyst worker (a
-// sensor in the analyst role) runs for one openctem.analyze/v1 job.
+// Package harness is the AI harness: the loop an AI worker (a
+// sensor in the ai-worker role) runs for one openctem.analyze/v1 job.
 //
 // One run = one job of one organization. The platform decides everything
 // that bounds the run before the model reads a byte: the signed grant (tools,
@@ -15,9 +15,9 @@
 // reach a target that is not bound in the grant (the egress forwarder
 // enforces the same rule at the network layer), run an intrusive tool, keep
 // memory between jobs or organizations, or apply anything: the platform
-// turns the result into the analyst's normal commands, with approvals.
+// turns the result into the AI agent's normal commands, with approvals.
 //
-// Design: openctem api/docs/rfcs/RFC-133-ai-analyst-harness.md.
+// Design: openctem api/docs/rfcs/RFC-133-ai-harness.md.
 //
 // Stability: Experimental (docs/STABILITY.md).
-package analyst
+package harness
