@@ -43,6 +43,15 @@ type Message struct {
 	Text        string       `json:"text,omitempty"`
 	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`
 	ToolResults []ToolResult `json:"tool_results,omitempty"`
+	// ProviderState is opaque and owned by the provider adapter: thinking
+	// blocks and their signatures that the provider needs echoed back on the
+	// next turn. The harness never reads it. It copies it into the run record
+	// and a resume, caps its size, and sends it only to the provider that
+	// produced it (see StateProvider and state.go).
+	ProviderState json.RawMessage `json:"provider_state,omitempty"`
+	// StateProvider is the Name() of the provider that produced ProviderState.
+	// The harness sets it on every response; an adapter's own value is ignored.
+	StateProvider string `json:"state_provider,omitempty"`
 }
 
 // ToolSpec is how a tool is described to the model.
