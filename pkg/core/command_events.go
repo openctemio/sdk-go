@@ -90,6 +90,8 @@ func (p *CommandPoller) logAdmission(ctx context.Context, cmd *Command, adm *Com
 	switch {
 	case err != nil:
 		p.clog(ctx, cmd.ID, "error", "Refused before running: "+err.Error(), refusalFields(err))
+	case adm.Settled:
+		p.clog(ctx, cmd.ID, "info", fmt.Sprintf("Not run: none of the %d target(s) resolves; each is reported on its own", adm.Total), nil)
 	case adm.Partial():
 		p.clog(ctx, cmd.ID, "info", fmt.Sprintf("Running on %d of %d target(s); %d skipped", adm.Total-len(adm.Refused), adm.Total, len(adm.Refused)), nil)
 	}
