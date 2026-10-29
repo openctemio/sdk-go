@@ -337,7 +337,30 @@ and the executor's own check right before the scanner starts.
   `skipped` with class `refused`: it is settled, not handed out again.
 - When every target is refused, or the single target of a single-target job
   (payload `target`), the command fails as before; the error lists the
-  targets and reasons.
+  targets and reasons. The exception: when every refused target is
+  `unresolvable`, nothing was wrong with the job, the names are gone. The
+  command then completes without running, with each name listed in
+  `refused_targets` (its `dns` member says `name_gone` for NXDOMAIN or no
+  addresses, `resolver_failed` when the lookup itself failed) and one
+  outcome per name (`skipped`/`refused`, or `failed` with class `name_gone`
+  or `resolver_failed` for a platform that accepts outcome revision 2). The
+  refusal stays per target: no tool sees any of the names.
+
+**Lookup-only jobs.** A job whose payload names a lookup-only capability
+(`resolve.dns`; `core.LookupOnlyCapability`) only asks DNS about its
+targets and never connects to them, so "does not resolve" is its answer:
+
+- a name that does not resolve is checked against the domain deny list
+  and, when `targets.allow` is set, against the allowed domains only (a
+  name without addresses cannot be matched against the allowed ranges);
+- if it passes, it is reported as `unresolvable` (no answer) and never
+  refuses the job, even when every target is such a name;
+- if it fails, it is refused as `denied_by_policy` (rule `targets.deny` or
+  `targets.allow`), as before.
+
+A job that names no capability, or any other capability, is treated as one
+that connects to its targets: a name whose addresses cannot be checked is
+refused and never handed to its tool.
 - A retest or validation command is not rewritten: one refused target
   still refuses it whole.
 - A refused target is never handed to an executor or a tool, so a result

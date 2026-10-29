@@ -149,6 +149,12 @@ type CommandAdmission struct {
 	// Refused are the targets removed from the command (or, with an error,
 	// the targets that made it refused), in payload order.
 	Refused []RefusedTarget
+	// Settled is true when no target is left to run and every target was
+	// refused as a name that does not resolve: the command completes
+	// without running, each target reported on its own with its refusal
+	// (reason unresolvable), so the platform settles each name. The
+	// refusal stays per target: no tool sees any of them.
+	Settled bool
 }
 
 // Partial reports whether the command runs on some of its targets only.
@@ -187,11 +193,16 @@ func (lp *LocalPolicy) AdmitCommandTargets(ctx context.Context, cmd *Command) (*
 	}
 	refused := make(map[string]bool)
 	var first error
+	lookupOnly := cmd.Type == "scan" && LookupOnlyCapability(payloadCapability(cmd.Payload))
 	for _, t := range targets {
 		if refused[t] {
 			continue
 		}
-		if err := lp.CheckTarget(ctx, t); err != nil {
+		err := lp.CheckTarget(ctx, t)
+		if lookupOnly {
+			err = lp.lookupOnlyRefusal(t, err)
+		}
+		if err != nil {
 			if cerr := ctx.Err(); cerr != nil {
 				return adm, cerr
 			}
@@ -216,6 +227,16 @@ func (lp *LocalPolicy) AdmitCommandTargets(ctx context.Context, cmd *Command) (*
 		}
 		return &LocalPolicyError{Rule: rule, Detail: refusedSummary(adm.Refused)}
 	}
+	// Nothing is left to run. When every target is a name that does not
+	// resolve, nothing was wrong with the job: it completes with each name
+	// refused on its own (Settled). Any other refusal refuses the job.
+	nothingLeft := func() (*CommandAdmission, error) {
+		if allUnresolvable(adm.Refused) {
+			adm.Settled = true
+			return adm, nil
+		}
+		return adm, refuseAll()
+	}
 	if cmd.Type != "scan" {
 		return adm, refuseAll()
 	}
@@ -233,8 +254,11 @@ func (lp *LocalPolicy) AdmitCommandTargets(ctx context.Context, cmd *Command) (*
 	single := ""
 	if len(job.Target) > 0 && string(job.Target) != "null" {
 		// "target" is the whole job when set: refused, nothing is left.
-		if json.Unmarshal(job.Target, &single) != nil || refused[single] {
+		if json.Unmarshal(job.Target, &single) != nil {
 			return adm, refuseAll()
+		}
+		if refused[single] {
+			return nothingLeft()
 		}
 	}
 	kept := make([]string, 0, len(job.Targets))
@@ -244,7 +268,7 @@ func (lp *LocalPolicy) AdmitCommandTargets(ctx context.Context, cmd *Command) (*
 		}
 	}
 	if len(kept) == 0 && single == "" {
-		return adm, refuseAll()
+		return nothingLeft()
 	}
 	raw, err := json.Marshal(kept)
 	if err != nil {

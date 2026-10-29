@@ -1384,6 +1384,10 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 			p.refuseCommand(ctx, cmd, err)
 			return
 		}
+		if adm.Settled {
+			p.completeUnresolved(ctx, cmd, adm)
+			return
+		}
 		if adm.Partial() {
 			fmt.Printf("[command-poller] Command %s: %s; running on the rest\n", cmd.ID, refusedSummary(adm.Refused))
 			admission = adm
@@ -1573,6 +1577,26 @@ func (p *CommandPoller) refuseCommand(ctx context.Context, cmd *Command, err err
 		Status: "failed", Error: err.Error(), CompletedAt: time.Now(), Refusal: RefusalOf(err),
 	}); rerr != nil {
 		fmt.Printf("[command-poller] Failed to report refused command %s: %v\n", cmd.ID, rerr)
+	}
+}
+
+// completeUnresolved completes a scan command whose every target is a name
+// that does not resolve (CommandAdmission.Settled) without running it: the
+// result lists each target with its refusal (reason unresolvable, and
+// whether the name is gone or the lookup failed) and carries one outcome per
+// target, so the platform settles each name on its own instead of failing
+// the job.
+func (p *CommandPoller) completeUnresolved(ctx context.Context, cmd *Command, adm *CommandAdmission) {
+	res := &CommandResult{
+		Status:         "completed",
+		CompletedAt:    time.Now(),
+		Metadata:       RefusedTargetsMetadata(adm.Refused),
+		TargetOutcomes: skippedOutcomes(adm.Refused, outcomeRevisionOf(cmd.Payload)),
+	}
+	p.logOutcome(ctx, cmd, res, nil, 0)
+	p.finishLog(ctx, cmd.ID)
+	if err := p.client.ReportCommandResult(ctx, cmd.ID, res); err != nil && p.verbose.Load() {
+		fmt.Printf("[command-poller] Failed to report result for command %s: %v\n", cmd.ID, err)
 	}
 }
 
@@ -2201,6 +2225,9 @@ func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payloa
 	)
 	for _, t := range raw {
 		v, err := policy.ValidateFor(ctx, payload.Scanner, t)
+		if err != nil && LookupOnlyCapability(payload.Capability) {
+			err = e.local.Load().lookupOnlyRefusal(t, err)
+		}
 		if err != nil {
 			if cerr := ctx.Err(); cerr != nil {
 				return nil, nil, cerr

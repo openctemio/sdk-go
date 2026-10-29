@@ -133,9 +133,15 @@ func TestAdmitCommandTargets(t *testing.T) {
 
 	t.Run("the single job target refused refuses the job", func(t *testing.T) {
 		// "target" is the whole job (a single-target scanner): nothing is left.
-		cmd := cmdWith("c", "scan", map[string]any{"scanner": "nuclei", "target": "api.example.com", "targets": []string{"api.example.com", "example.com"}})
-		if _, err := lp.AdmitCommandTargets(ctx, cmd); !isRule(err, "targets") {
+		cmd := cmdWith("c", "scan", map[string]any{"scanner": "nuclei", "target": "203.0.113.200", "targets": []string{"203.0.113.200", "example.com"}})
+		if _, err := lp.AdmitCommandTargets(ctx, cmd); !isRule(err, "targets.deny") {
 			t.Fatalf("err %v", err)
+		}
+		// A single target that does not resolve: nothing is left, and the
+		// job completes with the name refused on its own (Settled).
+		cmd = cmdWith("c", "scan", map[string]any{"scanner": "nuclei", "target": "api.example.com", "targets": []string{"api.example.com", "example.com"}})
+		if adm, err := lp.AdmitCommandTargets(ctx, cmd); err != nil || !adm.Settled {
+			t.Fatalf("admission %+v, err %v", adm, err)
 		}
 		// Admitted single target, a refused list entry: runs, list cleaned.
 		cmd = cmdWith("c", "scan", map[string]any{"scanner": "nuclei", "target": "example.com", "targets": []string{"example.com", "api.example.com"}})
