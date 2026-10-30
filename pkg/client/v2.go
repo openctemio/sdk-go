@@ -10,11 +10,14 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -436,12 +439,17 @@ func (c *Client) PushResultsV2(ctx context.Context, report *ctis.Report, opts *V
 		limits.MaxFindingsPerSegment = n
 	}
 
+	plan := v2Plan{
+		manifest: slices.Contains(hello.Features, protov2.FeatureResultsManifest),
+		resumed:  opts.Progress != nil,
+	}
 	for {
 		commandID := opts.CommandID
 		if p.Unbound {
 			commandID = ""
 		}
-		st, err := c.pushV2Once(ctx, report, limits, commandID, &p, save)
+		st, err := c.pushV2Once(ctx, report, limits, commandID, &p, save, plan)
+		plan.resumed = false // a retry in this call knows what it sent
 		if err == nil {
 			return st, nil
 		}
@@ -523,9 +531,19 @@ func copyAcked(m map[int]string) map[int]string {
 	return out
 }
 
+// v2Plan is what the server supports and where a push starts from.
+type v2Plan struct {
+	// manifest: the server verifies a commit manifest and lists held
+	// segments (protov2.FeatureResultsManifest).
+	manifest bool
+	// resumed: the push continues an earlier attempt (a delivery after a
+	// restart): segments the server already holds are not sent again.
+	resumed bool
+}
+
 // pushV2Once plans and sends the report under p.ReportID.
 func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits protov2.Limits, commandID string,
-	p *V2Progress, save func() error) (*protov2.Status, error) {
+	p *V2Progress, save func() error, plan v2Plan) (*protov2.Status, error) {
 	r := *report
 	r.Metadata.ID = p.ReportID // RFC-026: metadata.id empty or equal to the report id
 	if strings.TrimSpace(r.Version) == "" || !strings.HasPrefix(strings.TrimSpace(r.Version), "1") {
@@ -557,7 +575,7 @@ func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits pro
 	}
 
 	if len(segs) == 1 && !p.Split {
-		body, enc, digest, err := encodeV2(segs[0], limits)
+		body, enc, digest, _, err := encodeV2(segs[0], limits)
 		if err != nil {
 			return nil, err
 		}
@@ -569,14 +587,32 @@ func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits pro
 		return decodeStatus(data)
 	}
 
+	held := map[int]bool{}
+	if plan.resumed && plan.manifest {
+		held = c.heldSegments(ctx, p.ReportID)
+	}
 	digests := make([]string, len(segs))
+	manifest := make([]protov2.SegmentManifest, len(segs))
+	hashes := make([][]byte, len(segs))
+	totals := protov2.Counts{}
 	for seq, seg := range segs {
-		body, enc, digest, err := encodeV2(seg, limits)
+		body, enc, digest, raw, err := encodeV2(seg, limits)
 		if err != nil {
 			return nil, err
 		}
 		digests[seq] = digest
+		hashes[seq] = raw.sha256
+		manifest[seq] = protov2.SegmentManifest{Seq: seq, SHA256: hex.EncodeToString(raw.sha256), Bytes: raw.size,
+			Assets: len(seg.Assets), Findings: len(seg.Findings)}
+		totals.Assets += len(seg.Assets)
+		totals.Findings += len(seg.Findings)
 		if got, ok := p.Acked[seq]; ok && got == digest {
+			continue
+		}
+		if held[seq] {
+			// The server holds it (the acknowledgement was lost in a
+			// restart); the commit's digests and manifest still prove
+			// it is this segment.
 			continue
 		}
 		p.lastFindings, p.lastBytes = len(seg.Findings), rawSize(seg)
@@ -591,7 +627,12 @@ func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits pro
 			return nil, err
 		}
 	}
-	commit, err := json.Marshal(protov2.CommitRequest{SegmentCount: len(segs), SegmentDigests: digests})
+	req := protov2.CommitRequest{SegmentCount: len(segs), SegmentDigests: digests}
+	if plan.manifest {
+		req.Segments, req.Totals = manifest, &totals
+		req.ReportSHA256 = hex.EncodeToString(protov2.ReportRoot(hashes))
+	}
+	commit, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
@@ -602,14 +643,39 @@ func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits pro
 	return decodeStatus(data)
 }
 
+// heldSegments asks the server which segments of an uncommitted report it
+// holds. Any failure (no such report yet, an older server) is "none": the
+// segments are sent again, and replays are idempotent.
+func (c *Client) heldSegments(ctx context.Context, reportID string) map[int]bool {
+	held := map[int]bool{}
+	st, err := c.GetReportStatus(ctx, reportID)
+	if err != nil || st.State != protov2.StateReceiving {
+		return held
+	}
+	for _, seq := range st.HeldSegments {
+		held[seq] = true
+	}
+	return held
+}
+
+// segmentContent is a segment's bytes before Content-Encoding: their SHA-256
+// and size (the commit manifest).
+type segmentContent struct {
+	sha256 []byte
+	size   int64
+}
+
 // encodeV2 marshals a segment and compresses it with zstd when that helps and
 // stays within the server's compression-ratio cap. It returns the body, the
-// Content-Encoding ("" for none) and the Content-Digest of the body.
-func encodeV2(seg *ctis.Report, l protov2.Limits) ([]byte, string, string, error) {
+// Content-Encoding ("" for none), the Content-Digest of the body and the
+// hash and size of the bytes before encoding.
+func encodeV2(seg *ctis.Report, l protov2.Limits) ([]byte, string, string, segmentContent, error) {
 	raw, err := json.Marshal(seg)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("marshal segment: %w", err)
+		return nil, "", "", segmentContent{}, fmt.Errorf("marshal segment: %w", err)
 	}
+	sum := sha256.Sum256(raw)
+	content := segmentContent{sha256: sum[:], size: int64(len(raw))}
 	body, enc := raw, ""
 	if len(raw) > 1024 {
 		comp := v2Encoder().EncodeAll(raw, nil)
@@ -618,7 +684,7 @@ func encodeV2(seg *ctis.Report, l protov2.Limits) ([]byte, string, string, error
 			body, enc = comp, protov2.EncodingZstd
 		}
 	}
-	return body, enc, protov2.ContentDigest(body), nil
+	return body, enc, protov2.ContentDigest(body), content, nil
 }
 
 // rawSize is the JSON size of a segment before compression.

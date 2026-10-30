@@ -19,6 +19,8 @@ package conformance
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -74,6 +76,9 @@ type StoredReport struct {
 type segment struct {
 	digest string
 	report *ctis.Report
+	// sha256 and size are of the decoded bytes (the commit manifest).
+	sha256 [sha256.Size]byte
+	size   int64
 }
 
 // FakePlatform is an in-process control plane. Safe for concurrent use.
@@ -98,6 +103,10 @@ type FakePlatform struct {
 	// on hello: the fake stores the manifest's digest and asks for it again
 	// (send_manifest) when a heartbeat names another one.
 	Manifest bool
+	// resultsManifest: hello lists "results_manifest"; commits are checked
+	// against their manifest and the status lists held segments
+	// (SetResultsManifest).
+	resultsManifest bool
 	// FutureFields adds a member no SDK knows to every JSON object the
 	// fake answers with, as a newer platform would: a sensor must ignore
 	// it (forward compatibility, docs/STABILITY.md).
@@ -168,6 +177,15 @@ func (f *FakePlatform) SetManifest(on bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Manifest = on
+}
+
+// SetResultsManifest lists or stops listing the "results_manifest" feature
+// on hello (api RFC-026 §3.5a): the fake then verifies a commit's manifest
+// as the platform does and lists the held segments of an uncommitted report.
+func (f *FakePlatform) SetResultsManifest(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resultsManifest = on
 }
 
 // SetLocalPolicy lists or stops listing the "local_policy" feature on hello
@@ -663,6 +681,9 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 	if rest == protov2.HelloPath && r.Method == http.MethodGet {
 		features := []string{protov2.FeatureResults}
 		f.mu.Lock()
+		if f.resultsManifest {
+			features = append(features, protov2.FeatureResultsManifest)
+		}
 		if f.Control {
 			features = append(features, protov2.FeatureHeartbeat, protov2.FeatureCommands,
 				protov2.FeatureSuppressions, protov2.FeatureFingerprints, protov2.FeatureKeys)
@@ -736,6 +757,12 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 		var st protov2.Status
 		if rep != nil {
 			st = rep.Status
+			if f.resultsManifest && !rep.Committed {
+				for seq := range rep.Segments {
+					st.HeldSegments = append(st.HeldSegments, seq)
+				}
+				slices.Sort(st.HeldSegments)
+			}
 		}
 		f.mu.Unlock()
 		if rep == nil {
@@ -894,7 +921,8 @@ func (f *FakePlatform) putSegment(w http.ResponseWriter, r *http.Request, body [
 		f.problemLocked(w, http.StatusConflict, protov2.ProblemReportCommitted)
 		return
 	}
-	st.Segments[seq] = segment{digest: digest, report: &rep}
+	sum := sha256.Sum256(raw)
+	st.Segments[seq] = segment{digest: digest, report: &rep, sha256: sum, size: int64(len(raw))}
 	st.Status.Segments.Received = len(st.Segments)
 	st.Status.UpdatedAt = now
 	if whole {
@@ -983,6 +1011,41 @@ func (f *FakePlatform) commit(w http.ResponseWriter, body []byte, commandID, rep
 			return
 		}
 	}
+	if f.resultsManifest && (len(req.Segments) > 0 || req.Totals != nil || req.ReportSHA256 != "") && !manifestMatches(req, st) {
+		f.problemLocked(w, http.StatusConflict, protov2.ProblemSegmentSetMismatch)
+		return
+	}
 	f.finishLocked(st, req.SegmentCount)
+	if len(req.Segments) > 0 {
+		st.Status.Integrity = protov2.IntegrityManifest
+	}
 	writeJSON(w, http.StatusAccepted, st.Status)
+}
+
+// manifestMatches checks a commit manifest against the stored segments as the
+// platform does: each segment's decoded hash and size, the counts, and the
+// report hash.
+func manifestMatches(req protov2.CommitRequest, st *StoredReport) bool {
+	if len(req.Segments) != req.SegmentCount || req.Totals == nil {
+		return false
+	}
+	// len(req.Segments) == SegmentCount was just checked, so the slice is bounded
+	// by the size of the decoded request body, not by a bare client number.
+	hashes := make([][]byte, len(req.Segments))
+	var assets, findings int
+	for _, m := range req.Segments {
+		s, ok := st.Segments[m.Seq]
+		if m.Seq < 0 || m.Seq >= len(hashes) {
+			return false
+		}
+		if !ok || hashes[m.Seq] != nil || m.SHA256 != hex.EncodeToString(s.sha256[:]) || m.Bytes != s.size ||
+			m.Assets != len(s.report.Assets) || m.Findings != len(s.report.Findings) {
+			return false
+		}
+		hashes[m.Seq] = s.sha256[:]
+		assets += m.Assets
+		findings += m.Findings
+	}
+	return assets == req.Totals.Assets && findings == req.Totals.Findings &&
+		req.ReportSHA256 == hex.EncodeToString(protov2.ReportRoot(hashes))
 }

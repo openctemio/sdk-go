@@ -90,6 +90,11 @@ const (
 // FeatureResults is the hello feature of the results resource.
 const FeatureResults = "results"
 
+// FeatureResultsManifest is the hello feature of the commit manifest and of
+// the held segments on the status of an uncommitted report (api RFC-026
+// §3.5a).
+const FeatureResultsManifest = "results_manifest"
+
 // DigestSHA256 is the Content-Digest algorithm the SDK sends.
 const DigestSHA256 = "sha-256"
 
@@ -237,15 +242,91 @@ type Status struct {
 	AutoResolve     string        `json:"auto_resolve,omitempty"`
 	Errors          []ItemError   `json:"errors"`
 	ErrorsTruncated bool          `json:"errors_truncated"`
-	ReceivedAt      time.Time     `json:"received_at"`
-	UpdatedAt       time.Time     `json:"updated_at"`
+	// Integrity is how the committed report proved it is complete
+	// (Integrity* constants).
+	Integrity  string    `json:"integrity,omitempty"`
+	ReceivedAt time.Time `json:"received_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	// HeldSegments are the segment numbers the server holds (status of an
+	// uncommitted report, servers with FeatureResultsManifest). On the wire
+	// it is segments.held; it lives here so SegmentCounts stays comparable.
+	HeldSegments []int `json:"-"`
+}
+
+// statusWire is Status as sent: the same fields, with segments carrying held.
+type statusWire struct {
+	statusAlias
+	Segments struct {
+		SegmentCounts
+		Held []int `json:"held,omitempty"`
+	} `json:"segments"`
+}
+
+type statusAlias Status
+
+// MarshalJSON writes HeldSegments as segments.held.
+func (s Status) MarshalJSON() ([]byte, error) {
+	w := statusWire{statusAlias: statusAlias(s)}
+	w.Segments.SegmentCounts = s.Segments
+	w.Segments.Held = s.HeldSegments
+	return json.Marshal(w)
+}
+
+// UnmarshalJSON reads segments.held into HeldSegments.
+func (s *Status) UnmarshalJSON(b []byte) error {
+	var w statusWire
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	*s = Status(w.statusAlias)
+	s.Segments = w.Segments.SegmentCounts
+	s.HeldSegments = w.Segments.Held
+	return nil
 }
 
 // CommitRequest is the body of POST .../commit: the canonical sha-256
 // Content-Digest of each segment, in segment order.
+//
+// The manifest fields are sent only to a server listing
+// FeatureResultsManifest; the server compares every value with what it
+// received and refuses a mismatch with segment-set-mismatch.
 type CommitRequest struct {
 	SegmentCount   int      `json:"segment_count"`
 	SegmentDigests []string `json:"segment_digests"`
+	// Segments describes each segment's decoded content.
+	Segments []SegmentManifest `json:"segments,omitempty"`
+	// Totals sum the segments' counts (an asset repeated in several
+	// segments counts in each).
+	Totals *Counts `json:"totals,omitempty"`
+	// ReportSHA256 is ReportRoot over the segments' SHA256, lower-case hex.
+	ReportSHA256 string `json:"report_sha256,omitempty"`
+}
+
+// SegmentManifest is one segment of a commit manifest. SHA256 is over the
+// segment's bytes before Content-Encoding, lower-case hex.
+type SegmentManifest struct {
+	Seq      int    `json:"seq"`
+	SHA256   string `json:"sha256"`
+	Bytes    int64  `json:"bytes"`
+	Assets   int    `json:"assets"`
+	Findings int    `json:"findings"`
+}
+
+// Report integrity levels (Status.Integrity).
+const (
+	IntegritySingle     = "single"
+	IntegrityManifest   = "manifest"
+	IntegrityDigestOnly = "digest_only"
+)
+
+// ReportRoot is SHA-256 over the 32-byte decoded SHA-256 of every segment,
+// concatenated in segment order: one hash for the report content.
+func ReportRoot(segmentSHA256 [][]byte) []byte {
+	h := sha256.New()
+	for _, s := range segmentSHA256 {
+		h.Write(s)
+	}
+	return h.Sum(nil)
 }
 
 // Limits are the server's ingest limits, published on hello.

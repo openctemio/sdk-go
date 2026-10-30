@@ -731,3 +731,71 @@ func TestOutbox_OldPlatformKeepsTheQueue(t *testing.T) {
 }
 
 var _ = outbox.KindReport
+
+// A platform that lists results_manifest gets the commit manifest (each
+// segment's decoded hash, size and counts, the totals, the report hash) and
+// verifies it; a platform that does not gets the plain commit.
+func TestV2_CommitManifest(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		f := NewFakePlatform(true)
+		f.SetResultsManifest(on)
+		c := newClient(t, f, client.ProtocolV2)
+		st, err := c.PushResultsV2(context.Background(), report("semgrep", 3, 7), &client.V2PushOptions{MaxFindingsPerSegment: 5})
+		if err != nil {
+			t.Fatalf("manifest=%v: %v", on, err)
+		}
+		commits := f.RequestsTo(http.MethodPost, protov2.PathPrefix)
+		if len(commits) != 1 {
+			t.Fatalf("manifest=%v: commits %d", on, len(commits))
+		}
+		var req protov2.CommitRequest
+		if err := json.Unmarshal(commits[0].Body, &req); err != nil {
+			t.Fatal(err)
+		}
+		if on {
+			if len(req.Segments) != req.SegmentCount || req.Totals == nil || req.Totals.Findings != 21 || req.ReportSHA256 == "" {
+				t.Fatalf("manifest: %+v", req)
+			}
+			if st.Integrity != protov2.IntegrityManifest {
+				t.Fatalf("integrity %q, want manifest", st.Integrity)
+			}
+		} else if req.Segments != nil || req.Totals != nil || req.ReportSHA256 != "" {
+			t.Fatalf("an older platform got manifest fields: %+v", req)
+		}
+		f.Close()
+	}
+}
+
+// A push resumed after a restart (its progress lost the acknowledgement of a
+// segment the platform did store) asks which segments the platform holds and
+// does not send that one again.
+func TestV2_ResumeSkipsHeldSegments(t *testing.T) {
+	f := NewFakePlatform(true)
+	defer f.Close()
+	f.SetResultsManifest(true)
+	var n atomic.Int32
+	f.SetFault(func(r *http.Request, _ int) *FaultAnswer {
+		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/segments/1") && n.Add(1) == 1 {
+			return &FaultAnswer{Drop: true, Process: true} // stored, answer lost
+		}
+		return nil
+	})
+	c := newClient(t, f, client.ProtocolV2)
+	var prog client.V2Progress
+	opts := &client.V2PushOptions{MaxFindingsPerSegment: 2, OnProgress: func(p client.V2Progress) error { prog = p; return nil }}
+	if _, err := c.PushResultsV2(context.Background(), report("semgrep", 1, 6), opts); err == nil {
+		t.Fatal("expected the lost response to surface")
+	}
+	opts.Progress = &prog // the next delivery, as after a restart
+	st, err := c.PushResultsV2(context.Background(), report("semgrep", 1, 6), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// seg0 once (acknowledged), seg1 once (held: not resent), seg2 once.
+	if puts := f.RequestsTo(http.MethodPut, protov2.PathPrefix); len(puts) != 3 {
+		t.Fatalf("segment PUTs = %d (%v), want 3", len(puts), statuses(puts))
+	}
+	if f.AcceptedFindings() != 6 || st.State != protov2.StateCompleted || st.Integrity != protov2.IntegrityManifest {
+		t.Fatalf("accepted %d, state %s, integrity %q", f.AcceptedFindings(), st.State, st.Integrity)
+	}
+}

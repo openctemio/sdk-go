@@ -231,7 +231,12 @@ for the features and limits. Results go as
 (sha-256 of the bytes as sent) and zstd. Reports over the per-request limits
 are sent as segments (each a complete CTIS document with the report's tool,
 metadata and the assets its findings reference; `chunk.SplitSegments`) and a
-commit. A platform without protocol v2 answers `client.ErrV2Unsupported`;
+commit. To a platform that lists `results_manifest` on hello, the commit also
+carries the manifest: each segment's SHA-256 over its bytes before encoding,
+its size and counts, the totals and the report hash (SHA-256 over the segment
+hashes in order, `protov2.ReportRoot`); the platform compares them with what it
+received and refuses a mismatch. A resumed push asks the platform which
+segments it holds and sends only the missing ones. A platform without protocol v2 answers `client.ErrV2Unsupported`;
 the outbox keeps the report queued until the platform serves v2.
 
 | v2 answer | SDK |
@@ -295,7 +300,8 @@ Large data moves in two directions, and each direction has one code path
 - **Push** (sensor or collector to platform): the results protocol and the
   outbox above. Segments are the chunks (`chunk.SplitSegments`), the
   `report_id` plus segment number is the idempotency key, `V2Progress`
-  resumes after a restart, and the outbox is the encrypted, capped
+  and the platform's held-segment list resume after a restart, the commit
+  manifest proves the set is complete, and the outbox is the encrypted, capped
   store-and-forward spool.
 - **Pull** (published feed to platform or sensor): the contract module
   `github.com/openctemio/ctis/transfer` (`transfer` and `transfer/bundle`),
