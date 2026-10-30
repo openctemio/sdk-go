@@ -1,0 +1,3 @@
+### Security: a top-N port job no longer bypasses the local policy's ports.allow
+
+- With `ports.allow` set, a scan job whose settings ask the tool for its own port list (`top_ports`, `top_n`, in `config` or `scanner_config`) is refused with rule `ports.allow`: the sdk cannot prove the tool's list lies inside the allow-list. Before, only the `ports` setting was checked, so the platform's default top-1000 port set ran outside the allow-list. Name the ports in the job's `ports` setting, or leave `ports.allow` unset for a sensor that may scan any port. Jobs on a sensor without `ports.allow` are unchanged. `ports` values `full`/`top-N` were already refused; `scanner_config` is now checked as well.
