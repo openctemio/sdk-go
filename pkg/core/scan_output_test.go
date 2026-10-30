@@ -99,8 +99,18 @@ func TestExecuteScanEmptyOutputIsZeroFindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a scan with no output found nothing; got %v", err)
 	}
-	if res.FindingsCount != 0 || len(pusher.PushFindingsCalls) != 0 {
-		t.Fatalf("want 0 findings and no push, got %d / %d", res.FindingsCount, len(pusher.PushFindingsCalls))
+	if res.FindingsCount != 0 || len(pusher.PushFindingsCalls) != 1 {
+		t.Fatalf("want 0 findings and one empty report, got %d / %d", res.FindingsCount, len(pusher.PushFindingsCalls))
+	}
+	rep := pusher.PushFindingsCalls[0].Report
+	if rep.Tool == nil || rep.Tool.Name != "nuclei" {
+		t.Fatalf("the empty report must name the tool, got %+v", rep.Tool)
+	}
+	if len(rep.Findings) != 0 || len(rep.Assets) != 0 {
+		t.Fatalf("the empty report must carry nothing, got %d findings / %d assets", len(rep.Findings), len(rep.Assets))
+	}
+	if rep.Metadata.CoverageType != "full" {
+		t.Fatalf("a clean run that found nothing is full coverage, got %q", rep.Metadata.CoverageType)
 	}
 }
 
