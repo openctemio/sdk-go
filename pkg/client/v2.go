@@ -652,7 +652,7 @@ func (c *Client) heldSegments(ctx context.Context, reportID string) map[int]bool
 	if err != nil || st.State != protov2.StateReceiving {
 		return held
 	}
-	for _, seq := range st.Segments.Held {
+	for _, seq := range st.HeldSegments {
 		held[seq] = true
 	}
 	return held

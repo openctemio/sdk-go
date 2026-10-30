@@ -227,9 +227,6 @@ type Counts struct {
 type SegmentCounts struct {
 	Received int  `json:"received"`
 	Expected *int `json:"expected,omitempty"`
-	// Held lists the segment numbers the server holds (status of an
-	// uncommitted report, servers with FeatureResultsManifest).
-	Held []int `json:"held,omitempty"`
 }
 
 // Status is the report status resource (RFC-026 §3.7).
@@ -249,7 +246,42 @@ type Status struct {
 	// (Integrity* constants).
 	Integrity  string    `json:"integrity,omitempty"`
 	ReceivedAt time.Time `json:"received_at"`
-	UpdatedAt       time.Time     `json:"updated_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	// HeldSegments are the segment numbers the server holds (status of an
+	// uncommitted report, servers with FeatureResultsManifest). On the wire
+	// it is segments.held; it lives here so SegmentCounts stays comparable.
+	HeldSegments []int `json:"-"`
+}
+
+// statusWire is Status as sent: the same fields, with segments carrying held.
+type statusWire struct {
+	statusAlias
+	Segments struct {
+		SegmentCounts
+		Held []int `json:"held,omitempty"`
+	} `json:"segments"`
+}
+
+type statusAlias Status
+
+// MarshalJSON writes HeldSegments as segments.held.
+func (s Status) MarshalJSON() ([]byte, error) {
+	w := statusWire{statusAlias: statusAlias(s)}
+	w.Segments.SegmentCounts = s.Segments
+	w.Segments.Held = s.HeldSegments
+	return json.Marshal(w)
+}
+
+// UnmarshalJSON reads segments.held into HeldSegments.
+func (s *Status) UnmarshalJSON(b []byte) error {
+	var w statusWire
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	*s = Status(w.statusAlias)
+	s.Segments = w.Segments.SegmentCounts
+	s.HeldSegments = w.Segments.Held
+	return nil
 }
 
 // CommitRequest is the body of POST .../commit: the canonical sha-256

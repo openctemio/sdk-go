@@ -77,7 +77,7 @@ type segment struct {
 	digest string
 	report *ctis.Report
 	// sha256 and size are of the decoded bytes (the commit manifest).
-	sha256 []byte
+	sha256 [sha256.Size]byte
 	size   int64
 }
 
@@ -759,9 +759,9 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 			st = rep.Status
 			if f.resultsManifest && !rep.Committed {
 				for seq := range rep.Segments {
-					st.Segments.Held = append(st.Segments.Held, seq)
+					st.HeldSegments = append(st.HeldSegments, seq)
 				}
-				slices.Sort(st.Segments.Held)
+				slices.Sort(st.HeldSegments)
 			}
 		}
 		f.mu.Unlock()
@@ -922,7 +922,7 @@ func (f *FakePlatform) putSegment(w http.ResponseWriter, r *http.Request, body [
 		return
 	}
 	sum := sha256.Sum256(raw)
-	st.Segments[seq] = segment{digest: digest, report: &rep, sha256: sum[:], size: int64(len(raw))}
+	st.Segments[seq] = segment{digest: digest, report: &rep, sha256: sum, size: int64(len(raw))}
 	st.Status.Segments.Received = len(st.Segments)
 	st.Status.UpdatedAt = now
 	if whole {
@@ -1029,15 +1029,20 @@ func manifestMatches(req protov2.CommitRequest, st *StoredReport) bool {
 	if len(req.Segments) != req.SegmentCount || req.Totals == nil {
 		return false
 	}
-	hashes := make([][]byte, req.SegmentCount)
+	// len(req.Segments) == SegmentCount was just checked, so the slice is bounded
+	// by the size of the decoded request body, not by a bare client number.
+	hashes := make([][]byte, len(req.Segments))
 	var assets, findings int
 	for _, m := range req.Segments {
 		s, ok := st.Segments[m.Seq]
-		if !ok || hashes[m.Seq] != nil || m.SHA256 != hex.EncodeToString(s.sha256) || m.Bytes != s.size ||
+		if m.Seq < 0 || m.Seq >= len(hashes) {
+			return false
+		}
+		if !ok || hashes[m.Seq] != nil || m.SHA256 != hex.EncodeToString(s.sha256[:]) || m.Bytes != s.size ||
 			m.Assets != len(s.report.Assets) || m.Findings != len(s.report.Findings) {
 			return false
 		}
-		hashes[m.Seq] = s.sha256
+		hashes[m.Seq] = s.sha256[:]
 		assets += m.Assets
 		findings += m.Findings
 	}
