@@ -8,6 +8,7 @@ package core
 // resolve to a denied address between the check and the connection.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,9 +16,12 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/openctemio/ctis/capability"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/internal/absname"
 	"github.com/openctemio/sdk-go/pkg/reach"
@@ -44,6 +48,12 @@ type policyJob struct {
 	Config        map[string]any  `json:"config"`
 	// ScannerConfig is the older name of Config some jobs still carry.
 	ScannerConfig map[string]any `json:"scanner_config"`
+	// Capability and Params are the standard-param form of a job
+	// (ScanCommandPayload): the tool runtime writes each param onto the
+	// tool's config (tool.Manifest.ApplyParams), so a port list or a top-N
+	// count there is a ports setting like Config's.
+	Capability string                     `json:"capability"`
+	Params     map[string]json.RawMessage `json:"params"`
 	// CustomTemplates only needs its length.
 	CustomTemplates []json.RawMessage `json:"custom_templates"`
 }
@@ -338,6 +348,9 @@ func (lp *LocalPolicy) admitJob(cmd *Command) ([]string, error) {
 				return nil, err
 			}
 		}
+		if err := lp.checkPortParams(job.Capability, job.Params); err != nil {
+			return nil, err
+		}
 	}
 	targets, err := job.targets()
 	if err != nil {
@@ -597,6 +610,65 @@ func (lp *LocalPolicy) checkTopPortsSetting(cfg map[string]any) error {
 	for _, k := range topPortKeys {
 		if v, ok := cfg[k]; ok && v != nil {
 			return refuse("ports.allow", "the job's %s setting (%v) asks the tool to pick the ports, which cannot be checked against %s; name the ports in the job's ports setting", k, v, lp.portsText)
+		}
+	}
+	return nil
+}
+
+// checkPortParams applies ports.allow to the standard params of a
+// capability job. A param is a port list when the capability's catalog
+// entry types it port_list (the manifest maps it onto the tool's ports key),
+// or, for a capability the catalog does not know, when it is named "ports";
+// "top_n" and "top_ports" ask the tool to pick the ports and are refused as
+// in checkTopPortsSetting. A null value is no request.
+func (lp *LocalPolicy) checkPortParams(ref string, params map[string]json.RawMessage) error {
+	if len(params) == 0 {
+		return nil
+	}
+	c, known := capability.Lookup(ref)
+	names := make([]string, 0, len(params))
+	for n := range params {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		raw := bytes.TrimSpace(params[name])
+		if len(raw) == 0 || string(raw) == "null" {
+			continue
+		}
+		if slices.Contains(topPortKeys, name) {
+			return refuse("ports.allow", "the job's %s param (%s) asks the tool to pick the ports, which cannot be checked against %s; name the ports in the job's ports param", name, raw, lp.portsText)
+		}
+		isPorts := name == "ports"
+		if known {
+			if p, ok := c.Param(name); ok && p.Type == capability.ParamPortList {
+				isPorts = true
+			}
+		}
+		if !isPorts {
+			continue
+		}
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			return refuse("ports.allow", "the job's %s param cannot be checked against the policy", name)
+		}
+		if list, ok := v.([]any); ok {
+			parts := make([]string, 0, len(list))
+			for _, e := range list {
+				switch x := e.(type) {
+				case string:
+					parts = append(parts, x)
+				case float64:
+					parts = append(parts, strconv.FormatFloat(x, 'f', -1, 64))
+				default:
+					return refuse("ports.allow", "the job's %s param cannot be checked against the policy", name)
+				}
+			}
+			v = strings.Join(parts, ",")
+		}
+		if err := lp.checkPortSetting(v); err != nil {
+			return err
 		}
 	}
 	return nil

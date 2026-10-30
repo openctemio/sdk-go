@@ -1,0 +1,3 @@
+### Security: ports.allow now applies to a capability job's standard params
+
+- A job's standard `params` become the tool's config at run time, but the local policy checked only `config` and `scanner_config`, so a sensor with `ports.allow` still ran a job that sent `params.ports` outside the list, or `params.top_n` / `params.top_ports` (the tool picks the ports). The policy now refuses both: a port-list param (by the capability's catalog type, or named `ports`) must lie inside `ports.allow`, and a top-N param is refused while `ports.allow` is set, as it already is in `config`. A null value is no request; without `ports.allow` nothing changes.
