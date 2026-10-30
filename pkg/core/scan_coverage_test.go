@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/mocks"
@@ -122,5 +123,42 @@ func TestExecuteCollect_ReportStatesCoverage(t *testing.T) {
 	}
 	if got := pusher.PushFindingsCalls[1].Report.Metadata.CoverageType; got != "partial" {
 		t.Errorf("undeclared: got %q, want partial", got)
+	}
+}
+
+// emptyRunCoverage runs a scan that found nothing and returns the coverage
+// its (empty) report declares.
+func emptyRunCoverage(t *testing.T, res core.ScanResult) string {
+	t.Helper()
+	pusher := &mocks.MockPusher{}
+	exec := core.NewDefaultCommandExecutor(pusher)
+	res.ScannerName = "fakescan"
+	res.RawOutput = nil
+	exec.AddScanner(&fixedScanner{name: "fakescan", res: res})
+	if _, err := exec.Execute(context.Background(), scanCommand(t, "fakescan", "http://203.0.113.10")); err != nil {
+		t.Fatal(err)
+	}
+	if len(pusher.PushFindingsCalls) != 1 {
+		t.Fatalf("a scan that found nothing must still push one report, got %d", len(pusher.PushFindingsCalls))
+	}
+	rep := pusher.PushFindingsCalls[0].Report
+	if rep.Tool == nil || rep.Tool.Name != "fakescan" || len(rep.Findings) != 0 || len(rep.Assets) != 0 {
+		t.Fatalf("the empty report names the tool and nothing else, got %+v", rep)
+	}
+	return rep.Metadata.CoverageType
+}
+
+// A run that found nothing is only full when it covered everything: a
+// coverage gap or a run error makes the empty report partial, so the
+// platform never reads "not covered" as "gone".
+func TestEmptyScanReportCoverage(t *testing.T) {
+	if got := emptyRunCoverage(t, core.ScanResult{}); got != "full" {
+		t.Fatalf("clean empty run: want full, got %q", got)
+	}
+	if got := emptyRunCoverage(t, core.ScanResult{Error: "stopped"}); got != "partial" {
+		t.Fatalf("empty run with an error: want partial, got %q", got)
+	}
+	if got := emptyRunCoverage(t, core.ScanResult{CoverageGaps: []adapt.Gap{{Host: "203.0.113.10", Reason: adapt.GapBlocked}}}); got != "partial" {
+		t.Fatalf("empty run with a coverage gap: want partial, got %q", got)
 	}
 }

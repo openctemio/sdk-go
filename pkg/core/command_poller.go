@@ -2161,6 +2161,16 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 		if _, err := e.pusher.PushFindings(ctx, src.emptyReport(scanner.Name())); err != nil {
 			return atStage(StageUpload, fmt.Errorf("push failed: %w", err))
 		}
+	} else if e.pusher != nil {
+		// A scan that found nothing still reports, bound to its command like
+		// any report: without it the platform cannot tell "looked and found
+		// nothing" from "never looked", and a finding the scan no longer sees
+		// stays open forever. The report names no asset (nothing is created);
+		// which targets were really covered travels in the command result's
+		// target_outcomes.
+		if _, err := e.pusher.PushFindings(ctx, emptyScanReport(ctx, scanner.Name(), scanResult)); err != nil {
+			return atStage(StageUpload, fmt.Errorf("push failed: %w", err))
+		}
 	}
 
 	return nil
@@ -2603,6 +2613,19 @@ func scanCoverageType(report *ctis.Report, r *ScanResult) string {
 		return coverageTypePartial
 	}
 	return coverageTypeFull
+}
+
+// emptyScanReport is the report of a scan that found nothing: the tool and
+// the coverage the run proves (partial when a target was not covered, by the
+// same rules as a report with findings).
+func emptyScanReport(ctx context.Context, tool string, r *ScanResult) *ctis.Report {
+	report := ctis.NewReport()
+	report.Tool = &ctis.Tool{Name: tool}
+	if r != nil && r.ScannerVersion != "" {
+		report.Tool.Version = r.ScannerVersion
+	}
+	report.Metadata.CoverageType = reachCoverageType(ctx, scanCoverageType(report, r))
+	return report
 }
 
 // hasFailedTargets reports whether a report lists targets the run could not
