@@ -42,6 +42,8 @@ type policyJob struct {
 	Target        json.RawMessage `json:"target"`
 	Targets       []string        `json:"targets"`
 	Config        map[string]any  `json:"config"`
+	// ScannerConfig is the older name of Config some jobs still carry.
+	ScannerConfig map[string]any `json:"scanner_config"`
 	// CustomTemplates only needs its length.
 	CustomTemplates []json.RawMessage `json:"custom_templates"`
 }
@@ -325,9 +327,16 @@ func (lp *LocalPolicy) admitJob(cmd *Command) ([]string, error) {
 	}
 	// A port list the job hands its tool as a setting (api RFC-038, e.g.
 	// naabu's "ports") must lie inside ports.allow too.
-	if v, ok := job.Config["ports"]; ok && lp.ports != nil {
-		if err := lp.checkPortSetting(v); err != nil {
-			return nil, err
+	if lp.ports != nil {
+		for _, cfg := range []map[string]any{job.Config, job.ScannerConfig} {
+			if v, ok := cfg["ports"]; ok {
+				if err := lp.checkPortSetting(v); err != nil {
+					return nil, err
+				}
+			}
+			if err := lp.checkTopPortsSetting(cfg); err != nil {
+				return nil, err
+			}
 		}
 	}
 	targets, err := job.targets()
@@ -568,6 +577,26 @@ func (lp *LocalPolicy) checkPortSetting(v any) error {
 			if err := lp.checkPort(p); err != nil {
 				return refuse("ports.allow", "the job's ports setting %q includes port %d, which is not in %s", spec, p, lp.portsText)
 			}
+		}
+	}
+	return nil
+}
+
+// topPortKeys are the settings that make a tool scan its own "top N" port
+// list instead of a list the job names (naabu "top_ports", the standard
+// param "top_n").
+var topPortKeys = []string{"top_ports", "top_n"}
+
+// checkTopPortsSetting refuses a job that asks for a top-N port list while
+// ports.allow is set. The sdk does not know a tool's top-N list, so it
+// cannot prove every port of it is allowed, and the list would otherwise
+// run outside the operator's allow-list: the job is refused (fail closed).
+// An operator who wants top-N scans lists those ports in ports.allow and
+// the platform names them in "ports". A null or absent value is no request.
+func (lp *LocalPolicy) checkTopPortsSetting(cfg map[string]any) error {
+	for _, k := range topPortKeys {
+		if v, ok := cfg[k]; ok && v != nil {
+			return refuse("ports.allow", "the job's %s setting (%v) asks the tool to pick the ports, which cannot be checked against %s; name the ports in the job's ports setting", k, v, lp.portsText)
 		}
 	}
 	return nil
