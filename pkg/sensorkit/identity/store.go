@@ -8,8 +8,11 @@
 //
 //	signing.key    the Ed25519 private key, PKCS #8 PEM, 0600
 //	identity.json  what the platform granted (sensor id, tenant, key id), 0600
+//	pairing.json   the pairing request in flight (resumed after a restart), 0600
+//	signing.key.next  a new key staged by a re-pair; it replaces signing.key
+//	               only after the platform confirmed the re-pair, 0600
 //
-// Both files and the directory must belong to the user the sensor runs as
+// All files and the directory must belong to the user the sensor runs as
 // and must not be readable or writable by anyone else; otherwise Load and
 // Check refuse with the exact chmod/chown to run (RFC-052 D-7).
 //
@@ -40,6 +43,10 @@ const (
 	DirName      = "identity"
 	KeyFile      = "signing.key"
 	IdentityFile = "identity.json"
+	// PairingFile is the pairing request in flight (resume after a restart).
+	PairingFile = "pairing.json"
+	// NextKeyFile is a key staged by a re-pair (RotateKey).
+	NextKeyFile = "signing.key.next"
 
 	dirMode  fs.FileMode = 0o700
 	fileMode fs.FileMode = 0o600
@@ -160,6 +167,8 @@ func (s *Store) Dir() string { return s.dir }
 
 func (s *Store) keyPath() string      { return filepath.Join(s.dir, KeyFile) }
 func (s *Store) identityPath() string { return filepath.Join(s.dir, IdentityFile) }
+func (s *Store) pairingPath() string  { return filepath.Join(s.dir, PairingFile) }
+func (s *Store) nextKeyPath() string  { return filepath.Join(s.dir, NextKeyFile) }
 
 // PermissionError is an identity file or directory with looser permissions
 // or another owner than allowed. Fix is the command that repairs it.
@@ -183,7 +192,7 @@ func (s *Store) Check() error {
 		}
 		return err
 	}
-	for _, f := range []string{s.keyPath(), s.identityPath()} {
+	for _, f := range []string{s.keyPath(), s.identityPath(), s.pairingPath(), s.nextKeyPath()} {
 		if err := checkPath(f, false); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
@@ -221,11 +230,13 @@ func (s *Store) ensureDir() error {
 }
 
 // LoadKey reads the signing key. ErrNoKey when there is none.
-func (s *Store) LoadKey() (*sensorsig.Signer, error) {
+func (s *Store) LoadKey() (*sensorsig.Signer, error) { return s.loadKeyAt(s.keyPath()) }
+
+func (s *Store) loadKeyAt(path string) (*sensorsig.Signer, error) {
 	if err := s.Check(); err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(s.keyPath())
+	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrNoKey
 	}
@@ -234,7 +245,7 @@ func (s *Store) LoadKey() (*sensorsig.Signer, error) {
 	}
 	blk, _ := pem.Decode(b)
 	if blk == nil || blk.Type != "PRIVATE KEY" {
-		return nil, fmt.Errorf("identity: %s is not a PKCS #8 PEM private key", s.keyPath())
+		return nil, fmt.Errorf("identity: %s is not a PKCS #8 PEM private key", path)
 	}
 	k, err := x509.ParsePKCS8PrivateKey(blk.Bytes)
 	if err != nil {
@@ -242,7 +253,7 @@ func (s *Store) LoadKey() (*sensorsig.Signer, error) {
 	}
 	priv, ok := k.(ed25519.PrivateKey)
 	if !ok {
-		return nil, fmt.Errorf("identity: %s is not an Ed25519 key", s.keyPath())
+		return nil, fmt.Errorf("identity: %s is not an Ed25519 key", path)
 	}
 	return sensorsig.NewSigner(priv)
 }
@@ -275,28 +286,93 @@ func (s *Store) EnsureKey() (*sensorsig.Signer, error) {
 	return sensorsig.NewSigner(priv)
 }
 
-// RotateKey replaces the signing key with a new one and removes the
-// identity (re-pair: the old key is lost or suspected stolen). The old key
-// file is overwritten atomically.
+// newKeyPEM makes a new Ed25519 key and its PKCS #8 PEM.
+func newKeyPEM() (ed25519.PrivateKey, []byte, error) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, nil, err
+	}
+	return priv, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
+}
+
+// RotateKey stages a new signing key for a re-pair (the old key is lost or
+// suspected stolen). The new key is written to signing.key.next; signing.key
+// and identity.json are not touched, so an interrupted, refused or expired
+// re-pair leaves the working identity as it was. PromoteKey swaps the key in
+// once the platform confirmed. A key already staged by an earlier attempt is
+// reused (its pairing request may still be waiting for approval).
 func (s *Store) RotateKey() (*sensorsig.Signer, error) {
 	if err := s.ensureDir(); err != nil {
 		return nil, err
 	}
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	sg, err := s.loadKeyAt(s.nextKeyPath())
+	if !errors.Is(err, ErrNoKey) {
+		return sg, err
+	}
+	priv, pemBytes, err := newKeyPEM()
 	if err != nil {
 		return nil, err
 	}
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		return nil, err
-	}
-	if err := writeAtomic(s.keyPath(), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})); err != nil {
-		return nil, err
-	}
-	if err := os.Remove(s.identityPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := writeExclusive(s.nextKeyPath(), pemBytes); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return s.loadKeyAt(s.nextKeyPath())
+		}
 		return nil, err
 	}
 	return sensorsig.NewSigner(priv)
+}
+
+// hasIdentity reports whether a confirmed identity exists on disk.
+func (s *Store) hasIdentity() bool {
+	_, err := os.Lstat(s.identityPath())
+	return err == nil
+}
+
+// RegenerateUnconfirmedKey replaces a key that never became active: the
+// platform says it was registered by an approval nobody confirmed. With
+// staged it replaces signing.key.next, otherwise signing.key. It refuses
+// when a confirmed identity exists on disk for the key it would replace
+// (identity.json beside an unstaged key): that key is, or was, in use.
+func (s *Store) RegenerateUnconfirmedKey(staged bool) (*sensorsig.Signer, error) {
+	if !staged && s.hasIdentity() {
+		return nil, errors.New("identity: the key belongs to a confirmed identity; not replacing it")
+	}
+	if err := s.ensureDir(); err != nil {
+		return nil, err
+	}
+	priv, pemBytes, err := newKeyPEM()
+	if err != nil {
+		return nil, err
+	}
+	path := s.keyPath()
+	if staged {
+		path = s.nextKeyPath()
+	}
+	if err := writeAtomic(path, pemBytes); err != nil {
+		return nil, err
+	}
+	return sensorsig.NewSigner(priv)
+}
+
+// SaveAndPromote finishes a staged re-pair: it writes the new identity, then
+// atomically renames signing.key.next over signing.key. A crash between the
+// two steps is repaired by Load (the identity names the staged key).
+func (s *Store) SaveAndPromote(id *Identity) error {
+	if err := s.Save(id); err != nil {
+		return err
+	}
+	return s.promoteKey()
+}
+
+func (s *Store) promoteKey() error {
+	if err := os.Rename(s.nextKeyPath(), s.keyPath()); err != nil {
+		return fmt.Errorf("identity: promote the new key: %w", err)
+	}
+	return nil
 }
 
 // Load returns the identity and its signing key. ErrNoIdentity when the
@@ -321,11 +397,21 @@ func (s *Store) Load() (*Identity, *sensorsig.Signer, error) {
 		return nil, nil, fmt.Errorf("identity: %s is incomplete; pair again", s.identityPath())
 	}
 	sg, err := s.LoadKey()
+	if err != nil && !errors.Is(err, ErrNoKey) {
+		return nil, nil, err
+	}
+	// A re-pair that crashed after saving the identity but before the key
+	// swap: the identity names the staged key.
+	if errors.Is(err, ErrNoKey) || sg.KeyID() != id.KeyID {
+		if nk, nerr := s.loadKeyAt(s.nextKeyPath()); nerr == nil && nk.KeyID() == id.KeyID {
+			if perr := s.promoteKey(); perr != nil {
+				return nil, nil, perr
+			}
+			return &id, nk, nil
+		}
+	}
 	if errors.Is(err, ErrNoKey) {
 		return nil, nil, fmt.Errorf("identity: %s exists but %s is missing; pair again", s.identityPath(), s.keyPath())
-	}
-	if err != nil {
-		return nil, nil, err
 	}
 	if sg.KeyID() != id.KeyID {
 		return nil, nil, fmt.Errorf("identity: %s names key %s but %s holds key %s; pair again",

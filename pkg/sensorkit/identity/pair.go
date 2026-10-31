@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -36,6 +37,24 @@ var (
 	ErrEnrollmentRefused = errors.New("pairing: the platform refused the enrollment token (unknown, expired, used up or revoked)")
 )
 
+// ErrKeyRegistered: this key was registered to a sensor by an approval, so
+// it can never start another pairing (only an administrator's Re-pair, with
+// a new key, can replace it).
+//
+//nolint:staticcheck // ST1005: the sentence is shown to the operator as is
+var ErrKeyRegistered = errors.New("This key is already registered. Restore this sensor's identity, " +
+	"or ask an administrator to Re-pair it (Sensors > sensor > Re-pair).")
+
+// spentCodeError: the request that carried a pairing code ended (expired or
+// refused). The code is single use and spent; it is never sent again.
+type spentCodeError struct {
+	cause  error
+	prefix string
+}
+
+func (e *spentCodeError) Error() string { return e.cause.Error() }
+func (e *spentCodeError) Unwrap() error { return e.cause }
+
 // ClockSkewError is the platform refusing a request because its signature
 // time and the platform's clock differ by more than the tolerance (2
 // minutes): this machine's clock or the platform's is wrong.
@@ -55,11 +74,36 @@ func (e *ClockSkewError) Error() string {
 		"`sudo chronyc makestep` steps the clock now)", d.Round(time.Second), dir, sensorsig.MaxClockSkew)
 }
 
-// Backoff of RetryTransient.
+// Backoff of RetryTransient, and the wait after an answer retrying cannot
+// change (a 4xx the operator has to fix).
 const (
 	pairBackoffMin = 5 * time.Second
 	pairBackoffMax = 5 * time.Minute
+	pairFatalWait  = 5 * time.Minute
+	// pairConfirmWindow: the platform extends a request's expiry when it is
+	// approved, so a stored request is still tried this long after the
+	// expiry the sensor saw.
+	pairConfirmWindow = 10 * time.Minute
 )
+
+// fullJitter is a delay in [base/2, base]; rnd(n) returns [0, n).
+func fullJitter(base time.Duration, rnd func(int64) int64) time.Duration {
+	half := base / 2
+	return half + time.Duration(rnd(int64(base-half)+1))
+}
+
+// afterJitter is the platform's advised delay plus up to half of it again:
+// never earlier than the platform asked.
+func afterJitter(advised time.Duration, rnd func(int64) int64) time.Duration {
+	return advised + time.Duration(rnd(int64(advised/2)+1))
+}
+
+func codePrefix(code string) string {
+	if len(code) > 4 {
+		return code[:4]
+	}
+	return code
+}
 
 // PairOptions configures Pair.
 type PairOptions struct {
@@ -135,6 +179,11 @@ type PairOptions struct {
 	UserAgent string
 
 	sleep func(context.Context, time.Duration) error
+	// rnd returns a random number in [0, n) (tests inject a fixed one).
+	rnd func(n int64) int64
+	// spentPrefix is the first 4 characters of a code whose request ended;
+	// that code is never sent again.
+	spentPrefix string
 }
 
 // DefaultHostFacts describes this host.
@@ -159,6 +208,9 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 	if o.sleep == nil {
 		o.sleep = sleepCtx
 	}
+	if o.rnd == nil {
+		o.rnd = rand.Int64N //nolint:gosec // retry jitter, not a secret
+	}
 	if o.EnrollmentToken != "" && (o.Code != "" || o.RepairSensorID != "") {
 		return nil, errors.New("pairing: an instance enrollment token cannot be combined with a pairing code or a re-pair")
 	}
@@ -177,6 +229,8 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 	var signer *sensorsig.Signer
 	var err error
 	if o.NewKey {
+		// A re-pair stages its key: signing.key and identity.json stay
+		// untouched until the platform confirmed (Store.RotateKey).
 		signer, err = o.Store.RotateKey()
 	} else {
 		signer, err = o.Store.EnsureKey()
@@ -184,68 +238,170 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	base := o.HTTPClient
 	var rec *httpsec.PinRecorder
+	base := o.HTTPClient
 	if base == nil {
 		// Every request of the pairing must lead to the CA the first one
 		// verified; that CA's key becomes the stored pin.
 		rec = &httpsec.PinRecorder{}
 		base = httpsec.NewAPIClientRecordingPin(30*time.Second, rec)
 	}
-	hc := *base
-	hc.Transport = &sensorsig.Transport{Signer: signer, Base: base.Transport, MaxBody: 64 << 10}
-	pc := &pairClient{base: strings.TrimRight(o.BaseURL, "/") + protov2.PathPrefix, hc: &hc, ua: o.UserAgent, rec: rec}
+	newClient := func(sg *sensorsig.Signer) *pairClient {
+		hc := *base
+		hc.Transport = &sensorsig.Transport{Signer: sg, Base: base.Transport, MaxBody: 64 << 10}
+		return &pairClient{base: strings.TrimRight(o.BaseURL, "/") + protov2.PathPrefix, hc: &hc, ua: o.UserAgent, rec: rec}
+	}
+	pc := newClient(signer)
 	if _, err := jobsig.ParseRoot(o.JobSigningRoot); err != nil {
 		return nil, fmt.Errorf("pairing: SENSOR_JOB_SIGNING_ROOT: %w", err)
 	}
 
 	backoff := pairBackoffMin
+	rotated := false
+	lastWait := ""
+	tokenOnce := o.EnrollmentToken != "" && !o.OrganizationEnrollment
 	for {
-		id, err := pairOnce(ctx, pc, signer, o)
-		switch {
-		case err == nil:
+		id, err := pairOnce(ctx, pc, signer, &o)
+		if err == nil {
 			return id, nil
+		}
+		var spent *spentCodeError
+		switch {
+		case errors.As(err, &spent):
+			// The code is single use and went with the request: never
+			// send it again.
+			why := fmt.Sprintf("The pairing code %s… expired (or was refused); it is single use.", spent.prefix)
+			if !o.Retry {
+				//nolint:staticcheck // ST1005: the sentence is shown to the operator as is
+				return nil, fmt.Errorf("%w: %s Run pair without a code and enter the code it prints in Sensors > Add sensor > "+
+					"Pair a sensor that shows a code, or run it again with a new code.", spent.cause, why)
+			}
+			_, _ = fmt.Fprintf(o.Out, "%s Starting a request without a code: enter the code below in Sensors > Add sensor > "+
+				"Pair a sensor that shows a code, or restart with a new SENSOR_PAIRING_CODE.\n", why)
+			o.spentPrefix = spent.prefix
+			o.Code, o.CodeLabel = "", ""
+			continue
 		case errors.Is(err, ErrExpired) && o.Retry && (o.EnrollmentToken == "" || o.OrganizationEnrollment):
 			_, _ = fmt.Fprintln(o.Out, "The pairing request expired; starting a new one.")
 			backoff = pairBackoffMin
 			continue
-		case o.RetryTransient && ctx.Err() == nil && transientPairError(err, o.EnrollmentToken != "" && !o.OrganizationEnrollment):
-			_, _ = fmt.Fprintf(o.Out, "Pairing failed: %v\nRetrying in %s.\n", err, backoff)
-			if err := o.sleep(ctx, backoff); err != nil {
-				return nil, err
+		case ctx.Err() != nil:
+			return nil, err
+		case isKeyRegistered(err):
+			if !rotated && !o.Store.hasIdentity() {
+				// No identity was ever confirmed for this key: it was
+				// never active, so replacing it loses nothing.
+				rotated = true
+				if signer, err = o.Store.RegenerateUnconfirmedKey(o.NewKey); err != nil {
+					return nil, err
+				}
+				o.Store.ClearPending()
+				pc = newClient(signer)
+				_, _ = fmt.Fprintln(o.Out, "This sensor's key was already registered by an approval that was never confirmed; generated a new key.")
+				continue
 			}
-			backoff = min(backoff*2, pairBackoffMax)
-			continue
+			err = ErrKeyRegistered
 		}
-		return nil, err
+		if !o.RetryTransient {
+			return nil, err
+		}
+		var d time.Duration
+		switch classifyPairError(err, tokenOnce) {
+		case pairRetry:
+			if ra := retryAfterOf(err); ra > 0 {
+				d = afterJitter(ra, o.rnd)
+			} else {
+				d = fullJitter(backoff, o.rnd)
+			}
+			_, _ = fmt.Fprintf(o.Out, "Pairing failed: %v\nRetrying in %s.\n", err, d.Round(time.Second))
+			backoff = min(backoff*2, pairBackoffMax)
+		case pairWait:
+			d = pairFatalWait + time.Duration(o.rnd(int64(pairFatalWait/2)+1))
+			if msg := err.Error(); msg != lastWait {
+				lastWait = msg
+				_, _ = fmt.Fprintf(o.Out, "Pairing refused: %v\nRetrying cannot change this; fix it, or restart the sensor to try now. "+
+					"Trying again in %s.\n", err, d.Round(time.Second))
+			}
+		default:
+			return nil, err
+		}
+		if err := o.sleep(ctx, d); err != nil {
+			return nil, err
+		}
 	}
 }
 
-// transientPairError reports whether a pairing failure may clear without a
-// new configuration: a clock skew (once NTP is fixed), a rate limit, the
-// platform unavailable, a network error. With an enrollment token, only
-// failures from before the platform could spend it count (a 500 or a
-// generic 401 may come after).
-func transientPairError(err error, token bool) bool {
+func isKeyRegistered(err error) bool {
+	var he *httpError
+	return errors.As(err, &he) && he.problem.Name() == protov2.ProblemPairingKeyRegistered
+}
+
+func retryAfterOf(err error) time.Duration {
+	var he *httpError
+	if errors.As(err, &he) {
+		return he.retryAfter
+	}
+	return 0
+}
+
+type pairClass int
+
+const (
+	pairStop  pairClass = iota // return the error
+	pairRetry                  // backoff and try again
+	pairWait                   // an operator has to act: wait long, try again
+)
+
+// classifyPairError sorts a pairing failure. Retry: network errors, HTTP
+// 408, 425, 429, 500, 502, 503, 504, a clock skew, and a key another
+// request still holds (pairing-key-busy). Every other HTTP answer waits. With
+// a single-use instance enrollment token only failures from before the
+// platform could spend it retry (a 500 or a generic 401 may come after), and
+// nothing waits: the token is spent.
+func classifyPairError(err error, token bool) pairClass {
 	var ce *ClockSkewError
 	if errors.As(err, &ce) {
-		return true
+		return pairRetry
+	}
+	if errors.Is(err, ErrKeyRegistered) {
+		return pairWait
 	}
 	var he *httpError
 	if errors.As(err, &he) {
-		switch he.status {
-		case http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusBadGateway, http.StatusGatewayTimeout:
-			return true
-		case http.StatusInternalServerError, http.StatusUnauthorized:
-			return !token
+		if he.problem.Name() == protov2.ProblemPairingKeyBusy {
+			return pairRetry
 		}
-		return false
+		switch he.status {
+		case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests, http.StatusServiceUnavailable,
+			http.StatusBadGateway, http.StatusGatewayTimeout:
+			return pairRetry
+		case http.StatusInternalServerError:
+			if !token {
+				return pairRetry
+			}
+			return pairStop
+		}
+		if token {
+			return pairStop
+		}
+		return pairWait
 	}
 	var ue *url.Error
-	return errors.As(err, &ue) && !errors.Is(err, context.Canceled)
+	if errors.As(err, &ue) && !errors.Is(err, context.Canceled) {
+		return pairRetry
+	}
+	return pairStop
 }
 
-func pairOnce(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o PairOptions) (*Identity, error) {
+// errGone: a request resumed from pairing.json no longer exists on the
+// platform (expired, purged, refused, unknown to it).
+var errGone = errors.New("pairing: the earlier request is gone")
+
+func pairOnce(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o *PairOptions) (*Identity, error) {
+	if id, err, done := resumePending(ctx, pc, signer, o); done {
+		return id, err
+	}
+	o.Store.ClearPending()
 	nonce, err := pairing.NewNonce()
 	if err != nil {
 		return nil, err
@@ -258,7 +414,7 @@ func pairOnce(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o P
 		req.EnrollmentScope = pairing.EnrollmentScopeOrganization
 	}
 	var start pairing.StartResponse
-	if err := pc.do(ctx, o, http.MethodPost, pairing.StartPath, req, http.StatusCreated, &start); err != nil {
+	if err := pc.do(ctx, *o, http.MethodPost, pairing.StartPath, req, http.StatusCreated, &start); err != nil {
 		var he *httpError
 		if o.EnrollmentToken != "" && errors.As(err, &he) && he.status == http.StatusUnauthorized {
 			return nil, ErrEnrollmentRefused
@@ -273,38 +429,122 @@ func pairOnce(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o P
 		return nil, errors.New("pairing: the platform answered an invalid pairing id")
 	}
 	path := strings.ReplaceAll(pairing.StatusPath, "{pairing_id}", start.PairingID)
-	if err := pc.do(ctx, o, http.MethodPut, path+"/nonce", pairing.RevealRequest{SensorNonce: pairing.Encode(nonce)}, http.StatusNoContent, nil); err != nil {
+	if err := pc.do(ctx, *o, http.MethodPut, path+"/nonce", pairing.RevealRequest{SensorNonce: pairing.Encode(nonce)}, http.StatusNoContent, nil); err != nil {
 		return nil, fmt.Errorf("pairing: reveal: %w", err)
 	}
 	sas := pairing.ComputeSAS(signer.PublicKey(), platformPub, nonce, platformNonce)
-	printInstructions(o, start, sas, signer.KeyID())
+	p := &Pending{PairingID: start.PairingID, ExpiresAt: start.ExpiresAt, SAS: sas.String(), KeyID: signer.KeyID(),
+		CodeUsed: o.Code != "", CodePrefix: codePrefix(o.Code), Repair: o.RepairSensorID != "", UserCode: start.UserCode,
+		PlatformURL: o.BaseURL, PlatformKey: pairing.Encode(platformPub), PollSeconds: start.PollSeconds,
+		SpentCodePrefix: o.spentPrefix}
+	if err := o.Store.SavePending(p); err != nil {
+		_, _ = fmt.Fprintf(o.Out, "WARNING: the pairing request could not be saved, so a restart cannot resume it: %v\n", err)
+	}
+	printInstructions(*o, start.ExpiresAt, start.UserCode, sas.String(), signer.KeyID())
+	id, err := waitAndConfirm(ctx, pc, signer, o, p, platformPub, false)
+	if errors.Is(err, errGone) {
+		return nil, ErrExpired
+	}
+	return id, err
+}
 
+// resumePending continues the request saved in pairing.json when it belongs
+// to this key, platform and purpose; done reports that pairOnce is finished
+// (an identity, or an error to return). Not done: there was nothing to
+// resume (or it is gone), and a new request starts.
+func resumePending(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o *PairOptions) (id *Identity, err error, done bool) {
+	p, err := o.Store.LoadPending()
+	if err != nil {
+		return nil, err, true
+	}
+	if p == nil {
+		return nil, nil, false
+	}
+	// A code whose request ended is never sent again, also across a restart
+	// of a sensor whose environment still holds it.
+	if o.Code != "" && p.SpentCodePrefix != "" && codePrefix(o.Code) == p.SpentCodePrefix {
+		o.spentPrefix = p.SpentCodePrefix
+		o.Code, o.CodeLabel = "", ""
+	}
+	if o.spentPrefix == "" {
+		o.spentPrefix = p.SpentCodePrefix
+	}
+	platformPub, kerr := pairing.DecodeKey(p.PlatformKey)
+	pinned := o.PlatformKeyPin == "" || (kerr == nil && sensorsig.Thumbprint(platformPub) == strings.TrimPrefix(o.PlatformKeyPin, "SHA256:"))
+	// A new code the operator configured since is not on this request: it
+	// is superseded by a request that carries the new code.
+	carriesCode := o.Code == "" || (p.CodeUsed && p.CodePrefix == codePrefix(o.Code))
+	if kerr != nil || !pinned || !validID(p.PairingID) || p.KeyID != signer.KeyID() || p.PlatformURL != o.BaseURL ||
+		p.Repair != (o.RepairSensorID != "") || !carriesCode || time.Now().After(p.ExpiresAt.Add(pairConfirmWindow)) {
+		spent := p.CodeUsed && o.Code != "" && p.CodePrefix == codePrefix(o.Code)
+		o.Store.ClearPending()
+		if spent {
+			return nil, &spentCodeError{cause: ErrExpired, prefix: p.CodePrefix}, true
+		}
+		return nil, nil, false
+	}
+	_, _ = fmt.Fprintln(o.Out, "Resuming the pairing request this sensor started earlier.")
+	printInstructions(*o, p.ExpiresAt, p.UserCode, p.SAS, signer.KeyID())
+	id, err = waitAndConfirm(ctx, pc, signer, o, p, platformPub, true)
+	if errors.Is(err, errGone) {
+		o.Store.ClearPending()
+		if p.CodeUsed && o.Code != "" && p.CodePrefix == codePrefix(o.Code) {
+			return nil, &spentCodeError{cause: ErrExpired, prefix: p.CodePrefix}, true
+		}
+		return nil, nil, false
+	}
+	return id, err, true
+}
+
+// waitAndConfirm polls the request until an administrator decides, then
+// confirms the identity. resumed: a request that is gone or refused is
+// errGone (the caller starts a new one) rather than an error to report.
+func waitAndConfirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o *PairOptions, p *Pending, platformPub ed25519.PublicKey, resumed bool) (*Identity, error) {
+	path := strings.ReplaceAll(pairing.StatusPath, "{pairing_id}", p.PairingID)
+	// ended: the request is over for good; its pairing.json goes, and a code
+	// it carried is spent.
+	ended := func(cause error) (*Identity, error) {
+		o.Store.ClearPending()
+		if resumed {
+			return nil, errGone
+		}
+		if p.CodeUsed {
+			return nil, &spentCodeError{cause: cause, prefix: p.CodePrefix}
+		}
+		return nil, cause
+	}
 	for {
 		var st pairing.StatusResponse
-		err := pc.do(ctx, o, http.MethodGet, path, nil, http.StatusOK, &st)
+		err := pc.do(ctx, *o, http.MethodGet, path, nil, http.StatusOK, &st)
 		var he *httpError
 		switch {
 		case errors.As(err, &he) && he.status == http.StatusNotFound:
-			return nil, ErrExpired // purged or expired
+			return ended(ErrExpired) // purged or expired
+		case errors.As(err, &he) && resumed && he.status >= 400 && he.status < 500 && !retryableStatus(he.status):
+			return nil, errGone
 		case err != nil:
 			return nil, fmt.Errorf("pairing: status: %w", err)
 		}
 		switch st.Status {
 		case pairing.StatusDenied:
-			return nil, ErrDenied
+			return ended(ErrDenied)
 		case pairing.StatusExpired:
-			return nil, ErrExpired
+			return ended(ErrExpired)
 		case pairing.StatusApproved, pairing.StatusCompleted:
 			if st.Identity == nil {
 				return nil, errors.New("pairing: approved without an identity")
 			}
-			return confirm(ctx, pc, signer, o, start.PairingID, path, st.Identity, platformPub)
+			return confirm(ctx, pc, signer, *o, p.PairingID, path, st.Identity, platformPub)
 		}
-		wait := time.Duration(max(st.PollSeconds, start.PollSeconds, 2)) * time.Second
+		wait := time.Duration(max(st.PollSeconds, p.PollSeconds, 2)) * time.Second
 		if err := o.sleep(ctx, min(wait, 30*time.Second)); err != nil {
 			return nil, err
 		}
 	}
+}
+
+func retryableStatus(code int) bool {
+	return code == http.StatusRequestTimeout || code == http.StatusTooEarly || code == http.StatusTooManyRequests
 }
 
 func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o PairOptions, pairingID, path string, granted *pairing.Identity, platformPub ed25519.PublicKey) (*Identity, error) {
@@ -344,9 +584,16 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 		return nil, err
 	}
 	id.ContentPlatformKeys, id.ContentTenantKeys = contentKeys(o, granted)
-	if err := o.Store.Save(id); err != nil {
+	if o.NewKey {
+		// The re-pair is confirmed: the staged key replaces the old one.
+		err = o.Store.SaveAndPromote(id)
+	} else {
+		err = o.Store.Save(id)
+	}
+	if err != nil {
 		return nil, err
 	}
+	o.Store.ClearPending()
 	if id.Scope == pairing.ScopeInstance {
 		_, _ = fmt.Fprintf(o.Out, "Enrolled: shared sensor %q (%s) of the instance. Identity saved in %s.\n", id.Name, id.SensorID, o.Store.Dir())
 	} else {
@@ -489,8 +736,8 @@ func (c *pairClient) tlsPin() (element, pin string) {
 	return "", ""
 }
 
-func printInstructions(o PairOptions, start pairing.StartResponse, sas pairing.SAS, keyID string) {
-	exp := start.ExpiresAt.Local().Format("15:04")
+func printInstructions(o PairOptions, expiresAt time.Time, userCode, sas, keyID string) {
+	exp := expiresAt.Local().Format("15:04")
 	w := o.Out
 	if o.EnrollmentToken != "" && o.OrganizationEnrollment {
 		_, _ = fmt.Fprintf(w, "\nEnrolling in the organization with its enrollment token (request expires %s).\n", exp)
@@ -506,7 +753,7 @@ func printInstructions(o PairOptions, start pairing.StartResponse, sas pairing.S
 	}
 	if o.Code == "" {
 		_, _ = fmt.Fprintf(w, "\nPair this sensor in OpenCTEM: Sensors > Add sensor > Pair a sensor that shows a code\n")
-		_, _ = fmt.Fprintf(w, "  Code:        %s\n", start.UserCode)
+		_, _ = fmt.Fprintf(w, "  Code:        %s\n", userCode)
 		_, _ = fmt.Fprintf(w, "  (Or create a pairing code first under Sensors > Add sensor and start the sensor with SENSOR_PAIRING_CODE set to it.)\n")
 	} else {
 		shown := pairing.FormatCode(o.Code)
@@ -545,9 +792,39 @@ type pairClient struct {
 type httpError struct {
 	status int
 	body   string
+	// problem is the answer read as a problem document (nil: it is not one).
+	problem *protov2.Problem
+	// retryAfter is the Retry-After the platform sent (integer seconds,
+	// clamped to 1..300), or 0.
+	retryAfter time.Duration
 }
 
-func (e *httpError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.status, e.body) }
+// Error names the problem's title and detail when the platform sent a
+// problem document, else the first 300 characters of the answer.
+func (e *httpError) Error() string {
+	if p := e.problem; p != nil && (p.Title != "" || p.Detail != "") {
+		return fmt.Sprintf("HTTP %d: %s", e.status, strings.Join(nonEmpty(p.Title, p.Detail), ": "))
+	}
+	return fmt.Sprintf("HTTP %d: %s", e.status, e.body)
+}
+
+func nonEmpty(in ...string) []string {
+	var out []string
+	for _, s := range in {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func retryAfterSeconds(h http.Header) time.Duration {
+	n, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After")))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return time.Duration(min(n, 300)) * time.Second
+}
 
 // do sends one request, waiting out a 429 (Retry-After) a few times.
 func (c *pairClient) do(ctx context.Context, o PairOptions, method, path string, in any, want int, out any) error {
@@ -584,8 +861,8 @@ func (c *pairClient) do(ctx context.Context, o PairOptions, method, path string,
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		_ = resp.Body.Close()
 		if resp.StatusCode == http.StatusTooManyRequests && attempt < 5 {
-			wait, _ := strconv.Atoi(resp.Header.Get("Retry-After"))
-			d := time.Duration(min(max(wait, 1), 300)) * time.Second
+			d := max(retryAfterSeconds(resp.Header), time.Second)
+			d = afterJitter(d, o.rnd)
 			_, _ = fmt.Fprintf(o.Out, "Rate limited by the platform (HTTP 429); retrying in %s.\n", d)
 			if err := o.sleep(ctx, d); err != nil {
 				return err
@@ -598,7 +875,8 @@ func (c *pairClient) do(ctx context.Context, o PairOptions, method, path string,
 			}
 		}
 		if resp.StatusCode != want {
-			return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(data[:min(len(data), 300)]))}
+			return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(data[:min(len(data), 300)])),
+				problem: protov2.ParseProblem(data), retryAfter: retryAfterSeconds(resp.Header)}
 		}
 		if out != nil {
 			if err := json.Unmarshal(data, out); err != nil {
