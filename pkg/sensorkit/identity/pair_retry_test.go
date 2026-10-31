@@ -156,3 +156,54 @@ func TestPairDoesNotRetryFinalRefusals(t *testing.T) {
 		t.Fatalf("400: %v, starts=%d", err, f.starts)
 	}
 }
+
+func problemReply(status int, name string, header ...string) func(w http.ResponseWriter) {
+	return func(w http.ResponseWriter) {
+		for i := 0; i+1 < len(header); i += 2 {
+			w.Header().Set(header[i], header[i+1])
+		}
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(status)
+		// A detail longer than the part of the body an error keeps: the
+		// type is still read.
+		_, _ = w.Write([]byte(`{"type":"https://openctem.io/problems/sensor/` + name + `","title":"t","status":` + itoa(status) +
+			`,"detail":"` + strings.Repeat("d", 400) + `","retryable":false}`))
+	}
+}
+
+// A key the platform registered before is a final answer with the fix in
+// it, never retried (a retry loop only spends the pairing budget).
+func TestPairKeyRegisteredIsFinalAndExplained(t *testing.T) {
+	f, srv := newFakePlatform(t)
+	f.startReplies = []func(http.ResponseWriter){problemReply(http.StatusConflict, "pairing-key-registered")}
+	o := opts(t, srv, &bytes.Buffer{})
+	o.RetryTransient, o.Retry = true, true
+	_, err := Pair(context.Background(), o)
+	if !errors.Is(err, ErrKeyRegistered) || f.starts != 1 {
+		t.Fatalf("registered key: %v, starts=%d", err, f.starts)
+	}
+	for _, want := range []string{"pairs only once", o.Store.Dir(), "new code"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("message %q lacks %q", err, want)
+		}
+	}
+}
+
+// A key another open request holds is waited out; any other 409 is final.
+func TestPairKeyBusyIsRetried(t *testing.T) {
+	f, srv := newFakePlatform(t)
+	f.startReplies = []func(http.ResponseWriter){problemReply(http.StatusConflict, "pairing-key-busy", "Retry-After", "30")}
+	var out bytes.Buffer
+	o := opts(t, srv, &out)
+	o.RetryTransient = true
+	if _, err := Pair(context.Background(), o); err != nil || f.starts != 2 {
+		t.Fatalf("busy key: %v, starts=%d\n%s", err, f.starts, out.String())
+	}
+	f.starts = 0
+	f.startReplies = []func(http.ResponseWriter){problemReply(http.StatusConflict, "report-conflict")}
+	o = opts(t, srv, &bytes.Buffer{})
+	o.RetryTransient = true
+	if _, err := Pair(context.Background(), o); err == nil || errors.Is(err, ErrKeyRegistered) || f.starts != 1 {
+		t.Fatalf("other 409: %v, starts=%d", err, f.starts)
+	}
+}

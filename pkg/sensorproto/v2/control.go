@@ -323,6 +323,13 @@ const (
 	// clock or the platform's is wrong. Problem.ServerTime and
 	// Problem.ClockOffsetSeconds say by how much.
 	ProblemClockSkew ProblemType = "clock-skew"
+	// ProblemPairingKeyRegistered: a pairing start whose key was already
+	// registered to a sensor; a key pairs only once, so the sensor needs a
+	// new key (or its saved identity back).
+	ProblemPairingKeyRegistered ProblemType = "pairing-key-registered"
+	// ProblemPairingKeyBusy: another open pairing request holds the key;
+	// retry after the advised delay.
+	ProblemPairingKeyBusy ProblemType = "pairing-key-busy"
 )
 
 // ProblemInvalidRequest (ProblemTypeBase): a malformed request body, on the
