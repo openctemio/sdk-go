@@ -176,7 +176,7 @@ func Probe(ctx context.Context, dial DialFunc, host string, port int, o Options)
 	if !o.Plain {
 		cfg := &tls.Config{
 			InsecureSkipVerify: insecureSkipTargetVerify, //nolint:gosec // G402 security-review: allow GO-TLS-NOVERIFY see insecureSkipTargetVerify
-			MinVersion:         tls.VersionTLS10,
+			MinVersion:         tls.VersionTLS12,
 			NextProtos:         []string{"http/1.1"},
 		}
 		if net.ParseIP(host) == nil {
