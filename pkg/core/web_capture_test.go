@@ -26,6 +26,6 @@ func TestLiveHostWebContentPassthrough(t *testing.T) {
 	// Without captures the member is absent, so existing reports are unchanged.
 	raw, _ = json.Marshal(LiveHost{URL: "https://a.example.com/"})
 	if strings.Contains(string(raw), "web_content") {
-		t.Fatalf("empty WebContent marshalled: %s", raw)
+		t.Fatalf("empty WebContent marshaled: %s", raw)
 	}
 }
