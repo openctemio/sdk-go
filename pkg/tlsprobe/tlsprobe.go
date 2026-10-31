@@ -78,6 +78,13 @@ const (
 	maxErrLen = 160
 )
 
+// insecureSkipTargetVerify: the probe does not verify the target's
+// certificate. It exists to read a certificate a browser would refuse
+// (expired, another site's names, self-signed); the leaf is recorded and
+// judged (CertProblem), nothing it says is trusted, and no credential or
+// data is sent over the connection (one HEAD request at most).
+const insecureSkipTargetVerify = true
+
 // DialFunc opens a connection (net.Dialer.DialContext's signature).
 type DialFunc = reach.DialFunc
 
@@ -168,9 +175,7 @@ func Probe(ctx context.Context, dial DialFunc, host string, port int, o Options)
 	stream := conn
 	if !o.Plain {
 		cfg := &tls.Config{
-			// A scanner sees every certificate, valid or not: the leaf is
-			// recorded and judged (CertProblem), never trusted.
-			InsecureSkipVerify: true, //nolint:gosec // reading the certificate is the point; nothing is trusted
+			InsecureSkipVerify: insecureSkipTargetVerify, //nolint:gosec // G402 security-review: allow GO-TLS-NOVERIFY see insecureSkipTargetVerify
 			MinVersion:         tls.VersionTLS10,
 			NextProtos:         []string{"http/1.1"},
 		}
