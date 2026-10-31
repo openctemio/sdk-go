@@ -799,3 +799,55 @@ func TestV2_ResumeSkipsHeldSegments(t *testing.T) {
 		t.Fatalf("accepted %d, state %s, integrity %q", f.AcceptedFindings(), st.State, st.Integrity)
 	}
 }
+
+// A bound report states the lease epoch of the claim, so the platform can
+// refuse results of a run it handed out again; after the sensor's lease
+// watchdog marks the lease lost, nothing of the job is sent, bound or
+// unbound, even when the platform no longer knows the command.
+func TestV2_BoundResultsCarryTheEpochAndALostLeaseSendsNothing(t *testing.T) {
+	f := NewFakePlatform(true)
+	defer f.Close()
+	f.SetControl(true)
+	cmd := "0192a3b4-0000-7000-8000-000000000041"
+	f.QueueCommand(cmd)
+	c := newClient(t, f, client.ProtocolV2)
+	ans, err := c.ClaimCommand(context.Background(), cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.LeaseEpoch <= 0 {
+		t.Fatalf("the fake gave no lease epoch: %+v", ans)
+	}
+	if _, err := c.PushResultsV2(context.Background(), report("semgrep", 1, 1), &client.V2PushOptions{CommandID: cmd}); err != nil {
+		t.Fatal(err)
+	}
+	puts := f.RequestsTo(http.MethodPut, protov2.PathPrefix+"/commands/"+cmd+"/results/")
+	if len(puts) != 1 || puts[0].Header.Get(protov2.HeaderLeaseEpoch) != fmt.Sprint(ans.LeaseEpoch) {
+		t.Fatalf("bound PUTs %d, epoch header %q, want %d", len(puts), func() string {
+			if len(puts) == 0 {
+				return ""
+			}
+			return puts[0].Header.Get(protov2.HeaderLeaseEpoch)
+		}(), ans.LeaseEpoch)
+	}
+
+	c.MarkLeaseLost(cmd)
+	before := len(f.RequestsTo(http.MethodPut, protov2.PathPrefix))
+	_, err = c.PushResultsV2(context.Background(), report("semgrep", 1, 1), &client.V2PushOptions{CommandID: cmd})
+	var ve *client.V2Error
+	if !errors.As(err, &ve) || ve.Transient() {
+		t.Fatalf("push of a lost job: %v, want a permanent refusal", err)
+	}
+	if after := len(f.RequestsTo(http.MethodPut, protov2.PathPrefix)); after != before {
+		t.Fatalf("%d results request(s) sent for a job whose lease was lost", after-before)
+	}
+
+	// Through the outbox: dead-lettered, never sent unbound.
+	enableOutbox(t, c, t.TempDir())
+	ctx := core.WithCommandID(context.Background(), cmd)
+	_, _ = c.PushFindings(ctx, report("semgrep", 1, 1))
+	time.Sleep(200 * time.Millisecond)
+	if after := len(f.RequestsTo(http.MethodPut, protov2.PathPrefix)); after != before {
+		t.Fatalf("the outbox sent %d results request(s) for a job whose lease was lost", after-before)
+	}
+}

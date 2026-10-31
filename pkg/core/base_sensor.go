@@ -918,6 +918,7 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 			return a.afterHeartbeat(err, a.nextAfterFailure(err, next)), err
 		}
 		a.control.delivered(sent, time.Since(sent), next)
+		a.leasesRenewed(sent, status.RunningCommands)
 		if a.verbose {
 			fmt.Printf("[%s] Heartbeat sent\n", a.name)
 		}
@@ -943,6 +944,7 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 		return a.afterHeartbeat(err, a.nextAfterFailure(err, next)), err
 	}
 	rtt := time.Since(sent)
+	a.leasesRenewed(sent, status.RunningCommands)
 	a.doorbell.Handle(hints)
 	a.manifestAsked(hints)
 	a.configReportAsked(hints)
@@ -951,6 +953,18 @@ func (a *BaseSensor) heartbeatOnce(ctx context.Context, status *SensorStatus) (t
 	}
 	a.control.delivered(sent, rtt, next)
 	return a.afterHeartbeat(nil, next), nil
+}
+
+// leasesRenewed tells the load reporter (the sensor's *CommandPoller) that
+// the heartbeat sent at sent was answered: the leases of the commands it
+// listed were renewed (lease_watchdog.go).
+func (a *BaseSensor) leasesRenewed(sent time.Time, ids []string) {
+	a.statusMu.RLock()
+	obs, ok := a.loadReporter.(LeaseRenewalObserver)
+	a.statusMu.RUnlock()
+	if ok {
+		obs.LeasesRenewed(sent, ids)
+	}
 }
 
 // sendPlainHeartbeat sends a heartbeat without the doorbell. It still acts on
