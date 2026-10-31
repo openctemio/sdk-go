@@ -216,45 +216,49 @@ exec.SetScanTargetPolicy(&core.ScanTargetPolicy{
 | `OPENCTEM_SDK_SCAN_ROOTS` | Allowed roots (`:`-separated) for the default policy |
 | `SENSOR_ALLOW_PRIVATE_TARGETS=1` | Allow RFC1918/ULA targets (`SENSOR_ALLOW_PRIVATE_TARGETS=1` — or its pre-rename name `AGENT_ALLOW_PRIVATE_TARGETS=1`, read with a deprecation warning — and `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1` are honored too; setting the sensor and agent names to different values refuses every target) |
 
-#### A sensor without a local policy: fail closed or legacy
+#### A sensor without a local policy: follow the platform's scope or fail closed
 
 The sensor-local policy (`/etc/openctem/sensor-policy.yaml`, or the
-`SENSOR_ALLOWED_RANGES` / `SENSOR_ALLOWED_PORTS` shorthands) is the network
-owner's limit on what the sensor scans. It holds even against a compromised
-platform or a TLS man-in-the-middle on the control path: those can send any
-job, but cannot make the sensor scan outside its policy (api RFC-040). A
-sensor with no policy depends on whether it **requires** one:
+`SENSOR_ALLOWED_RANGES` / `SENSOR_ALLOWED_PORTS` shorthands) is optional and
+narrow-only. With no policy the sensor follows the platform's signed scope:
+it runs any job whose scope statement the platform signed (the signature is
+verified on the sensor as always), outside the built-in deny list and unless
+the kill switch is engaged. A policy written by the host owner narrows that
+(the intersection of the two), never widens it. The platform never writes the
+file. A policy that is present holds even against a compromised platform or a
+TLS man-in-the-middle on the control path: those can send any job, but cannot
+make the sensor scan outside the policy (api RFC-040). An explicit
+`targets: {allow: []}` allows nothing.
 
-| | No policy, required (new installs) | No policy, legacy |
+**Threat model.** Without a local policy a compromised platform could sign a
+wide scope. Host owners who do not trust the platform install a narrowing
+policy or set `SENSOR_REQUIRE_LOCAL_POLICY=true`.
+
+`SENSOR_REQUIRE_LOCAL_POLICY=true` is the explicit opt-in for fail closed
+without a file:
+
+| | No policy (default: follows platform scope) | No policy, `SENSOR_REQUIRE_LOCAL_POLICY=true` |
 |---|---|---|
-| Job with a network target (URL, host, IP, CIDR, image reference) | Refused before any tool starts: `refused by local policy: no_local_policy: ...` | Admitted outside the built-in deny list |
+| Job with a network target (URL, host, IP, CIDR, image reference) | Admitted when the platform signed the scope and the target is outside the built-in deny list | Refused before any tool starts: `refused by local policy: no_local_policy: ...` |
 | Job without network targets (repository or filesystem scan, health check, collector, content refresh) | Runs | Runs |
-| Custom templates, out-of-band callbacks (interactsh) | Refused (`no_local_policy`) | Allowed (templates still need a signature) |
-| `LocalPolicy.CheckTarget` called directly (retests, tool tasks) | Every network target refused | Built-in deny list: loopback, link-local and `169.254.169.254`, multicast, unspecified, CGNAT, reserved, private unless the private-range switch |
+| Custom templates, out-of-band callbacks (interactsh) | Allowed (templates still need a signature) | Refused (`no_local_policy`) |
+| `LocalPolicy.CheckTarget` called directly (retests, tool tasks) | Built-in deny list: loopback, link-local and `169.254.169.254`, multicast, unspecified, CGNAT, reserved, private unless the private-range switch | Every network target refused |
 | Kill switch | Applies | Applies |
-| Report (`local_policy`) | `{"state": "absent", "required": true}` | `{"state": "absent", "required": false}` |
+| Report (`local_policy`) | `{"state": "absent", "required": false}` | `{"state": "absent", "required": true}` |
 
-Whether the sensor requires a policy:
+Whether the sensor requires a policy: `SENSOR_REQUIRE_LOCAL_POLICY=true`
+requires one; unset or `false` does not. The `require_local_policy` field that
+earlier releases wrote into `<state dir>/identity/identity.json` is still
+decoded but ignored.
 
-1. `SENSOR_REQUIRE_LOCAL_POLICY=true|false`, when set, wins.
-2. Otherwise a sensor whose key-bound identity was paired by this SDK
-   requires one: pairing writes `"require_local_policy": true` into
-   `<state dir>/identity/identity.json` (`identity.Identity.RequireLocalPolicy`).
-3. An identity written by an older SDK has no such field, and a bearer-key
-   sensor has no identity: both are legacy installs and keep their behavior,
-   with a warning at start and `required: false` in the report so the
-   platform can flag them.
+The start log names the mode (`Local policy mode: follows platform scope` or
+`fail closed`), and the config report's `policy.local` check is `fail` with
+code `required_absent` while a required policy is missing (and `pass` with
+code `absent` otherwise).
 
-The start log names the mode (`Local policy mode: fail closed ...` or a
-`legacy install` warning), and the config report's `policy.local` check is
-`fail` with code `required_absent` while a required policy is missing.
-
-**Upgrade.** Existing paired sensors are unchanged until they set
-`SENSOR_REQUIRE_LOCAL_POLICY=true` or pair again (a re-pair writes a new
-identity, which requires a policy). Sensors paired from this release on fail
-closed without a policy: install the policy file, or set
-`SENSOR_ALLOWED_RANGES`, before they run network scans; or set
-`SENSOR_REQUIRE_LOCAL_POLICY=false` to keep the legacy behavior on purpose.
+**Upgrade.** Sensors paired by the earlier fail-closed releases that have no
+policy file now follow the platform's signed scope. Set
+`SENSOR_REQUIRE_LOCAL_POLICY=true` to keep fail closed.
 
 #### Posture report
 
@@ -264,7 +268,7 @@ The manifest reports what the platform needs to flag an unhardened sensor
 | Member | Values | Meaning |
 |---|---|---|
 | `local_policy.state` (`local_policy`) | `enforced`, `absent` | A policy is loaded or not |
-| `local_policy.required` (`local_policy`) | `true`, `false` | Without a policy, network jobs are refused (`true`) or admitted (`false`, legacy). Also on every heartbeat |
+| `local_policy.required` (`local_policy`) | `true`, `false` | Without a policy, network jobs are refused (`true`) or follow the platform's signed scope (`false`, the default). Also on every heartbeat |
 | `posture.platform_tls.pin` (`posture`) | `fingerprint`, `ca_file`, `none` | Platform requests over HTTPS trust only a pinned TLS identity (the pin stored at pairing, or `SENSOR_CA_FINGERPRINT`); a private CA file (`SENSOR_CA_CERT_FILE`) besides the system trust store; or the system trust store only |
 | `posture.sandbox.mode` (`posture`) | `off`, `auto`, `required` | `SENSOR_SANDBOX` |
 | `posture.sandbox.sandboxed` (`posture`) | `true`, `false` | Tool runs go through the sandbox launcher |

@@ -69,12 +69,14 @@ func TestLocalPolicy_V2(t *testing.T) {
 	}
 }
 
-// The absent-policy warning says what actually happens: callbacks only when a job asks, custom templates only with pinned
-// keys. It said both "are allowed".
-func TestAbsentPolicyWarningIsAccurate(t *testing.T) {
-	w := strings.Join(absentPolicy().Warnings(), "\n")
-	if !strings.Contains(w, "jobs may use out-of-band callbacks") || !strings.Contains(w, "pinned signing key") || strings.Contains(w, "are allowed") {
-		t.Errorf("warning: %s", w)
+// A sensor that follows the platform's signed scope is the default mode, not
+// something to fix: no warning. A required-but-absent policy still warns.
+func TestAbsentPolicyDefaultHasNoWarning(t *testing.T) {
+	if w := absentPolicy().Warnings(); len(w) != 0 {
+		t.Errorf("default mode warns: %v", w)
+	}
+	if !strings.Contains(absentPolicy().Describe(), "follows the platform's signed scope") {
+		t.Errorf("describe: %s", absentPolicy().Describe())
 	}
 }
 

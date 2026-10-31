@@ -1,0 +1,7 @@
+### Behaviour change: the sensor-local policy is optional and narrow-only
+
+- With no local policy file a sensor follows the platform's signed scope: it runs any job whose scope statement the platform signed (signature verification, the built-in deny list and the kill switch are unchanged). A local policy written by the host owner narrows that scope (intersection), never widens it; an explicit `targets: {allow: []}` still allows nothing. The platform never writes the file.
+- Pairing no longer writes `require_local_policy: true` into the identity. The stored field of existing identity files is still decoded but ignored. `SENSOR_REQUIRE_LOCAL_POLICY=true` is the only way to fail closed without a file (rule `no_local_policy`); unset or `false` follows the platform's scope.
+- The start log, `Describe()`, the doctor setting and the `policy.local` check no longer present a missing policy as something to fix. The report keeps its shape (`absent` with `required: false`, `absent` with `required: true`, `enforced` with `targets_allow` -1 for no allow list and 0 for an explicit empty list).
+- Upgrade: sensors paired by the earlier fail-closed releases that have no policy file now follow the platform's signed scope. Set `SENSOR_REQUIRE_LOCAL_POLICY=true` to keep fail closed.
+- Threat model: without a local policy a compromised platform could sign a wide scope. Host owners who do not trust the platform install a narrowing policy or set `SENSOR_REQUIRE_LOCAL_POLICY=true`.
