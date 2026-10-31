@@ -174,12 +174,16 @@ type LocalPolicy struct {
 	digest   string
 
 	targetsAllowSet bool
-	allowNets       []*net.IPNet
-	denyNets        []*net.IPNet
-	allowDomains    []domainPattern
-	denyDomains     []domainPattern
-	allowPrivate    bool
-	allowLoopback   bool // tests only
+	// allowAll is targets.allow: ["*"] (schema v2 and later): every target the
+	// platform signs, still inside the deny lists and the private-range rules.
+	// It sets no allow list, so targetsAllowSet stays false.
+	allowAll      bool
+	allowNets     []*net.IPNet
+	denyNets      []*net.IPNet
+	allowDomains  []domainPattern
+	denyDomains   []domainPattern
+	allowPrivate  bool
+	allowLoopback bool // tests only
 
 	ports     []portRange // nil: any port
 	portsText string
@@ -493,7 +497,11 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 				lp.warnings = append(lp.warnings, fmt.Sprintf("targets.allow_private is true but %s is not 1: private targets stay refused", EnvSensorAllowPrivateTargets))
 			}
 		}
-		if t.Allow != nil {
+		if allowAll, err := allowAllEntry(t.Allow, schema); err != nil {
+			return nil, err
+		} else if allowAll {
+			lp.allowAll = true
+		} else if t.Allow != nil {
 			lp.targetsAllowSet = true
 			if err := lp.addTargets("targets.allow", t.Allow, true, t.AllowPrivate != nil && *t.AllowPrivate); err != nil {
 				return nil, err
@@ -684,6 +692,28 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// allowAllEntry reports whether targets.allow is the single entry "*" (allow
+// everything the platform signs). "*" is a schema v2 feature (v1 is frozen),
+// and it cannot be mixed with other entries: that would be ambiguous.
+func allowAllEntry(entries []string, schema string) (bool, error) {
+	star := false
+	for _, e := range entries {
+		if strings.TrimSpace(e) == "*" {
+			star = true
+		}
+	}
+	if !star {
+		return false, nil
+	}
+	if schema == "v1" {
+		return false, fmt.Errorf("targets.allow: \"*\" (allow everything the platform signs) needs apiVersion %s or later; schema v1 is frozen", LocalPolicyAPIVersionV2)
+	}
+	if len(entries) != 1 {
+		return false, errors.New("targets.allow: \"*\" allows everything the platform signs and cannot be mixed with other entries; use only [\"*\"], or list the ranges and names without it")
+	}
+	return true, nil
 }
 
 // addTargets parses CIDRs, IPs and domain patterns into the allow or deny
@@ -1040,6 +1070,10 @@ type LocalPolicySummary struct {
 	// AllowPrivate: private ranges may be scanned (the policy and the
 	// private-range switch agree).
 	AllowPrivate bool `json:"allow_private"`
+	// Mode is "allow_all" (targets.allow: ["*"]: everything the platform
+	// signs), "allow_list" (a targets.allow list) or "platform_scope" (no
+	// allow list: the platform's signed scope).
+	Mode string `json:"mode"`
 	// Ports is ports.allow ("" = any port).
 	Ports string `json:"ports,omitempty"`
 	// Tools and Checks are tools.allow and checks.allow (absent = any).
@@ -1084,8 +1118,13 @@ func (lp *LocalPolicy) Report() *LocalPolicyReport {
 		HTTPUserAgent:        lp.httpUserAgent,
 		AllowInsecureTLS:     lp.allowInsecureTLS,
 	}
+	s.Mode = "platform_scope"
+	if lp.allowAll {
+		s.Mode = "allow_all"
+	}
 	if lp.targetsAllowSet {
 		s.TargetsAllow = len(lp.allowNets) + len(lp.allowDomains)
+		s.Mode = "allow_list"
 	}
 	r.Summary = s
 	return r
@@ -1106,7 +1145,9 @@ func (lp *LocalPolicy) Describe() string {
 		from = EnvAllowedRanges + "/" + EnvAllowedPorts
 	}
 	allow := "any"
-	if s.TargetsAllow >= 0 {
+	if s.Mode == "allow_all" {
+		allow = "everything the platform signs (allow all)"
+	} else if s.TargetsAllow >= 0 {
 		allow = strconv.Itoa(s.TargetsAllow)
 	}
 	ports := cmp.Or(s.Ports, "any")
