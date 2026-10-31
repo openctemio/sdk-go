@@ -72,8 +72,8 @@ type PairOptions struct {
 	BaseURL string
 	// Store keeps the key and receives the identity.
 	Store *Store
-	// Code attaches to a code an administrator created with "expect a
-	// sensor" (reverse mode). Empty: the platform gives a code for the
+	// Code attaches to a pairing code an administrator created first
+	// (reverse mode). Empty: the platform gives a code for the
 	// administrator to enter.
 	Code string
 	// CodeLabel, when set, names where Code came from (an environment
