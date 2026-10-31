@@ -78,12 +78,10 @@ type Identity struct {
 	// later re-pair can be checked against it.
 	PlatformKey string    `json:"platform_key,omitempty"`
 	PairedAt    time.Time `json:"paired_at"`
-	// RequireLocalPolicy is true for an identity paired by an SDK that
-	// fails closed without a sensor-local policy: such a sensor refuses
-	// every job with network targets until one is installed
-	// (core.LocalPolicy.Required; SENSOR_REQUIRE_LOCAL_POLICY overrides
-	// it). An identity written by an older SDK has no such field and is a
-	// legacy install that keeps its behavior.
+	// RequireLocalPolicy was written by earlier releases that paired a
+	// sensor fail-closed. It is still decoded so existing identity files
+	// load, but it is ignored: a sensor without a local policy follows the
+	// platform's signed scope unless SENSOR_REQUIRE_LOCAL_POLICY=true.
 	RequireLocalPolicy bool `json:"require_local_policy,omitempty"`
 	// PlatformTLSPin is the platform's TLS identity pinned at pairing,
 	// "sha256:<64 hex digits>", and PlatformTLSPinElement what it is the

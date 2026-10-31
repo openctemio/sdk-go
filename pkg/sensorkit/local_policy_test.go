@@ -72,7 +72,7 @@ func TestKit_LocalPolicy(t *testing.T) {
 	}
 }
 
-// No policy: the kit starts as before and warns (owner decision Q3 (a)).
+// No policy: the kit starts, follows the platform scope and does not warn.
 func TestKit_NoLocalPolicyWarns(t *testing.T) {
 	f := conformance.NewFakePlatform(true)
 	t.Cleanup(f.Close)
@@ -81,7 +81,7 @@ func TestKit_NoLocalPolicyWarns(t *testing.T) {
 	if _, err := New(opts); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Local policy: absent") || !strings.Contains(errw.String(), "Warning: no local policy") {
+	if !strings.Contains(out.String(), "Local policy: absent") || strings.Contains(errw.String(), "no local policy") || !strings.Contains(out.String(), "follows platform scope") {
 		t.Fatalf("stdout %s stderr %s", out.String(), errw.String())
 	}
 }

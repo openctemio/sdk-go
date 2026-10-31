@@ -1,6 +1,7 @@
 package sensorkit
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -36,8 +37,8 @@ func checkCode(k *Kit, id string) string {
 	return ""
 }
 
-// A sensor paired by this SDK fails closed without a local policy; one
-// paired before (no flag in identity.json) keeps the legacy behavior.
+// Without a local policy a sensor follows the platform scope whatever the
+// stored identity flag says; only SENSOR_REQUIRE_LOCAL_POLICY=true fails closed.
 func TestNew_PairedIdentityRequiresLocalPolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -46,9 +47,10 @@ func TestNew_PairedIdentityRequiresLocalPolicy(t *testing.T) {
 		required bool
 		log      string
 	}{
-		{name: "new identity", flag: true, required: true, log: "Local policy mode: fail closed (paired by this SDK)"},
-		{name: "legacy identity", flag: false, required: false, log: "local policy mode: legacy install"},
-		{name: "env false wins", flag: true, env: "false", required: false, log: "legacy (" + core.EnvRequireLocalPolicy + "=false)"},
+		// The stored flag is ignored: a missing file follows platform scope.
+		{name: "stored flag ignored", flag: true, required: false, log: "Local policy mode: follows platform scope"},
+		{name: "no flag", flag: false, required: false, log: "Local policy mode: follows platform scope"},
+		{name: "env false", flag: true, env: "false", required: false, log: "follows platform scope (" + core.EnvRequireLocalPolicy + "=false)"},
 		{name: "env true wins", flag: false, env: "true", required: true, log: "fail closed (" + core.EnvRequireLocalPolicy + "=true)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -153,10 +155,49 @@ func TestResolveRequireLocalPolicy_IdentityFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req, from, err := ResolveRequireLocalPolicy(got); err != nil || !req || from != requireFromIdentity {
-		t.Fatalf("a new identity: %t %q %v", req, from, err)
+	if !got.RequireLocalPolicy {
+		t.Fatal("the stored flag no longer decodes")
+	}
+	if req, from, err := ResolveRequireLocalPolicy(got); err != nil || req || from != "" {
+		t.Fatalf("the stored flag must not require a policy: %t %q %v", req, from, err)
 	}
 	if req, _, _ := ResolveRequireLocalPolicy(nil); req {
 		t.Fatal("no identity requires a policy")
+	}
+	t.Setenv(core.EnvRequireLocalPolicy, "true")
+	if req, from, err := ResolveRequireLocalPolicy(got); err != nil || !req || from != requireFromEnv {
+		t.Fatalf("env true: %t %q %v", req, from, err)
+	}
+}
+
+// The stored identity flag of earlier releases does not make a sensor fail
+// closed: with no env a network target is admitted (the signed scope is
+// checked separately); with the env set it is refused.
+func TestNew_StoredFlagDoesNotFailClosed(t *testing.T) {
+	for _, env := range []string{"", "true"} {
+		t.Run("env="+env, func(t *testing.T) {
+			clearEnv(t)
+			f := conformance.NewFakePlatform(true)
+			t.Cleanup(f.Close)
+			opts, _, _ := baseOptions(t, f)
+			opts.APIKey = ""
+			pairedStore(t, opts.StateDir)
+			requireOnIdentity(t, opts.StateDir)
+			if env != "" {
+				t.Setenv(core.EnvRequireLocalPolicy, env)
+			}
+			k, err := New(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k.closeClient)
+			err = k.LocalPolicy().CheckTarget(context.Background(), "203.0.113.9")
+			if env == "" && err != nil {
+				t.Fatalf("stored flag must not refuse network targets: %v", err)
+			}
+			if env == "true" && err == nil {
+				t.Fatal("env true must refuse network targets without a policy")
+			}
+		})
 	}
 }
