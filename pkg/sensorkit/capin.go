@@ -133,7 +133,7 @@ func fetchPlatformCA(ctx context.Context, apiURL *url.URL) (bundle, presented []
 		Proxy: http.ProxyFromEnvironment,
 		TLSClientConfig: &tls.Config{
 			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: true, //nolint:gosec // G402: verified against the pin by verifyPinnedBundle before anything is trusted
+			InsecureSkipVerify: true, //nolint:gosec // G402 security-review: allow GO-TLS-NOVERIFY the chain captured here is verified against the SENSOR_CA_SHA256 pin by verifyPinnedBundle before anything is trusted
 			VerifyConnection: func(cs tls.ConnectionState) error {
 				presented = cs.PeerCertificates
 				return nil
