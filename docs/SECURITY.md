@@ -987,6 +987,18 @@ store := credentials.NewFileStore(path)  // Only for non-sensitive data
   gateway sends the server certificate and the intermediate), give the root
   in `SENSOR_CA_CERT_FILE`: the pin must match a certificate of the chain
   that verified. Without a pin, pairing pins the CA it verified.
+- Automatic private CA: set `SENSOR_CA_SHA256` to the SHA-256 of the platform's
+  root CA (comma separated for a rotation; the console's install command sets
+  it). On an unknown-authority error the sensor fetches
+  `GET <SENSOR_API_URL>/api/v1/sensors/platform-ca` with chain verification off
+  for that one request, and trusts the bundle only when a certificate in it
+  matches a pin AND signs the chain the server presented on that connection
+  (a man in the middle cannot pass: it would have to hold a key the pinned root
+  signed). Only the pinned certificate is stored (state dir `platform-ca.pem`,
+  mode 0644) and reused on later starts while a pin still matches. Without
+  `SENSOR_CA_SHA256` nothing is trusted automatically. The pin travels in the
+  console-copied command, the same trust path as the pairing code. Air-gapped
+  hosts use `SENSOR_CA_CERT_FILE`.
 
 ### 3. Sensor Configuration
 

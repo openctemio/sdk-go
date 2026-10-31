@@ -239,6 +239,8 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 				"platform offers it (one way: the API key is retired); off keeps the API key."},
 		settingsreg.Setting{Name: EnvCACertFile, Type: settingsreg.Path, Group: "platform", Validate: readableFile,
 			Description: "PEM file with the platform's private CA (or a TLS-inspecting proxy's CA)."},
+		settingsreg.Setting{Name: EnvCASHA256, Type: settingsreg.String, Group: "platform", Validate: validCASHA256,
+			Description: "SHA-256 fingerprint(s) of the platform's private root CA, comma separated (the console's install command sets it). The sensor then fetches the platform's CA itself and trusts only a certificate that matches and signs the platform's chain."},
 		settingsreg.Setting{Name: EnvCAFingerprint, Type: settingsreg.String, Group: "platform", Validate: validCAFingerprint,
 			Description: "SHA-256 fingerprint of the platform's CA certificate (from the install snippet); pins platform TLS to it. SENSOR_API_URL must then use a host name, not an IP address."},
 		settingsreg.Setting{Name: EnvPairingCode, Type: settingsreg.String, Secret: true, Group: "identity", Validate: validPairingCode,

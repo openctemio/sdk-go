@@ -421,6 +421,13 @@ func applyCATrust(opts Options) error {
 		}
 		httpsec.SetAPIPinnedCA(fp)
 	}
+	if v := envOr("", EnvCASHA256); v != "" {
+		pins, err := ParseCAPins(v)
+		if err != nil {
+			return usageError(fmt.Errorf("%s: %w", EnvCASHA256, err))
+		}
+		autoTrustPlatformCA(context.Background(), envOr(opts.APIURL, EnvAPIURL), ResolveStateDir(opts.StateDir), pins, orStderr(opts.Stderr))
+	}
 	return nil
 }
 

@@ -3,6 +3,7 @@ package httpsec
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -42,16 +43,65 @@ func APIRootCAs() *x509.CertPool {
 func LoadCAFile(path string) (*x509.CertPool, error) {
 	pem, err := os.ReadFile(path) // #nosec G304 -- operator-configured CA file
 	if err != nil {
-		return nil, fmt.Errorf("CA certificate file: %w", err)
+		return nil, fmt.Errorf("CA certificate file %s cannot be read: %w", path, err)
 	}
 	pool, err := x509.SystemCertPool()
 	if err != nil || pool == nil {
 		pool = x509.NewCertPool()
 	}
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("CA certificate file %s: %w", path, errNoCertificate)
+	certs := parseCAFileCerts(pem)
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("CA certificate file %s is not a PEM certificate file (no -----BEGIN CERTIFICATE----- block): %w", path, errNoCertificate)
 	}
+	root := false
+	for _, c := range certs {
+		pool.AddCert(c)
+		if c.CheckSignatureFrom(c) == nil && string(c.RawIssuer) == string(c.RawSubject) {
+			root = true
+		}
+	}
+	setCAFileInfo(path, !root)
 	return pool, nil
+}
+
+func parseCAFileCerts(data []byte) []*x509.Certificate {
+	var out []*x509.Certificate
+	for {
+		var b *pem.Block
+		b, data = pem.Decode(data)
+		if b == nil {
+			return out
+		}
+		if b.Type != "CERTIFICATE" {
+			continue
+		}
+		if c, err := x509.ParseCertificate(b.Bytes); err == nil {
+			out = append(out, c)
+		}
+	}
+}
+
+var (
+	caFileMu               sync.Mutex
+	caFilePath             string
+	caFileIntermediateOnly bool
+)
+
+func setCAFileInfo(path string, intermediateOnly bool) {
+	caFileMu.Lock()
+	caFilePath, caFileIntermediateOnly = path, intermediateOnly
+	caFileMu.Unlock()
+}
+
+// CAFileIntermediateOnly returns the path of the CA file loaded with
+// LoadCAFile when it holds no root (self-signed) certificate, else "".
+func CAFileIntermediateOnly() string {
+	caFileMu.Lock()
+	defer caFileMu.Unlock()
+	if caFileIntermediateOnly {
+		return caFilePath
+	}
+	return ""
 }
 
 var errNoCertificate = errors.New("no PEM certificate in the file")
