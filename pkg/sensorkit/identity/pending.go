@@ -29,6 +29,9 @@ type Pending struct {
 	Repair bool `json:"repair"`
 	// UserCode is the code the console asks for (a request without a code).
 	UserCode string `json:"user_code,omitempty"`
+	// Link is the page to approve the request on (already checked by
+	// safeLink when it was saved).
+	Link string `json:"link,omitempty"`
 	// PlatformURL and PlatformKey bind the request to the platform that
 	// made it, so it is never resumed against another one.
 	PlatformURL string `json:"platform_url"`

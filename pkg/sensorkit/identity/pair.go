@@ -27,7 +27,7 @@ import (
 
 var (
 	// ErrDenied: an administrator refused the pairing.
-	ErrDenied = errors.New("pairing: an administrator refused this sensor")
+	ErrDenied = errors.New("pairing: the request was refused: an administrator rejected it, or picked a fingerprint this host did not show")
 	// ErrExpired: the pairing request expired before it was approved and
 	// confirmed (and PairOptions.Retry was off).
 	ErrExpired = errors.New("pairing: the request expired before it was approved")
@@ -265,6 +265,7 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 		if err == nil {
 			return id, nil
 		}
+		err = explainUntrustedTLS(err)
 		var spent *spentCodeError
 		switch {
 		case errors.As(err, &spent):
@@ -273,11 +274,11 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 			why := fmt.Sprintf("The pairing code %s… expired (or was refused); it is single use.", spent.prefix)
 			if !o.Retry {
 				//nolint:staticcheck // ST1005: the sentence is shown to the operator as is
-				return nil, fmt.Errorf("%w: %s Run pair without a code and enter the code it prints in Sensors > Add sensor > "+
-					"Pair a sensor that shows a code, or run it again with a new code.", spent.cause, why)
+				return nil, fmt.Errorf("%w: %s Run pair without a code and open the link it prints, "+
+					"or run it again with a new code.", spent.cause, why)
 			}
-			_, _ = fmt.Fprintf(o.Out, "%s Starting a request without a code: enter the code below in Sensors > Add sensor > "+
-				"Pair a sensor that shows a code, or restart with a new SENSOR_PAIRING_CODE.\n", why)
+			_, _ = fmt.Fprintf(o.Out, "%s Starting a request without a code: open the new link below "+
+				"(or enter its code on the console's /activate page).\n", why)
 			o.spentPrefix = spent.prefix
 			o.Code, o.CodeLabel = "", ""
 			continue
@@ -363,6 +364,15 @@ func classifyPairError(err error, token bool) pairClass {
 	if errors.As(err, &ce) {
 		return pairRetry
 	}
+	// A certificate this host does not trust: retrying in a loop cannot
+	// change it, so say why once and wait.
+	var te *UntrustedTLSError
+	if errors.As(err, &te) {
+		if token {
+			return pairStop
+		}
+		return pairWait
+	}
 	if errors.Is(err, ErrKeyRegistered) {
 		return pairWait
 	}
@@ -434,13 +444,13 @@ func pairOnce(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o *
 	}
 	sas := pairing.ComputeSAS(signer.PublicKey(), platformPub, nonce, platformNonce)
 	p := &Pending{PairingID: start.PairingID, ExpiresAt: start.ExpiresAt, SAS: sas.String(), KeyID: signer.KeyID(),
-		CodeUsed: o.Code != "", CodePrefix: codePrefix(o.Code), Repair: o.RepairSensorID != "", UserCode: start.UserCode,
+		CodeUsed: o.Code != "", CodePrefix: codePrefix(o.Code), Repair: o.RepairSensorID != "", UserCode: start.UserCode, Link: safeLink(start.VerificationURIComplete),
 		PlatformURL: o.BaseURL, PlatformKey: pairing.Encode(platformPub), PollSeconds: start.PollSeconds,
 		SpentCodePrefix: o.spentPrefix}
 	if err := o.Store.SavePending(p); err != nil {
 		_, _ = fmt.Fprintf(o.Out, "WARNING: the pairing request could not be saved, so a restart cannot resume it: %v\n", err)
 	}
-	printInstructions(*o, start.ExpiresAt, start.UserCode, sas.String(), signer.KeyID())
+	printInstructions(*o, start.ExpiresAt, start.UserCode, safeLink(start.VerificationURIComplete), sas.String(), signer.KeyID())
 	id, err := waitAndConfirm(ctx, pc, signer, o, p, platformPub, false)
 	if errors.Is(err, errGone) {
 		return nil, ErrExpired
@@ -484,7 +494,7 @@ func resumePending(ctx context.Context, pc *pairClient, signer *sensorsig.Signer
 		return nil, nil, false
 	}
 	_, _ = fmt.Fprintln(o.Out, "Resuming the pairing request this sensor started earlier.")
-	printInstructions(*o, p.ExpiresAt, p.UserCode, p.SAS, signer.KeyID())
+	printInstructions(*o, p.ExpiresAt, p.UserCode, safeLink(p.Link), p.SAS, signer.KeyID())
 	id, err = waitAndConfirm(ctx, pc, signer, o, p, platformPub, true)
 	if errors.Is(err, errGone) {
 		o.Store.ClearPending()
@@ -736,7 +746,7 @@ func (c *pairClient) tlsPin() (element, pin string) {
 	return "", ""
 }
 
-func printInstructions(o PairOptions, expiresAt time.Time, userCode, sas, keyID string) {
+func printInstructions(o PairOptions, expiresAt time.Time, userCode, link, sas, keyID string) {
 	exp := expiresAt.Local().Format("15:04")
 	w := o.Out
 	if o.EnrollmentToken != "" && o.OrganizationEnrollment {
@@ -751,21 +761,26 @@ func printInstructions(o PairOptions, expiresAt time.Time, userCode, sas, keyID 
 		_, _ = fmt.Fprintf(w, "  Key:         %s\n\n", pairing.KeyFingerprint(keyID))
 		return
 	}
-	if o.Code == "" {
-		_, _ = fmt.Fprintf(w, "\nPair this sensor in OpenCTEM: Sensors > Add sensor > Pair a sensor that shows a code\n")
+	switch {
+	case link != "":
+		// One path: the code and the link to approve it on, whether the
+		// sensor started with a code (the Add sensor dialog finds it by
+		// itself) or without one.
+		_, _ = fmt.Fprintf(w, "\nPair this sensor: open %s\n", link)
 		_, _ = fmt.Fprintf(w, "  Code:        %s\n", userCode)
-		_, _ = fmt.Fprintf(w, "  (Or create a pairing code first under Sensors > Add sensor and start the sensor with SENSOR_PAIRING_CODE set to it.)\n")
-	} else {
+	case userCode != "" && o.Code == "":
+		_, _ = fmt.Fprintf(w, "\nPair this sensor in OpenCTEM: Sensors > Add sensor, or the console's /activate page\n")
+		_, _ = fmt.Fprintf(w, "  Code:        %s\n", userCode)
+	default:
 		shown := pairing.FormatCode(o.Code)
 		if o.CodeLabel != "" {
 			shown = "from " + o.CodeLabel
 		}
-		_, _ = fmt.Fprintf(w, "\nAttached to pairing code %s. In the console, check that the fingerprint matches before approving.\n",
-			shown)
+		_, _ = fmt.Fprintf(w, "\nAttached to pairing code %s: the console's Add sensor dialog shows this sensor.\n", shown)
 	}
 	_, _ = fmt.Fprintf(w, "  Fingerprint: %s    (expires %s)\n", sas, exp)
 	_, _ = fmt.Fprintf(w, "  Key:         %s\n", pairing.KeyFingerprint(keyID))
-	_, _ = fmt.Fprintf(w, "Approve it only if the console shows the same fingerprint. Waiting for approval...\n\n")
+	_, _ = fmt.Fprintf(w, "In the console, pick this fingerprint and approve. Waiting for approval...\n\n")
 }
 
 // validID accepts what the platform uses as ids (UUIDs): short, no path or
