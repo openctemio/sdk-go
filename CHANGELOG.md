@@ -8,6 +8,30 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.43.0 — 2026-10-31
+
+### Behaviour change: the sensor-local policy is optional and narrow-only
+
+- With no local policy file a sensor follows the platform's signed scope: it runs any job whose scope statement the platform signed (signature verification, the built-in deny list and the kill switch are unchanged). A local policy written by the host owner narrows that scope (intersection), never widens it; an explicit `targets: {allow: []}` still allows nothing. The platform never writes the file.
+- Pairing no longer writes `require_local_policy: true` into the identity. The stored field of existing identity files is still decoded but ignored. `SENSOR_REQUIRE_LOCAL_POLICY=true` is the only way to fail closed without a file (rule `no_local_policy`); unset or `false` follows the platform's scope.
+- The start log, `Describe()`, the doctor setting and the `policy.local` check no longer present a missing policy as something to fix. The report keeps its shape (`absent` with `required: false`, `absent` with `required: true`, `enforced` with `targets_allow` -1 for no allow list and 0 for an explicit empty list).
+- Upgrade: sensors paired by the earlier fail-closed releases that have no policy file now follow the platform's signed scope. Set `SENSOR_REQUIRE_LOCAL_POLICY=true` to keep fail closed.
+- Threat model: without a local policy a compromised platform could sign a wide scope. Host owners who do not trust the platform install a narrowing policy or set `SENSOR_REQUIRE_LOCAL_POLICY=true`.
+
+### Added: the sensor prints the link to approve it on
+
+- When the platform sends it (`verification_uri_complete`), `identity.Pair` prints `Pair this sensor: open <console>/activate?code=XXXX-XXXX` with the code and the fingerprint, whether the sensor started with a code or without one. A started-with-code sensor shows the same code the console's command carried. The link is printed only when it is an absolute http(s) URL of printable characters (no terminal control sequence from the platform reaches the operator's screen), and a resumed request prints it again.
+- The output asks the operator to pick this fingerprint in the console (the console now offers three and the platform checks the pick).
+
+### Changed: ctis v1.6.6 (more edge protection signatures)
+
+- Sensors recognise block and challenge pages of three more bot-management and WAF edges, including challenges answered with status 200, so a scan they stop is reported as a coverage gap with the edge and its vendor, never as no findings. Weak signs count only on a small page.
+
+### Fixed: an untrusted platform certificate is explained once instead of retried silently
+
+- A TLS chain signed by an authority the host does not trust (a private CA, or TLS interception) stops the retry loop with one sentence naming the presented authority's SHA-256 fingerprint and the fix (the console's command installs the CA, or `SENSOR_CA_CERT_FILE`), then waits like any other refusal (`UntrustedTLSError`).
+- A refused request now says it may have been closed by a wrong fingerprint pick, and the spent-code message points to the new link instead of console menu names.
+
 ## v0.42.2 — 2026-10-31
 
 ### Changed: pairing retries use full jitter and no longer exit on an unknown 4xx
