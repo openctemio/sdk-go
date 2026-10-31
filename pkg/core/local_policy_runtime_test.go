@@ -268,7 +268,7 @@ func TestBaseSensor_ReportsAbsentPolicy(t *testing.T) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if r := p.statuses[0].LocalPolicy; r == nil || r.State != LocalPolicyStateAbsent || r.Digest != "" || len(r.Warnings) == 0 {
+	if r := p.statuses[0].LocalPolicy; r == nil || r.State != LocalPolicyStateAbsent || r.Digest != "" || r.Required || len(r.Warnings) != 0 {
 		t.Fatalf("absent report %+v", r)
 	}
 	if r := p.puts[0].LocalPolicy; r == nil || r.State != LocalPolicyStateAbsent {

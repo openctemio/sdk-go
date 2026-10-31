@@ -13,13 +13,13 @@ package core
 // does not start.
 //
 // A sensor with no policy at all depends on whether it requires one
-// (LocalPolicy.Required: SENSOR_REQUIRE_LOCAL_POLICY, else whether its
-// paired identity was created by an SDK that fails closed). A sensor that
-// requires one refuses every job with network targets, custom templates and
+// (LocalPolicy.Required: SENSOR_REQUIRE_LOCAL_POLICY=true, else not). A
+// sensor that requires one refuses every job with network targets, custom templates and
 // out-of-band callbacks until a policy is installed (rule no_local_policy);
-// jobs without network targets still run. A legacy sensor works as before
-// (owner decision Q3 (a)): it reports local_policy "absent" with required
-// false, and warns.
+// jobs without network targets still run. A sensor that does not require one
+// follows the platform's signed scope (built-in deny list and kill switch
+// still apply): it reports local_policy "absent" with required false. A
+// local policy only narrows what the platform signed, never widens it.
 
 import (
 	"bytes"
@@ -63,8 +63,7 @@ const (
 	EnvKillSwitchFile = "SENSOR_KILL_SWITCH_FILE"
 	// EnvRequireLocalPolicy (true/false) decides whether the sensor fails
 	// closed without a local policy. Set, it wins; unset, the caller decides
-	// (LocalPolicyOptions.Required: the sensor kit requires a policy for an
-	// identity paired by an SDK that fails closed).
+	// (LocalPolicyOptions.Required; the sensor kit does not require one).
 	EnvRequireLocalPolicy = "SENSOR_REQUIRE_LOCAL_POLICY"
 
 	// LocalPolicyRuleNoPolicy is the rule of a job refused because the
@@ -636,10 +635,9 @@ func absentWarnings(required bool) []string {
 			"no local policy: network scans are refused until one is added (" + LocalPolicyRuleNoPolicy + "); " + noLocalPolicyHelp,
 		}
 	}
-	return []string{
-		"no local policy: this sensor was paired before local policies were required, so it accepts any target the platform sends outside the built-in deny list, and jobs may use out-of-band callbacks; custom templates run only when a pinned signing key signs the job. Fix: install " +
-			DefaultLocalPolicyPath + ", or set " + EnvRequireLocalPolicy + "=true to refuse network jobs without one",
-	}
+	// Not required: the sensor follows the platform's signed scope. That is
+	// the default mode, not something to fix.
+	return nil
 }
 
 // failsClosed reports whether lp has no policy and requires one: every
@@ -648,8 +646,9 @@ func (lp *LocalPolicy) failsClosed() bool { return lp != nil && !lp.present && l
 
 // Required reports whether the sensor requires a local policy: without
 // one it refuses every job with network targets (rule no_local_policy),
-// custom templates and out-of-band callbacks. False is a legacy install,
-// which without a policy admits any target outside the built-in deny list.
+// custom templates and out-of-band callbacks. False (the default) follows the
+// platform's signed scope: without a policy any target outside the built-in
+// deny list that the platform signed is admitted.
 func (lp *LocalPolicy) Required() bool { return lp != nil && lp.required }
 
 // WithRequired returns a copy of lp (of the absent policy when lp is nil)
@@ -1002,10 +1001,11 @@ func (lp *LocalPolicy) killSwitchReason() string {
 type LocalPolicyReport struct {
 	// State is LocalPolicyStateEnforced or LocalPolicyStateAbsent.
 	State string `json:"state"`
-	// Required is true when the sensor requires a local policy (new
-	// installs): absent, it refuses every job with network targets. State
-	// absent with Required false is a legacy install that admits any
-	// target outside the built-in deny list. Always sent; an SDK that
+	// Required is true when the host owner set
+	// SENSOR_REQUIRE_LOCAL_POLICY=true: absent, the sensor refuses every
+	// job with network targets. State absent with Required false follows
+	// the platform's signed scope (any target outside the built-in deny
+	// list that the platform signed). Always sent; an SDK that
 	// predates it sends none, which reads as false.
 	Required bool `json:"required"`
 	// Source is LocalPolicySourceFile or LocalPolicySourceEnv ("" when
@@ -1097,7 +1097,7 @@ func (lp *LocalPolicy) Describe() string {
 		return "absent and required: fail closed (jobs with network targets, custom templates and callbacks are refused)"
 	}
 	if !lp.Present() {
-		return "absent (legacy install: built-in deny list only)"
+		return "absent: follows the platform's signed scope (install a local policy only to narrow it)"
 	}
 	r := lp.Report()
 	s := r.Summary

@@ -290,7 +290,7 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "File holding the job signer's keys (same form as SENSOR_JOB_SIGNING_KEYS; not group- or world-writable). A pin read from a file is exclusive: the keys and root pinned from the platform at pairing are not trusted next to it. Setting both the variable and the file stops the sensor."},
 		settingsreg.Setting{Name: EnvJobSigningRootFile, Type: settingsreg.Path, Group: "policy",
 			Description: "File holding the offline job-signing root (same form as SENSOR_JOB_SIGNING_ROOT; not group- or world-writable). A pin read from a file is exclusive, as for SENSOR_JOB_SIGNING_KEYS_FILE. Setting both the variable and the file stops the sensor."},
-		settingsreg.Setting{Name: core.EnvRequireSignedJobs, Type: settingsreg.Bool, Default: "auto", Group: "policy",
+		settingsreg.Setting{Name: core.EnvRequireSignedJobs, Type: settingsreg.Bool, Default: "false", Group: "policy",
 			Description: "true: refuse every job without a valid signature from a pinned job signer; false: run unsigned jobs (signed ones are still verified), refused on a sensor that pinned the signer's keys or root at pairing (it may only raise the requirement). Unset: true for a sensor that pinned the signer's keys or root at pairing, false otherwise."},
 		settingsreg.Setting{Name: core.EnvDangerousAllowUnsignedJobs, Type: settingsreg.Bool, Group: "policy",
 			Description: "Development only: accept unsigned jobs although job-signing keys or a root are pinned; logs a warning at start and for every unsigned job."},
@@ -303,7 +303,7 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 		settingsreg.Setting{Name: core.EnvKillSwitchFile, Type: settingsreg.Path, Group: "policy",
 			Description: "A file whose presence stops every job."},
 		settingsreg.Setting{Name: core.EnvRequireLocalPolicy, Type: settingsreg.Bool, Default: "auto", Group: "policy",
-			Description: "true: without a local policy, refuse every job with network targets, custom templates and callbacks; false: legacy behavior. Unset: true for a sensor paired by an SDK that fails closed, false for older identities and API-key sensors."},
+			Description: "true: without a local policy, refuse every job with network targets, custom templates and callbacks. false or unset: without a local policy the sensor follows the platform's signed scope; a local policy only narrows it."},
 		settingsreg.Setting{Name: core.EnvSensorAllowPrivateTargets, Type: settingsreg.Enum, Enum: []string{"", "0", "1"}, Group: "policy",
 			Description: "1 allows private (RFC 1918 / ULA) targets; the local policy must allow them too."},
 		settingsreg.Setting{Name: core.EnvScanRoots, Type: settingsreg.List, Group: "policy",
@@ -455,8 +455,8 @@ func (k *Kit) reportLocalPolicyChecks(lp *core.LocalPolicy) {
 				Keys:    []string{core.EnvLocalPolicy, core.EnvAllowedRanges, core.EnvRequireLocalPolicy},
 				Summary: "no local policy: network scans are refused until one is added"})
 		default:
-			k.ReportCheck(core.ConfigCheck{ID: CheckLocalPolicy, Status: core.CheckWarn, Code: "absent",
-				Keys: []string{core.EnvLocalPolicy, core.EnvRequireLocalPolicy}, Summary: "no sensor-local policy is installed"})
+			k.ReportCheck(core.ConfigCheck{ID: CheckLocalPolicy, Status: core.CheckPass, Code: "absent",
+				Keys: []string{core.EnvLocalPolicy, core.EnvRequireLocalPolicy}, Summary: "no sensor-local policy: the sensor follows the platform's signed scope; install a local policy only to narrow it"})
 		}
 		switch {
 		case rep.Summary == nil || !rep.Summary.AllowCustomTemplates,
