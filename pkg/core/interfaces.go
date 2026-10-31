@@ -1085,6 +1085,27 @@ type LiveHost struct {
 	ResponseHeaders *ResponseHeaders `json:"response_headers,omitempty"`
 	// CNAMEs is the DNS alias chain of the host, bounded by SanitizeCNAMEs.
 	CNAMEs []string `json:"cnames,omitempty"`
+	// WebContent is the result of a web content fetch (capability
+	// monitor.web_content), one capture per fetched URL. It is passed through
+	// to ctis.LiveHostInput.WebContent, which bounds it again.
+	WebContent []WebCapture `json:"web_content,omitempty"`
+}
+
+// WebCapture is one fetched URL of a web content fetch: what the server
+// answered, never what a page would execute. Body is set only for a text
+// content type and is at most 512 KiB; SHA256 and Size describe all the bytes
+// read. The body never belongs in a log line.
+type WebCapture struct {
+	URL           string    `json:"url"`                 // The URL that was asked for
+	FinalURL      string    `json:"final_url,omitempty"` // Where redirects ended
+	StatusCode    int       `json:"status_code"`         // HTTP status of the final response
+	ContentType   string    `json:"content_type,omitempty"`
+	Size          int64     `json:"size"`                // Body bytes read
+	SHA256        string    `json:"sha256"`              // Lowercase hex SHA-256 of those bytes
+	Truncated     bool      `json:"truncated,omitempty"` // Reading stopped at the limit
+	Body          string    `json:"body,omitempty"`      // Text body, capped
+	BodyTruncated bool      `json:"body_truncated,omitempty"`
+	FetchedAt     time.Time `json:"fetched_at"`
 }
 
 // TLSLeaf is the leaf certificate an HTTP probe saw in a TLS handshake.
