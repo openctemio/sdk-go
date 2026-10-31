@@ -190,3 +190,47 @@ func TestLocalPolicy_V3HTTPReported(t *testing.T) {
 		t.Fatalf("defaults %+v", s)
 	}
 }
+
+const allowAllV2 = "apiVersion: openctem.io/sensor-policy/v2\ntargets:\n  allow: [\"*\"]\n"
+
+// targets.allow: ["*"] (v2): every target the platform signs, still inside the
+// built-in deny list, the deny entries and the private-range rule.
+func TestLocalPolicy_AllowAll(t *testing.T) {
+	lp := mustPolicy(t, allowAllV2+"  deny: [\"203.0.113.0/24\"]\n")
+	r := lp.Report()
+	if r.Schema != "v2" || r.Summary.Mode != "allow_all" || r.Summary.TargetsAllow != -1 {
+		t.Fatalf("report %+v", r.Summary)
+	}
+	if d := lp.Describe(); !strings.Contains(d, "everything the platform signs") {
+		t.Errorf("describe: %s", d)
+	}
+	ctx := t.Context()
+	for _, ok := range []string{"198.51.100.7", "app.example.org"} {
+		if err := lp.CheckTarget(ctx, ok); err != nil {
+			t.Errorf("%s refused under allow-all: %v", ok, err)
+		}
+	}
+	for _, no := range []string{"203.0.113.9", "169.254.169.254", "127.0.0.1", "10.1.2.3", "imds.corp.example.com"} {
+		if err := lp.CheckTarget(ctx, no); err == nil {
+			t.Errorf("%s allowed under allow-all", no)
+		}
+	}
+	if mustPolicy(t, "apiVersion: openctem.io/sensor-policy/v2\n").Report().Summary.Mode != "platform_scope" {
+		t.Error("no allow list is platform_scope")
+	}
+	if mustPolicy(t, fullPolicy).Report().Summary.Mode != "allow_list" {
+		t.Error("an allow list is allow_list")
+	}
+}
+
+func TestLocalPolicy_AllowAllRefusals(t *testing.T) {
+	for doc, want := range map[string]string{
+		"apiVersion: openctem.io/sensor-policy/v1\ntargets:\n  allow: [\"*\"]\n":                  "needs apiVersion",
+		"apiVersion: openctem.io/sensor-policy/v2\ntargets:\n  allow: [\"*\", \"10.0.0.0/8\"]\n":  "cannot be mixed",
+		"apiVersion: openctem.io/sensor-policy/v2\ntargets:\n  allow: [\"example.com\", \"*\"]\n": "cannot be mixed",
+	} {
+		if _, err := ParseLocalPolicy([]byte(doc), LocalPolicyOptions{}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", doc, err, want)
+		}
+	}
+}

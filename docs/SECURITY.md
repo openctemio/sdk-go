@@ -279,6 +279,17 @@ about the HTTPS requests (pairing, protocol v2, the HTTPS binding, the
 certificate requests that fetch that bundle). See
 [Platform TLS pin](#platform-tls-pin-stored-at-pairing).
 
+#### Allow everything the platform signs: `targets.allow: ["*"]`
+
+Schema v2 and later accept the single entry `"*"` in `targets.allow`: the sensor
+allows every target the platform signs. It is not an allow list: the built-in
+deny list, `targets.deny` and the private-range rules (`allow_private` plus the
+host switch) still apply. `"*"` mixed with other entries is refused as
+ambiguous, and schema v1 (frozen) refuses it. `policy validate` prints "allows
+everything the platform signs" and the policy summary the sensor reports has
+`mode: allow_all` (`allow_list` for a list, `platform_scope` without
+`targets.allow`).
+
 #### Domain patterns in `targets.allow` and `targets.deny`
 
 | Entry | Covers |
