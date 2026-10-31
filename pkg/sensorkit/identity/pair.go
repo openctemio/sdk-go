@@ -34,6 +34,11 @@ var (
 	// (malformed, unknown, expired, used up or revoked; it does not say
 	// which). Ask whoever issued it for a new one.
 	ErrEnrollmentRefused = errors.New("pairing: the platform refused the enrollment token (unknown, expired, used up or revoked)")
+	// ErrKeyRegistered: the platform registered this key to a sensor
+	// before (an administrator approved it once, whatever happened next);
+	// a key pairs only once. The error Pair returns wraps it and names the
+	// identity directory.
+	ErrKeyRegistered = errors.New("pairing: the platform already registered this sensor's key (it was approved once); a key pairs only once")
 )
 
 // ClockSkewError is the platform refusing a request because its signature
@@ -238,6 +243,10 @@ func transientPairError(err error, token bool) bool {
 			return true
 		case http.StatusInternalServerError, http.StatusUnauthorized:
 			return !token
+		case http.StatusConflict:
+			// Another open request holds the key (a concurrent start):
+			// it clears once that request closes.
+			return he.problem == protov2.ProblemPairingKeyBusy
 		}
 		return false
 	}
@@ -262,6 +271,10 @@ func pairOnce(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o P
 		var he *httpError
 		if o.EnrollmentToken != "" && errors.As(err, &he) && he.status == http.StatusUnauthorized {
 			return nil, ErrEnrollmentRefused
+		}
+		if errors.As(err, &he) && he.status == http.StatusConflict && he.problem == protov2.ProblemPairingKeyRegistered {
+			return nil, fmt.Errorf("%w. Restore this sensor's saved identity, or remove its key (%s) so it generates a new one, "+
+				"then pair again with a new code", ErrKeyRegistered, o.Store.Dir())
 		}
 		return nil, fmt.Errorf("pairing: start: %w", err)
 	}
@@ -545,6 +558,9 @@ type pairClient struct {
 type httpError struct {
 	status int
 	body   string
+	// problem is the problem type of a problem answer ("" otherwise),
+	// read from the whole body before it is shortened.
+	problem protov2.ProblemType
 }
 
 func (e *httpError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.status, e.body) }
@@ -598,7 +614,8 @@ func (c *pairClient) do(ctx context.Context, o PairOptions, method, path string,
 			}
 		}
 		if resp.StatusCode != want {
-			return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(data[:min(len(data), 300)]))}
+			return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(data[:min(len(data), 300)])),
+				problem: protov2.ParseProblem(data).Name()}
 		}
 		if out != nil {
 			if err := json.Unmarshal(data, out); err != nil {
