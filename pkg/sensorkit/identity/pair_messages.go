@@ -33,7 +33,7 @@ func safeLink(raw string) string {
 	return raw
 }
 
-// UntrustedTLSError: the platform presented a certificate chain this host
+// UntrustedTLSError reports that the platform presented a certificate chain this host
 // does not trust (a private certificate authority, or something between the
 // sensor and the platform). Retrying cannot fix it.
 type UntrustedTLSError struct {
