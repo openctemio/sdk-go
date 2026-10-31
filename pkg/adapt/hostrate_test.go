@@ -432,3 +432,31 @@ func TestMarkGapKeepsTheStrongestReasonAndTheRate(t *testing.T) {
 		t.Fatalf("gaps %+v", gaps)
 	}
 }
+
+// A host given up for resets is up and refuses the connections (cause
+// reset); one given up for timeouts did not answer (no_answer). A breaker
+// that refused a connection while open names the cause of its trip.
+func TestBreakerGapNamesTheCause(t *testing.T) {
+	for _, tc := range []struct {
+		reason, cause string
+	}{
+		{ReasonReset, GapCauseReset},
+		{ReasonTimeout, GapCauseNoAnswer},
+		{ReasonRefused, GapCauseRefused},
+		{"other", ""},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			c, _ := testCtl(t, 1000)
+			for range TargetRate.BreakerFailures {
+				c.Report("h", Event{Signal: Failed, Reason: tc.reason})
+			}
+			if err := c.Acquire(context.Background(), "h"); !errors.Is(err, ErrHostUnavailable) {
+				t.Fatalf("breaker not open: %v", err)
+			}
+			s := c.Summary()
+			if s.GapsTotal != 1 || s.Gaps[0].Reason != GapBreakerOpen || s.Gaps[0].Cause != tc.cause {
+				t.Fatalf("gaps %+v, want breaker_open with cause %q", s.Gaps, tc.cause)
+			}
+		})
+	}
+}
