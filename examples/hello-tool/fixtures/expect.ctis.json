@@ -1,0 +1,34 @@
+{
+  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "assets": [
+    {
+      "id": "target-t1",
+      "name": "{{fixture.url}}",
+      "type": "http_service",
+      "value": "{{fixture.url}}"
+    }
+  ],
+  "findings": [
+    {
+      "asset_ref": "target-t1",
+      "rule_id": "hello-tool/xcto-missing",
+      "severity": "low",
+      "title": "X-Content-Type-Options header missing",
+      "type": "misconfiguration",
+      "web": {
+        "method": "GET",
+        "url": "{{fixture.url}}"
+      }
+    }
+  ],
+  "metadata": {
+    "properties": {
+      "provenance": "<provenance>"
+    },
+    "source_type": "scanner"
+  },
+  "tool": {
+    "name": "hello-tool"
+  },
+  "version": "1.6"
+}
