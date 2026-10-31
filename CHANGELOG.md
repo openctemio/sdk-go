@@ -8,6 +8,20 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.44.0 — 2026-10-31
+
+### Added: `targets.allow: ["*"]` in local policy schema v2
+
+- A single `"*"` entry (schema v2 and later) means every target the platform signs, still inside the built-in deny list, `targets.deny` and the private-range rules. Mixed with other entries it is refused; schema v1 stays frozen and refuses it. The reported policy summary gains `mode` (`allow_all`, `allow_list`, `platform_scope`) and `policy validate` says "everything the platform signs".
+
+### Added: SENSOR_CA_SHA256 makes a sensor trust a private platform CA by itself
+
+- With `SENSOR_CA_SHA256=<root sha256>` (comma separated for rotation) a sensor whose platform certificate comes from a private CA fetches the platform's public CA bundle and trusts only a certificate that matches the pin and signs the chain the server presents; it keeps it in its state directory. Without a pin nothing is trusted automatically. `SENSOR_CA_CERT_FILE` still works for air-gapped hosts.
+
+### Changed: clearer untrusted-certificate errors
+
+- The error lists every certificate the platform presented (name and SHA-256) and names the root authority the top one needs (the platform does not send it). A `SENSOR_CA_CERT_FILE` that cannot be read or is not PEM is refused with its path, and one that holds only an intermediate is called out.
+
 ## v0.43.0 — 2026-10-31
 
 ### Behaviour change: the sensor-local policy is optional and narrow-only
