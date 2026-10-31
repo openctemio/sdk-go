@@ -1,0 +1,42 @@
+# hello-tool: the smallest useful OpenCTEM tool. It reports web services that
+# answer without the X-Content-Type-Options header. The runtime trusts this
+# file, never the program: keep every fact about the tool here.
+apiVersion: openctem.io/tool/v1
+name: hello-tool
+version: "0.1.0"
+description: Reports web services served without the X-Content-Type-Options header.
+publisher: example
+license: Apache-2.0
+presentation:
+  display_name: Hello tool
+class: target-scan
+tier: T1
+implements:
+  - capability: vuln.templates@1
+    params:
+      rate: {}
+consumes: [http_service, website, web_application]
+produces: ["finding:misconfiguration"]
+config:
+  additionalProperties: false
+  properties:
+    rate:
+      description: "Maximum requests per second."
+      maximum: 100
+      minimum: 1
+      type: integer
+      x-octm-scope: scan
+  type: object
+permissions:
+  network: targets
+resources: {}
+safety:
+  rate_param: rate
+run:
+  argv: [./bin/hello-tool]
+selftest:
+  - name: missing-header
+    task: fixtures/task.json
+    expect: fixtures/expect.ctis.json
+protocol:
+  min: 1

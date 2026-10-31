@@ -315,6 +315,7 @@ it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
 ## Examples
 
 See [examples/](examples/) for complete examples:
+- A tool in Go in one file, and the 15-minute walk-through for writing one ([hello-tool](examples/hello-tool), [docs/tool-quickstart.md](docs/tool-quickstart.md))
 - A tool in Python with no SDK, and how to check it with the conformance kit ([python-adapter](examples/python-adapter), [docs/adapter-protocol.md](docs/adapter-protocol.md))
 - A complete sensor on `pkg/sensorkit` ([minimal-sensor](examples/minimal-sensor))
 - A custom scanner and adapter ([custom-scanner](examples/custom-scanner), [custom-adapter](examples/custom-adapter))

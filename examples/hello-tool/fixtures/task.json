@@ -1,0 +1,9 @@
+{
+  "serve": {
+    "body": "<html><head><title>fixture</title></head><body>ok</body></html>",
+    "headers": {"Content-Type": "text/html"},
+    "status": 200
+  },
+  "id": "selftest-missing-header",
+  "targets": [{"ref": "t1", "type": "http_service", "value": "{{fixture.url}}"}]
+}
