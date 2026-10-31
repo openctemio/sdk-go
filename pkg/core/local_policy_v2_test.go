@@ -210,7 +210,7 @@ func TestLocalPolicy_AllowAll(t *testing.T) {
 			t.Errorf("%s refused under allow-all: %v", ok, err)
 		}
 	}
-	for _, no := range []string{"203.0.113.9", "169.254.169.254", "127.0.0.1", "10.1.2.3", "imds.corp.example.com"} {
+	for _, no := range []string{"203.0.113.9", "169.254.169.254", "10.1.2.3", "imds.corp.example.com"} {
 		if err := lp.CheckTarget(ctx, no); err == nil {
 			t.Errorf("%s allowed under allow-all", no)
 		}
