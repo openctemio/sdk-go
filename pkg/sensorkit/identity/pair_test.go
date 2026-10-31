@@ -36,6 +36,7 @@ type fakePlatform struct {
 	status      string
 	starts      int
 	lastCode    string
+	codes       []string // the code of every start
 	confirmed   bool
 	sas         pairing.SAS
 	unsigned    int
@@ -103,6 +104,7 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.commitment, _ = pairing.DecodeFixed(req.Commitment, 32)
 		f.nonceP, _ = pairing.NewNonce()
 		f.lastCode = req.Code
+		f.codes = append(f.codes, req.Code)
 		f.lastToken = req.EnrollmentToken
 		f.lastScope = req.EnrollmentScope
 		f.starts++
@@ -394,13 +396,13 @@ func TestStoreKeyMismatchIsRefused(t *testing.T) {
 	if _, _, err := s.Load(); err == nil || !strings.Contains(err.Error(), sg.KeyID()) {
 		t.Fatalf("err = %v", err)
 	}
-	// RotateKey makes a new key and drops the identity.
+	// RotateKey stages a new key and leaves the identity and the key alone.
 	ng, err := s.RotateKey()
 	if err != nil || ng.KeyID() == sg.KeyID() {
 		t.Fatalf("rotate: %v", err)
 	}
-	if _, _, err := s.Load(); !errors.Is(err, ErrNoIdentity) {
-		t.Fatalf("after rotate: %v", err)
+	if got, err := s.LoadKey(); err != nil || got.KeyID() != sg.KeyID() {
+		t.Fatalf("signing.key changed by RotateKey: %v", err)
 	}
 }
 

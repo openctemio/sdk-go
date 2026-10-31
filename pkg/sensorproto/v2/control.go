@@ -323,12 +323,13 @@ const (
 	// clock or the platform's is wrong. Problem.ServerTime and
 	// Problem.ClockOffsetSeconds say by how much.
 	ProblemClockSkew ProblemType = "clock-skew"
-	// ProblemPairingKeyRegistered: a pairing start whose key was already
-	// registered to a sensor; a key pairs only once, so the sensor needs a
-	// new key (or its saved identity back).
+	// ProblemPairingNotFound: no such pairing request (expired or purged).
+	ProblemPairingNotFound ProblemType = "pairing-not-found"
+	// ProblemPairingKeyRegistered: the key was registered to a sensor by an
+	// approval and can never pair again; not retryable.
 	ProblemPairingKeyRegistered ProblemType = "pairing-key-registered"
-	// ProblemPairingKeyBusy: another open pairing request holds the key;
-	// retry after the advised delay.
+	// ProblemPairingKeyBusy: another request holds the key right now;
+	// retryable after the Retry-After delay.
 	ProblemPairingKeyBusy ProblemType = "pairing-key-busy"
 )
 

@@ -227,7 +227,10 @@ func (k *Kit) resolveIdentity() error {
 		// organization token counts the key once, so asking again is free.
 		Retry: token == "" || organization,
 		// A clock skew, a rate limit or an unavailable platform is waited
-		// out here with backoff, not by exiting into a restart loop.
+		// out here with jittered backoff, and any other refusal is
+		// printed once and retried no sooner than 5 minutes later, not
+		// by exiting into a restart loop. A spent pairing code is never
+		// resent: the request falls back to one without a code.
 		RetryTransient: true,
 		Out:            k.errw,
 		UserAgent:      productToken(k.opts.ProductName, k.opts.Version),
