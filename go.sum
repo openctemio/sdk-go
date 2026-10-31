@@ -259,6 +259,8 @@ github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJw
 github.com/opencontainers/image-spec v1.1.1/go.mod h1:qpqAh3Dmcf36wStyyWU+kCeDgrGnAve2nCC8+7h8Q0M=
 github.com/openctemio/ctis v1.6.4-0.20261026080002-68fec37977b4 h1:py/WPNS3ErXCYGtOmOfDgdQzxDEUARhkV2JHbK7yh/s=
 github.com/openctemio/ctis v1.6.4-0.20261026080002-68fec37977b4/go.mod h1:2JPNuKKM8Se951SQ2dqNSzf+0wyFJe3tEm1BGd2zbDI=
+github.com/openctemio/ctis v1.6.5-0.20261031064405-bb6bfa3b0644 h1:mc+IJbugpm/r08knSqiCxcoGZ2VkFWrDFLCau8G1N9o=
+github.com/openctemio/ctis v1.6.5-0.20261031064405-bb6bfa3b0644/go.mod h1:2JPNuKKM8Se951SQ2dqNSzf+0wyFJe3tEm1BGd2zbDI=
 github.com/pborman/getopt v0.0.0-20170112200414-7148bc3a4c30/go.mod h1:85jBQOZwpVEaDAr341tbn15RS4fCAsIst0qp7i8ex1o=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c/go.mod h1:7rwL4CYBLnjLxUqIJNnCWiEdr3bn6IUYi15bNlnbCCU=
