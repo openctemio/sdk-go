@@ -60,6 +60,9 @@ type fakePlatform struct {
 	helloAsked     int
 	// startReplies answer the next starts, one each, before a normal start.
 	startReplies []func(w http.ResponseWriter)
+	// link: a platform that answers every start with its code and the
+	// approval links (the code the start carried, else a new one).
+	link string
 }
 
 func newFakePlatform(t *testing.T) (*fakePlatform, *httptest.Server) {
@@ -130,6 +133,13 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			PlatformSignature: pairing.Encode(sig), ExpiresAt: exp, PollSeconds: 1}
 		if req.Code == "" {
 			resp.UserCode = "K7QM-4ZTD"
+		}
+		if f.link != "" {
+			if req.Code != "" {
+				resp.UserCode = pairing.FormatCode(req.Code)
+			}
+			resp.VerificationURI = f.link
+			resp.VerificationURIComplete = f.link + "?code=" + resp.UserCode
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -260,7 +270,8 @@ func TestPairReverseModeSendsTheCodeAndPrintsNoCode(t *testing.T) {
 	}
 }
 
-// A code from the configuration is named by its source, never printed.
+// A code from the configuration is named by its source, never printed, on a
+// platform that sends no approval link.
 func TestPairReverseModeWithCodeLabelHidesTheCode(t *testing.T) {
 	f, srv := newFakePlatform(t)
 	var out bytes.Buffer
