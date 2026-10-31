@@ -8,6 +8,34 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.41.0 — 2026-10-31
+
+### Security: ports.allow now applies to a capability job's standard params
+
+- A job's standard `params` become the tool's config at run time, but the local policy checked only `config` and `scanner_config`, so a sensor with `ports.allow` still ran a job that sent `params.ports` outside the list, or `params.top_n` / `params.top_ports` (the tool picks the ports). The policy now refuses both: a port-list param (by the capability's catalog type, or named `ports`) must lie inside `ports.allow`, and a top-N param is refused while `ports.allow` is set, as it already is in `config`. A null value is no request; without `ports.allow` nothing changes.
+
+### Security: a top-N port job no longer bypasses the local policy's ports.allow
+
+- With `ports.allow` set, a scan job whose settings ask the tool for its own port list (`top_ports`, `top_n`, in `config` or `scanner_config`) is refused with rule `ports.allow`: the sdk cannot prove the tool's list lies inside the allow-list. Before, only the `ports` setting was checked, so the platform's default top-1000 port set ran outside the allow-list. Name the ports in the job's `ports` setting, or leave `ports.allow` unset for a sensor that may scan any port. Jobs on a sensor without `ports.allow` are unchanged. `ports` values `full`/`top-N` were already refused; `scanner_config` is now checked as well.
+
+### Behaviour change: a scan that finds nothing still pushes a report
+
+- A scan command whose scanner produced no output now pushes one empty report bound to the command (tool name and version, no assets, no findings), instead of pushing nothing. The report's `coverage_type` follows the same rules as a report with findings: `full` only when every target was covered, `partial` when the run stopped, a host was a coverage gap or a target was unreached. Which targets were covered is in the command result's `target_outcomes`. Without this report the platform could not tell "looked and found nothing" from "never looked", so findings the scan no longer saw stayed open. The report travels through the same authenticated, command-bound push as any other; a platform that does not use it ignores it (no asset is created).
+
+### Behaviour change: a scan job whose every target does not resolve completes per target
+
+- At the sensor-local policy's admission, a scan job whose every refused target is a name that does not resolve now completes without running, with each name in `metadata.refused_targets` (reason `unresolvable`, `dns` `name_gone` or `resolver_failed`) and one outcome per name, instead of failing as a whole. The platform can then settle each name on its own. No tool sees any of the names; a job with any other refusal still fails.
+
+### Added: lookup-only DNS jobs report a name without an answer instead of refusing it
+
+- A job naming the lookup-only capability `resolve.dns` checks a name that does not resolve against the domain deny list and, with `targets.allow` set, the allowed domains only, and reports it per target as `unresolvable`; a name outside the allowed domains is refused as `denied_by_policy`. Every capability that connects to its targets keeps refusing a name whose addresses cannot be checked. See `docs/SECURITY.md`.
+
+### Added: commit manifest and resume from held segments
+
+- `PushResultsV2` sends the commit manifest of a segmented report to a platform that lists `results_manifest` on hello: each segment's SHA-256 over its bytes before Content-Encoding, its size and its asset and finding counts, the totals and the report hash (`protov2.ReportRoot`: SHA-256 over the segment hashes in order). The platform compares every value with what it received; a report it cannot verify is not used to close findings by absence. Older platforms get the plain commit.
+- A push resumed from `V2Progress` (the outbox's next delivery after a restart) asks the platform which segments of the report it already holds (`segments.held` on the status) and does not send those again.
+- `protov2`: `CommitRequest.Segments/Totals/ReportSHA256`, `SegmentManifest`, `Status.HeldSegments`, `Status.Integrity`, `FeatureResultsManifest`, `ReportRoot`. The conformance fake verifies the manifest when `SetResultsManifest(true)`.
+
 ## v0.40.0 — 2026-10-28
 
 ### Added: an eval harness for AI playbooks, and `openctem playbook init|test`
