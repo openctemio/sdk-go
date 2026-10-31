@@ -99,3 +99,18 @@ func TestPairExplainsAnUntrustedCertificate(t *testing.T) {
 		t.Fatal("an untrusted certificate must wait, not retry in a loop")
 	}
 }
+
+// The message lists every presented certificate and names the root the top one
+// needs, since the platform sends the intermediate and not the root.
+func TestUntrustedTLSErrorListsTheChain(t *testing.T) {
+	e := &UntrustedTLSError{RootSHA256: "15:BA", Presented: []PresentedCert{
+		{Subject: "platform", Issuer: "OpenCTEM Internal CA - 2026 ECC Intermediate", SHA256: "AA:11"},
+		{Subject: "OpenCTEM Internal CA - 2026 ECC Intermediate", Issuer: "OpenCTEM Internal CA - 2026 ECC Root", SHA256: "15:BA"},
+	}}
+	for _, want := range []string{"[1] platform (SHA-256 AA:11)", "[2] OpenCTEM Internal CA - 2026 ECC Intermediate (SHA-256 15:BA)",
+		`issued by "OpenCTEM Internal CA - 2026 ECC Root"`, "you need that root", "SENSOR_CA_SHA256"} {
+		if !strings.Contains(e.Error(), want) {
+			t.Fatalf("message lacks %q:\n%v", want, e)
+		}
+	}
+}

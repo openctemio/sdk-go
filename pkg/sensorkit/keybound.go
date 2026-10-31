@@ -298,3 +298,8 @@ func productToken(name, version string) string {
 	}
 	return name + "/" + version
 }
+
+func validCASHA256(v string) error {
+	_, err := ParseCAPins(v)
+	return err
+}
