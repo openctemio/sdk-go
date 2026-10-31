@@ -128,7 +128,44 @@ type Gap struct {
 	// "blocked".
 	Edge   string `json:"edge,omitempty"`
 	Vendor string `json:"vendor,omitempty"`
+	// Cause and Cert say what a recheck of a breaker_open host found
+	// (pkg/tlsprobe): Cause is one of the GapCause values, Cert a problem of
+	// the certificate the host served (GapCert values, "" when it is fine or
+	// none was seen). Additive: older receivers ignore them and still see
+	// Reason "breaker_open".
+	Cause string `json:"cause,omitempty"`
+	Cert  string `json:"cert,omitempty"`
 }
+
+// Gap causes: what a recheck of a host the breaker gave up found.
+const (
+	// GapCauseHTTPReset: the host accepts the connection (and completes the
+	// TLS handshake) but resets or closes it on every HTTP request. The
+	// host is up; it refuses the scanner's requests (it may block the
+	// scanner's address, or its backend is down).
+	GapCauseHTTPReset = "http_reset"
+	// GapCauseReset: the host accepts connections, then resets them; which
+	// layer (the TLS handshake or the HTTP request) was not seen.
+	GapCauseReset = "reset"
+	// GapCauseTLSFailed: the host accepts the connection but the TLS
+	// handshake fails.
+	GapCauseTLSFailed = "tls_failed"
+	// GapCauseRefused: the host refuses the connection (the port is closed).
+	GapCauseRefused = "refused"
+	// GapCauseNoAnswer: no answer at all (filtered, down, or no path).
+	GapCauseNoAnswer = "no_answer"
+	// GapCauseAnswered: the host answered the recheck; it failed the tool's
+	// requests only for a while.
+	GapCauseAnswered = "answered"
+)
+
+// Certificate problems a recheck saw (Gap.Cert).
+const (
+	GapCertExpired      = "expired"
+	GapCertNotYetValid  = "not_yet_valid"
+	GapCertNameMismatch = "name_mismatch"
+	GapCertSelfSigned   = "self_signed"
+)
 
 // Change is one move of a host's rate or breaker.
 type Change struct {
@@ -198,6 +235,9 @@ type hostState struct {
 	gapDetail string
 	gapEdge   string
 	gapVendor string
+	gapCause  string
+	// tripReason is the failure reason of the breaker's last trip.
+	tripReason string
 }
 
 // NewHostRate returns the controller of one task with the given ceiling
@@ -489,9 +529,13 @@ func (c *HostRate) trip(h *hostState, now time.Time, reason string, ch *[]Change
 	}
 	h.trips++
 	h.fails, h.probing = 0, false
+	h.tripReason = reason
 	if h.trips >= c.b.BreakerMaxTrips {
 		h.brk = down
 		c.setGap(h, GapBreakerOpen, fmt.Sprintf("given up after %d breaker trips (%s)", h.trips, reason))
+		if h.gap == GapBreakerOpen {
+			h.gapCause = gapCauseOf(reason)
+		}
 		*ch = append(*ch, Change{Host: h.name, From: h.rate, To: 0, Reason: ReasonGaveUp})
 		return
 	}
@@ -515,7 +559,12 @@ func (c *HostRate) close(h *hostState, ch *[]Change) {
 
 // lose records a connection the controller refused: the host's coverage is
 // incomplete.
-func (c *HostRate) lose(h *hostState, reason, detail string) { c.setGap(h, reason, detail) }
+func (c *HostRate) lose(h *hostState, reason, detail string) {
+	c.setGap(h, reason, detail)
+	if reason == GapBreakerOpen && h.gap == GapBreakerOpen && h.gapCause == "" {
+		h.gapCause = gapCauseOf(h.tripReason)
+	}
+}
 
 // gapRank orders gap reasons: a host keeps its strongest one.
 func gapRank(r string) int {
@@ -554,8 +603,24 @@ func (c *HostRate) setEdgeGap(h *hostState, v edgeprotect.Verdict) {
 
 func (c *HostRate) setGap(h *hostState, reason, detail string) {
 	if gapRank(reason) > gapRank(h.gap) {
-		h.gap, h.gapDetail = reason, detail
+		h.gap, h.gapDetail, h.gapCause = reason, detail, ""
 	}
+}
+
+// gapCauseOf is the Gap.Cause of a host given up for failures of reason:
+// a reset says the host accepted the connections (it is up and refuses
+// them), a timeout that nothing answered, a refusal that the port is
+// closed. Any other reason names no cause.
+func gapCauseOf(reason string) string {
+	switch reason {
+	case ReasonReset:
+		return GapCauseReset
+	case ReasonTimeout:
+		return GapCauseNoAnswer
+	case ReasonRefused:
+		return GapCauseRefused
+	}
+	return ""
 }
 
 func (c *HostRate) emit(ch []Change) {
@@ -609,7 +674,7 @@ func (c *HostRate) Summary() Summary {
 		if h.gap != "" {
 			s.GapsTotal++
 			if len(s.Gaps) < c.b.MaxGaps {
-				s.Gaps = append(s.Gaps, Gap{Host: h.name, Reason: h.gap, Detail: h.gapDetail, Edge: h.gapEdge, Vendor: h.gapVendor})
+				s.Gaps = append(s.Gaps, Gap{Host: h.name, Reason: h.gap, Detail: h.gapDetail, Edge: h.gapEdge, Vendor: h.gapVendor, Cause: h.gapCause})
 			}
 		}
 	}
