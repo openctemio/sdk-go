@@ -43,8 +43,8 @@ const (
 	// EnvCAFingerprint pins the platform CA by its SHA-256 fingerprint
 	// (install snippet; api RFC-052).
 	EnvCAFingerprint = "SENSOR_CA_FINGERPRINT"
-	// EnvPairingCode is the code an administrator created with "expect a
-	// sensor": a sensor with no identity attaches to it on first start.
+	// EnvPairingCode is a pairing code an administrator created first
+	// ("Create a pairing code first" in the console): a sensor with no identity attaches to it on first start.
 	EnvPairingCode = "SENSOR_PAIRING_CODE"
 	// EnvInstanceEnrollmentToken is a single-use instance enrollment token
 	// (octe_…, api RFC-100 §7): a sensor with no identity enrolls with it as
