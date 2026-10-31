@@ -585,9 +585,10 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 	id := &Identity{PlatformURL: o.BaseURL, SensorID: granted.SensorID, TenantID: granted.TenantID,
 		TenantName: granted.TenantName, Name: granted.Name, KeyID: granted.KeyID, Scope: granted.Scope,
 		PlatformKey: pairing.Encode(platformPub), PairedAt: time.Now().UTC(),
-		// A sensor paired from now on fails closed without a local policy,
-		// and never starts out accepting unsigned jobs.
-		RequireLocalPolicy: true, RequireSignedJobs: !o.AllowUnsignedJobs}
+		// A sensor never starts out accepting unsigned jobs. The local
+		// policy is optional: without one the sensor follows the platform's
+		// signed scope (RequireLocalPolicy is no longer written).
+		RequireSignedJobs: !o.AllowUnsignedJobs}
 	id.PlatformTLSPinElement, id.PlatformTLSPin = pc.tlsPin()
 	var err error
 	if id.JobSigningKeys, id.JobSigningRoot, err = pc.jobSigning(ctx, o); err != nil {

@@ -320,7 +320,7 @@ func TestLocalPolicy_Absent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lp.Present() || lp.Report().State != LocalPolicyStateAbsent || lp.Report().Summary != nil || len(lp.Report().Warnings) == 0 {
+	if lp.Present() || lp.Report().State != LocalPolicyStateAbsent || lp.Report().Summary != nil || lp.Report().Required || len(lp.Report().Warnings) != 0 {
 		t.Fatalf("absent report %+v", lp.Report())
 	}
 	cmd := cmdWith("a", "scan", map[string]any{"scanner": "anything", "target": "192.0.2.1",

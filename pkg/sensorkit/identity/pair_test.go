@@ -248,9 +248,9 @@ func TestPairForwardMode(t *testing.T) {
 	if strings.Contains(string(b), "PRIVATE") {
 		t.Fatal("identity.json holds key material")
 	}
-	// A sensor paired by this SDK fails closed without a local policy.
-	if !id.RequireLocalPolicy || !got.RequireLocalPolicy || !strings.Contains(string(b), `"require_local_policy": true`) {
-		t.Fatalf("the identity does not require a local policy: %s", b)
+	// Pairing no longer writes the fail-closed flag: the local policy is optional.
+	if id.RequireLocalPolicy || got.RequireLocalPolicy || strings.Contains(string(b), "require_local_policy") {
+		t.Fatalf("pairing wrote require_local_policy: %s", b)
 	}
 }
 

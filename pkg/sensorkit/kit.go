@@ -201,9 +201,10 @@ type Options struct {
 	// core.DefaultLocalPolicyPath when that file exists). Without a file,
 	// SENSOR_ALLOWED_RANGES / SENSOR_ALLOWED_PORTS make a shorthand policy;
 	// without those the policy is absent and reported local_policy
-	// "absent": a sensor paired by this SDK (or with
-	// SENSOR_REQUIRE_LOCAL_POLICY=true) then refuses every job with network
-	// targets; a legacy install works as before (ResolveRequireLocalPolicy).
+	// "absent": the sensor follows the platform's signed scope (built-in
+	// deny list and kill switch still apply), unless
+	// SENSOR_REQUIRE_LOCAL_POLICY=true, which refuses every job with
+	// network targets (ResolveRequireLocalPolicy).
 	LocalPolicyPath string
 	// WorkDir is where scans write; its free disk is part of the slot
 	// sizing (default StateDir).
@@ -766,10 +767,10 @@ const (
 )
 
 // ResolveRequireLocalPolicy decides whether a sensor without a local policy
-// fails closed: SENSOR_REQUIRE_LOCAL_POLICY when set, else true for an
-// identity paired by an SDK that fails closed (identity.RequireLocalPolicy)
-// and false for a legacy identity, a bearer-key sensor or no identity.
-// from is "env", "identity" or "" (the legacy default).
+// fails closed: SENSOR_REQUIRE_LOCAL_POLICY when set, else false (the sensor
+// follows the platform's signed scope). The identity's stored
+// require_local_policy flag, written by earlier releases, is ignored.
+// from is "env" or "" (the default). id is kept for callers.
 func ResolveRequireLocalPolicy(id *identity.Identity) (required bool, from string, err error) {
 	v, set, err := core.RequireLocalPolicyFromEnv(nil)
 	if err != nil {
@@ -777,9 +778,6 @@ func ResolveRequireLocalPolicy(id *identity.Identity) (required bool, from strin
 	}
 	if set {
 		return v, requireFromEnv, nil
-	}
-	if id != nil && id.RequireLocalPolicy {
-		return true, requireFromIdentity, nil
 	}
 	return false, "", nil
 }
@@ -869,12 +867,10 @@ func (k *Kit) applyRequireLocalPolicy() error {
 	switch {
 	case required && from == requireFromEnv:
 		_, _ = fmt.Fprintf(k.out, "  Local policy mode: fail closed (%s=true): without a policy, jobs with network targets are refused\n", core.EnvRequireLocalPolicy)
-	case required:
-		_, _ = fmt.Fprintf(k.out, "  Local policy mode: fail closed (paired by this SDK): without a policy, jobs with network targets are refused\n")
 	case from == requireFromEnv:
-		_, _ = fmt.Fprintf(k.errw, "Warning: local policy mode: legacy (%s=false): without a policy this sensor admits any target outside the built-in deny list\n", core.EnvRequireLocalPolicy)
+		_, _ = fmt.Fprintf(k.out, "  Local policy mode: follows platform scope (%s=false): without a policy any target the platform signed runs; install a local policy only to narrow it\n", core.EnvRequireLocalPolicy)
 	default:
-		_, _ = fmt.Fprintf(k.errw, "Warning: local policy mode: legacy install: without a policy this sensor admits any target outside the built-in deny list; set %s=true or re-pair to fail closed\n", core.EnvRequireLocalPolicy)
+		_, _ = fmt.Fprintf(k.out, "  Local policy mode: follows platform scope: without a policy any target the platform signed runs; install a local policy only to narrow it, or set %s=true to fail closed\n", core.EnvRequireLocalPolicy)
 	}
 	for _, w := range lp.Warnings() {
 		_, _ = fmt.Fprintf(k.errw, "Warning: %s\n", w)
