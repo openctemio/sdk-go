@@ -21,8 +21,10 @@ import (
 // HostRate is one task's per-host rate controller: additive increase,
 // multiplicative decrease (AIMD) on each destination host, with a breaker
 // per host. Its state belongs to one task: a forwarder creates it and drops
-// it with the task, so nothing a host taught one task (or one tenant)
-// reaches another.
+// it with the task. A task that joins the sensor-wide SensorRate (Share)
+// also shares the host's rate with the sensor's other tasks, and the
+// Retry-After and edge-block cooldowns with its own tenant's tasks only:
+// nothing a host taught one tenant's task reaches another tenant's.
 //
 // Signals: a connection or an answer is health; 429 and 503 (with their
 // Retry-After) are congestion; a reset, a timeout, a refused connection on
@@ -50,6 +52,22 @@ type HostRate struct {
 	mu       sync.Mutex
 	hosts    map[string]*hostState
 	overflow *hostState
+
+	// shared is the sensor-wide state the task joined (Share; nil: the
+	// task paces itself alone), tenant the organization of its job.
+	shared *SensorRate
+	tenant string
+}
+
+// Share makes the task share target state with every other task of the
+// sensor (SensorRate): the host's rate (fair share per tenant), the
+// tenant's Retry-After and cooldowns. tenant is the organization of the
+// task's job ("" on a sensor of one organization). Call it before the
+// first Acquire.
+func (c *HostRate) Share(s *SensorRate, tenant string) {
+	c.mu.Lock()
+	c.shared, c.tenant = s, tenant
+	c.mu.Unlock()
 }
 
 // Signal is what one connection or answer said about its host.
@@ -315,6 +333,23 @@ func (c *HostRate) Acquire(ctx context.Context, host string) error {
 		h.probing, h.probeAt = true, now
 	}
 	wait := h.notBefore.Sub(now)
+	shared, tenant := c.shared, c.tenant
+	if shared != nil {
+		cool, nb := shared.admit(tenant, host, c.ceiling)
+		if !cool.until.IsZero() {
+			if cool.edge.State.Stops() {
+				c.setEdgeGap(h, cool.edge)
+			} else {
+				c.setGap(h, GapBlocked, cool.detail)
+			}
+			c.mu.Unlock()
+			c.emit(ch)
+			return fmt.Errorf("%w: %s blocked the scan (%s); left alone for %s", ErrHostUnavailable, host, cool, cool.until.Sub(now).Round(time.Second))
+		}
+		if d := nb.Sub(now); d > wait {
+			wait = d
+		}
+	}
 	if wait > c.b.HoldMax {
 		c.lose(h, GapRateFloor, "the host asked to wait "+wait.Round(time.Second).String())
 		c.mu.Unlock()
@@ -333,7 +368,13 @@ func (c *HostRate) Acquire(ctx context.Context, host string) error {
 		case <-t.C:
 		}
 	}
-	return lim.Wait(ctx)
+	if err := lim.Wait(ctx); err != nil {
+		return err
+	}
+	if shared != nil {
+		return shared.wait(ctx, tenant, host)
+	}
+	return nil
 }
 
 // Report feeds one signal about host to the controller.
@@ -354,6 +395,9 @@ func (c *HostRate) Report(host string, e Event) {
 		h.oks++
 		h.fails, h.run403, h.answered = 0, 0, true
 		c.close(h, &ch)
+		if c.shared != nil {
+			c.shared.answered(c.tenant, host)
+		}
 	case Congested:
 		// The host is alive, only busy: a probe that got this closes the
 		// breaker, and the rate comes down.
@@ -367,6 +411,9 @@ func (c *HostRate) Report(host string, e Event) {
 			}
 		}
 		c.decrease(h, now, e.Reason, &ch)
+		if c.shared != nil {
+			c.shared.congested(c.tenant, host, e.RetryAfter)
+		}
 	case Forbidden:
 		h.fails = 0
 		c.close(h, &ch)
@@ -379,6 +426,9 @@ func (c *HostRate) Report(host string, e Event) {
 			c.setEdgeGap(h, e.Edge)
 			c.decrease(h, now, ReasonBlocked, &ch)
 			c.trip(h, now, ReasonBlocked, &ch)
+			if c.shared != nil {
+				c.shared.block(c.tenant, host, e.Edge, "")
+			}
 			break
 		}
 		if !h.answered {
@@ -388,9 +438,13 @@ func (c *HostRate) Report(host string, e Event) {
 		if h.run403 >= c.b.BlockRun {
 			h.run403 = 0
 			h.bad++
-			c.setGap(h, GapBlocked, fmt.Sprintf("%d consecutive 403 answers", c.b.BlockRun))
+			detail := fmt.Sprintf("%d consecutive 403 answers", c.b.BlockRun)
+			c.setGap(h, GapBlocked, detail)
 			c.decrease(h, now, ReasonBlocked, &ch)
 			c.trip(h, now, ReasonBlocked, &ch)
+			if c.shared != nil {
+				c.shared.block(c.tenant, host, edgeprotect.Verdict{}, detail)
+			}
 		}
 	case Failed:
 		h.bad++

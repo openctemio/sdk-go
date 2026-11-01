@@ -92,6 +92,13 @@ func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared
 		e.fw.Reach = reach.NewRecorder()
 	}
 	e.fw.TargetRate().OnChange = e.change
+	// One view of each target for every task of the sensor: the host's
+	// rate is shared, Retry-After and cooldowns per organization of the job.
+	rates := h.TargetRates
+	if rates == nil {
+		rates = adapt.Process()
+	}
+	e.fw.TargetRate().Share(rates, core.JobTenantFromContext(ctx))
 	if p.egress != nil {
 		// The job's proxy pool carries every connection the scope allows;
 		// the scope check, pinning and per-target rate run first.
