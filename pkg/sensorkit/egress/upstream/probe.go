@@ -111,11 +111,16 @@ func (p *Pool) DialEndpoint(ctx context.Context, endpointID string, target netip
 	actx, cancel := context.WithTimeout(ctx, p.opts.AttemptTimeout)
 	defer cancel()
 	start := p.opts.now()
-	c, err := p.tunnel(actx, &e, target)
+	release, err := p.take(actx, i)
+	if err != nil {
+		return nil, &egress.UpstreamError{Class: egress.ClassProxyDown, Endpoint: e.ID, Final: true, Err: err}
+	}
+	c, err := p.tunnel(actx, &e, target, "")
 	if err == nil {
 		p.observe(i, false, "", false, target.Addr(), p.opts.now().Sub(start), "")
-		return c, nil
+		return withRelease(c, release), nil
 	}
+	release()
 	class, cause := egress.ClassProxyDown, err
 	var ae *attemptError
 	if errors.As(err, &ae) {

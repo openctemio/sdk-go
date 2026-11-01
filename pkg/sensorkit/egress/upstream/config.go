@@ -11,12 +11,19 @@
 //     loopback) directly when the pool applies to public targets only
 //     (an organization's default pool), and through the pool otherwise;
 //   - ranks the usable endpoints (Strategy): sticky ranks them by a
-//     weighted rendezvous hash of (job, target host), so one host keeps
-//     one endpoint for the job and removing an endpoint moves only its
-//     hosts; priority keeps the given order;
-//   - opens a tunnel to the target address the forwarder passed (never a
-//     name: the address the scope check pinned) with HTTP CONNECT, HTTP
-//     CONNECT over TLS (the proxy's certificate verified) or SOCKS5;
+//     weighted rendezvous hash of (job, target host) for failover;
+//     priority keeps the given order;
+//   - keeps a sticky slot per target host: the first connection to a host
+//     draws its endpoint with weight Weight × (0.05 + score²), score being
+//     the job-local EWMA of the endpoint's tunnels and handshake time; the
+//     slot moves only when its endpoint fails as a proxy, never because of
+//     a target's answer;
+//   - bounds the open connections of an endpoint (MaxConns);
+//   - opens a tunnel to the target address the forwarder passed (the
+//     address the scope check pinned) with HTTP CONNECT, HTTP CONNECT over
+//     TLS (the proxy's certificate verified) or SOCKS5; a socks5h endpoint
+//     gets a target the job scoped by name by name (remote DNS), after the
+//     forwarder checked the name's addresses;
 //   - fails over to the next endpoint only when the proxy is down, at most
 //     once per endpoint; a proxy that refuses the credentials, or that
 //     says the target is unreachable or refused, ends the connection;
@@ -49,7 +56,11 @@ const (
 	SchemeHTTP    = "http"
 	SchemeHTTPS   = "https"
 	SchemeSOCKS5  = "socks5"
-	SchemeSOCKS5H = "socks5h" // treated as socks5: the tunnel is always opened by address
+	// SchemeSOCKS5H is SOCKS5 with remote DNS: a target the job scoped by
+	// name is sent to the proxy by name and resolved there; any other
+	// target (an address or range, or an address a name resolved to) by
+	// address, as with socks5.
+	SchemeSOCKS5H = "socks5h"
 )
 
 // Strategies of a pool.
@@ -70,6 +81,9 @@ const ModePool = "pool"
 // MaxEndpoints bounds a pool.
 const MaxEndpoints = 64
 
+// MaxEndpointConns bounds Endpoint.MaxConns.
+const MaxEndpointConns = 65535
+
 // maxCredential bounds a username or a password (SOCKS5 user/pass allows
 // 255 bytes each).
 const maxCredential = 255
@@ -85,6 +99,10 @@ type Endpoint struct {
 	Weight float64 `json:"weight"`
 	// Auth says the endpoint has credentials on the platform.
 	Auth bool `json:"auth,omitempty"`
+	// MaxConns bounds the connections the job keeps open through the
+	// endpoint at once, handshakes included (0: no bound). A connection
+	// that finds it full waits for a free one, within its dial timeout.
+	MaxConns int `json:"max_conns,omitempty"`
 
 	Username string `json:"-"`
 	Password string `json:"-"`
@@ -191,6 +209,9 @@ func (e *Endpoint) validate() error {
 	}
 	if math.IsNaN(e.Weight) || math.IsInf(e.Weight, 0) || e.Weight <= 0 {
 		return errors.New("weight must be a positive number")
+	}
+	if e.MaxConns < 0 || e.MaxConns > MaxEndpointConns {
+		return fmt.Errorf("max_conns %d out of range (0 to %d)", e.MaxConns, MaxEndpointConns)
 	}
 	if len(e.Username) > maxCredential || len(e.Password) > maxCredential || hasControl(e.Username) || hasControl(e.Password) {
 		return errors.New("credentials too long or with control characters")

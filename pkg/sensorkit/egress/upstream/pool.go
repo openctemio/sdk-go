@@ -45,6 +45,26 @@ const maxSamples = 256
 // maxLastError bounds Report's last_error.
 const maxLastError = 200
 
+// Local score of an endpoint (job-local EWMA of what the sensor saw): the
+// first pick of a host's sticky slot is weighted by the platform's weight
+// times firstPickFloor + score², so a degraded endpoint still gets a little
+// traffic (and so evidence) while a healthy one gets most new hosts.
+const (
+	// ewmaAlpha is the weight of the newest attempt.
+	ewmaAlpha = 0.2
+	// latencyRef is the handshake time that halves an endpoint's score.
+	latencyRef = time.Second
+	// firstPickFloor keeps every usable endpoint pickable.
+	firstPickFloor = 0.05
+	// maxSlots bounds the sticky slots one job keeps; hosts past it are
+	// ranked by the rendezvous hash alone.
+	maxSlots = 65536
+)
+
+// ErrEndpointBusy is the error of a connection that waited for a free
+// connection of its endpoint (Endpoint.MaxConns) until its caller gave up.
+var ErrEndpointBusy = errors.New("upstream: the proxy endpoint is at its connection limit")
+
 // Options configure a Pool. Zero fields take the defaults.
 type Options struct {
 	// Key identifies the job (or the task) for sticky ranking: the same
@@ -65,6 +85,8 @@ type Options struct {
 	lookup func(ctx context.Context, host string) ([]netip.Addr, error)
 	now    func() time.Time
 	jitter func() float64 // in [0, 1)
+	// rand draws the first pick of a sticky slot, in [0, 1).
+	rand func() float64
 }
 
 // Pool is one job's view of a proxy pool: the Dial hook of the job's task
@@ -75,6 +97,14 @@ type Pool struct {
 
 	mu    sync.Mutex
 	state []endpointState
+	// slots are the sticky slots: the endpoint each target host of the job
+	// goes through. A slot is set by the first connection that succeeds
+	// and moves only when its endpoint fails as a proxy (down, refusing
+	// our credentials, breaker open), never on a target's answer.
+	slots map[string]int
+	// sem bounds each endpoint's open connections (Endpoint.MaxConns; nil:
+	// no bound).
+	sem []chan struct{}
 }
 
 type endpointState struct {
@@ -89,6 +119,12 @@ type endpointState struct {
 	// distinct target addresses (at most replyTimeoutLimit).
 	replyTimeouts int
 	timeoutAddrs  []netip.Addr
+
+	// local score: EWMA of the proxy's own outcomes (1 a tunnel, 0 down or
+	// refusing our credentials; a target's answer says nothing about the
+	// proxy) and of the handshake time.
+	okRate  float64
+	latency float64 // seconds, 0: none seen
 
 	// stats
 	ok, down, auth, unreach, refused int64
@@ -123,7 +159,18 @@ func New(cfg Config, opts Options) (*Pool, error) {
 	if opts.jitter == nil {
 		opts.jitter = rand.Float64
 	}
-	return &Pool{cfg: cfg, opts: opts, state: make([]endpointState, len(cfg.Endpoints))}, nil
+	if opts.rand == nil {
+		opts.rand = rand.Float64
+	}
+	p := &Pool{cfg: cfg, opts: opts, state: make([]endpointState, len(cfg.Endpoints)),
+		slots: map[string]int{}, sem: make([]chan struct{}, len(cfg.Endpoints))}
+	for i, e := range cfg.Endpoints {
+		p.state[i].okRate = 1
+		if e.MaxConns > 0 {
+			p.sem[i] = make(chan struct{}, e.MaxConns)
+		}
+	}
+	return p, nil
 }
 
 // Credential is one endpoint's credentials.
@@ -173,21 +220,43 @@ func (p *Pool) Dial(ctx context.Context, network, addr string) (net.Conn, error)
 	if host == "" {
 		host = target.Addr().String()
 	}
+	// A target the job scoped by name goes to a socks5h endpoint by name:
+	// the proxy resolves it (remote DNS). The forwarder has already checked
+	// the name's addresses (none is denied, and an internal one is dialed
+	// directly above when the pool applies to public targets only).
+	name := ""
+	if egress.TargetScopedByName(ctx) && validName(host) && len(host) <= maxSOCKSName {
+		name = host
+	}
 	var last *egress.UpstreamError
-	for _, i := range p.rank(host) {
+	order, slot := p.order(host)
+	for _, i := range order {
 		ok, probe := p.acquire(i)
 		if !ok {
 			continue
 		}
 		e := p.endpoint(i)
+		release, err := p.take(ctx, i)
+		if err != nil {
+			if probe {
+				p.release(i)
+			}
+			return nil, &egress.UpstreamError{Class: egress.ClassProxyDown, Endpoint: e.ID, Final: true, Err: err}
+		}
+		byName := ""
+		if e.Scheme == SchemeSOCKS5H {
+			byName = name
+		}
 		actx, cancel := context.WithTimeout(ctx, p.opts.AttemptTimeout)
 		start := p.opts.now()
-		c, err := p.tunnel(actx, &e, target)
+		c, err := p.tunnel(actx, &e, target, byName)
 		cancel()
 		if err == nil {
 			p.observe(i, probe, "", false, target.Addr(), p.opts.now().Sub(start), "")
-			return c, nil
+			p.keepSlot(host, slot, i)
+			return withRelease(c, release), nil
 		}
+		release()
 		class, cause, replyTimeout := egress.ClassProxyDown, err, false
 		var targetClass reach.Class
 		var ae *attemptError
@@ -203,7 +272,9 @@ func (p *Pool) Dial(ctx context.Context, network, addr string) (net.Conn, error)
 			return nil, &egress.UpstreamError{Class: class, Endpoint: e.ID, Final: true, Err: cause}
 		}
 		class = p.observe(i, probe, class, replyTimeout, target.Addr(), 0, err.Error())
-		last = &egress.UpstreamError{Class: class, Endpoint: e.ID, Final: class != egress.ClassTargetUnreachable, Err: cause}
+		// A connection by name is decided for every address of the target:
+		// the forwarder does not ask again for the next one.
+		last = &egress.UpstreamError{Class: class, Endpoint: e.ID, Final: class != egress.ClassTargetUnreachable || byName != "", Err: cause}
 		if class == egress.ClassTargetUnreachable {
 			last.TargetClass = targetClass
 		}
@@ -297,6 +368,131 @@ func (p *Pool) rank(host string) []int {
 	return idx
 }
 
+// order is the endpoints to try for a target host, and the host's sticky
+// slot before this connection (-1: none). With the priority strategy it is
+// rank. With sticky: the slot's endpoint first; a host without a slot gets
+// a first pick drawn with weight Weight × (firstPickFloor + score²) among
+// the usable endpoints (those with a free connection when any has one);
+// the rest follow in rendezvous order for failover.
+func (p *Pool) order(host string) ([]int, int) {
+	idx := p.rank(host)
+	if p.cfg.Strategy == StrategyPriority || len(idx) == 0 {
+		return idx, -1
+	}
+	p.mu.Lock()
+	slot, ok := p.slots[host]
+	if !ok || p.state[slot].authFailed {
+		slot = -1
+	}
+	first := slot
+	if first < 0 {
+		first = p.firstPick(idx)
+	}
+	p.mu.Unlock()
+	if first < 0 {
+		return idx, slot
+	}
+	out := make([]int, 0, len(idx))
+	out = append(out, first)
+	for _, i := range idx {
+		if i != first {
+			out = append(out, i)
+		}
+	}
+	return out, slot
+}
+
+// firstPick draws an endpoint among idx with weight pickWeight; the
+// endpoints whose breaker is open, and those at their connection limit
+// while another has room, are left out. -1 when none is usable. Called
+// with p.mu held.
+func (p *Pool) firstPick(idx []int) int {
+	now := p.opts.now()
+	var cand []int
+	var weights []float64
+	total := 0.0
+	for pass := 0; pass < 2 && total == 0; pass++ {
+		cand, weights = cand[:0], weights[:0]
+		for _, i := range idx {
+			s := &p.state[i]
+			if !s.openUntil.IsZero() && now.Before(s.openUntil) {
+				continue
+			}
+			if pass == 0 && p.sem[i] != nil && len(p.sem[i]) >= cap(p.sem[i]) {
+				continue
+			}
+			w := p.pickWeight(i)
+			cand, weights = append(cand, i), append(weights, w)
+			total += w
+		}
+	}
+	if total <= 0 {
+		return -1
+	}
+	r := p.opts.rand() * total
+	for k, w := range weights {
+		if r < w {
+			return cand[k]
+		}
+		r -= w
+	}
+	return cand[len(cand)-1]
+}
+
+// pickWeight is endpoint i's first-pick weight: the platform's weight
+// times firstPickFloor + score². Called with p.mu held.
+func (p *Pool) pickWeight(i int) float64 {
+	sc := p.score(i)
+	return p.cfg.Endpoints[i].Weight * (firstPickFloor + sc*sc)
+}
+
+// score is endpoint i's local score in [0, 1]: the EWMA of its tunnels
+// that came up, scaled down by its handshake time (latencyRef halves it).
+// Called with p.mu held.
+func (p *Pool) score(i int) float64 {
+	s := &p.state[i]
+	return s.okRate / (1 + s.latency/latencyRef.Seconds())
+}
+
+// keepSlot records that host's connection went through endpoint i. A host
+// without a slot gets i; a host whose slot is another endpoint gets i only
+// because that endpoint failed as a proxy or was unusable in this dial
+// (the order tried the slot first and only a proxy failure moves on).
+func (p *Pool) keepSlot(host string, slot, i int) {
+	if p.cfg.Strategy == StrategyPriority {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cur, ok := p.slots[host]
+	switch {
+	case !ok && len(p.slots) < maxSlots:
+		p.slots[host] = i
+	case ok && cur == slot && cur != i:
+		p.slots[host] = i
+	}
+}
+
+// take waits for a free connection of endpoint i (Endpoint.MaxConns),
+// bounded by ctx, and returns its release (idempotent).
+func (p *Pool) take(ctx context.Context, i int) (func(), error) {
+	sem := p.sem[i]
+	if sem == nil {
+		return func() {}, nil
+	}
+	select {
+	case sem <- struct{}{}:
+	default:
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("%w (%d)", ErrEndpointBusy, cap(sem))
+		}
+	}
+	var once sync.Once
+	return func() { once.Do(func() { <-sem }) }, nil
+}
+
 // unitHash maps (key, host, endpoint id) to (0, 1).
 func unitHash(key, host, id string) float64 {
 	h := sha256.New()
@@ -360,6 +556,17 @@ func (p *Pool) observe(i int, wasProbe bool, class string, replyTimeout bool, ta
 		if wasProbe || len(s.timeoutAddrs) >= replyTimeoutLimit {
 			class = egress.ClassProxyDown
 		}
+	}
+	switch class {
+	case "":
+		s.okRate += ewmaAlpha * (1 - s.okRate)
+		if sec := handshake.Seconds(); s.latency == 0 {
+			s.latency = sec
+		} else {
+			s.latency += ewmaAlpha * (sec - s.latency)
+		}
+	case egress.ClassProxyDown, egress.ClassProxyAuth:
+		s.okRate -= ewmaAlpha * s.okRate
 	}
 	switch class {
 	case "":

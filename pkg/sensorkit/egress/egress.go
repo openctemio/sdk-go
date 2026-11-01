@@ -421,6 +421,9 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 	var lastErr error
 	targetErr := false // lastErr is about the target, not about an upstream proxy
 	dctxBase := WithTargetHost(ctx, host)
+	if _, ok := f.names[normName(host)]; ok {
+		dctxBase = WithScopedName(dctxBase)
+	}
 	var pathErr *UpstreamError // the last failure was the path's (UpstreamError.PathFault)
 	for _, a := range addrs {
 		dctx, cancel := context.WithTimeout(dctxBase, f.limits.DialTimeout)
