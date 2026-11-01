@@ -154,6 +154,7 @@
         "cancel": {"type": "boolean"},
         "web_scope": {"type": "boolean"},
         "http_identity": {"type": "boolean"},
+        "http_query": {"type": "boolean"},
         "streaming": {"const": false}
       }
     },

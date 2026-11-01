@@ -65,6 +65,21 @@ func HeaderArgs(name string) (flag string, ok bool) {
 	return m[1], true
 }
 
+// queryArgsRE is the query-parameter placeholder, {{http.query:-flag}}.
+var queryArgsRE = regexp.MustCompile(`^http\.query:(--?[A-Za-z0-9][A-Za-z0-9_-]{0,63})$`)
+
+// QueryArgs parses the query-parameter placeholder name "http.query:-flag":
+// as the whole argv element it becomes the flag and "name=value" of the
+// task's query parameter (Task.Identity.Query), and nothing when the task
+// has none. ok is false for any other name.
+func QueryArgs(name string) (flag string, ok bool) {
+	m := queryArgsRE.FindStringSubmatch(strings.TrimSpace(name))
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
 // ArgvPlaceholders returns the placeholder names in an argv element.
 func ArgvPlaceholders(element string) []string {
 	var out []string

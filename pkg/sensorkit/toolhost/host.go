@@ -253,6 +253,12 @@ type Outcome struct {
 	// start_eagain.
 	Attempts  int
 	Transient string
+	// Identity is the identification the task's requests carried: the
+	// User-Agent, the headers (secret-looking values masked) with where each
+	// came from, and the query parameter with whether the tool applied it.
+	// The result carries it (core.MetaHTTPIdentity) so the platform shows
+	// what a scan was sent with. Nil when the task carried none.
+	Identity *tool.AppliedIdentity
 	// startKind is how this attempt's start failed ("" when it did not).
 	startKind string
 }
@@ -288,8 +294,8 @@ func (h *Host) lifecycle(ctx context.Context, m tool.Manifest, task tool.Task, r
 	}
 	start := time.Now()
 	started := map[string]any{"tool": m.Name, "tool_version": m.Version, "targets": len(task.Targets), "capability": task.Capability}
-	if eff, _ := effectiveHTTP(m, h.Policy, orgPolicyFor(m, task)); eff.String() != "" {
-		s := eff.String()
+	if mg, _ := effectiveHTTP(m, h.Policy, orgPolicyFor(m, task), sendsHTTPToTargets(m, task)); mg != nil && mg.eff.String() != "" {
+		s := mg.eff.String()
 		// What the tool's requests look like to the targets (tool.yaml http),
 		// recorded with the task.
 		started["http"] = s
@@ -383,6 +389,8 @@ type prepared struct {
 	// egress is the job's proxy pool: the forwarder's Dial hook (nil:
 	// direct).
 	egress core.EgressDialer
+	// applied is the identification the task's requests carry (nil: none).
+	applied *tool.AppliedIdentity
 }
 
 // prepare checks the manifest and the task (targets, config), admits it
@@ -446,15 +454,16 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	// {{http.headers:-flag}}), so it never reaches a passive source, a
 	// vendor API or a registry. The organization's TLS rule still applies.
 	org := orgPolicyFor(m, task)
-	eff, ierr := effectiveHTTP(m, h.Policy, org)
+	mg, ierr := effectiveHTTP(m, h.Policy, org, sendsHTTPToTargets(m, task))
 	if ierr != nil {
 		return nil, ierr, nil
 	}
-	task.Identity = identityOf(eff, org)
+	task.Identity = mg.identity
 	if err := task.Identity.Validate(); err != nil {
 		return nil, refusedErr("the job's identification is invalid: %v", err), nil
 	}
-	task.HTTP, task.OrgHTTP = eff, nil
+	task.HTTP, task.OrgHTTP = mg.eff, nil
+	applied := mg.applied
 	if ierr := checkIdentity(m, task); ierr != nil {
 		return nil, ierr, nil
 	}
@@ -464,7 +473,7 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	}
 	task.Egress = nil // kept in prepared only: it never travels with the task
 	p := &prepared{m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine, contentPaths: contentPaths,
-		targetRate: o.TargetRate, egress: egressDialer}
+		targetRate: o.TargetRate, egress: egressDialer, applied: applied}
 	if task.IsRetest() && len(adm.Refused) > 0 {
 		// A retest never reaches a target the policy refused: its items
 		// are not sent and end unverifiable.
@@ -1253,6 +1262,7 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 	if p.rateLine != nil {
 		out.Logs = append(out.Logs, *p.rateLine)
 	}
+	out.Identity = p.applied
 	s.h.stamp(out, p.m, p.task, execution)
 }
 

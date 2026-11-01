@@ -264,6 +264,24 @@ http:
   - Its User-Agent applies unless the local policy forces one.
   - `allow_insecure_tls: false` refuses a tool that skips TLS verification, even where the local policy allows it.
   - It can never allow what the local policy forbids.
+- **The sensor owner can mark the scan traffic too** (local policy schema `openctem.io/sensor-policy/v4`):
+
+  ```yaml
+  apiVersion: openctem.io/sensor-policy/v4
+  http:
+    user_agent: "dc1-scan (+netops@example.com)"
+    headers:                       # at most 4: name, value
+      - {name: X-Netops, value: dc1}
+  ```
+
+  - The same rules as every identification header: an RFC 7230 token name of at most 64 characters, a printable ASCII value of at most 200 characters, never a credential, connection or `Proxy-*` header; names are unique, case-insensitively. A bad entry stops the policy from loading.
+  - They are sent on every request of every task that sends HTTP to its targets, for every organization's job on this sensor (a shared sensor's network identity). Never put an organization's data or a credential in a value.
+  - Merged with the job's `http_policy` by name, case-insensitively, one value per name: a name in the job's `locked_headers` (platform-enforced or program-set) keeps the job's value, any other job header of that name is replaced, every other name is kept. The job's `user_agent_locked` does the same for the User-Agent. Together at most 16 headers; past that the task is refused with a message naming the cap (nothing is dropped).
+  - A networked tool that cannot carry headers (no `features.http_identity`, no `{{http.headers:-flag}}`) is refused while the owner sets headers, like for a job's identification.
+- **A query parameter:** a job can carry `http_policy.query` (`{name, value}`, each 1 to 64 of letters, digits and `. _ ~ -`).
+  - A tool carries it when it declares `features.http_query` (it requests through `ctx.HTTP()`, which sets it on every URL, or maps it onto its own flag) or passes `{{http.query:-flag}}` (the flag and `name=value`, nothing when the task has none).
+  - Any other tool still runs; the result reports the parameter as not applied, with the reason.
+- **Reported:** the result's metadata `http_identity` lists what the requests carried: the User-Agent and each header with its source (`job`, `job_locked`, `sensor`), values of secret-looking names masked, entries not applied with a reason, and the query parameter. A sensor that does all of this advertises `http.identity@2` (`toolhost.CapabilityHTTPIdentityV2`).
 - **Refused:**
   - `Authorization`, `Cookie` and `Proxy-*` headers (credentials come from the credential broker, never from tool.yaml);
   - framing headers;

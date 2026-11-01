@@ -17,6 +17,13 @@ const (
 	MetaTargetRate = "target_rate"
 )
 
+// MetaHTTPIdentity is the result metadata key of the identification a scan's
+// requests carried (tool.AppliedIdentity): the User-Agent, the headers with
+// their source (job, job_locked, sensor) and masked values, and the query
+// parameter with whether the tool applied it. The platform's run detail
+// shows it as "Sent with".
+const MetaHTTPIdentity = "http_identity"
+
 // HasCoverageGaps reports whether the scan left hosts not fully covered.
 func (r *ScanResult) HasCoverageGaps() bool {
 	return r != nil && (len(r.CoverageGaps) > 0 || r.CoverageGapsTotal > 0)
@@ -41,6 +48,9 @@ func CoverageGapsMetadata(r *ScanResult) map[string]any {
 		s := *r.TargetRate
 		s.Gaps, s.GapsTotal = nil, 0
 		meta[MetaTargetRate] = s
+	}
+	if r.HTTPIdentity != nil {
+		meta[MetaHTTPIdentity] = r.HTTPIdentity
 	}
 	if len(meta) == 0 {
 		return nil

@@ -259,6 +259,10 @@ func (s *toolScanner) ScanTargets(ctx context.Context, targets []string, opts *c
 		ExitCode: out.ExitCode, RawOutput: raw, Stderr: out.Stderr}
 	// Hosts the forwarder could not fully cover: the scan completes, partial.
 	res.WithTargetRate(out.TargetRate)
+	// What the requests were sent with, for the run detail.
+	if out.Identity != nil {
+		res.HTTPIdentity = out.Identity
+	}
 	return res, nil
 }
 

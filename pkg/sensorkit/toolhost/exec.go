@@ -99,7 +99,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 
 	oom, oomKind := execOOM(ctx, runCtx, res)
 	// Only the host's OOM kill is a transient start failure.
-	out := &Outcome{Sandbox: be.Status(), ExitCode: -1, startKind: strings.TrimPrefix(oomKind, "oom_envelope")}
+	out := &Outcome{Sandbox: be.Status(), ExitCode: -1, startKind: strings.TrimPrefix(oomKind, "oom_envelope"), Identity: p.applied}
 	if res != nil {
 		out.ExitCode, out.Sandbox = res.ExitCode, res.Sandbox
 	}
@@ -240,6 +240,14 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 					return nil, ierr
 				}
 				out = append(out, hs...)
+				continue
+			}
+			// The query parameter: the flag and "name=value", nothing when
+			// the task has none.
+			if flag, ok := tool.QueryArgs(whole); ok {
+				if q := p.task.Identity; q != nil && q.Query != nil {
+					out = append(out, flag, q.Query.Name+"="+q.Query.Value)
+				}
 				continue
 			}
 			// A content slot's packs, one argument each.

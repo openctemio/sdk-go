@@ -145,6 +145,13 @@ type Features struct {
 	// declare it. An exec-profile tool whose argv carries
 	// {{http.user_agent}} and {{http.headers:-flag}} needs no declaration.
 	HTTPIdentity bool `json:"http_identity,omitempty"`
+	// HTTPQuery: every request the tool sends to its targets carries the
+	// task's query parameter (Task.Identity.Query): it maps it onto its own
+	// flag, or requests only through Context.HTTP, which appends it. A tool
+	// without it still runs, and the task's result reports the parameter
+	// "not applied" (never silently dropped). An exec-profile tool whose
+	// argv carries {{http.query:-flag}} needs no declaration.
+	HTTPQuery bool `json:"http_query,omitempty"`
 	// Streaming is reserved: feeding records to the next stage while the
 	// task runs is not part of protocol v1.
 	Streaming bool `json:"streaming,omitempty"`

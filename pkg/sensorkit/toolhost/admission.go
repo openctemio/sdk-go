@@ -113,6 +113,13 @@ func Admit(ctx context.Context, m tool.Manifest, task tool.Task, pol Policy, mod
 // identification only to a sensor that reports it.
 const CapabilityHTTPIdentity = "http.identity@1"
 
+// CapabilityHTTPIdentityV2 is what a sensor advertises when, besides
+// http.identity@1, it honors the job's locked_headers and user_agent_locked,
+// merges the owner's local http.headers (schema v4), carries the job's query
+// parameter in tools that declare features.http_query, and reports the
+// identification it applied (Outcome.Identity, core.MetaHTTPIdentity).
+const CapabilityHTTPIdentityV2 = "http.identity@2"
+
 // HTTPPolicy is a policy that decides about the tools' requests
 // (*core.LocalPolicy, schema v3): a User-Agent that replaces every tool's,
 // and whether a tool may skip TLS verification.
@@ -120,10 +127,38 @@ type HTTPPolicy interface {
 	HTTPPolicy() (userAgent string, allowInsecureTLS bool)
 }
 
+// HTTPHeaderPolicy is a policy that adds identification headers of the
+// sensor owner to every task that sends HTTP to its targets
+// (*core.LocalPolicy, schema v4).
+type HTTPHeaderPolicy interface {
+	HTTPHeaders() []core.LocalHTTPHeader
+}
+
+// httpMerge is the result of merging the job's identification with the
+// sensor owner's: the task's http settings, the identification every
+// request carries, and the report of what was applied.
+type httpMerge struct {
+	eff      *tool.HTTPSpec
+	identity *tool.Identity
+	applied  *tool.AppliedIdentity
+}
+
 // effectiveHTTP is the task's http settings: the manifest's, with the
 // policy's User-Agent; a tool that skips TLS verification is refused
-// where the policy forbids it. nil when nothing is set.
-func effectiveHTTP(m tool.Manifest, pol Policy, org *core.OrgHTTPPolicy) (*tool.HTTPSpec, *tool.Error) {
+// where the policy forbids it. The identification (the job's headers and
+// query parameter, then the sensor owner's headers when sendsHTTP) is
+// merged by name, case-insensitively, one value per name:
+//
+//   - a job name in LockedHeaders (platform-enforced or program-set) is
+//     never changed by the sensor owner's layer;
+//   - any other job name is replaced by the sensor owner's header of that
+//     name; every other name is kept (union);
+//   - the sensor owner's User-Agent wins over the job's unless the job locks
+//     it (UserAgentLocked).
+//
+// More than maxOrgHTTPHeaders names in all refuse the task, naming the
+// cap; nothing is dropped. nil eff when nothing is set.
+func effectiveHTTP(m tool.Manifest, pol Policy, org *core.OrgHTTPPolicy, sendsHTTP bool) (*httpMerge, *tool.Error) {
 	var eff *tool.HTTPSpec
 	if m.HTTP != nil {
 		c := *m.HTTP
@@ -142,13 +177,22 @@ func effectiveHTTP(m tool.Manifest, pol Policy, org *core.OrgHTTPPolicy) (*tool.
 	if !allowInsecure && skips {
 		return nil, refusedErr("the local policy forbids skipping TLS verification (http.allow_insecure_tls: false); %s sets tls.insecure_skip_verify", m.Name)
 	}
+	applied := &tool.AppliedIdentity{Tool: m.Name}
+	uaSource := ""
+	if ua != "" {
+		uaSource = tool.SourceSensor
+	}
 	if org != nil {
 		if org.AllowInsecureTLS != nil && !*org.AllowInsecureTLS && skips {
 			return nil, refusedErr("the organization's policy forbids skipping TLS verification; %s sets tls.insecure_skip_verify", m.Name)
 		}
-		// The local policy's User-Agent wins over the organization's.
-		if ua == "" {
-			ua = org.UserAgent
+		// The local policy's User-Agent wins over the organization's,
+		// unless the job locks it.
+		if org.UserAgent != "" && (ua == "" || org.UserAgentLocked) {
+			ua, uaSource = org.UserAgent, tool.SourceJob
+			if org.UserAgentLocked {
+				uaSource = tool.SourceJobLocked
+			}
 		}
 	}
 	if ua != "" {
@@ -157,49 +201,155 @@ func effectiveHTTP(m tool.Manifest, pol Policy, org *core.OrgHTTPPolicy) (*tool.
 		}
 		eff.UserAgent = ua
 	}
-	// The organization's headers (a program's identification header)
-	// replace a tool.yaml header of the same name, whatever its case.
-	if org != nil && len(org.Headers) > 0 {
+	var local []core.LocalHTTPHeader
+	if hh, ok := pol.(HTTPHeaderPolicy); ok && hh != nil && sendsHTTP {
+		local = hh.HTTPHeaders()
+	}
+	merged, err := mergeIdentityHeaders(org, local)
+	if err != nil {
+		return nil, refusedErr("%v", err)
+	}
+	// The identification's headers replace a tool.yaml header of the same
+	// name, whatever its case.
+	var idHeaders map[string]string
+	for _, h := range merged {
+		if !h.Applied {
+			continue
+		}
+		if idHeaders == nil {
+			idHeaders = map[string]string{}
+		}
+		idHeaders[h.Name] = h.Value
 		if eff == nil {
 			eff = &tool.HTTPSpec{}
 		}
 		if eff.Headers == nil {
 			eff.Headers = map[string]string{}
 		}
-		for name, value := range org.Headers {
-			for have := range eff.Headers {
-				if strings.EqualFold(have, name) {
-					delete(eff.Headers, have)
+		for have := range eff.Headers {
+			if strings.EqualFold(have, h.Name) {
+				delete(eff.Headers, have)
+			}
+		}
+		eff.Headers[h.Name] = h.Value
+	}
+	for _, h := range merged {
+		applied.Headers = append(applied.Headers, tool.AppliedHeader{Name: h.Name, Value: tool.MaskIdentityValue(h.Name, h.Value),
+			Source: h.Source, Applied: h.Applied, Reason: h.Reason})
+	}
+	id := &tool.Identity{Headers: idHeaders}
+	// The identification's User-Agent is the job's, or the owner's when the
+	// owner's wins and the job also set one (the job's identification names
+	// a User-Agent: the owner's replaces it).
+	if org != nil && org.UserAgent != "" && eff != nil {
+		id.UserAgent = eff.UserAgent
+	}
+	if eff != nil && eff.UserAgent != "" && uaSource != "" {
+		applied.UserAgent, applied.UserAgentSource = eff.UserAgent, uaSource
+	}
+	if org != nil && org.Query != nil {
+		q := &tool.AppliedQuery{Name: org.Query.Name, Value: org.Query.Value}
+		if carriesQuery(m) {
+			id.Query, q.Applied = org.Query, true
+		} else {
+			q.Reason = fmt.Sprintf("%s does not carry a query parameter (features.http_query)", m.Name)
+		}
+		applied.Query = q
+	}
+	if id.Empty() {
+		id = nil
+	}
+	if id == nil && applied.UserAgent == "" && len(applied.Headers) == 0 && applied.Query == nil {
+		applied = nil
+	}
+	return &httpMerge{eff: eff, identity: id, applied: applied}, nil
+}
+
+// carriesQuery reports whether the tool puts the task's query parameter on
+// its requests: it declares features.http_query, or its argv passes
+// {{http.query:-flag}}.
+func carriesQuery(m tool.Manifest) bool {
+	if m.Features != nil && m.Features.HTTPQuery {
+		return true
+	}
+	if m.Run != nil && m.Run.Profile == tool.ProfileExec {
+		for _, a := range m.Run.Argv {
+			for _, name := range tool.ArgvPlaceholders(a) {
+				if _, ok := tool.QueryArgs(name); ok {
+					return true
 				}
 			}
-			eff.Headers[name] = value
 		}
 	}
-	return eff, nil
+	return false
+}
+
+// mergedHeader is one header of the merged identification.
+type mergedHeader struct {
+	Name, Value, Source string
+	Applied             bool
+	Reason              string
+}
+
+// mergeIdentityHeaders merges the job's headers with the sensor owner's by
+// name (case-insensitive); see effectiveHTTP. The result is in name order,
+// the owner's refused entries (a locked name) included, not applied.
+func mergeIdentityHeaders(org *core.OrgHTTPPolicy, local []core.LocalHTTPHeader) ([]mergedHeader, error) {
+	locked := map[string]bool{}
+	var jobHeaders map[string]string
+	if org != nil {
+		jobHeaders = org.Headers
+		for _, n := range org.LockedHeaders {
+			locked[strings.ToLower(n)] = true
+		}
+	}
+	byKey := map[string]*mergedHeader{}
+	for name, value := range jobHeaders {
+		src := tool.SourceJob
+		if locked[strings.ToLower(name)] {
+			src = tool.SourceJobLocked
+		}
+		byKey[strings.ToLower(name)] = &mergedHeader{Name: name, Value: value, Source: src, Applied: true}
+	}
+	var refused []mergedHeader
+	for _, h := range local {
+		key := strings.ToLower(h.Name)
+		if err := core.CheckIdentityHeader(h.Name, h.Value); err != nil {
+			return nil, fmt.Errorf("the sensor's local http.headers are invalid: %v", err)
+		}
+		if locked[key] {
+			refused = append(refused, mergedHeader{Name: h.Name, Value: h.Value, Source: tool.SourceSensor,
+				Reason: "the job locks this header (platform-enforced or set by the program); the job's value is sent"})
+			continue
+		}
+		byKey[key] = &mergedHeader{Name: h.Name, Value: h.Value, Source: tool.SourceSensor, Applied: true}
+	}
+	if len(byKey) > core.MaxIdentityHeaders {
+		return nil, fmt.Errorf("the job's identification would carry %d headers (the job's %d plus the sensor's local http.headers); at most %d: remove local headers or ask the platform owner to remove job headers",
+			len(byKey), len(jobHeaders), core.MaxIdentityHeaders)
+	}
+	out := make([]mergedHeader, 0, len(byKey)+len(refused))
+	for _, h := range byKey {
+		out = append(out, *h)
+	}
+	out = append(out, refused...)
+	slices.SortFunc(out, func(a, b mergedHeader) int {
+		if c := strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)); c != 0 {
+			return c
+		}
+		if a.Applied != b.Applied {
+			if a.Applied {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	})
+	return out, nil
 }
 
 func refusedErr(format string, args ...any) *tool.Error {
 	return tool.AsError(tool.Refused(fmt.Sprintf(format, args...)))
-}
-
-// identityOf is the identification the task's requests must carry: the
-// organization's headers, and its User-Agent as it ends up effective (the
-// sensor-local policy's wins). nil when the organization sets neither.
-func identityOf(eff *tool.HTTPSpec, org *core.OrgHTTPPolicy) *tool.Identity {
-	if org == nil || (org.UserAgent == "" && len(org.Headers) == 0) {
-		return nil
-	}
-	id := &tool.Identity{}
-	if org.UserAgent != "" && eff != nil {
-		id.UserAgent = eff.UserAgent
-	}
-	if len(org.Headers) > 0 {
-		id.Headers = maps.Clone(org.Headers)
-	}
-	if id.Empty() {
-		return nil
-	}
-	return id
 }
 
 // checkIdentity refuses a task whose identification the tool cannot put on
@@ -209,7 +359,7 @@ func identityOf(eff *tool.HTTPSpec, org *core.OrgHTTPPolicy) *tool.Identity {
 // given. A tool that would probe without the identification never starts
 // (CapabilityHTTPIdentity).
 func checkIdentity(m tool.Manifest, task tool.Task) *tool.Error {
-	if task.Identity.Empty() || !sendsHTTPToTargets(m, task) {
+	if !task.Identity.NeedsHeaders() || !sendsHTTPToTargets(m, task) {
 		return nil
 	}
 	if m.Features != nil && m.Features.HTTPIdentity {

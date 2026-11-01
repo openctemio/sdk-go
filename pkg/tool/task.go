@@ -224,10 +224,19 @@ const (
 type Identity struct {
 	UserAgent string            `json:"user_agent,omitempty"`
 	Headers   map[string]string `json:"headers,omitempty"`
+	// Query is the query parameter every request carries (nil none); a tool
+	// without features.http_query is not given it (AppliedIdentity says so).
+	Query *core.HTTPQuery `json:"query,omitempty"`
 }
 
 // Empty reports whether the identification sets nothing.
-func (i *Identity) Empty() bool { return i == nil || (i.UserAgent == "" && len(i.Headers) == 0) }
+func (i *Identity) Empty() bool {
+	return i == nil || (i.UserAgent == "" && len(i.Headers) == 0 && i.Query == nil)
+}
+
+// NeedsHeaders reports whether the identification sets a User-Agent or a
+// header (a query parameter alone needs no features.http_identity).
+func (i *Identity) NeedsHeaders() bool { return i != nil && (i.UserAgent != "" || len(i.Headers) > 0) }
 
 // HeaderLines is the identification as "Name: value" lines: the User-Agent
 // first, then the headers in name order. A tool that maps the
@@ -285,5 +294,5 @@ func (i *Identity) Validate() error {
 	if i == nil {
 		return nil
 	}
-	return (&core.OrgHTTPPolicy{UserAgent: i.UserAgent, Headers: i.Headers}).Validate()
+	return (&core.OrgHTTPPolicy{UserAgent: i.UserAgent, Headers: i.Headers, Query: i.Query}).ValidateMerged()
 }
