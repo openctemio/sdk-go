@@ -53,9 +53,9 @@ import (
 
 // Schemes of an endpoint.
 const (
-	SchemeHTTP    = "http"
-	SchemeHTTPS   = "https"
-	SchemeSOCKS5  = "socks5"
+	SchemeHTTP   = "http"
+	SchemeHTTPS  = "https"
+	SchemeSOCKS5 = "socks5"
 	// SchemeSOCKS5H is SOCKS5 with remote DNS: a target the job scoped by
 	// name is sent to the proxy by name and resolved there; any other
 	// target (an address or range, or an address a name resolved to) by
