@@ -2045,7 +2045,8 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// under it, which a cancel still ends.
 	// The platform's deadline for the command, when it sent one, shortens
 	// the budget so the result arrives before it (run_watch.go).
-	ctx, deliverCtx, cancelJob := withJobTimeout(ctx, capToDeadline(local.CapTimeout(jobTimeout(payload.TimeoutSeconds, payload.Budget)), payload.Deadline, time.Now()))
+	jobStart := time.Now()
+	ctx, deliverCtx, cancelJob := withJobTimeout(ctx, capToDeadline(local.CapTimeout(jobTimeout(payload.TimeoutSeconds, payload.Budget)), payload.Deadline, jobStart))
 	defer cancelJob()
 	// Every tool run of the job is watched (run_watch.go).
 	ctx = WithRunWatch(ctx, runWatchFor(payload.Budget))
@@ -2064,7 +2065,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		// other target is unfinished.
 		failed := &CommandExecutionResult{DurationMs: time.Since(startTime).Milliseconds()}
 		failed.TargetOutcomes = payload.outcomes(FailureTargetOutcomes(ctx, targets, payload.evidence(ctx, nil, scanResult), nil), refusedTargets)
-		return failed, atStage(StageRun, fmt.Errorf("scan failed: %w", err))
+		return failed, atStage(StageRun, fmt.Errorf("scan failed: %w", budgetClassed(err, ctx, deliverCtx, payload.Deadline, jobStart)))
 	}
 	ctx = deliveryContext(ctx, deliverCtx)
 
