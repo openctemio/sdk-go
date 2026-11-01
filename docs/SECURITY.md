@@ -160,6 +160,26 @@ above the ceiling the sensor's operator configured. Rate-limit flags in extra
 args (`core.RateLimitToolFlags`: `-rate-limit`, `-bulk-size`, `-c`,
 `-per-host-rate-limit`, ...) are refused, so they cannot get around it.
 
+Toward each target host every task forwarder paces its connections
+adaptively (`adapt.HostRate`: AIMD, Retry-After, a breaker, coverage gaps)
+and shares one sensor-wide view of the host (`adapt.SensorRate`, one per
+process):
+
+- the host's rate is shared by every task of the sensor, so two tools on one
+  host do not add up; on a shared sensor it is split evenly between the
+  tenants asking for the host (fair share);
+- a Retry-After any task got from the host holds the other tasks of the same
+  tenant;
+- after an edge block (a vendor block or challenge page, or a run of 403
+  answers) the host is left alone by the tenant's tasks for 15 minutes,
+  doubling on each further block up to 6 hours. During the cooldown every
+  connection toward it is refused before a path is chosen, so no other proxy
+  endpoint is tried for it, and the host is a coverage gap with the edge's
+  reason, never "no findings".
+
+Retry-After and cooldowns are kept per tenant and host: what a target told
+one tenant's scans never reaches another tenant's tasks.
+
 `core.TemplateCache` additionally requires the tenant ID to be a UUID and the
 template type to be on the allowlist (both become path components), checks
 that every written path stays inside the cache directory, and scopes cache

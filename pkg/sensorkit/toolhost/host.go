@@ -122,6 +122,11 @@ type Host struct {
 	// rule (core.CheckSharedAddr), at admission and again for each address
 	// pinned for the task's forwarder.
 	Shared bool
+	// TargetRates is the sensor-wide state every task forwarder shares
+	// about a target host: its rate (fair share per tenant), and each
+	// tenant's Retry-After and edge-block cooldowns (adapt.SensorRate).
+	// nil: the process's one (adapt.Process).
+	TargetRates *adapt.SensorRate
 	// Governor admits every tool launch under host pressure, scales the
 	// start handshake to the measured stall and counts transient start
 	// failures (research/318; resource.Manager.Governor). nil: launches

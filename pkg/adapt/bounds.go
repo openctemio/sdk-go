@@ -141,3 +141,48 @@ func Ceiling(limits ...float64) float64 {
 	}
 	return c
 }
+
+// SharedRateBounds bound the sensor-wide state of SensorRate: what every
+// task of the sensor shares about a target host.
+type SharedRateBounds struct {
+	// CooldownBase is how long a target is left alone after the first
+	// edge block (a WAF or CDN block or challenge page, or a run of 403
+	// answers); each further block of the same target doubles it, up to
+	// CooldownMax.
+	CooldownBase time.Duration
+	CooldownMax  time.Duration
+	// ShareIdle is how long a tenant that stopped asking for a host still
+	// counts for the host's fair share.
+	ShareIdle time.Duration
+	// HostIdle is how long a host nobody asked for is kept (its rate, and
+	// the cooldowns and Retry-After it set, once they passed).
+	HostIdle time.Duration
+	// MaxHosts bounds the hosts the sensor tracks; MaxTenantsPerHost the
+	// tenants sharing one host. A task whose host or tenant does not fit
+	// paces itself alone (as it did before the sensor-wide state): state is
+	// never shared between hosts or tenants to make room.
+	MaxHosts          int
+	MaxTenantsPerHost int
+}
+
+// SharedRate is the table of sensor-wide bounds. Why each value:
+//
+//   - CooldownBase 15m doubling to CooldownMax 6h: an edge that blocked
+//     the scanner's address keeps blocking it for a while; asking again at
+//     once only deepens the block. Six hours bounds what a hostile target
+//     can withhold from a tenant's scans (each cooldown is reported as a
+//     coverage gap with its reason, never as "no findings").
+//   - ShareIdle 30s: a few windows; a tenant whose tool pauses between
+//     phases keeps its share.
+//   - HostIdle 10m: long enough to carry what one task learned to the
+//     next one on the same host.
+//   - MaxHosts 65536, MaxTenantsPerHost 64: the per-task MaxHosts, and
+//     more tenants on one target at once than a shared sensor runs.
+var SharedRate = SharedRateBounds{
+	CooldownBase:      15 * time.Minute,
+	CooldownMax:       6 * time.Hour,
+	ShareIdle:         30 * time.Second,
+	HostIdle:          10 * time.Minute,
+	MaxHosts:          65536,
+	MaxTenantsPerHost: 64,
+}
