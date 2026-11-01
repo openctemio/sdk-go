@@ -281,7 +281,7 @@ certificate requests that fetch that bundle). See
 
 #### Allow everything the platform signs: `targets.allow: ["*"]`
 
-Schema v2 and later accept the single entry `"*"` in `targets.allow`: the sensor
+The policy accepts the single entry `"*"` in `targets.allow`: the sensor
 allows every target the platform signs. It is not an allow list: the built-in
 deny list, `targets.deny` and the private-range rules (`allow_private` plus the
 host switch) still apply. `"*"` mixed with other entries is refused as
@@ -894,7 +894,7 @@ or the task does not start:
 - A sensor whose tools all run through the tool host advertises
   `http.identity@1`; the platform gives identification-carrying jobs only to
   such a sensor.
-- The sensor owner's local headers (policy schema v3 `http.headers`, at most
+- The sensor owner's local headers (policy `http.headers`, at most
   four) go through the same validation as the job's (token name, printable
   ASCII value, no credential, connection or `Proxy-*` header; re-checked
   where they are used) and are merged by name under the job's

@@ -70,21 +70,15 @@ const (
 	// sensor requires a local policy and has none.
 	LocalPolicyRuleNoPolicy = "no_local_policy"
 
-	// LocalPolicyAPIVersion is the apiVersion of schema v1. v1 is frozen:
-	// it never gains a key, because a sensor refuses a file with a key it
-	// does not know, so a new v1 key would stop every older sensor (owner
-	// decision D13, api research/25 §3.3), and so is v2. The latest schema (v3)
-	// may gain additive, optional keys: a sensor that predates a key refuses
-	// the file (unknown key) and the operator upgrades the sensor to the
-	// release that introduced it, as it would for an unknown apiVersion. A
-	// new schema version is for breaking changes only.
+	// LocalPolicyAPIVersion is the apiVersion of the one local policy
+	// schema, v1, which holds every key (targets, ports, tools, checks,
+	// managed, http with user_agent, allow_insecure_tls and headers, rate,
+	// the kill switch). Until 1.0 there is a single schema: additive,
+	// optional keys may be added to it, and a sensor that predates a key
+	// refuses the file as an unknown key (fail closed: the operator upgrades
+	// the sensor). Breaking changes are decided at 1.0 (owner decision,
+	// supersedes D13's per-key versions).
 	LocalPolicyAPIVersion = "openctem.io/sensor-policy/v1"
-	// LocalPolicyAPIVersionV2 is the apiVersion of schema v2: every v1 key
-	// plus managed (see policyFileV2).
-	LocalPolicyAPIVersionV2 = "openctem.io/sensor-policy/v2"
-	// LocalPolicyAPIVersionV3 is the apiVersion of schema v3: every v2 key
-	// plus http (see policyFileV3).
-	LocalPolicyAPIVersionV3 = "openctem.io/sensor-policy/v3"
 	// MaxLocalPolicyBytes bounds the policy file.
 	MaxLocalPolicyBytes = 1 << 20
 	// MaxLocalPolicyEntries bounds each list in the policy.
@@ -99,7 +93,7 @@ const (
 // as LocalPolicyReport.Schemas reports them: the platform generates a
 // recommended policy only in a version the sensor lists, so a downloaded
 // file never stops a sensor.
-var LocalPolicySchemas = []string{"v1", "v2", "v3"}
+var LocalPolicySchemas = []string{"v1"}
 
 // Local policy states, as LocalPolicyReport.State reports them.
 const (
@@ -178,7 +172,7 @@ type LocalPolicy struct {
 	digest   string
 
 	targetsAllowSet bool
-	// allowAll is targets.allow: ["*"] (schema v2 and later): every target the
+	// allowAll is targets.allow: ["*"] every target the
 	// platform signs, still inside the deny lists and the private-range rules.
 	// It sets no allow list, so targetsAllowSet stays false.
 	allowAll      bool
@@ -200,11 +194,11 @@ type LocalPolicy struct {
 	// httpUserAgent replaces every tool's User-Agent ("": the tools');
 	// allowInsecureTLS false refuses tools that skip TLS verification.
 	httpUserAgent string
-	// httpHeaders are http.headers (v3), validated.
+	// httpHeaders are http.headers, validated.
 	httpHeaders      []LocalHTTPHeader
 	allowInsecureTLS bool
 
-	// schema is the file's schema version ("v1", "v2"); "" without a file.
+	// schema is the file's schema version ("v1"); "" without a file.
 	schema string
 	// managedAccept is managed.accept (v2; true when absent): false means
 	// the sensor owner refuses every platform-managed policy document
@@ -250,12 +244,6 @@ type policyFile struct {
 	} `yaml:"rate"`
 	KillSwitch     bool   `yaml:"kill_switch"`
 	KillSwitchFile string `yaml:"kill_switch_file"`
-}
-
-// policyFileV2 is schema v2: every v1 key, plus managed. Like v1 it is
-// frozen once released; later keys go into v3.
-type policyFileV2 struct {
-	policyFile `yaml:",inline"`
 	// Managed decides whether the platform may narrow this policy further
 	// with a managed document (api research/25 §3.5). It is read only from
 	// this file, never from the network.
@@ -264,18 +252,12 @@ type policyFileV2 struct {
 		// and the platform shows it as locked by its owner. Default true.
 		Accept *bool `yaml:"accept"`
 	} `yaml:"managed"`
-}
-
-// policyFileV3 is schema v3: every v2 key, plus http. v3 may gain
-// additive, optional keys (http.headers did); v1 and v2 are frozen.
-type policyFileV3 struct {
-	policyFileV2 `yaml:",inline"`
 	// HTTP is what the owner of this network decides about the tools'
 	// requests, whatever a tool's tool.yaml says (api RFC-060 §4.1).
 	HTTP *policyHTTP `yaml:"http"`
 }
 
-// policyHTTP is v3's http block.
+// policyHTTP is the policy's http block.
 type policyHTTP struct {
 	// UserAgent replaces every tool's User-Agent (a scanner the
 	// network's owners recognize in their logs).
@@ -465,53 +447,34 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 		return nil, errors.New("the policy is empty")
 	}
 	// The version first (a lenient read of apiVersion alone), then the
-	// whole document strictly against that version's keys: a v1 file with
-	// a v2 key is refused, as every v1-only sensor refuses it.
+	// whole document strictly against v1's keys: an unknown key or a typo
+	// refuses the file.
 	var head struct {
 		APIVersion string `yaml:"apiVersion"`
 	}
 	if err := yaml.Unmarshal(data, &head); err != nil {
 		return nil, fmt.Errorf("invalid policy: %w", err)
 	}
-	var (
-		doc    policyFile
-		target any
-		v2     policyFileV2
-		v3     policyFileV3
-		schema string
-	)
-	switch head.APIVersion {
-	case LocalPolicyAPIVersion:
-		target, schema = &doc, "v1"
-	case LocalPolicyAPIVersionV2:
-		target, schema = &v2, "v2"
-	case LocalPolicyAPIVersionV3:
-		target, schema = &v3, "v3"
-	default:
-		return nil, fmt.Errorf("apiVersion is %q; it must be %q, %q or %q", head.APIVersion, LocalPolicyAPIVersion, LocalPolicyAPIVersionV2, LocalPolicyAPIVersionV3)
+	if head.APIVersion != LocalPolicyAPIVersion {
+		return nil, fmt.Errorf("policy apiVersion is %q; it must be %s (the only schema; regenerate the file, for example with sensors.sh set-policy)", head.APIVersion, LocalPolicyAPIVersion)
 	}
+	var doc policyFile
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
-	if err := dec.Decode(target); err != nil {
-		return nil, fmt.Errorf("invalid policy (schema %s): %w", schema, err)
+	if err := dec.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("invalid policy (a key this sensor does not know is refused: upgrade the sensor if the file comes from a newer release): %w", err)
 	}
 	var extra any
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, errors.New("invalid policy: more than one YAML document")
 	}
 	managedAccept := true
-	if schema == "v3" {
-		v2 = v3.policyFileV2
-	}
-	if schema == "v2" || schema == "v3" {
-		doc = v2.policyFile
-		if m := v2.Managed; m != nil && m.Accept != nil {
-			managedAccept = *m.Accept
-		}
+	if m := doc.Managed; m != nil && m.Accept != nil {
+		managedAccept = *m.Accept
 	}
 
 	sum := sha256.Sum256(data)
-	lp := &LocalPolicy{present: true, digest: "sha256:" + hex.EncodeToString(sum[:]), schema: schema, managedAccept: managedAccept}
+	lp := &LocalPolicy{present: true, digest: "sha256:" + hex.EncodeToString(sum[:]), schema: "v1", managedAccept: managedAccept}
 	envPrivate := privateSwitch(lookup)
 
 	if t := doc.Targets; t != nil {
@@ -521,7 +484,7 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 				lp.warnings = append(lp.warnings, fmt.Sprintf("targets.allow_private is true but %s is not 1: private targets stay refused", EnvSensorAllowPrivateTargets))
 			}
 		}
-		if allowAll, err := allowAllEntry(t.Allow, schema); err != nil {
+		if allowAll, err := allowAllEntry(t.Allow); err != nil {
 			return nil, err
 		} else if allowAll {
 			lp.allowAll = true
@@ -562,7 +525,7 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 	lp.allowCustomTemplates = doc.AllowCustomTemplates != nil && *doc.AllowCustomTemplates
 	lp.allowInteractsh = doc.AllowInteractsh != nil && *doc.AllowInteractsh
 	lp.allowInsecureTLS = true
-	if err := lp.readHTTP(v3.HTTP); err != nil {
+	if err := lp.readHTTP(doc.HTTP); err != nil {
 		return nil, err
 	}
 	if r := doc.Rate; r != nil {
@@ -710,9 +673,8 @@ func splitList(s string) []string {
 }
 
 // allowAllEntry reports whether targets.allow is the single entry "*" (allow
-// everything the platform signs). "*" is a schema v2 feature (v1 is frozen),
-// and it cannot be mixed with other entries: that would be ambiguous.
-func allowAllEntry(entries []string, schema string) (bool, error) {
+// everything the platform signs). "*" cannot be mixed with other entries: that would be ambiguous.
+func allowAllEntry(entries []string) (bool, error) {
 	star := false
 	for _, e := range entries {
 		if strings.TrimSpace(e) == "*" {
@@ -721,9 +683,6 @@ func allowAllEntry(entries []string, schema string) (bool, error) {
 	}
 	if !star {
 		return false, nil
-	}
-	if schema == "v1" {
-		return false, fmt.Errorf("targets.allow: \"*\" (allow everything the platform signs) needs apiVersion %s or later; schema v1 is frozen", LocalPolicyAPIVersionV2)
 	}
 	if len(entries) != 1 {
 		return false, errors.New("targets.allow: \"*\" allows everything the platform signs and cannot be mixed with other entries; use only [\"*\"], or list the ranges and names without it")
@@ -978,7 +937,7 @@ func (lp *LocalPolicy) readHTTP(h *policyHTTP) error {
 }
 
 // HTTPHeaders are the identification headers the sensor's owner sets
-// (http.headers, schema v3): sent on every request of every task that sends
+// (http.headers): sent on every request of every task that sends
 // HTTP to its targets, below the job's locked names. Without a policy: none.
 func (lp *LocalPolicy) HTTPHeaders() []LocalHTTPHeader {
 	if !lp.Present() {
@@ -1010,7 +969,7 @@ func checkLocalHeaders(hs []LocalHTTPHeader) ([]LocalHTTPHeader, error) {
 	return slices.Clone(hs), nil
 }
 
-// Schema is the policy file's schema version ("v1", "v2"), "" without a
+// Schema is the policy file's schema version ("v1"), "" without a
 // file.
 func (lp *LocalPolicy) Schema() string {
 	if lp == nil {
@@ -1120,7 +1079,7 @@ type LocalPolicyReport struct {
 	Summary *LocalPolicySummary `json:"summary,omitempty"`
 	// Warnings are the operator warnings (see LocalPolicy.Warnings).
 	Warnings []string `json:"warnings,omitempty"`
-	// Schema is the policy file's schema version ("v1", "v2"); "" without
+	// Schema is the policy file's schema version ("v1"); "" without
 	// a file.
 	Schema string `json:"schema,omitempty"`
 	// Schemas are the schema versions this sensor reads
@@ -1164,7 +1123,7 @@ type LocalPolicySummary struct {
 	// every tool ("" none). AllowInsecureTLS is http.allow_insecure_tls.
 	HTTPUserAgent    string `json:"http_user_agent,omitempty"`
 	AllowInsecureTLS bool   `json:"allow_insecure_tls"`
-	// HTTPHeaderNames are the names of http.headers (v3); the values stay
+	// HTTPHeaderNames are the names of http.headers; the values stay
 	// on the host.
 	HTTPHeaderNames []string `json:"http_header_names,omitempty"`
 }

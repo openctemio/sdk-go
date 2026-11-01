@@ -5,14 +5,14 @@ import (
 	"testing"
 )
 
-const headersHead = "apiVersion: openctem.io/sensor-policy/v3\ntargets:\n  allow: [\"*\"]\n"
+const headersHead = "apiVersion: openctem.io/sensor-policy/v1\ntargets:\n  allow: [\"*\"]\n"
 
 func headersPolicy(t *testing.T, http string) (*LocalPolicy, error) {
 	t.Helper()
 	return ParseLocalPolicy([]byte(headersHead+http), LocalPolicyOptions{LookupEnv: privateOn, LookupIP: policyDNS})
 }
 
-// The sensor owner's identification headers (schema v3) are read, kept in
+// The sensor owner's identification headers (policy v1) are read, kept in
 // order, and only their names reach the report.
 func TestLocalPolicyHeadersHeaders(t *testing.T) {
 	lp, err := headersPolicy(t, "http:\n  user_agent: dc1-scan\n  headers:\n    - {name: X-Netops, value: dc1}\n    - {name: ATTT, value: is-here}\n")
@@ -24,10 +24,10 @@ func TestLocalPolicyHeadersHeaders(t *testing.T) {
 		t.Fatalf("headers %+v", hs)
 	}
 	if ua, _ := lp.HTTPPolicy(); ua != "dc1-scan" {
-		t.Fatalf("v3 keeps its keys: ua %q", ua)
+		t.Fatalf("v1 keeps its keys: ua %q", ua)
 	}
 	r := lp.Report()
-	if r.Schema != "v3" || len(r.Summary.HTTPHeaderNames) != 2 || r.Summary.HTTPHeaderNames[0] != "X-Netops" {
+	if r.Schema != "v1" || len(r.Summary.HTTPHeaderNames) != 2 || r.Summary.HTTPHeaderNames[0] != "X-Netops" {
 		t.Fatalf("report %+v", r)
 	}
 	// The returned list is a copy.
@@ -75,15 +75,11 @@ func TestLocalPolicyHeadersHeaderValidation(t *testing.T) {
 	if _, err := headersPolicy(t, "http:\n  headers:\n    - {name: A1, value: "+strings.Repeat("v", 200)+"}\n"); err != nil {
 		t.Errorf("200 bytes: %v", err)
 	}
-	// v1 and v2 are frozen: they never gain http.headers.
-	for _, v := range []string{"v1", "v2"} {
-		doc := "apiVersion: openctem.io/sensor-policy/" + v + "\ntargets:\n  allow: [\"203.0.113.0/24\"]\nhttp:\n  headers:\n    - {name: X-A, value: v}\n"
+	// Only v1 exists.
+	for _, v := range []string{"v2", "v3", "v4"} {
+		doc := "apiVersion: openctem.io/sensor-policy/" + v + "\nhttp:\n  headers:\n    - {name: X-A, value: v}\n"
 		if _, err := ParseLocalPolicy([]byte(doc), LocalPolicyOptions{LookupEnv: privateOn, LookupIP: policyDNS}); err == nil {
-			t.Errorf("%s must not accept http", v)
+			t.Errorf("%s accepted", v)
 		}
-	}
-	// There is no v4.
-	if _, err := ParseLocalPolicy([]byte("apiVersion: openctem.io/sensor-policy/v4\ntargets:\n  allow: [\"*\"]\n"), LocalPolicyOptions{LookupEnv: privateOn, LookupIP: policyDNS}); err == nil {
-		t.Error("v4 is not a schema")
 	}
 }

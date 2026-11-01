@@ -120,7 +120,7 @@ func Admit(ctx context.Context, m tool.Manifest, task tool.Task, pol Policy, mod
 const CapabilityHTTPIdentity = "http.identity@1"
 
 // HTTPPolicy is a policy that decides about the tools' requests
-// (*core.LocalPolicy, schema v3): a User-Agent that replaces every tool's,
+// (*core.LocalPolicy, policy v1): a User-Agent that replaces every tool's,
 // and whether a tool may skip TLS verification.
 type HTTPPolicy interface {
 	HTTPPolicy() (userAgent string, allowInsecureTLS bool)
@@ -128,7 +128,7 @@ type HTTPPolicy interface {
 
 // HTTPHeaderPolicy is a policy that adds identification headers of the
 // sensor owner to every task that sends HTTP to its targets
-// (*core.LocalPolicy, schema v3).
+// (*core.LocalPolicy, policy v1).
 type HTTPHeaderPolicy interface {
 	HTTPHeaders() []core.LocalHTTPHeader
 }

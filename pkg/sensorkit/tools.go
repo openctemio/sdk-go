@@ -85,7 +85,7 @@ func (p kitPolicy) KillSwitchEngaged() bool                  { return p.k.LocalP
 // CapRate caps a tool's rate key by the policy's rate.max_rps.
 func (p kitPolicy) CapRate(requested int) int { return p.k.LocalPolicy().CapRate(requested) }
 
-// HTTPPolicy is the policy's http section (schema v3): a forced
+// HTTPPolicy is the policy's http section (policy v1): a forced
 // User-Agent, and whether a tool may skip TLS verification.
 func (p kitPolicy) HTTPPolicy() (string, bool) { return p.k.LocalPolicy().HTTPPolicy() }
 

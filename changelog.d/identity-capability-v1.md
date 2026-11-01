@@ -4,9 +4,13 @@
   A sensor advertises only `http.identity@1` for locked headers and `user_agent_locked`, the sensor-local `http.headers`,
   the query parameter and the reported identity. An older sensor on `@1` ignores the fields it does not know.
 
-### Changed: `http.headers` is part of local policy schema v3 (there is no v4)
+### Behaviour change: one local policy schema, `openctem.io/sensor-policy/v1`, holds every key
 
-- v0.45.0 introduced schema `openctem.io/sensor-policy/v4` for `http.headers`; it is removed (`LocalPolicyAPIVersionV4` and
-  "v4" in `LocalPolicySchemas`). `http.headers` is an additive, optional key of v3. v1 and v2 stay frozen. A sensor that
-  predates the key refuses the file as it would refuse an unknown apiVersion: upgrade the sensor first. A new schema
-  version is for breaking changes only.
+- The local policy has a single schema, `openctem.io/sensor-policy/v1`, with every key: targets (including `allow: ["*"]`),
+  ports, tools, checks, `managed`, `http` (`user_agent`, `allow_insecure_tls`, `headers`), rate and the kill switch. Until 1.0
+  it may gain additive, optional keys; a sensor that predates a key refuses the file as an unknown key (fail closed:
+  upgrade the sensor). Breaking changes are decided at 1.0.
+- `LocalPolicyAPIVersionV2` and `LocalPolicyAPIVersionV3` are removed and `LocalPolicySchemas` is `["v1"]`. A file with any
+  other apiVersion (v2, v3 and the v4 of v0.45.0 included) is refused with "policy apiVersion is ...; it must be
+  openctem.io/sensor-policy/v1": rewrite the file's apiVersion line, or regenerate it (`sensors.sh set-policy`).
+  Upgrade note: files written for the sensors in the field with `v2` or `v3` need that one line changed.

@@ -255,7 +255,7 @@ http:
 - **Go tools:** `ctx.HTTP()` applies it. A request's own `User-Agent` or header still wins.
 - **Exec tools:** pass `{{http.user_agent}}` to the program (`"-H", "User-Agent: {{http.user_agent}}"`).
 - **Adapters:** read the effective settings in `run.task.http`.
-- **The network owner decides last.** The sensor's local policy (schema `openctem.io/sensor-policy/v3`) can set `http: {user_agent: "...", allow_insecure_tls: false}`:
+- **The network owner decides last.** The sensor's local policy (schema `openctem.io/sensor-policy/v1`) can set `http: {user_agent: "...", allow_insecure_tls: false}`:
   - its User-Agent replaces every tool's;
   - a tool that skips TLS verification is refused with `refused_by_policy`.
 
@@ -264,10 +264,10 @@ http:
   - Its User-Agent applies unless the local policy forces one.
   - `allow_insecure_tls: false` refuses a tool that skips TLS verification, even where the local policy allows it.
   - It can never allow what the local policy forbids.
-- **The sensor owner can mark the scan traffic too** (local policy schema `openctem.io/sensor-policy/v3`):
+- **The sensor owner can mark the scan traffic too** (local policy schema `openctem.io/sensor-policy/v1`):
 
   ```yaml
-  apiVersion: openctem.io/sensor-policy/v3
+  apiVersion: openctem.io/sensor-policy/v1
   http:
     user_agent: "dc1-scan (+netops@example.com)"
     headers:                       # at most 4: name, value
