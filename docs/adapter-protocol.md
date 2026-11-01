@@ -281,7 +281,7 @@ http:
 - **A query parameter:** a job can carry `http_policy.query` (`{name, value}`, each 1 to 64 of letters, digits and `. _ ~ -`).
   - A tool carries it when it declares `features.http_query` (it requests through `ctx.HTTP()`, which sets it on every URL, or maps it onto its own flag) or passes `{{http.query:-flag}}` (the flag and `name=value`, nothing when the task has none).
   - Any other tool still runs; the result reports the parameter as not applied, with the reason.
-- **Reported:** the result's metadata `http_identity` lists what the requests carried: the User-Agent and each header with its source (`job`, `job_locked`, `sensor`), values of secret-looking names masked, entries not applied with a reason, and the query parameter. A sensor that does all of this advertises `http.identity@2` (`toolhost.CapabilityHTTPIdentityV2`).
+- **Reported:** the result's metadata `http_identity` lists what the requests carried: the User-Agent and each header with its source (`job`, `job_locked`, `sensor`), values of secret-looking names masked, entries not applied with a reason, and the query parameter. `http.identity@1` covers all of this: locked headers, the sensor-local layer, the query parameter and the report. An older sensor on `@1` ignores the fields it does not know; it has no local layer, so locks are moot there.
 - **Refused:**
   - `Authorization`, `Cookie` and `Proxy-*` headers (credentials come from the credential broker, never from tool.yaml);
   - framing headers;

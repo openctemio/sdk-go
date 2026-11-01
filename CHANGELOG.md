@@ -38,8 +38,8 @@ Unreleased changes are kept one file per change in
 - A job's `http_policy.query` (`{name, value}`) is added to every request URL by tools that declare `features.http_query`
   (`ctx.HTTP()` does it) or pass `{{http.query:-flag}}`. Any other tool runs, and the result reports the parameter as not applied.
 - The result's metadata `http_identity` reports the identification actually sent per tool (headers with source, secret-looking
-  values masked, anything not applied with its reason). New capability constant `toolhost.CapabilityHTTPIdentityV2`
-  (`http.identity@2`).
+  values masked, anything not applied with its reason). `http.identity@1` covers all of this
+  (there is no `@2`).
 - **Behaviour change:** a sensor whose owner sets `http.headers` refuses a networked tool that cannot carry headers, the same
   rule as for a job's identification.
 
