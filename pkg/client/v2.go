@@ -430,6 +430,13 @@ func (c *Client) PushResultsV2(ctx context.Context, report *ctis.Report, opts *V
 		return save()
 	}
 
+	// The job's lease was lost here (core.ErrLeaseLost): its results belong
+	// to a run the platform handed to another sensor. They are never sent,
+	// bound or unbound.
+	if opts.CommandID != "" && c.leases.isLost(opts.CommandID) {
+		return nil, &V2Error{Status: http.StatusConflict, Body: errLeaseLostResults.Error()}
+	}
+
 	hello, err := c.resultsHello(ctx)
 	if err != nil {
 		return nil, err
@@ -487,6 +494,9 @@ func (c *Client) PushResultsV2(ctx context.Context, report *ctis.Report, opts *V
 					return nil, errors.Join(err, serr)
 				}
 			}
+		case ve.ProblemName() == protov2.ProblemCommandNotFound && commandID != "" && c.leases.isLost(commandID):
+			// Lost while sending: never re-sent unbound.
+			return nil, err
 		case ve.ProblemName() == protov2.ProblemCommandNotFound && commandID != "":
 			p.Unbound = true
 			if rerr := restart("its command is no longer open on the platform"); rerr != nil {
@@ -544,6 +554,12 @@ type v2Plan struct {
 // pushV2Once plans and sends the report under p.ReportID.
 func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits protov2.Limits, commandID string,
 	p *V2Progress, save func() error, plan v2Plan) (*protov2.Status, error) {
+	// A bound report states the lease epoch its command is held under, so
+	// the platform refuses the results of a run it has handed out again.
+	var lease http.Header
+	if commandID != "" {
+		lease = leaseHeader(c.leases.epoch(commandID))
+	}
 	r := *report
 	r.Metadata.ID = p.ReportID // RFC-026: metadata.id empty or equal to the report id
 	if strings.TrimSpace(r.Version) == "" || !strings.HasPrefix(strings.TrimSpace(r.Version), "1") {
@@ -580,7 +596,7 @@ func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits pro
 			return nil, err
 		}
 		p.lastFindings, p.lastBytes = len(segs[0].Findings), rawSize(segs[0])
-		data, _, err := c.v2Do(ctx, http.MethodPut, protov2.ReportPath(commandID, p.ReportID), body, enc, digest)
+		data, _, err := c.v2DoWith(ctx, http.MethodPut, protov2.ReportPath(commandID, p.ReportID), body, enc, digest, lease)
 		if err != nil {
 			return nil, err
 		}
@@ -616,7 +632,7 @@ func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits pro
 			continue
 		}
 		p.lastFindings, p.lastBytes = len(seg.Findings), rawSize(seg)
-		if _, _, err := c.v2Do(ctx, http.MethodPut, protov2.SegmentPath(commandID, p.ReportID, seq), body, enc, digest); err != nil {
+		if _, _, err := c.v2DoWith(ctx, http.MethodPut, protov2.SegmentPath(commandID, p.ReportID, seq), body, enc, digest, lease); err != nil {
 			return nil, err
 		}
 		if p.Acked == nil {
@@ -636,7 +652,7 @@ func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits pro
 	if err != nil {
 		return nil, err
 	}
-	data, _, err := c.v2Do(ctx, http.MethodPost, protov2.CommitPath(commandID, p.ReportID), commit, "", "")
+	data, _, err := c.v2DoWith(ctx, http.MethodPost, protov2.CommitPath(commandID, p.ReportID), commit, "", "", lease)
 	if err != nil {
 		return nil, err
 	}

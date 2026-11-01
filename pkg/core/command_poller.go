@@ -359,6 +359,8 @@ type CommandPoller struct {
 	// re-queued by the platform's acknowledged-command reaper while this
 	// sensor still held it, and then ran twice (api RFC-030 B6).
 	sem chan struct{}
+	// leases watches each held job's lease (lease_watchdog.go).
+	leases leaseWatch
 
 	// slotFreed is signaled when a command ends while the platform may
 	// still have work for this sensor (backlog), so the poller claims it
@@ -613,6 +615,10 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 		killTick = kt.C
 	}
 
+	// Held leases are checked every LeaseWatchInterval.
+	leaseTick := time.NewTicker(LeaseWatchInterval)
+	defer leaseTick.Stop()
+
 	// deferred fires when a poll skipped for the claim backoff may run.
 	deferred := time.NewTimer(time.Hour)
 	deferred.Stop()
@@ -635,6 +641,8 @@ func (p *CommandPoller) Start(ctx context.Context) error {
 
 	for {
 		select {
+		case now := <-leaseTick.C:
+			p.watchLeases(now)
 		case <-killTick:
 			// Released: poll at once instead of waiting for the next tick.
 			if was := p.killed.Load(); !p.checkKillSwitch() && was {
@@ -744,6 +752,25 @@ func (p *CommandPoller) StopCommands(ids ...string) {
 func (p *CommandPoller) QueueStats() QueueStats {
 	st, _ := p.queue.snapshot(time.Now())
 	return st
+}
+
+// LeasesRenewed records an answered heartbeat, sent at at, that listed ids
+// as running: their leases were renewed (lease_watchdog.go). It implements
+// LeaseRenewalObserver.
+func (p *CommandPoller) LeasesRenewed(at time.Time, ids []string) {
+	p.leases.renewed(at, ids)
+}
+
+// watchLeases stops the held jobs whose lease ran out without a renewal.
+func (p *CommandPoller) watchLeases(now time.Time) {
+	rec, _ := p.client.(LeaseLossRecorder)
+	for _, id := range p.leases.expire(now, func(id string) {
+		if rec != nil {
+			rec.MarkLeaseLost(id)
+		}
+	}) {
+		fmt.Printf("[command-poller] Lease of command %s not renewed for longer than the lease: stopping it\n", id)
+	}
 }
 
 // HeldCommandIDs are the commands this sensor holds (claimed, not
@@ -1145,6 +1172,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		p.queue.track(cmd.ID, commandTargets(meta), meta.NetworkID)
 
 		// Claim (acknowledge) it now that a slot is held.
+		claimedAt := time.Now()
 		if err := p.claim(ctx, cmd); err != nil {
 			p.queue.forget(cmd.ID)
 			<-p.sem
@@ -1161,6 +1189,7 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		// poller drains (DrainGrace) instead of killing it at once.
 		cmdCtx, cancel := context.WithCancelCause(p.cmdBase)
 		p.queue.setCancel(cmd.ID, cancel)
+		p.leases.track(cmd.ID, cmd.LeaseExpiresAt, claimedAt, cancel)
 		p.activeCmds.Add(1)
 		started++
 		go p.executeCommand(cmdCtx, cmd, jobErr)
@@ -1239,6 +1268,7 @@ func (p *CommandPoller) claim(ctx context.Context, cmd *Command) error {
 // releaseCommandSlot frees what a finished command held: its context, its
 // queue entry, its concurrency slot and the host it claimed.
 func (p *CommandPoller) releaseCommandSlot(cmd *Command) {
+	p.leases.untrack(cmd.ID)
 	p.queue.cancel(cmd.ID, context.Canceled) // free the context
 	p.queue.forget(cmd.ID)
 	<-p.sem
@@ -1411,6 +1441,13 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	// through the normal failure path below, so the command is reported failed
 	// with the panic message instead of vanishing.
 	result, err, abandoned := p.runExecutor(ctx, cmd)
+	// The lease was lost while the platform could not be reached: the job
+	// is another sensor's now. Nothing is reported or released (both would
+	// be refused) and its results are not sent (Client.MarkLeaseLost).
+	if errors.Is(context.Cause(ctx), ErrLeaseLost) {
+		fmt.Printf("[command-poller] Command %s stopped: %v\n", cmd.ID, ErrLeaseLost)
+		return
+	}
 	if abandoned {
 		p.giveUpAbandoned(ctx, cmd)
 		return
@@ -1483,21 +1520,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 			fmt.Printf("[command-poller] Command %s completed (findings: %d)\n", cmd.ID, reportResult.FindingsCount)
 		}
 	}
-	// Targets refused at admission and by the executor's own check: the
-	// command completed on the rest (partial), and the result says which
-	// targets were skipped and why.
-	if admission.Partial() {
-		refused := append(append([]RefusedTarget(nil), admission.Refused...), refusedTargetsFrom(reportResult.Metadata)...)
-		if reportResult.Metadata == nil {
-			reportResult.Metadata = map[string]any{}
-		}
-		for k, v := range RefusedTargetsMetadata(refused) {
-			reportResult.Metadata[k] = v
-		}
-		if reportResult.TargetOutcomes != nil {
-			reportResult.TargetOutcomes = append(skippedOutcomes(admission.Refused, outcomeRevisionOf(cmd.Payload)), reportResult.TargetOutcomes...)
-		}
-	}
+	addAdmissionRefusals(reportResult, admission, cmd)
 	addReachMetadata(reportResult, reached)
 	p.logOutcome(ctx, cmd, reportResult, err, time.Since(startTime))
 	p.finishLog(ctx, cmd.ID)
@@ -1511,6 +1534,25 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Failed to report result for command %s: %v\n", cmd.ID, err)
 		}
+	}
+}
+
+// addAdmissionRefusals records the targets refused at admission and by the
+// executor's own check: the command completed on the rest (partial), and the
+// result says which targets were skipped and why.
+func addAdmissionRefusals(reportResult *CommandResult, admission *CommandAdmission, cmd *Command) {
+	if !admission.Partial() {
+		return
+	}
+	refused := append(append([]RefusedTarget(nil), admission.Refused...), refusedTargetsFrom(reportResult.Metadata)...)
+	if reportResult.Metadata == nil {
+		reportResult.Metadata = map[string]any{}
+	}
+	for k, v := range RefusedTargetsMetadata(refused) {
+		reportResult.Metadata[k] = v
+	}
+	if reportResult.TargetOutcomes != nil {
+		reportResult.TargetOutcomes = append(skippedOutcomes(admission.Refused, outcomeRevisionOf(cmd.Payload)), reportResult.TargetOutcomes...)
 	}
 }
 

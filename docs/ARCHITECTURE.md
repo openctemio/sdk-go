@@ -151,6 +151,32 @@ chooses where the job goes next. A package `core` cannot import (the
 content cache, the proxy pool, `tool.Error`) tags its errors with
 `core.FailureClassifier`.
 
+### The lease watchdog
+
+A claimed job is held under a lease that the platform renews on every
+answered heartbeat that lists it as running. During a network loss nothing
+is renewed, and the platform re-queues the job for another sensor once the
+lease runs out. The poller keeps, per held job, the lease length it learned
+at the claim (`lease_expires_at` minus the sensor's own clock at the claim;
+an implausible value, below 30 seconds or above an hour, is read as the
+platform default of 3 minutes) and the time of its last renewal
+(`BaseSensor` tells the poller after each answered heartbeat,
+`LeaseRenewalObserver`). A job that went longer than its lease plus a grace
+(a quarter of the lease, at least 30 seconds) without a renewal is stopped
+with `ErrLeaseLost` (`pkg/core/lease_watchdog.go`, checked every 5 seconds):
+
+- the client first marks the lease lost (`Client.MarkLeaseLost`), so nothing
+  of the job is sent afterwards: a bound report is refused before any
+  request, the outbox dead-letters it, and it is never re-sent unbound after
+  `command-not-found`;
+- the poller reports nothing and releases nothing (both would be refused).
+
+Only durations are compared with the sensor's clock, so clock skew between
+sensor and platform never decides a stop. The watchdog arms at the first
+answered heartbeat: a poller run without `BaseSensor` never stops a job.
+Bound reports also carry the claim's `X-OpenCTEM-Lease-Epoch`, so the
+platform refuses results of a run it has handed out again.
+
 ### The local store and the janitor
 
 A daemon opens `pkg/localstore` beside its outbox (`SENSOR_STORE_DIR`; the

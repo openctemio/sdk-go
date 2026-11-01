@@ -52,6 +52,7 @@ func (p *CommandPoller) RunClaimed(ctx context.Context, cmd *Command) error {
 	cmdCtx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
 	defer cancel(nil)
 	p.queue.setCancel(cmd.ID, cancel)
+	p.leases.track(cmd.ID, cmd.LeaseExpiresAt, time.Now(), cancel)
 	// A stop (SIGTERM on the Job) is a drain: the command is released, not
 	// reported failed.
 	stop := context.AfterFunc(ctx, func() { cancel(errDrained) })

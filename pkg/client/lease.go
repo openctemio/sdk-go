@@ -29,10 +29,46 @@ type leaseEntry struct {
 	at    time.Time
 }
 
-// leaseTable maps a command ID to the lease epoch it is held under.
+// leaseTable maps a command ID to the lease epoch it is held under, and
+// keeps the commands whose lease was lost here (core lease watchdog).
 type leaseTable struct {
-	mu sync.Mutex
-	m  map[string]leaseEntry
+	mu   sync.Mutex
+	m    map[string]leaseEntry
+	lost map[string]time.Time
+}
+
+// lostLeaseTTL is how long a lost command's results stay refused: longer
+// than any outbox retry of them.
+const lostLeaseTTL = 7 * 24 * time.Hour
+
+// errLeaseLostResults is why the results of a lost job are not sent.
+var errLeaseLostResults = errors.New("results not sent: the job's lease was lost while the platform could not be reached, and it was handed to another sensor")
+
+// markLost records that cmdID's lease was lost here.
+func (t *leaseTable) markLost(cmdID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := time.Now()
+	if t.lost == nil {
+		t.lost = map[string]time.Time{}
+	}
+	if len(t.lost) >= maxLeaseEntries {
+		for id, at := range t.lost {
+			if now.Sub(at) > lostLeaseTTL || len(t.lost) >= maxLeaseEntries {
+				delete(t.lost, id)
+			}
+		}
+	}
+	t.lost[cmdID] = now
+	delete(t.m, cmdID)
+}
+
+// isLost reports whether cmdID's lease was lost here.
+func (t *leaseTable) isLost(cmdID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	at, ok := t.lost[cmdID]
+	return ok && time.Since(at) <= lostLeaseTTL
 }
 
 // record keeps the epoch of a claim or start answer; an answer without one
@@ -122,4 +158,13 @@ func leaseLost(action string, epoch int, err error) error {
 		return err
 	}
 	return &leaseLostError{epoch: epoch, err: err}
+}
+
+// MarkLeaseLost records that the job cmdID lost its lease here (the sensor's
+// lease watchdog stopped it): its results are not sent afterwards, bound or
+// unbound, and nothing re-sends them. It implements core.LeaseLossRecorder.
+func (c *Client) MarkLeaseLost(cmdID string) {
+	if cmdID != "" {
+		c.leases.markLost(cmdID)
+	}
 }
