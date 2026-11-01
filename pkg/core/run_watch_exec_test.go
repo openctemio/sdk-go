@@ -59,3 +59,27 @@ func TestExecuteScan_NoDeadlineNoBudget(t *testing.T) {
 		t.Fatalf("a job without deadline or timeout got deadline %v", sc.deadline)
 	}
 }
+
+// errOnDoneScanner fails with its context's error when the job ends, as a
+// tool runner that settled nothing does.
+type errOnDoneScanner struct{ fixedScanner }
+
+func (s *errOnDoneScanner) Scan(ctx context.Context, _ string, _ *core.ScanOptions) (*core.ScanResult, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A job its time budget ended with nothing settled fails as a budget
+// time-out (infra.budget_exceeded), not as an unknown tool error.
+func TestExecuteScan_BudgetFailureIsClassified(t *testing.T) {
+	payload, _ := json.Marshal(map[string]any{"scanner": "dl", "target": "http://203.0.113.10", "timeout_seconds": 1})
+	exec := core.NewDefaultCommandExecutor(nil)
+	exec.AddScanner(&errOnDoneScanner{fixedScanner: fixedScanner{name: "dl"}})
+	_, err := exec.Execute(context.Background(), &core.Command{ID: "c-budget", Type: "scan", Payload: payload})
+	if err == nil {
+		t.Fatal("want a failure")
+	}
+	if f := core.ClassifyFailure(core.FailureInput{Err: err}); f.Class != core.FailureBudgetExceeded {
+		t.Fatalf("class %q (%v)", f.Class, err)
+	}
+}

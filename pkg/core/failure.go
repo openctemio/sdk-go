@@ -134,6 +134,11 @@ const (
 	ReasonSlowStart   = "slow_start"
 	ReasonOOMHost     = "oom_host"
 	ReasonStartEAGAIN = "start_eagain"
+	// ReasonDeadlinePassed refines FailureBudgetExceeded: the platform's
+	// deadline for the command had already passed when the job started, so
+	// the job only had MinDeadlineBudget. The platform sent a stale
+	// deadline; neither the tool nor the targets caused the failure.
+	ReasonDeadlinePassed = "deadline_passed"
 )
 
 // Host pressure levels a failure's evidence may name.

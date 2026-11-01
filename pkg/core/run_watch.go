@@ -19,6 +19,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"time"
@@ -147,3 +148,40 @@ func (c *ProcessCPU) Read() (time.Duration, bool) {
 
 // cpuReadable says process CPU time is read on this system (procTable).
 var cpuReadable = runtime.GOOS == "linux"
+
+// budgetError is a job failure its own time budget caused: the job context
+// ran out while the same context without the budget did not. It keeps the
+// tool's error (Unwrap) and classifies as FailureBudgetExceeded, so the
+// platform reads a time-out of the job, not an unknown tool failure.
+type budgetError struct {
+	err    error
+	reason string
+}
+
+func (e *budgetError) Error() string { return "the job's time budget ran out: " + e.err.Error() }
+func (e *budgetError) Unwrap() error { return e.err }
+
+// FailureClass implements FailureClassifier.
+func (e *budgetError) FailureClass() (string, string) {
+	return string(FailureBudgetExceeded), e.reason
+}
+
+// budgetClassed returns err as a budgetError when the job's time budget
+// ended the run (job ran out, unbounded, the same context without the
+// budget, did not), with ReasonDeadlinePassed when the platform's deadline
+// had passed before the job started (it then ran MinDeadlineBudget only).
+// Any other error, and a cancel (unbounded ended too), is returned as is.
+func budgetClassed(err error, job, unbounded context.Context, deadline, start time.Time) error {
+	if err == nil || !errors.Is(job.Err(), context.DeadlineExceeded) || unbounded.Err() != nil {
+		return err
+	}
+	var be *budgetError
+	if errors.As(err, &be) {
+		return err
+	}
+	reason := ""
+	if !deadline.IsZero() && !deadline.After(start) {
+		reason = ReasonDeadlinePassed
+	}
+	return &budgetError{err: err, reason: reason}
+}
