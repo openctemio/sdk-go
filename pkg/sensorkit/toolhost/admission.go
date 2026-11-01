@@ -111,17 +111,16 @@ func Admit(ctx context.Context, m tool.Manifest, task tool.Task, pol Policy, mod
 // whose tools all run through the tool host advertises it
 // (ToolRegistry.AddCapabilities), and the platform gives jobs that carry an
 // identification only to a sensor that reports it.
+//
+// The one capability covers the whole feature: the job's locked_headers and
+// user_agent_locked, the sensor owner's local http.headers (policy schema
+// v3), the query parameter (features.http_query, {{http.query:-flag}}) and
+// the report of what was sent (Outcome.Identity, core.MetaHTTPIdentity). A
+// sensor that predates a part of it ignores the fields it does not know.
 const CapabilityHTTPIdentity = "http.identity@1"
 
-// CapabilityHTTPIdentityV2 is what a sensor advertises when, besides
-// http.identity@1, it honors the job's locked_headers and user_agent_locked,
-// merges the owner's local http.headers (schema v4), carries the job's query
-// parameter in tools that declare features.http_query, and reports the
-// identification it applied (Outcome.Identity, core.MetaHTTPIdentity).
-const CapabilityHTTPIdentityV2 = "http.identity@2"
-
 // HTTPPolicy is a policy that decides about the tools' requests
-// (*core.LocalPolicy, schema v3): a User-Agent that replaces every tool's,
+// (*core.LocalPolicy, policy v1): a User-Agent that replaces every tool's,
 // and whether a tool may skip TLS verification.
 type HTTPPolicy interface {
 	HTTPPolicy() (userAgent string, allowInsecureTLS bool)
@@ -129,7 +128,7 @@ type HTTPPolicy interface {
 
 // HTTPHeaderPolicy is a policy that adds identification headers of the
 // sensor owner to every task that sends HTTP to its targets
-// (*core.LocalPolicy, schema v4).
+// (*core.LocalPolicy, policy v1).
 type HTTPHeaderPolicy interface {
 	HTTPHeaders() []core.LocalHTTPHeader
 }

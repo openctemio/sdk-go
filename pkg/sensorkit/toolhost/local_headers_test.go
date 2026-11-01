@@ -370,3 +370,11 @@ func TestMaskIdentityValue(t *testing.T) {
 		}
 	}
 }
+
+// The platform matches one capability for the whole identification feature;
+// there is no second version of it.
+func TestOneIdentityCapability(t *testing.T) {
+	if CapabilityHTTPIdentity != "http.identity@1" {
+		t.Fatalf("capability %q: the platform matches http.identity@1", CapabilityHTTPIdentity)
+	}
+}

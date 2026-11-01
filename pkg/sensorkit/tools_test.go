@@ -225,7 +225,7 @@ func TestKitPolicy_FollowsReload(t *testing.T) {
 }
 
 // TestKitPolicy_HTTPAndAddresses: the kit's host applies the local
-// policy's http section (schema v3) and pins a confined task's addresses
+// policy's http section (policy v1) and pins a confined task's addresses
 // to the ones the policy admitted. Both were read by type assertion and
 // were silently off for kit-hosted tools.
 func TestKitPolicy_HTTPAndAddresses(t *testing.T) {
@@ -244,7 +244,7 @@ func TestKitPolicy_HTTPAndAddresses(t *testing.T) {
 	if ua, insecure := hp.HTTPPolicy(); ua != "" || !insecure {
 		t.Fatalf("no policy: %q %v", ua, insecure)
 	}
-	lp, err := core.ParseLocalPolicy([]byte("apiVersion: openctem.io/sensor-policy/v3\nhttp:\n  user_agent: corp-scan\n  allow_insecure_tls: false\n"), core.LocalPolicyOptions{})
+	lp, err := core.ParseLocalPolicy([]byte("apiVersion: openctem.io/sensor-policy/v1\nhttp:\n  user_agent: corp-scan\n  allow_insecure_tls: false\n"), core.LocalPolicyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -255,7 +255,7 @@ http:
 - **Go tools:** `ctx.HTTP()` applies it. A request's own `User-Agent` or header still wins.
 - **Exec tools:** pass `{{http.user_agent}}` to the program (`"-H", "User-Agent: {{http.user_agent}}"`).
 - **Adapters:** read the effective settings in `run.task.http`.
-- **The network owner decides last.** The sensor's local policy (schema `openctem.io/sensor-policy/v3`) can set `http: {user_agent: "...", allow_insecure_tls: false}`:
+- **The network owner decides last.** The sensor's local policy (schema `openctem.io/sensor-policy/v1`) can set `http: {user_agent: "...", allow_insecure_tls: false}`:
   - its User-Agent replaces every tool's;
   - a tool that skips TLS verification is refused with `refused_by_policy`.
 
@@ -264,10 +264,10 @@ http:
   - Its User-Agent applies unless the local policy forces one.
   - `allow_insecure_tls: false` refuses a tool that skips TLS verification, even where the local policy allows it.
   - It can never allow what the local policy forbids.
-- **The sensor owner can mark the scan traffic too** (local policy schema `openctem.io/sensor-policy/v4`):
+- **The sensor owner can mark the scan traffic too** (local policy schema `openctem.io/sensor-policy/v1`):
 
   ```yaml
-  apiVersion: openctem.io/sensor-policy/v4
+  apiVersion: openctem.io/sensor-policy/v1
   http:
     user_agent: "dc1-scan (+netops@example.com)"
     headers:                       # at most 4: name, value
@@ -281,7 +281,7 @@ http:
 - **A query parameter:** a job can carry `http_policy.query` (`{name, value}`, each 1 to 64 of letters, digits and `. _ ~ -`).
   - A tool carries it when it declares `features.http_query` (it requests through `ctx.HTTP()`, which sets it on every URL, or maps it onto its own flag) or passes `{{http.query:-flag}}` (the flag and `name=value`, nothing when the task has none).
   - Any other tool still runs; the result reports the parameter as not applied, with the reason.
-- **Reported:** the result's metadata `http_identity` lists what the requests carried: the User-Agent and each header with its source (`job`, `job_locked`, `sensor`), values of secret-looking names masked, entries not applied with a reason, and the query parameter. A sensor that does all of this advertises `http.identity@2` (`toolhost.CapabilityHTTPIdentityV2`).
+- **Reported:** the result's metadata `http_identity` lists what the requests carried: the User-Agent and each header with its source (`job`, `job_locked`, `sensor`), values of secret-looking names masked, entries not applied with a reason, and the query parameter. `http.identity@1` covers all of this: locked headers, the sensor-local layer, the query parameter and the report. An older sensor on `@1` ignores the fields it does not know; it has no local layer, so locks are moot there.
 - **Refused:**
   - `Authorization`, `Cookie` and `Proxy-*` headers (credentials come from the credential broker, never from tool.yaml);
   - framing headers;

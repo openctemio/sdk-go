@@ -8,7 +8,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
 
-// httpPolicy is a fake local policy with schema v3's http section.
+// httpPolicy is a fake local policy with policy v1's http section.
 type httpPolicy struct {
 	fakePolicy
 	ua            string
@@ -26,7 +26,7 @@ var httpManifest = tool.Manifest{
 
 var httpTask = tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "x"}}}
 
-// The sensor's local policy (schema v3) wins over the tool: its
+// The sensor's local policy (policy v1) wins over the tool: its
 // User-Agent replaces the tool's, in the task the tool receives and in
 // exec argv.
 func TestLocalPolicyForcesTheUserAgent(t *testing.T) {
