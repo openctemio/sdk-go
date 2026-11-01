@@ -1520,21 +1520,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 			fmt.Printf("[command-poller] Command %s completed (findings: %d)\n", cmd.ID, reportResult.FindingsCount)
 		}
 	}
-	// Targets refused at admission and by the executor's own check: the
-	// command completed on the rest (partial), and the result says which
-	// targets were skipped and why.
-	if admission.Partial() {
-		refused := append(append([]RefusedTarget(nil), admission.Refused...), refusedTargetsFrom(reportResult.Metadata)...)
-		if reportResult.Metadata == nil {
-			reportResult.Metadata = map[string]any{}
-		}
-		for k, v := range RefusedTargetsMetadata(refused) {
-			reportResult.Metadata[k] = v
-		}
-		if reportResult.TargetOutcomes != nil {
-			reportResult.TargetOutcomes = append(skippedOutcomes(admission.Refused, outcomeRevisionOf(cmd.Payload)), reportResult.TargetOutcomes...)
-		}
-	}
+	addAdmissionRefusals(reportResult, admission, cmd)
 	addReachMetadata(reportResult, reached)
 	p.logOutcome(ctx, cmd, reportResult, err, time.Since(startTime))
 	p.finishLog(ctx, cmd.ID)
@@ -1548,6 +1534,25 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Failed to report result for command %s: %v\n", cmd.ID, err)
 		}
+	}
+}
+
+// addAdmissionRefusals records the targets refused at admission and by the
+// executor's own check: the command completed on the rest (partial), and the
+// result says which targets were skipped and why.
+func addAdmissionRefusals(reportResult *CommandResult, admission *CommandAdmission, cmd *Command) {
+	if !admission.Partial() {
+		return
+	}
+	refused := append(append([]RefusedTarget(nil), admission.Refused...), refusedTargetsFrom(reportResult.Metadata)...)
+	if reportResult.Metadata == nil {
+		reportResult.Metadata = map[string]any{}
+	}
+	for k, v := range RefusedTargetsMetadata(refused) {
+		reportResult.Metadata[k] = v
+	}
+	if reportResult.TargetOutcomes != nil {
+		reportResult.TargetOutcomes = append(skippedOutcomes(admission.Refused, outcomeRevisionOf(cmd.Payload)), reportResult.TargetOutcomes...)
 	}
 }
 
