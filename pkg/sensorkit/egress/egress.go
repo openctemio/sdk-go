@@ -376,7 +376,9 @@ func (f *Forwarder) isVendor(h string) bool {
 
 // TargetRate is the task's per-host rate controller: its Summary has the
 // rates reached and the hosts whose coverage is incomplete (gaps). Set its
-// OnChange before Serve to log the rate changes.
+// OnChange before Serve to log the rate changes, and join the sensor-wide
+// state with its Share (adapt.SensorRate) so the task shares each target's
+// rate, Retry-After and edge-block cooldown with the sensor's other tasks.
 func (f *Forwarder) TargetRate() *adapt.HostRate { return f.hostRate }
 
 // allowRate waits for the task's rate and the host's adaptive rate (bounded
