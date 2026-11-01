@@ -28,10 +28,11 @@ Unreleased changes are kept one file per change in
 
 ### Added: the sensor owner's headers, the job's query parameter and a report of what was sent
 
-- Local policy schema `openctem.io/sensor-policy/v4` adds `http.headers`: up to four `{name, value}` identification headers
+- Local policy schema `openctem.io/sensor-policy/v3` adds `http.headers`: up to four `{name, value}` identification headers
   that the sensor sends on every request of every task that sends HTTP to its targets, whichever organization's job it is.
   They obey the rules of every identification header (token name, printable ASCII value of at most 200 characters, never a
-  credential, connection or `Proxy-*` header). A v3 file with `headers` is still refused.
+  credential, connection or `Proxy-*` header). It is part of schema v3 (there is no v4): an older sensor refuses a v3 file with
+  `headers` as an unknown key, so upgrade the sensor first.
 - A job's `http_policy` can lock names (`locked_headers`, `user_agent_locked`). The sensor's headers replace an unlocked job
   header of the same name, never a locked one; the User-Agent follows the same rule. The merged set is capped at 16 headers
   (the job's own cap stays 10) and a task over it is refused with a message naming the cap.

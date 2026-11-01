@@ -73,7 +73,11 @@ const (
 	// LocalPolicyAPIVersion is the apiVersion of schema v1. v1 is frozen:
 	// it never gains a key, because a sensor refuses a file with a key it
 	// does not know, so a new v1 key would stop every older sensor (owner
-	// decision D13, api research/25 §3.3). New keys go into a new version.
+	// decision D13, api research/25 §3.3), and so is v2. The latest schema (v3)
+	// may gain additive, optional keys: a sensor that predates a key refuses
+	// the file (unknown key) and the operator upgrades the sensor to the
+	// release that introduced it, as it would for an unknown apiVersion. A
+	// new schema version is for breaking changes only.
 	LocalPolicyAPIVersion = "openctem.io/sensor-policy/v1"
 	// LocalPolicyAPIVersionV2 is the apiVersion of schema v2: every v1 key
 	// plus managed (see policyFileV2).
@@ -81,9 +85,6 @@ const (
 	// LocalPolicyAPIVersionV3 is the apiVersion of schema v3: every v2 key
 	// plus http (see policyFileV3).
 	LocalPolicyAPIVersionV3 = "openctem.io/sensor-policy/v3"
-	// LocalPolicyAPIVersionV4 is the apiVersion of schema v4: every v3 key
-	// plus http.headers (see policyFileV4).
-	LocalPolicyAPIVersionV4 = "openctem.io/sensor-policy/v4"
 	// MaxLocalPolicyBytes bounds the policy file.
 	MaxLocalPolicyBytes = 1 << 20
 	// MaxLocalPolicyEntries bounds each list in the policy.
@@ -98,7 +99,7 @@ const (
 // as LocalPolicyReport.Schemas reports them: the platform generates a
 // recommended policy only in a version the sensor lists, so a downloaded
 // file never stops a sensor.
-var LocalPolicySchemas = []string{"v1", "v2", "v3", "v4"}
+var LocalPolicySchemas = []string{"v1", "v2", "v3"}
 
 // Local policy states, as LocalPolicyReport.State reports them.
 const (
@@ -199,7 +200,7 @@ type LocalPolicy struct {
 	// httpUserAgent replaces every tool's User-Agent ("": the tools');
 	// allowInsecureTLS false refuses tools that skip TLS verification.
 	httpUserAgent string
-	// httpHeaders are http.headers (v4), validated.
+	// httpHeaders are http.headers (v3), validated.
 	httpHeaders      []LocalHTTPHeader
 	allowInsecureTLS bool
 
@@ -265,34 +266,23 @@ type policyFileV2 struct {
 	} `yaml:"managed"`
 }
 
-// policyFileV3 is schema v3: every v2 key, plus http. Frozen once
-// released, like v1 and v2.
+// policyFileV3 is schema v3: every v2 key, plus http. v3 may gain
+// additive, optional keys (http.headers did); v1 and v2 are frozen.
 type policyFileV3 struct {
 	policyFileV2 `yaml:",inline"`
 	// HTTP is what the owner of this network decides about the tools'
 	// requests, whatever a tool's tool.yaml says (api RFC-060 §4.1).
-	HTTP *struct {
-		// UserAgent replaces every tool's User-Agent (a scanner the
-		// network's owners recognize in their logs).
-		UserAgent *string `yaml:"user_agent"`
-		// AllowInsecureTLS false refuses tasks of tools that skip
-		// certificate verification. Default true.
-		AllowInsecureTLS *bool `yaml:"allow_insecure_tls"`
-	} `yaml:"http"`
+	HTTP *policyHTTP `yaml:"http"`
 }
 
-// policyFileV4 is schema v4: every v3 key, plus http.headers (the host
-// owner's identification headers). Its http block replaces v3's, with the
-// same keys and one more.
-type policyFileV4 struct {
-	policyFileV2 `yaml:",inline"`
-	HTTP         *policyHTTPV4 `yaml:"http"`
-}
-
-// policyHTTPV4 is v4's http block: v3's keys and headers.
-type policyHTTPV4 struct {
-	UserAgent        *string `yaml:"user_agent"`
-	AllowInsecureTLS *bool   `yaml:"allow_insecure_tls"`
+// policyHTTP is v3's http block.
+type policyHTTP struct {
+	// UserAgent replaces every tool's User-Agent (a scanner the
+	// network's owners recognize in their logs).
+	UserAgent *string `yaml:"user_agent"`
+	// AllowInsecureTLS false refuses tasks of tools that skip
+	// certificate verification. Default true.
+	AllowInsecureTLS *bool `yaml:"allow_insecure_tls"`
 	// Headers are sent on every request of every task that sends HTTP
 	// to its targets, whichever organization's job it is (a shared
 	// sensor's network identity). At most MaxLocalHTTPHeaders, the same
@@ -488,7 +478,6 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 		target any
 		v2     policyFileV2
 		v3     policyFileV3
-		v4     policyFileV4
 		schema string
 	)
 	switch head.APIVersion {
@@ -498,10 +487,8 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 		target, schema = &v2, "v2"
 	case LocalPolicyAPIVersionV3:
 		target, schema = &v3, "v3"
-	case LocalPolicyAPIVersionV4:
-		target, schema = &v4, "v4"
 	default:
-		return nil, fmt.Errorf("apiVersion is %q; it must be %q, %q, %q or %q", head.APIVersion, LocalPolicyAPIVersion, LocalPolicyAPIVersionV2, LocalPolicyAPIVersionV3, LocalPolicyAPIVersionV4)
+		return nil, fmt.Errorf("apiVersion is %q; it must be %q, %q or %q", head.APIVersion, LocalPolicyAPIVersion, LocalPolicyAPIVersionV2, LocalPolicyAPIVersionV3)
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -513,13 +500,10 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 		return nil, errors.New("invalid policy: more than one YAML document")
 	}
 	managedAccept := true
-	switch schema {
-	case "v3":
+	if schema == "v3" {
 		v2 = v3.policyFileV2
-	case "v4":
-		v2 = v4.policyFileV2
 	}
-	if schema == "v2" || schema == "v3" || schema == "v4" {
+	if schema == "v2" || schema == "v3" {
 		doc = v2.policyFile
 		if m := v2.Managed; m != nil && m.Accept != nil {
 			managedAccept = *m.Accept
@@ -578,7 +562,7 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 	lp.allowCustomTemplates = doc.AllowCustomTemplates != nil && *doc.AllowCustomTemplates
 	lp.allowInteractsh = doc.AllowInteractsh != nil && *doc.AllowInteractsh
 	lp.allowInsecureTLS = true
-	if err := lp.readHTTP(schema, v3.HTTP, v4.HTTP); err != nil {
+	if err := lp.readHTTP(v3.HTTP); err != nil {
 		return nil, err
 	}
 	if r := doc.Rate; r != nil {
@@ -970,30 +954,16 @@ func (lp *LocalPolicy) HTTPPolicy() (userAgent string, allowInsecureTLS bool) {
 	return lp.httpUserAgent, lp.allowInsecureTLS
 }
 
-// readHTTP reads the http section of a v3 or v4 file (h3, h4: the file's
-// own, nil when absent).
-func (lp *LocalPolicy) readHTTP(schema string, h3 *struct {
-	UserAgent        *string `yaml:"user_agent"`
-	AllowInsecureTLS *bool   `yaml:"allow_insecure_tls"`
-}, h4 *policyHTTPV4) error {
-	h := h3
-	if schema == "v4" {
-		h = nil
-		if h4 != nil {
-			h = &struct {
-				UserAgent        *string `yaml:"user_agent"`
-				AllowInsecureTLS *bool   `yaml:"allow_insecure_tls"`
-			}{h4.UserAgent, h4.AllowInsecureTLS}
-			headers, err := checkLocalHeaders(h4.Headers)
-			if err != nil {
-				return err
-			}
-			lp.httpHeaders = headers
-		}
-	}
+// readHTTP reads the http section of a v3 file (nil when absent).
+func (lp *LocalPolicy) readHTTP(h *policyHTTP) error {
 	if h == nil {
 		return nil
 	}
+	headers, err := checkLocalHeaders(h.Headers)
+	if err != nil {
+		return err
+	}
+	lp.httpHeaders = headers
 	if h.UserAgent != nil {
 		ua := *h.UserAgent
 		if ua == "" || len(ua) > 256 || strings.IndexFunc(ua, func(r rune) bool { return r < 0x20 || r > 0x7e }) >= 0 {
@@ -1008,7 +978,7 @@ func (lp *LocalPolicy) readHTTP(schema string, h3 *struct {
 }
 
 // HTTPHeaders are the identification headers the sensor's owner sets
-// (http.headers, schema v4): sent on every request of every task that sends
+// (http.headers, schema v3): sent on every request of every task that sends
 // HTTP to its targets, below the job's locked names. Without a policy: none.
 func (lp *LocalPolicy) HTTPHeaders() []LocalHTTPHeader {
 	if !lp.Present() {
@@ -1194,7 +1164,7 @@ type LocalPolicySummary struct {
 	// every tool ("" none). AllowInsecureTLS is http.allow_insecure_tls.
 	HTTPUserAgent    string `json:"http_user_agent,omitempty"`
 	AllowInsecureTLS bool   `json:"allow_insecure_tls"`
-	// HTTPHeaderNames are the names of http.headers (v4); the values stay
+	// HTTPHeaderNames are the names of http.headers (v3); the values stay
 	// on the host.
 	HTTPHeaderNames []string `json:"http_header_names,omitempty"`
 }

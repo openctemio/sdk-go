@@ -114,7 +114,7 @@ func Admit(ctx context.Context, m tool.Manifest, task tool.Task, pol Policy, mod
 //
 // The one capability covers the whole feature: the job's locked_headers and
 // user_agent_locked, the sensor owner's local http.headers (policy schema
-// v4), the query parameter (features.http_query, {{http.query:-flag}}) and
+// v3), the query parameter (features.http_query, {{http.query:-flag}}) and
 // the report of what was sent (Outcome.Identity, core.MetaHTTPIdentity). A
 // sensor that predates a part of it ignores the fields it does not know.
 const CapabilityHTTPIdentity = "http.identity@1"
@@ -128,7 +128,7 @@ type HTTPPolicy interface {
 
 // HTTPHeaderPolicy is a policy that adds identification headers of the
 // sensor owner to every task that sends HTTP to its targets
-// (*core.LocalPolicy, schema v4).
+// (*core.LocalPolicy, schema v3).
 type HTTPHeaderPolicy interface {
 	HTTPHeaders() []core.LocalHTTPHeader
 }

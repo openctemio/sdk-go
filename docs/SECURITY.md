@@ -894,7 +894,7 @@ or the task does not start:
 - A sensor whose tools all run through the tool host advertises
   `http.identity@1`; the platform gives identification-carrying jobs only to
   such a sensor.
-- The sensor owner's local headers (policy schema v4 `http.headers`, at most
+- The sensor owner's local headers (policy schema v3 `http.headers`, at most
   four) go through the same validation as the job's (token name, printable
   ASCII value, no credential, connection or `Proxy-*` header; re-checked
   where they are used) and are merged by name under the job's

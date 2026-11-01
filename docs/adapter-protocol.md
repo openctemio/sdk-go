@@ -264,10 +264,10 @@ http:
   - Its User-Agent applies unless the local policy forces one.
   - `allow_insecure_tls: false` refuses a tool that skips TLS verification, even where the local policy allows it.
   - It can never allow what the local policy forbids.
-- **The sensor owner can mark the scan traffic too** (local policy schema `openctem.io/sensor-policy/v4`):
+- **The sensor owner can mark the scan traffic too** (local policy schema `openctem.io/sensor-policy/v3`):
 
   ```yaml
-  apiVersion: openctem.io/sensor-policy/v4
+  apiVersion: openctem.io/sensor-policy/v3
   http:
     user_agent: "dc1-scan (+netops@example.com)"
     headers:                       # at most 4: name, value
