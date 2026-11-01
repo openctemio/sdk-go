@@ -119,7 +119,6 @@ func Admit(ctx context.Context, m tool.Manifest, task tool.Task, pol Policy, mod
 // sensor that predates a part of it ignores the fields it does not know.
 const CapabilityHTTPIdentity = "http.identity@1"
 
-
 // HTTPPolicy is a policy that decides about the tools' requests
 // (*core.LocalPolicy, schema v3): a User-Agent that replaces every tool's,
 // and whether a tool may skip TLS verification.
