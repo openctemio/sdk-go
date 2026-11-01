@@ -81,6 +81,9 @@ const (
 	// LocalPolicyAPIVersionV3 is the apiVersion of schema v3: every v2 key
 	// plus http (see policyFileV3).
 	LocalPolicyAPIVersionV3 = "openctem.io/sensor-policy/v3"
+	// LocalPolicyAPIVersionV4 is the apiVersion of schema v4: every v3 key
+	// plus http.headers (see policyFileV4).
+	LocalPolicyAPIVersionV4 = "openctem.io/sensor-policy/v4"
 	// MaxLocalPolicyBytes bounds the policy file.
 	MaxLocalPolicyBytes = 1 << 20
 	// MaxLocalPolicyEntries bounds each list in the policy.
@@ -95,7 +98,7 @@ const (
 // as LocalPolicyReport.Schemas reports them: the platform generates a
 // recommended policy only in a version the sensor lists, so a downloaded
 // file never stops a sensor.
-var LocalPolicySchemas = []string{"v1", "v2", "v3"}
+var LocalPolicySchemas = []string{"v1", "v2", "v3", "v4"}
 
 // Local policy states, as LocalPolicyReport.State reports them.
 const (
@@ -195,7 +198,9 @@ type LocalPolicy struct {
 	allowInteractsh      bool
 	// httpUserAgent replaces every tool's User-Agent ("": the tools');
 	// allowInsecureTLS false refuses tools that skip TLS verification.
-	httpUserAgent    string
+	httpUserAgent string
+	// httpHeaders are http.headers (v4), validated.
+	httpHeaders      []LocalHTTPHeader
 	allowInsecureTLS bool
 
 	// schema is the file's schema version ("v1", "v2"); "" without a file.
@@ -275,6 +280,32 @@ type policyFileV3 struct {
 		AllowInsecureTLS *bool `yaml:"allow_insecure_tls"`
 	} `yaml:"http"`
 }
+
+// policyFileV4 is schema v4: every v3 key, plus http.headers (the host
+// owner's identification headers). Its http block replaces v3's, with the
+// same keys and one more.
+type policyFileV4 struct {
+	policyFileV2 `yaml:",inline"`
+	HTTP         *struct {
+		UserAgent        *string `yaml:"user_agent"`
+		AllowInsecureTLS *bool   `yaml:"allow_insecure_tls"`
+		// Headers are sent on every request of every task that sends HTTP
+		// to its targets, whichever organization's job it is (a shared
+		// sensor's network identity). At most MaxLocalHTTPHeaders, the same
+		// rules as the platform's identification headers; a name the job
+		// locks is not changed.
+		Headers []LocalHTTPHeader `yaml:"headers"`
+	} `yaml:"http"`
+}
+
+// LocalHTTPHeader is one identification header of the sensor-local layer.
+type LocalHTTPHeader struct {
+	Name  string `yaml:"name" json:"name"`
+	Value string `yaml:"value" json:"value"`
+}
+
+// MaxLocalHTTPHeaders bounds http.headers of the local policy.
+const MaxLocalHTTPHeaders = 4
 
 // domainPattern is a targets entry naming hosts: an exact name, or
 // "*.x" for x itself and every name below it, at any depth. This is the
@@ -454,6 +485,7 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 		target any
 		v2     policyFileV2
 		v3     policyFileV3
+		v4     policyFileV4
 		schema string
 	)
 	switch head.APIVersion {
@@ -463,8 +495,10 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 		target, schema = &v2, "v2"
 	case LocalPolicyAPIVersionV3:
 		target, schema = &v3, "v3"
+	case LocalPolicyAPIVersionV4:
+		target, schema = &v4, "v4"
 	default:
-		return nil, fmt.Errorf("apiVersion is %q; it must be %q, %q or %q", head.APIVersion, LocalPolicyAPIVersion, LocalPolicyAPIVersionV2, LocalPolicyAPIVersionV3)
+		return nil, fmt.Errorf("apiVersion is %q; it must be %q, %q, %q or %q", head.APIVersion, LocalPolicyAPIVersion, LocalPolicyAPIVersionV2, LocalPolicyAPIVersionV3, LocalPolicyAPIVersionV4)
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -476,10 +510,13 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 		return nil, errors.New("invalid policy: more than one YAML document")
 	}
 	managedAccept := true
-	if schema == "v3" {
+	switch schema {
+	case "v3":
 		v2 = v3.policyFileV2
+	case "v4":
+		v2 = v4.policyFileV2
 	}
-	if schema == "v2" || schema == "v3" {
+	if schema == "v2" || schema == "v3" || schema == "v4" {
 		doc = v2.policyFile
 		if m := v2.Managed; m != nil && m.Accept != nil {
 			managedAccept = *m.Accept
@@ -538,7 +575,22 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 	lp.allowCustomTemplates = doc.AllowCustomTemplates != nil && *doc.AllowCustomTemplates
 	lp.allowInteractsh = doc.AllowInteractsh != nil && *doc.AllowInteractsh
 	lp.allowInsecureTLS = true
-	if h := v3.HTTP; h != nil {
+	httpDoc := v3.HTTP
+	if schema == "v4" {
+		httpDoc = nil
+		if h4 := v4.HTTP; h4 != nil {
+			httpDoc = &struct {
+				UserAgent        *string `yaml:"user_agent"`
+				AllowInsecureTLS *bool   `yaml:"allow_insecure_tls"`
+			}{h4.UserAgent, h4.AllowInsecureTLS}
+			headers, err := checkLocalHeaders(h4.Headers)
+			if err != nil {
+				return nil, err
+			}
+			lp.httpHeaders = headers
+		}
+	}
+	if h := httpDoc; h != nil {
 		if h.UserAgent != nil {
 			ua := *h.UserAgent
 			if ua == "" || len(ua) > 256 || strings.IndexFunc(ua, func(r rune) bool { return r < 0x20 || r > 0x7e }) >= 0 {
@@ -939,6 +991,39 @@ func (lp *LocalPolicy) HTTPPolicy() (userAgent string, allowInsecureTLS bool) {
 	return lp.httpUserAgent, lp.allowInsecureTLS
 }
 
+// HTTPHeaders are the identification headers the sensor's owner sets
+// (http.headers, schema v4): sent on every request of every task that sends
+// HTTP to its targets, below the job's locked names. Without a policy: none.
+func (lp *LocalPolicy) HTTPHeaders() []LocalHTTPHeader {
+	if !lp.Present() {
+		return nil
+	}
+	return slices.Clone(lp.httpHeaders)
+}
+
+// checkLocalHeaders validates http.headers: at most MaxLocalHTTPHeaders,
+// each as a platform identification header (CheckIdentityHeader), names
+// unique case-insensitively. Names and values are kept as written (no
+// trimming: a value with an edge space is refused by neither rule, and
+// what the owner wrote is what is sent).
+func checkLocalHeaders(hs []LocalHTTPHeader) ([]LocalHTTPHeader, error) {
+	if len(hs) > MaxLocalHTTPHeaders {
+		return nil, fmt.Errorf("http.headers: at most %d headers, got %d", MaxLocalHTTPHeaders, len(hs))
+	}
+	seen := map[string]bool{}
+	for _, h := range hs {
+		if err := CheckIdentityHeader(h.Name, h.Value); err != nil {
+			return nil, fmt.Errorf("http.headers: %w", err)
+		}
+		k := strings.ToLower(h.Name)
+		if seen[k] {
+			return nil, fmt.Errorf("http.headers: %s is listed twice (names are case-insensitive)", h.Name)
+		}
+		seen[k] = true
+	}
+	return slices.Clone(hs), nil
+}
+
 // Schema is the policy file's schema version ("v1", "v2"), "" without a
 // file.
 func (lp *LocalPolicy) Schema() string {
@@ -1093,6 +1178,9 @@ type LocalPolicySummary struct {
 	// every tool ("" none). AllowInsecureTLS is http.allow_insecure_tls.
 	HTTPUserAgent    string `json:"http_user_agent,omitempty"`
 	AllowInsecureTLS bool   `json:"allow_insecure_tls"`
+	// HTTPHeaderNames are the names of http.headers (v4); the values stay
+	// on the host.
+	HTTPHeaderNames []string `json:"http_header_names,omitempty"`
 }
 
 // Report is the policy's state now (the kill switch is read live).
@@ -1117,6 +1205,9 @@ func (lp *LocalPolicy) Report() *LocalPolicyReport {
 		ManagedAccept:        lp.managedAccept,
 		HTTPUserAgent:        lp.httpUserAgent,
 		AllowInsecureTLS:     lp.allowInsecureTLS,
+	}
+	for _, h := range lp.httpHeaders {
+		s.HTTPHeaderNames = append(s.HTTPHeaderNames, h.Name)
 	}
 	s.Mode = "platform_scope"
 	if lp.allowAll {

@@ -894,6 +894,17 @@ or the task does not start:
 - A sensor whose tools all run through the tool host advertises
   `http.identity@1`; the platform gives identification-carrying jobs only to
   such a sensor.
+- The sensor owner's local headers (policy schema v4 `http.headers`, at most
+  four) go through the same validation as the job's (token name, printable
+  ASCII value, no credential, connection or `Proxy-*` header; re-checked
+  where they are used) and are merged by name under the job's
+  `locked_headers`: the owner can add a header or replace an unlocked one,
+  never a platform-enforced or program-set one. A shared sensor sends them
+  on every tenant's job; they are the host's network identity, and a value
+  must never carry a tenant's data. The merged set is capped at 16 and a job
+  over the cap is refused, not trimmed. The result reports the applied
+  identification (`http_identity` metadata) with secret-looking values
+  masked, so a value is never shown that was not sent, nor sent unreported.
 
 ### 8. API Client Transport
 

@@ -179,6 +179,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		}
 	}
 	out.Duration = time.Since(start)
+	out.Identity = p.applied
 	h.stamp(out, m, p.task, "exec profile")
 	return out, nil
 }
@@ -240,6 +241,14 @@ func expandArgv(argv []string, p *prepared) ([]string, *tool.Error) {
 					return nil, ierr
 				}
 				out = append(out, hs...)
+				continue
+			}
+			// The query parameter: the flag and "name=value", nothing when
+			// the task has none.
+			if flag, ok := tool.QueryArgs(whole); ok {
+				if q := p.task.Identity; q != nil && q.Query != nil {
+					out = append(out, flag, q.Query.Name+"="+q.Query.Value)
+				}
 				continue
 			}
 			// A content slot's packs, one argument each.

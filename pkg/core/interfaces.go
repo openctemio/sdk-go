@@ -165,6 +165,10 @@ type ScanResult struct {
 	CoverageGapsTotal int         `json:"coverage_gaps_total,omitempty"`
 	// TargetRate is the per-host rate outcome (nil: no controller ran).
 	TargetRate *adapt.Summary `json:"target_rate,omitempty"`
+	// HTTPIdentity is the identification the scan's requests carried
+	// (*tool.AppliedIdentity, held as any so core does not import tool); the
+	// result's metadata carries it under MetaHTTPIdentity.
+	HTTPIdentity any `json:"http_identity,omitempty"`
 }
 
 // =============================================================================

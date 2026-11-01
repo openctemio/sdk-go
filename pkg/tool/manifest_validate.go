@@ -450,6 +450,9 @@ func (m Manifest) validateRun(add func(p, format string, args ...any), schema *c
 			if _, ok := HeaderArgs(mm[1]); ok && strings.TrimSpace(a) != mm[0] {
 				add(ptr, "%s: a header list must be the whole argument", mm[0])
 			}
+			if _, ok := QueryArgs(mm[1]); ok && strings.TrimSpace(a) != mm[0] {
+				add(ptr, "%s: the query parameter must be the whole argument", mm[0])
+			}
 			if _, form, _, ok := ConfigArg(mm[1]); ok && form != ArgScalar {
 				special++
 				if form == ArgSwitch && strings.TrimSpace(a) != mm[0] {
@@ -471,6 +474,9 @@ func checkPlaceholder(name string, schema *core.SettingsSchema, slots []ContentS
 		return ""
 	}
 	if _, ok := HeaderArgs(name); ok {
+		return ""
+	}
+	if _, ok := QueryArgs(name); ok {
 		return ""
 	}
 	if slot, ok := strings.CutPrefix(name, "content."); ok {

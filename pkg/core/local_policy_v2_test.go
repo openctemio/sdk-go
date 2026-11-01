@@ -42,7 +42,7 @@ func TestLocalPolicy_V2(t *testing.T) {
 	if r2.Schema != "v2" || r1.Schema != "v1" || !s2.ManagedAccept {
 		t.Errorf("schemas %q/%q, managed_accept %v", r1.Schema, r2.Schema, s2.ManagedAccept)
 	}
-	if !slices.Equal(r2.Schemas, []string{"v1", "v2", "v3"}) || !slices.Equal(lp1.Report().Schemas, []string{"v1", "v2", "v3"}) {
+	if !slices.Equal(r2.Schemas, []string{"v1", "v2", "v3", "v4"}) || !slices.Equal(lp1.Report().Schemas, []string{"v1", "v2", "v3", "v4"}) {
 		t.Errorf("supported schemas not reported: %v", r2.Schemas)
 	}
 

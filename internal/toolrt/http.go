@@ -190,6 +190,19 @@ func (u requestDefaults) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.Header.Set(k, v)
 	}
 	if u.identity != nil {
+		if q := u.identity.Query; q != nil && req.URL != nil {
+			// The task's query parameter replaces one of the same name the
+			// tool put on the URL.
+			vals := req.URL.Query()
+			if vals.Get(q.Name) != q.Value || len(vals[q.Name]) != 1 {
+				if !cloned {
+					req = req.Clone(req.Context())
+					cloned = true
+				}
+				vals.Set(q.Name, q.Value)
+				req.URL.RawQuery = vals.Encode()
+			}
+		}
 		if u.identity.UserAgent != "" {
 			force("User-Agent", u.identity.UserAgent)
 		}
