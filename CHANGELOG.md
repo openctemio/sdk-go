@@ -8,6 +8,51 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.45.0 — 2026-11-01
+
+### Behaviour change: a job whose lease cannot be renewed is stopped, and its results are not sent
+
+- During a network loss longer than a job's lease plus a grace (a quarter of
+  the lease, at least 30 seconds; 3 minutes 45 seconds with the platform's
+  default lease), the sensor now stops the job (`core.ErrLeaseLost`). The
+  platform hands the job to another sensor at that point, so the two no
+  longer scan the same targets. Nothing of the stopped job is reported,
+  released or sent afterwards, bound or unbound (`Client.MarkLeaseLost`).
+  Before, the job kept running and its late results were dead-lettered or
+  re-sent without their command.
+- Only durations are compared with the sensor's clock (clock skew never
+  decides a stop), and the watchdog arms at the first answered heartbeat.
+- Bound results (`PUT …/commands/{id}/results/…`, segments and commit) now
+  carry `X-OpenCTEM-Lease-Epoch` from the claim, so the platform refuses
+  results of a run it has handed out again.
+
+### Added: the sensor owner's headers, the job's query parameter and a report of what was sent
+
+- Local policy schema `openctem.io/sensor-policy/v4` adds `http.headers`: up to four `{name, value}` identification headers
+  that the sensor sends on every request of every task that sends HTTP to its targets, whichever organization's job it is.
+  They obey the rules of every identification header (token name, printable ASCII value of at most 200 characters, never a
+  credential, connection or `Proxy-*` header). A v3 file with `headers` is still refused.
+- A job's `http_policy` can lock names (`locked_headers`, `user_agent_locked`). The sensor's headers replace an unlocked job
+  header of the same name, never a locked one; the User-Agent follows the same rule. The merged set is capped at 16 headers
+  (the job's own cap stays 10) and a task over it is refused with a message naming the cap.
+- A job's `http_policy.query` (`{name, value}`) is added to every request URL by tools that declare `features.http_query`
+  (`ctx.HTTP()` does it) or pass `{{http.query:-flag}}`. Any other tool runs, and the result reports the parameter as not applied.
+- The result's metadata `http_identity` reports the identification actually sent per tool (headers with source, secret-looking
+  values masked, anything not applied with its reason). New capability constant `toolhost.CapabilityHTTPIdentityV2`
+  (`http.identity@2`).
+- **Behaviour change:** a sensor whose owner sets `http.headers` refuses a networked tool that cannot carry headers, the same
+  rule as for a job's identification.
+
+### Added: `pkg/tlsprobe` reads a host's certificate even when HTTP fails
+
+- `tlsprobe.Probe` connects to one host and port, completes a TLS handshake without verifying the certificate and, when asked, sends one `HEAD /` request. It returns the leaf certificate as `core.TLSLeaf` (expired, not yet valid, names that do not cover the host, self-signed) and what the host did: answered, completed the handshake and then reset or closed the request (`http_reset`), failed the handshake, refused the connection or did not answer. `tlsprobe.Dialer` tunnels the probe through a task's egress proxy (HTTP CONNECT or SOCKS5), so it passes the same scope and rate controls as the task's tools; a proxy refusal that names the upstream error (connection refused, timeout) classifies the same way, one that names none says nothing about the host.
+- `adapt.Gap` gains `cause` and `cert` (additive; older receivers ignore them and still see the reason). A host the task forwarder's breaker gave up names the cause of its failures: `reset` (it accepts connections and resets them), `no_answer` or `refused`.
+
+### Fixed: a job its own time budget stopped fails as `infra.budget_exceeded`, not `unknown`
+
+- When a scan job's time budget (its `timeout_seconds`, task budget or the platform's `deadline`) ends the run before the tool settled anything, the failure is now classified `infra.budget_exceeded` (error code `TIMEOUT`) instead of `unknown`. The tool's error is kept (`errors.Is` still finds `context.DeadlineExceeded`). A cancel is not affected.
+- When the platform's `deadline` had already passed before the job started (the job then gets only `MinDeadlineBudget`, 30 s), the failure carries the reason `deadline_passed`, so the platform and the operator see that a stale deadline, not the tool or the targets, ended the job.
+
 ## v0.44.0 — 2026-10-31
 
 ### Added: `targets.allow: ["*"]` in local policy schema v2
