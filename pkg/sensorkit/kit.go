@@ -342,12 +342,12 @@ type middleware struct {
 // command queue, outbox, key renewal and shutdown. A sensor adds its tools
 // and calls Run.
 type Kit struct {
-	opts      Options
+	opts Options
 	// feedRelayOrigins: the feed relay's origin allowlist (ServeFeedRelay);
 	// nil: the relay is off.
 	feedRelayOrigins []string
-	s         settings
-	out, errw io.Writer
+	s                settings
+	out, errw        io.Writer
 
 	client *client.Client
 	sensor *core.BaseSensor

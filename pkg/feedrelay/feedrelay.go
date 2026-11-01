@@ -22,6 +22,8 @@
 //     redirects re-checked) with a size cap per file and per round, to a
 //     temporary file, never into memory beyond one file;
 //   - a pinned file whose digest or size differs is never uploaded.
+//
+// Stability: Beta (docs/STABILITY.md).
 package feedrelay
 
 import (
