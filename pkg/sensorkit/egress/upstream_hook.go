@@ -28,6 +28,26 @@ func TargetHost(ctx context.Context) string {
 	return h
 }
 
+type scopedNameKey struct{}
+
+// WithScopedName marks ctx's target host (WithTargetHost) as a name the
+// job's scope admitted: a name target, not an address or range, a vendor
+// host or any public host. The forwarder sets it; a Dial hook reads it with
+// TargetScopedByName.
+func WithScopedName(ctx context.Context) context.Context {
+	return context.WithValue(ctx, scopedNameKey{}, true)
+}
+
+// TargetScopedByName reports whether the target host on ctx (TargetHost) is
+// a name the job's scope admitted. Only such a name may be sent to an
+// upstream proxy to resolve (socks5h): its addresses were checked at
+// admission and none is denied. Any other destination is dialed by the
+// address the forwarder checked.
+func TargetScopedByName(ctx context.Context) bool {
+	v, _ := ctx.Value(scopedNameKey{}).(bool)
+	return v
+}
+
 // EndpointConn is a connection an upstream proxy endpoint carries: the
 // forwarder records the endpoint id (Record.Endpoint).
 type EndpointConn interface {

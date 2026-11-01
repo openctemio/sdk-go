@@ -28,6 +28,17 @@ type testProxy struct {
 	mu    sync.Mutex
 	auth  []string // Proxy-Authorization values or "user:pass" seen
 	dials []string // CONNECT targets
+	// names is a SOCKS proxy's own resolver for CONNECT by name.
+	names map[string]string
+}
+
+func (tp *testProxy) resolve(name, real string) {
+	tp.mu.Lock()
+	if tp.names == nil {
+		tp.names = map[string]string{}
+	}
+	tp.names[name] = real
+	tp.mu.Unlock()
 }
 
 func (tp *testProxy) addr() string { return tp.ln.Addr().String() }
@@ -175,6 +186,30 @@ func (tp *testProxy) serveSOCKS(c net.Conn, rep byte, user, pass string) {
 		var b [16]byte
 		_, _ = io.ReadFull(br, b[:])
 		a = netip.AddrFrom16(b)
+	case 3:
+		// By name (socks5h): the proxy resolves it with its own table.
+		l, _ := br.ReadByte()
+		name := make([]byte, l)
+		_, _ = io.ReadFull(br, name)
+		var pb [2]byte
+		_, _ = io.ReadFull(br, pb[:])
+		tp.mu.Lock()
+		tp.dials = append(tp.dials, string(name)+":"+strconv.Itoa(int(binary.BigEndian.Uint16(pb[:]))))
+		real, ok := tp.names[string(name)]
+		tp.mu.Unlock()
+		if !ok {
+			_, _ = c.Write([]byte{5, 4, 0, 1, 0, 0, 0, 0, 0, 0})
+			return
+		}
+		up, err := net.Dial("tcp", real)
+		if err != nil {
+			_, _ = c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+			return
+		}
+		defer up.Close()
+		_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+		pipe(c, br, up)
+		return
 	default:
 		return
 	}
@@ -248,6 +283,12 @@ func newNetmap() *netmap { return &netmap{m: map[string]string{}, dials: map[str
 func (n *netmap) add(endpoint, real string) {
 	n.mu.Lock()
 	n.m[endpoint] = real
+	n.mu.Unlock()
+}
+
+func (n *netmap) remove(endpoint string) {
+	n.mu.Lock()
+	delete(n.m, endpoint)
 	n.mu.Unlock()
 }
 

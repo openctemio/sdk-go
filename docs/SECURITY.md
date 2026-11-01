@@ -681,9 +681,27 @@ arguments or environment:
   address and applies the per-target rate **before** the pool is asked: an
   out-of-scope target never reaches a proxy, and the rate toward a target
   is shared by all endpoints.
-- The tunnel is opened to the checked IP address and port, never to a name
-  (`socks5h` is treated as `socks5`). DNS stays with the forwarder: names
-  are resolved on the sensor, not by the proxy.
+- The tunnel is opened to the checked IP address and port. The one
+  exception is a `socks5h` endpoint and a target the job scoped **by name**
+  (not an address or range, not a vendor host): the forwarder still checks
+  the name's admitted addresses first (a name pinned to a denied address is
+  refused before any proxy is asked, and one pinned to an internal address
+  is dialed directly when the pool applies to public targets only), then
+  the proxy gets the name and resolves it (remote DNS), so the exit's own
+  resolver picks the address. Such a connection is decided for all of the
+  name's addresses at once. Every other endpoint and destination is dialed
+  by the checked address.
+- Sticky slots: the first connection of a job to a target host draws its
+  endpoint with weight `weight × (0.05 + score²)`, where `weight` is the
+  platform's and `score` the job-local EWMA of the endpoint's own tunnels
+  (a target's answer does not count) scaled down by its handshake time.
+  The host keeps that endpoint for the job; the slot moves only when its
+  endpoint fails as a proxy (down, refusing the credentials, breaker open),
+  never because of a target's answer, so a block is never retried through
+  another exit.
+- `max_conns` bounds an endpoint's open connections (handshakes included);
+  a connection that finds it full waits, within its dial timeout, and
+  otherwise fails as a `proxy_unavailable` gap.
 - HTTP CONNECT, HTTP CONNECT over TLS to an `https` proxy (certificate
   verified against the system roots, TLS 1.2 or later, never skipped) and
   SOCKS5 with optional username/password. Many HTTP proxies allow CONNECT

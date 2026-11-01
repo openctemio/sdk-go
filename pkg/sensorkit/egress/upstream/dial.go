@@ -60,13 +60,15 @@ func replyTimedOut(e *Endpoint, err error) *attemptError {
 // tunnel opens a tunnel to target through e. Every error is an
 // *attemptError. The handshake is bounded by ctx: its deadline is the
 // connection's deadline until the tunnel is up, and the end of ctx ends it.
-func (p *Pool) tunnel(ctx context.Context, e *Endpoint, target netip.AddrPort) (net.Conn, error) {
+// name, when set, is the target's name for a socks5h endpoint (the proxy
+// resolves it); "" opens the tunnel by address.
+func (p *Pool) tunnel(ctx context.Context, e *Endpoint, target netip.AddrPort, name string) (net.Conn, error) {
 	raw, err := p.dialEndpoint(ctx, e)
 	if err != nil {
 		return nil, err
 	}
 	stop := bindDeadline(ctx, raw)
-	conn, err := p.handshake(ctx, raw, e, target)
+	conn, err := p.handshake(ctx, raw, e, target, name)
 	live := stop()
 	if err != nil {
 		_ = raw.Close()
@@ -152,12 +154,14 @@ func (p *Pool) endpointAddrs(ctx context.Context, e *Endpoint) ([]netip.Addr, er
 	return out, nil
 }
 
-func (p *Pool) handshake(ctx context.Context, c net.Conn, e *Endpoint, target netip.AddrPort) (net.Conn, error) {
+func (p *Pool) handshake(ctx context.Context, c net.Conn, e *Endpoint, target netip.AddrPort, name string) (net.Conn, error) {
 	switch e.Scheme {
 	case SchemeHTTP, SchemeHTTPS:
 		return httpConnect(c, e, target)
+	case SchemeSOCKS5H:
+		return socks5Connect(c, e, target, name)
 	default:
-		return socks5Connect(c, e, target)
+		return socks5Connect(c, e, target, "")
 	}
 }
 
@@ -272,7 +276,12 @@ const (
 	socksAuthVersion = 0x01
 )
 
-func socks5Connect(c net.Conn, e *Endpoint, target netip.AddrPort) (net.Conn, error) {
+// maxSOCKSName bounds a name sent in a SOCKS5 CONNECT (one length byte).
+const maxSOCKSName = 255
+
+// socks5Connect opens a SOCKS5 tunnel to target, or to name (ATYP domain:
+// the proxy resolves it) when name is set.
+func socks5Connect(c net.Conn, e *Endpoint, target netip.AddrPort, name string) (net.Conn, error) {
 	creds := e.Username != "" || e.Password != ""
 	greet := []byte{socksVer, 1, socksNoAuth}
 	if creds {
@@ -320,10 +329,15 @@ func socks5Connect(c net.Conn, e *Endpoint, target netip.AddrPort) (net.Conn, er
 	}
 	req := []byte{socksVer, socksCmdConnect, 0x00}
 	a := target.Addr().Unmap()
-	if a.Is4() {
+	dest := target.String()
+	switch {
+	case name != "" && len(name) <= maxSOCKSName:
+		req = append(append(req, socksAtypName, uint8(len(name))), name...) //nolint:gosec // bounded to 255 above
+		dest = joinHostPort(name, int(target.Port()))
+	case a.Is4():
 		b := a.As4()
 		req = append(append(req, socksAtypIPv4), b[:]...)
-	} else {
+	default:
 		b := a.As16()
 		req = append(append(req, socksAtypIPv6), b[:]...)
 	}
@@ -342,16 +356,17 @@ func socks5Connect(c net.Conn, e *Endpoint, target netip.AddrPort) (net.Conn, er
 	case 0x00:
 		return wrap(c, br, e.ID), nil
 	case 0x02:
-		return nil, failed(egress.ClassTargetRefused, "%s: proxy ruleset refused CONNECT %s", e, target)
+		return nil, failed(egress.ClassTargetRefused, "%s: proxy ruleset refused CONNECT %s", e, dest)
 	case 0x05:
 		// Connection refused: the target answered.
-		return nil, unreachable(reach.PortClosed, "%s: proxy reply %d to CONNECT %s", e, rep, target)
+		return nil, unreachable(reach.PortClosed, "%s: proxy reply %d to CONNECT %s", e, rep, dest)
 	case 0x03, 0x04:
-		return nil, unreachable(reach.NoRoute, "%s: proxy reply %d to CONNECT %s", e, rep, target)
+		return nil, unreachable(reach.NoRoute, "%s: proxy reply %d to CONNECT %s", e, rep, dest)
 	case 0x01, 0x06:
 		// 0x01 (general failure) is what many proxies answer when the
-		// target does not answer: about the target, not the proxy.
-		return nil, unreachable(reach.Timeout, "%s: proxy reply %d to CONNECT %s", e, rep, target)
+		// target does not answer (or, by name, when the name does not
+		// resolve at the proxy): about the target, not the proxy.
+		return nil, unreachable(reach.Timeout, "%s: proxy reply %d to CONNECT %s", e, rep, dest)
 	default:
 		return nil, failed(egress.ClassProxyDown, "%s: proxy reply %d to CONNECT", e, rep)
 	}
@@ -399,6 +414,27 @@ type conn struct {
 	net.Conn
 	r        io.Reader
 	endpoint string
+	// release frees the endpoint's connection slot (Endpoint.MaxConns)
+	// when the tunnel closes; nil: none taken.
+	release func()
+}
+
+// withRelease makes closing c free the endpoint's connection slot.
+func withRelease(c net.Conn, release func()) net.Conn {
+	if tc, ok := c.(*conn); ok {
+		tc.release = release
+		return tc
+	}
+	return &conn{Conn: c, r: c, release: release}
+}
+
+// Close closes the tunnel and frees its connection slot.
+func (c *conn) Close() error {
+	err := c.Conn.Close()
+	if c.release != nil {
+		c.release()
+	}
+	return err
 }
 
 func wrap(c net.Conn, br *bufio.Reader, endpoint string) net.Conn {
