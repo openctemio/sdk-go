@@ -98,3 +98,36 @@ func TestDialContextViaChecksThenDialsThroughTheGivenDialer(t *testing.T) {
 		t.Fatalf("dials %v err %v", got, err)
 	}
 }
+
+// An idle probe tests only the endpoints with their own echo URL, each at
+// most once per upstream.ProbeInterval on the sensor; the others are left
+// out of the result (never reported as failed).
+func TestProxyTestProbeTestsOnlyEndpointsWithTheirOwnTokenOncePerInterval(t *testing.T) {
+	x := &ProxyTestExecutor{Egress: &fakePreparer{}, Probes: upstream.NewProbeGate()}
+	payload := ProxyTestPayload{Egress: testEgress(false), Probe: true,
+		Echo: ProxyTestEcho{URL: "https://127.0.0.1/echo?t=x", Endpoints: map[string]string{"e1": "https://127.0.0.1/echo?t=e1"}}}
+	res, err := x.Execute(context.Background(), proxyTestCommand(t, payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := res.Metadata[MetadataKeyProxyTest].(ProxyTestResult)
+	if len(r.Endpoints) != 1 || r.Endpoints[0].EndpointID != "e1" {
+		t.Fatalf("probe results %+v, want e1 only (e2 has no token of its own)", r.Endpoints)
+	}
+	res, err = x.Execute(context.Background(), proxyTestCommand(t, payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := res.Metadata[MetadataKeyProxyTest].(ProxyTestResult); len(r.Endpoints) != 0 {
+		t.Fatalf("second probe within the interval tested %+v", r.Endpoints)
+	}
+	// A plain test (not a probe) is not bounded by the gate.
+	payload.Probe = false
+	res, err = x.Execute(context.Background(), proxyTestCommand(t, payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := res.Metadata[MetadataKeyProxyTest].(ProxyTestResult); len(r.Endpoints) != 2 {
+		t.Fatalf("a test after a probe tested %+v, want both endpoints", r.Endpoints)
+	}
+}
