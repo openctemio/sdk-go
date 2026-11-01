@@ -14,3 +14,11 @@
   other apiVersion (v2, v3 and the v4 of v0.45.0 included) is refused with "policy apiVersion is ...; it must be
   openctem.io/sensor-policy/v1": rewrite the file's apiVersion line, or regenerate it (`sensors.sh set-policy`).
   Upgrade note: files written for the sensors in the field with `v2` or `v3` need that one line changed.
+
+### Upgrade notes: removed exported constants (intended break, v0.45.0 constants that no release used)
+
+- `core.LocalPolicyAPIVersionV2`, `core.LocalPolicyAPIVersionV3` and `toolhost.CapabilityHTTPIdentityV2` are removed. Use
+  `core.LocalPolicyAPIVersion` (`openctem.io/sensor-policy/v1`, the only schema) and `toolhost.CapabilityHTTPIdentity`
+  (`http.identity@1`). `core.LocalPolicyAPIVersionV4` existed only in v0.45.0 and is removed too.
+- A policy file whose apiVersion is `.../v2`, `.../v3` or `.../v4` is now refused: change its apiVersion line to `.../v1`
+  (the keys are unchanged) or regenerate it with `sensors.sh set-policy`.
