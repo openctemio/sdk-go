@@ -286,16 +286,19 @@ type policyFileV3 struct {
 // same keys and one more.
 type policyFileV4 struct {
 	policyFileV2 `yaml:",inline"`
-	HTTP         *struct {
-		UserAgent        *string `yaml:"user_agent"`
-		AllowInsecureTLS *bool   `yaml:"allow_insecure_tls"`
-		// Headers are sent on every request of every task that sends HTTP
-		// to its targets, whichever organization's job it is (a shared
-		// sensor's network identity). At most MaxLocalHTTPHeaders, the same
-		// rules as the platform's identification headers; a name the job
-		// locks is not changed.
-		Headers []LocalHTTPHeader `yaml:"headers"`
-	} `yaml:"http"`
+	HTTP         *policyHTTPV4 `yaml:"http"`
+}
+
+// policyHTTPV4 is v4's http block: v3's keys and headers.
+type policyHTTPV4 struct {
+	UserAgent        *string `yaml:"user_agent"`
+	AllowInsecureTLS *bool   `yaml:"allow_insecure_tls"`
+	// Headers are sent on every request of every task that sends HTTP
+	// to its targets, whichever organization's job it is (a shared
+	// sensor's network identity). At most MaxLocalHTTPHeaders, the same
+	// rules as the platform's identification headers; a name the job
+	// locks is not changed.
+	Headers []LocalHTTPHeader `yaml:"headers"`
 }
 
 // LocalHTTPHeader is one identification header of the sensor-local layer.
@@ -575,32 +578,8 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 	lp.allowCustomTemplates = doc.AllowCustomTemplates != nil && *doc.AllowCustomTemplates
 	lp.allowInteractsh = doc.AllowInteractsh != nil && *doc.AllowInteractsh
 	lp.allowInsecureTLS = true
-	httpDoc := v3.HTTP
-	if schema == "v4" {
-		httpDoc = nil
-		if h4 := v4.HTTP; h4 != nil {
-			httpDoc = &struct {
-				UserAgent        *string `yaml:"user_agent"`
-				AllowInsecureTLS *bool   `yaml:"allow_insecure_tls"`
-			}{h4.UserAgent, h4.AllowInsecureTLS}
-			headers, err := checkLocalHeaders(h4.Headers)
-			if err != nil {
-				return nil, err
-			}
-			lp.httpHeaders = headers
-		}
-	}
-	if h := httpDoc; h != nil {
-		if h.UserAgent != nil {
-			ua := *h.UserAgent
-			if ua == "" || len(ua) > 256 || strings.IndexFunc(ua, func(r rune) bool { return r < 0x20 || r > 0x7e }) >= 0 {
-				return nil, errors.New("http.user_agent must be 1 to 256 printable ASCII characters")
-			}
-			lp.httpUserAgent = ua
-		}
-		if h.AllowInsecureTLS != nil {
-			lp.allowInsecureTLS = *h.AllowInsecureTLS
-		}
+	if err := lp.readHTTP(schema, v3.HTTP, v4.HTTP); err != nil {
+		return nil, err
 	}
 	if r := doc.Rate; r != nil {
 		if r.MaxRPS != nil {
@@ -989,6 +968,43 @@ func (lp *LocalPolicy) HTTPPolicy() (userAgent string, allowInsecureTLS bool) {
 		return "", true
 	}
 	return lp.httpUserAgent, lp.allowInsecureTLS
+}
+
+// readHTTP reads the http section of a v3 or v4 file (h3, h4: the file's
+// own, nil when absent).
+func (lp *LocalPolicy) readHTTP(schema string, h3 *struct {
+	UserAgent        *string `yaml:"user_agent"`
+	AllowInsecureTLS *bool   `yaml:"allow_insecure_tls"`
+}, h4 *policyHTTPV4) error {
+	h := h3
+	if schema == "v4" {
+		h = nil
+		if h4 != nil {
+			h = &struct {
+				UserAgent        *string `yaml:"user_agent"`
+				AllowInsecureTLS *bool   `yaml:"allow_insecure_tls"`
+			}{h4.UserAgent, h4.AllowInsecureTLS}
+			headers, err := checkLocalHeaders(h4.Headers)
+			if err != nil {
+				return err
+			}
+			lp.httpHeaders = headers
+		}
+	}
+	if h == nil {
+		return nil
+	}
+	if h.UserAgent != nil {
+		ua := *h.UserAgent
+		if ua == "" || len(ua) > 256 || strings.IndexFunc(ua, func(r rune) bool { return r < 0x20 || r > 0x7e }) >= 0 {
+			return errors.New("http.user_agent must be 1 to 256 printable ASCII characters")
+		}
+		lp.httpUserAgent = ua
+	}
+	if h.AllowInsecureTLS != nil {
+		lp.allowInsecureTLS = *h.AllowInsecureTLS
+	}
+	return nil
 }
 
 // HTTPHeaders are the identification headers the sensor's owner sets

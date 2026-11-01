@@ -99,7 +99,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 
 	oom, oomKind := execOOM(ctx, runCtx, res)
 	// Only the host's OOM kill is a transient start failure.
-	out := &Outcome{Sandbox: be.Status(), ExitCode: -1, startKind: strings.TrimPrefix(oomKind, "oom_envelope")}
+	out := &Outcome{Sandbox: be.Status(), ExitCode: -1, startKind: strings.TrimPrefix(oomKind, "oom_envelope"), Identity: p.applied}
 	if res != nil {
 		out.ExitCode, out.Sandbox = res.ExitCode, res.Sandbox
 	}
@@ -179,7 +179,6 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		}
 	}
 	out.Duration = time.Since(start)
-	out.Identity = p.applied
 	h.stamp(out, m, p.task, "exec profile")
 	return out, nil
 }
