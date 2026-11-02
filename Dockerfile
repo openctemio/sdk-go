@@ -22,7 +22,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Base builder
 # -----------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.26-alpine AS base
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS base
 
 # hadolint ignore=DL3018
 RUN apk add --no-cache git ca-certificates tzdata

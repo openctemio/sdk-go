@@ -14,7 +14,7 @@ This page builds [`examples/hello-tool`](../examples/hello-tool), which is compl
 for every field is [Writing a tool](https://docs.openctem.io/developers/tool-authoring/); the same walk-through for
 a Python tool is [Build your first tool](https://docs.openctem.io/developers/build-your-first-tool/).
 
-You need Go 1.26 or later.
+You need Go 1.27 or later.
 
 ## 1. Install the SDK and the CLI
 
