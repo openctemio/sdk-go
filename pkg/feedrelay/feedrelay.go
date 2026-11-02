@@ -50,8 +50,8 @@ const Capability = "feed.relay@1"
 
 // Paths below the sensor API prefix (/api/v2/sensor).
 const (
-	NextPath  = "/feed-relay/next"
-	RoundPath = "/feed-relay/" // + {round}/files/{name} | {round}/done
+	NextPath  = "/feed-relay-rounds/next"
+	RoundPath = "/feed-relay-rounds/" // + {round}/files/{name} | {round}/done
 )
 
 // Limits.
