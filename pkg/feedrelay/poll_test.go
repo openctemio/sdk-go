@@ -16,7 +16,7 @@ func (e *httpErr) Error() string                 { return fmt.Sprintf("status %d
 func (e *httpErr) HTTPStatusCode() int           { return e.status }
 func (e *httpErr) RetryAfterHint() time.Duration { return e.retry }
 
-// The relay honours the platform's Retry-After (bounded), asks again soon
+// The relay honors the platform's Retry-After (bounded), asks again soon
 // after a served round, and waits long after the platform refused it.
 func TestNextPoll(t *testing.T) {
 	r := &Relay{cfg: Config{Interval: time.Minute}}

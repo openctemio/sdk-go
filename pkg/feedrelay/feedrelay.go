@@ -252,7 +252,7 @@ func (r *Relay) Run(ctx context.Context) {
 	}
 }
 
-// Poll bounds: the platform's Retry-After is honoured within them.
+// Poll bounds: the platform's Retry-After is honored within them.
 const (
 	minPoll = time.Second
 	maxPoll = 30 * time.Minute
