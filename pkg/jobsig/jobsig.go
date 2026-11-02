@@ -64,6 +64,17 @@ const (
 // SensorScopeInstance is Statement.SensorScope for a shared sensor's job.
 const SensorScopeInstance = "instance"
 
+// CommandTypeFeedRelay is the command type of a feed relay round (api
+// RFC-142): the platform asks a platform-owned sensor for named files of a
+// signed feed. It belongs to no organization: its statement carries
+// PlatformTenantID and SensorScopeInstance, and its targets are the feed
+// origins the sensor may download from.
+const CommandTypeFeedRelay = "feed_relay"
+
+// PlatformTenantID is the tenant id of a statement that belongs to the
+// platform (the nil UUID). Only a feed relay statement carries it.
+const PlatformTenantID = "00000000-0000-0000-0000-000000000000"
+
 // Zone is the instance scan zone a shared job's statement names.
 type Zone struct {
 	ID     string   `json:"id"`

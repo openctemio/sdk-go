@@ -210,6 +210,11 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 	if g == nil {
 		return nil
 	}
+	// A feed relay round is never a command: it arrives on its own channel
+	// (VerifyFeedRelay), so a command claiming to be one is refused.
+	if cmd.Type == jobsig.CommandTypeFeedRelay {
+		return jobRefusal("a feed relay round is not a command")
+	}
 	unsigned := len(bytes.TrimSpace(cmd.SignedJob)) == 0 || bytes.Equal(bytes.TrimSpace(cmd.SignedJob), []byte("null"))
 	switch {
 	case unsigned && g.required:
@@ -245,6 +250,26 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 		}
 	}
 	return nil
+}
+
+// VerifyFeedRelay verifies the signed statement of a feed relay round (api
+// RFC-142) against this shared sensor: signed for the instance scope and
+// this sensor, the platform tenant id, command type feed_relay, the round
+// id as command id, lease epoch 0, and payload exactly as received. Only a
+// shared sensor's guard with a pinned key or root verifies one; every other
+// guard refuses.
+func (g *JobGuard) VerifyFeedRelay(ctx context.Context, roundID string, payload, signedJob []byte) (*jobsig.Statement, error) {
+	if g == nil || !g.shared || g.v == nil {
+		return nil, errors.New("only a shared sensor with a pinned job-signing key or root relays feeds")
+	}
+	if len(bytes.TrimSpace(signedJob)) == 0 {
+		return nil, errors.New("the feed relay round is not signed")
+	}
+	g.refreshKeySet(ctx)
+	return g.v.Verify(ctx, signedJob, jobsig.Binding{
+		Shared: true, SensorID: g.sensorID, CommandID: roundID, CommandType: jobsig.CommandTypeFeedRelay,
+		Payload: payload,
+	})
 }
 
 func jobRefusal(detail string) error {

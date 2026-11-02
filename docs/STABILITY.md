@@ -38,6 +38,7 @@ without a tier fails the job.
 | `pkg/tool/adapter` | Adapter protocol v1, the tool side (`Serve`, `Dispatch`) | Stable |
 | `pkg/tool/toolcompat` | Transitional bridges: a `core.Scanner` or `core.Collector` run as a tool of the contract (`FromScanner`, `FromCollector`), out of process; a contract tool served to the command executor (`AsScanner`) | Beta; removed once every in-tree scanner is ported |
 | `pkg/blobsig` | Offline check of a cosign keyless signature bundle for a downloaded file: Fulcio chain, Rekor inclusion proof and an exact signer identity, against the embedded Sigstore public good trust root | Beta |
+| `pkg/feedrelay` | The feed relay (api RFC-142): a shared sensor downloads the signed feed files the platform asks for from allowed origins and streams them back (`feed.relay@1`) | Beta |
 | `pkg/webscope` | The web scope of a job: hosts, path prefixes, deny paths and methods a web tool may request; `Allows` checks a request as the server sees its path | Beta |
 | `pkg/testkit` | Run a tool in-process with the runtime's rules; golden CTIS | Stable |
 | `pkg/importtool` | The file importer as a parser-class tool: Nessus, Qualys with KnowledgeBase, DefectDojo Generic JSON, CycloneDX, SPDX, osv-scanner, CSAF and OpenVEX files, and a reconFTW results directory, to CTIS (the `ctis/importer` package), sandboxed with no network | Beta |
