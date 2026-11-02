@@ -342,9 +342,12 @@ type middleware struct {
 // command queue, outbox, key renewal and shutdown. A sensor adds its tools
 // and calls Run.
 type Kit struct {
-	opts      Options
-	s         settings
-	out, errw io.Writer
+	opts Options
+	// feedRelayOrigins: the feed relay's origin allowlist (ServeFeedRelay);
+	// nil: the relay is off.
+	feedRelayOrigins []string
+	s                settings
+	out, errw        io.Writer
 
 	client *client.Client
 	sensor *core.BaseSensor
@@ -1178,6 +1181,7 @@ func (k *Kit) Run(ctx context.Context) error {
 	} else {
 		close(pollerDone)
 	}
+	k.startFeedRelay(ctx)
 
 	if err := s.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start sensor: %w", err)

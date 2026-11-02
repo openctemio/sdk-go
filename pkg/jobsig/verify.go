@@ -337,6 +337,13 @@ func (v *Verifier) checkStatement(st *Statement, keyID string, b Binding) error 
 		return refusef(ReasonSensorScope, "a zone is only for a shared sensor's job, with an id and ranges")
 	case b.Shared && st.TenantID == "":
 		return refusef(ReasonTenant, "statement names no organization to bind the job's results to")
+	// The platform tenant id is only for a feed relay, and a feed relay
+	// belongs only to the platform, on a shared sensor: neither can be
+	// passed off as the other.
+	case st.TenantID == PlatformTenantID && st.CommandType != CommandTypeFeedRelay:
+		return refusef(ReasonTenant, "the platform tenant id is only for a feed relay statement")
+	case st.CommandType == CommandTypeFeedRelay && (st.TenantID != PlatformTenantID || !b.Shared):
+		return refusef(ReasonTenant, "a feed relay belongs to the platform and runs only on a shared sensor")
 	case !b.Shared && (b.TenantID == "" || !strings.EqualFold(st.TenantID, b.TenantID)):
 		return refusef(ReasonTenant, "statement is for organization %q, not this sensor's", st.TenantID)
 	}
