@@ -4,7 +4,7 @@ Go SDK for building sensors, tools and integrations for the OpenCTEM
 platform. Product documentation: https://docs.openctem.io.
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.26-blue?logo=go)](https://golang.org/)
+[![Go](https://img.shields.io/badge/Go-1.27-blue?logo=go)](https://golang.org/)
 [![Go Reference](https://pkg.go.dev/badge/github.com/openctemio/sdk-go.svg)](https://pkg.go.dev/github.com/openctemio/sdk-go)
 
 ## Overview

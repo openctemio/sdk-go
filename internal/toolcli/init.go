@@ -274,7 +274,7 @@ func Scaffold(kind, capRef, name string) (map[string]scaffoldFile, tool.Manifest
 		}
 	case KindGo:
 		files["main.go"] = scaffoldFile{goMain(c), 0o644}
-		files["go.mod"] = scaffoldFile{fmt.Sprintf("module example.com/%s\n\ngo 1.26\n\nrequire github.com/openctemio/sdk-go v%s\n", name, scaffoldSDKVersion()), 0o644}
+		files["go.mod"] = scaffoldFile{fmt.Sprintf("module example.com/%s\n\ngo 1.27\n\nrequire github.com/openctemio/sdk-go v%s\n", name, scaffoldSDKVersion()), 0o644}
 	case KindPython:
 		files[name+".py"] = scaffoldFile{pythonStub(name), 0o755}
 		files["openctem_tool.py"] = scaffoldFile{pythonHelper, 0o644}
