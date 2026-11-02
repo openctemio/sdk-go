@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -59,6 +60,16 @@ type TestSpec struct {
 	RootCAs *x509.CertPool
 	// Resolve looks the echo host up (nil: the system resolver).
 	Resolve func(ctx context.Context, host string) ([]netip.Addr, error)
+	// EndpointURLs are echo URLs of single endpoints (endpoint id to a URL
+	// whose token names that endpoint alone), so every address the echo
+	// observes is bound to its endpoint. Each must be https on the host and
+	// port of EchoURL (the platform's echo: no other destination); one that
+	// is not fails its endpoint's test (ClassEchoFailed) before any
+	// connection. An endpoint without one uses EchoURL.
+	EndpointURLs map[string]string
+	// Endpoints, when not nil, are the only endpoints tested (in the pool's
+	// order); the others are left out of the results.
+	Endpoints []string
 
 	// allowDenied lets the echo be a loopback address (tests): otherwise
 	// an echo address a proxy must never be (Denied: loopback, link-local,
@@ -148,7 +159,7 @@ func (p *Pool) indexOf(endpointID string) int {
 // one result per endpoint in the pool's order. A canceled ctx ends the
 // test; endpoints not reached are reported as failed with that error.
 func (p *Pool) Test(ctx context.Context, spec TestSpec) []EndpointResult {
-	echo, err := parseEcho(spec)
+	base, baseErr := parseEcho(spec)
 	p.mu.Lock()
 	ids := make([]string, len(p.cfg.Endpoints))
 	for i, e := range p.cfg.Endpoints {
@@ -157,6 +168,13 @@ func (p *Pool) Test(ctx context.Context, spec TestSpec) []EndpointResult {
 	p.mu.Unlock()
 	out := make([]EndpointResult, 0, len(ids))
 	for _, id := range ids {
+		if spec.Endpoints != nil && !slices.Contains(spec.Endpoints, id) {
+			continue
+		}
+		echo, err := base, baseErr
+		if u, ok := spec.EndpointURLs[id]; ok && err == nil {
+			echo, err = endpointEcho(spec, u, base)
+		}
 		switch {
 		case err != nil:
 			out = append(out, EndpointResult{EndpointID: id, Class: ClassEchoFailed, Error: err.Error()})
@@ -192,6 +210,21 @@ func parseEcho(spec TestSpec) (echoTarget, error) {
 		return echoTarget{}, errors.New("the echo's second port is not valid")
 	}
 	return echoTarget{host: u.Hostname(), port: port, path: u.RequestURI(), altPort: spec.AltPort, spec: spec}, nil
+}
+
+// endpointEcho is the echo target of one endpoint's own URL u: the same
+// https host and port as the pool's echo (base), with its own path and token.
+func endpointEcho(spec TestSpec, u string, base echoTarget) (echoTarget, error) {
+	s := spec
+	s.EchoURL = u
+	e, err := parseEcho(s)
+	if err != nil {
+		return echoTarget{}, err
+	}
+	if !strings.EqualFold(e.host, base.host) || e.port != base.port {
+		return echoTarget{}, errors.New("the endpoint's echo address is not the platform's echo")
+	}
+	return e, nil
 }
 
 func (e echoTarget) resolve(ctx context.Context) ([]netip.Addr, error) {

@@ -47,12 +47,23 @@ type ProxyTestEcho struct {
 	URL string `json:"url"`
 	// AltPort is the echo host's second port (0: not tried).
 	AltPort int `json:"alt_port,omitempty"`
+	// Endpoints are echo URLs of single endpoints (endpoint id to a URL on
+	// the same https host and port as URL, whose token names that endpoint
+	// alone), so the platform binds each observed exit to its endpoint. An
+	// endpoint without one uses URL.
+	Endpoints map[string]string `json:"endpoints,omitempty"`
 }
 
 // ProxyTestPayload is the payload of a proxy_test command.
 type ProxyTestPayload struct {
 	Egress *upstream.Config `json:"egress"`
 	Echo   ProxyTestEcho    `json:"echo"`
+	// Probe marks an idle probe of endpoints the platform holds on
+	// probation or in quarantine. Only endpoints with their own echo URL
+	// (Echo.Endpoints) are probed, each at most once per
+	// upstream.ProbeInterval on this sensor; the others are left out of
+	// the result.
+	Probe bool `json:"probe,omitempty"`
 }
 
 // ProxyTestResult is what a proxy_test command completes with.
@@ -76,6 +87,25 @@ type ProxyTestExecutor struct {
 	Egress EgressPreparer
 	// RootCAs verify the echo's certificate (nil: the system roots).
 	RootCAs func() *x509.CertPool
+	// Probes bounds idle probes (nil: upstream.ProcessProbeGate).
+	Probes *upstream.ProbeGate
+}
+
+// probeTargets are the endpoints an idle probe tests: those with their own
+// echo URL (a shared token would not bind an observation to its endpoint)
+// that the sensor did not probe within upstream.ProbeInterval. Never nil.
+func (x *ProxyTestExecutor) probeTargets(p ProxyTestPayload) []string {
+	gate := x.Probes
+	if gate == nil {
+		gate = upstream.ProcessProbeGate()
+	}
+	ids := []string{}
+	for _, e := range p.Egress.Endpoints {
+		if _, ok := p.Echo.Endpoints[e.ID]; ok && gate.Take(p.Egress.PoolID, e.ID) {
+			ids = append(ids, e.ID)
+		}
+	}
+	return ids
 }
 
 // Execute tests the command's pool. A test whose endpoints all fail is a
@@ -99,9 +129,12 @@ func (x *ProxyTestExecutor) Execute(ctx context.Context, cmd *Command) (*Command
 	}
 	ctx, cancel := context.WithTimeout(ctx, proxyTestTimeout)
 	defer cancel()
-	spec := upstream.TestSpec{EchoURL: p.Echo.URL, AltPort: p.Echo.AltPort}
+	spec := upstream.TestSpec{EchoURL: p.Echo.URL, AltPort: p.Echo.AltPort, EndpointURLs: p.Echo.Endpoints}
 	if x.RootCAs != nil {
 		spec.RootCAs = x.RootCAs()
+	}
+	if p.Probe {
+		spec.Endpoints = x.probeTargets(p)
 	}
 	res := ProxyTestResult{PoolID: p.Egress.PoolID, Endpoints: pool.Test(ctx, spec)}
 	return &CommandExecutionResult{

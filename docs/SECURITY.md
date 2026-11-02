@@ -789,6 +789,16 @@ sensor refuses an echo address a proxy must never be asked to reach
 (loopback, link-local, metadata) and applies `SENSOR_SCAN_EGRESS_ALLOW` as for
 a scan.
 
+The command may give each endpoint its own echo URL (`echo.endpoints`: a
+token that names that endpoint alone), so the platform binds every observed
+exit address to the endpoint that produced it. Such a URL must be https on the
+same host and port as the pool's echo URL; any other fails that endpoint's
+test before a connection, so a test never reaches a destination other than
+the platform's echo. A test marked `probe` is an idle probe of endpoints the
+platform holds on probation or in quarantine: only endpoints with their own
+echo URL are probed, each at most once per 10 minutes on the sensor
+(`upstream.ProbeGate`), and the others are left out of the result.
+
 #### Shared mode (`SENSOR_SHARED_MODE=1`, `sensorkit.Options.Shared`)
 
 A sensor that runs jobs of many tenants (an instance's shared sensors, api

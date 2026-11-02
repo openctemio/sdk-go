@@ -38,7 +38,7 @@ func newEchoFixture(t *testing.T) *echoFixture {
 		f.paths = append(f.paths, r.URL.RequestURI())
 		f.heard = append(f.heard, r.Header.Get("Authorization")+r.Header.Get("Cookie"))
 		f.mu.Unlock()
-		if r.URL.Query().Get("t") != "tok" {
+		if tok := r.URL.Query().Get("t"); tok != "tok" && !strings.HasPrefix(tok, "tok-") {
 			http.NotFound(w, r)
 			return
 		}
