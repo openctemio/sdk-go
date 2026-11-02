@@ -186,3 +186,75 @@ var SharedRate = SharedRateBounds{
 	MaxHosts:          65536,
 	MaxTenantsPerHost: 64,
 }
+
+// SourcePaceBounds bound the request rate toward a system of record a
+// collector or importer reads (an inventory API such as vCenter, a
+// directory, a monitoring server): SourcePacer.
+type SourcePaceBounds struct {
+	// Floor is the slowest pace. A source still slow or busy at the floor
+	// keeps being read at the floor; the caller's breaker and run budget
+	// decide when to stop.
+	Floor float64
+	// DefaultCeiling is the ceiling when no limit was given.
+	DefaultCeiling float64
+	// StartFraction of the ceiling is where a new source starts.
+	StartFraction float64
+	// Window is how often the rate is re-evaluated, MinSamples the answers
+	// a window needs before its latency counts.
+	Window     time.Duration
+	MinSamples int
+	// IncreaseFraction of the ceiling is added per clean window;
+	// DecreaseFactor multiplies the rate on push-back (at most once per
+	// window).
+	IncreaseFraction float64
+	DecreaseFactor   float64
+	// LatencyFactor: a window whose median latency is above this multiple
+	// of the source's baseline (and above LatencyFloor) is push-back.
+	LatencyFactor float64
+	LatencyFloor  time.Duration
+	// BaselineDrift is the fraction by which the baseline moves toward each
+	// window's median when that median is higher: a source that became
+	// slower for good becomes the new normal instead of being held at the
+	// floor forever. A lower median replaces the baseline at once.
+	BaselineDrift float64
+	// MaxSamples bounds the latencies one window keeps.
+	MaxSamples int
+	// RetryAfterMax caps a source's Retry-After.
+	RetryAfterMax time.Duration
+}
+
+// SourcePace is the table of source-pace bounds. Why each value:
+//
+//   - Floor 0.2/s: one request every five seconds still finishes a
+//     paged inventory of ten thousand objects in minutes, and leaves a
+//     struggling server essentially alone.
+//   - DefaultCeiling 5/s: what an operator would accept from one read-only
+//     account against a production vCenter or domain controller.
+//   - StartFraction 0.5: a new source is read at half the ceiling until
+//     its answers show it is healthy.
+//   - Window 10s, MinSamples 3: at a few requests per second a window holds
+//     enough answers for a median; one slow answer does not move the rate.
+//   - IncreaseFraction 0.1, DecreaseFactor 0.5: additive increase, halving
+//     on push-back (429, 503, a busy fault, a timeout, a reset, or the
+//     latency signal), once per window.
+//   - LatencyFactor 3, LatencyFloor 250ms: a server that answers three
+//     times slower than its own normal is under load (a vpxd or DC at full
+//     CPU slows down before it errors); answers under 250ms are fast
+//     whatever their ratio.
+//   - BaselineDrift 0.1: about twenty windows (a few minutes) for a source
+//     that stays slower to become the new normal.
+//   - RetryAfterMax 5m: the same cap HostRate and the control client honor.
+var SourcePace = SourcePaceBounds{
+	Floor:            0.2,
+	DefaultCeiling:   5,
+	StartFraction:    0.5,
+	Window:           10 * time.Second,
+	MinSamples:       3,
+	IncreaseFraction: 0.1,
+	DecreaseFactor:   0.5,
+	LatencyFactor:    3,
+	LatencyFloor:     250 * time.Millisecond,
+	BaselineDrift:    0.1,
+	MaxSamples:       64,
+	RetryAfterMax:    5 * time.Minute,
+}
