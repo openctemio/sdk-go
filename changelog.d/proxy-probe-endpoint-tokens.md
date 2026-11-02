@@ -9,3 +9,9 @@
   once per 10 minutes per sensor (`upstream.ProbeGate`); the others are left
   out of the result. New: `upstream.TestSpec.EndpointURLs` and
   `TestSpec.Endpoints`.
+
+### Upgrade notes: proxy test payloads are no longer comparable
+
+- `core.ProxyTestEcho` and `core.ProxyTestPayload` gained a map field
+  (`Endpoints`), so they can no longer be compared with `==`. Compare the
+  fields you need instead.
