@@ -20,36 +20,37 @@ import (
 var _ feedrelay.Platform = (*Client)(nil)
 
 // NextFeedRelay asks the platform for the next feed relay round (api
-// RFC-142). nil, nil: there is none (204).
-func (c *Client) NextFeedRelay(ctx context.Context) (*feedrelay.Round, error) {
+// RFC-142). With no round (204) it returns nil and the platform's
+// Retry-After (0 when absent).
+func (c *Client) NextFeedRelay(ctx context.Context) (*feedrelay.Round, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+protov2.PathPrefix+feedrelay.NextPath, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.doContent(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNoContent {
-		return nil, nil
+		return nil, parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()), nil
 	}
 	if err := feedRelayStatus(resp); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, feedrelay.MaxRoundBody+1))
 	if err != nil {
-		return nil, fmt.Errorf("read feed relay round: %w", err)
+		return nil, 0, fmt.Errorf("read feed relay round: %w", err)
 	}
 	if len(b) > feedrelay.MaxRoundBody {
-		return nil, errors.New("feed relay round over the size limit")
+		return nil, 0, errors.New("feed relay round over the size limit")
 	}
 	var r feedrelay.Round
 	if err := json.Unmarshal(b, &r); err != nil {
-		return nil, fmt.Errorf("decode feed relay round: %w", err)
+		return nil, 0, fmt.Errorf("decode feed relay round: %w", err)
 	}
-	return &r, nil
+	return &r, 0, nil
 }
 
 // UploadFeedRelayFile streams one file of a round with its Content-Length

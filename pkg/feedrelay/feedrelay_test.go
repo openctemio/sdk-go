@@ -33,12 +33,12 @@ type fakePlatform struct {
 	report  *feedrelay.Report
 }
 
-func (p *fakePlatform) NextFeedRelay(context.Context) (*feedrelay.Round, error) {
+func (p *fakePlatform) NextFeedRelay(context.Context) (*feedrelay.Round, time.Duration, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	r := p.round
 	p.round = nil
-	return r, nil
+	return r, 0, nil
 }
 
 func (p *fakePlatform) UploadFeedRelayFile(_ context.Context, id, name string, body io.Reader, size int64, sum string) error {

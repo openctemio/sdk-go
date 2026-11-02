@@ -973,6 +973,9 @@ func (e *HTTPError) Error() string {
 // package.
 func (e *HTTPError) HTTPStatusCode() int { return e.StatusCode }
 
+// RetryAfterHint is the server's Retry-After, 0 when absent.
+func (e *HTTPError) RetryAfterHint() time.Duration { return e.RetryAfter }
+
 // truncateForError shortens s to at most limit bytes (on a UTF-8 boundary)
 // and marks the cut.
 func truncateForError(s string, limit int) string {

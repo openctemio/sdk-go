@@ -131,8 +131,9 @@ type Report struct {
 
 // Platform is the sensor's connection to the platform (pkg/client.Client).
 type Platform interface {
-	// NextFeedRelay returns the next round, or nil when there is none.
-	NextFeedRelay(ctx context.Context) (*Round, error)
+	// NextFeedRelay returns the next round, or nil and the platform's
+	// Retry-After (0: none) when there is none.
+	NextFeedRelay(ctx context.Context) (*Round, time.Duration, error)
 	// UploadFeedRelayFile streams one file of a round.
 	UploadFeedRelayFile(ctx context.Context, roundID, name string, body io.Reader, size int64, sha256Hex string) error
 	// FeedRelayDone reports the round.
@@ -243,24 +244,63 @@ func (r *Relay) Run(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		served, err := r.RunOnce(ctx)
+		served, wait, err := r.runOnce(ctx)
 		if err != nil && ctx.Err() == nil {
 			r.cfg.Logf("feed relay: %v", err)
 		}
-		next := r.cfg.Interval
-		if served {
-			next = time.Second // the platform plans the next round at once
-		}
-		t.Reset(next)
+		t.Reset(r.nextPoll(served, wait, err))
 	}
+}
+
+// Poll bounds: the platform's Retry-After is honoured within them.
+const (
+	minPoll = time.Second
+	maxPoll = 30 * time.Minute
+	// refusedPoll is the wait after the platform refused this sensor (403):
+	// not designated is answered 204 with a Retry-After, so a 403 means it
+	// may not relay at all (not a platform sensor, or disabled).
+	refusedPoll = 15 * time.Minute
+)
+
+// retryAfter is an error that carries the server's Retry-After
+// (client.HTTPError on 429 and 503).
+type retryAfter interface{ RetryAfterHint() time.Duration }
+
+// statusCoder is an error that carries an HTTP status (client.HTTPError).
+type statusCoder interface{ HTTPStatusCode() int }
+
+// nextPoll is how long to wait before asking again: right after a served
+// round soon (the platform plans the next one), else the platform's
+// Retry-After when it sent one, else the interval; a refused sensor waits
+// long.
+func (r *Relay) nextPoll(served bool, wait time.Duration, err error) time.Duration {
+	var ra retryAfter
+	var sc statusCoder
+	switch {
+	case errors.As(err, &ra) && ra.RetryAfterHint() > 0:
+		wait = ra.RetryAfterHint()
+	case errors.As(err, &sc) && sc.HTTPStatusCode() == http.StatusForbidden:
+		wait = refusedPoll
+	case served:
+		return minPoll
+	}
+	if wait <= 0 {
+		return r.cfg.Interval
+	}
+	return min(max(wait, minPoll), maxPoll)
 }
 
 // RunOnce asks for one round and serves it. served reports whether a round
 // was handled (delivered or refused).
 func (r *Relay) RunOnce(ctx context.Context) (served bool, err error) {
-	round, err := r.cfg.Platform.NextFeedRelay(ctx)
+	served, _, err = r.runOnce(ctx)
+	return served, err
+}
+
+func (r *Relay) runOnce(ctx context.Context) (served bool, wait time.Duration, err error) {
+	round, wait, err := r.cfg.Platform.NextFeedRelay(ctx)
 	if err != nil || round == nil {
-		return false, err
+		return false, wait, err
 	}
 	p, err := r.admit(ctx, round)
 	if err != nil {
@@ -269,19 +309,19 @@ func (r *Relay) RunOnce(ctx context.Context) (served bool, err error) {
 		if jobsig.ReasonOf(err) != "" {
 			code = "signature_" + jobsig.ReasonOf(err)
 		}
-		return true, r.cfg.Platform.FeedRelayDone(ctx, round.ID, Report{Refused: code})
+		return true, 0, r.cfg.Platform.FeedRelayDone(ctx, round.ID, Report{Refused: code})
 	}
 	rep := Report{Files: make([]Outcome, 0, len(p.Files))}
 	var total int64
 	for _, f := range p.Files {
 		if ctx.Err() != nil {
-			return true, ctx.Err()
+			return true, 0, ctx.Err()
 		}
 		o := r.serveFile(ctx, round.ID, p.Targets, f, MaxRoundBytes-total)
 		total += o.Bytes
 		rep.Files = append(rep.Files, o)
 	}
-	return true, r.cfg.Platform.FeedRelayDone(ctx, round.ID, rep)
+	return true, 0, r.cfg.Platform.FeedRelayDone(ctx, round.ID, rep)
 }
 
 // admit verifies the round's signature and checks its payload against the
