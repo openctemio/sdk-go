@@ -516,5 +516,13 @@ func Stamp(r *ctis.Report, p Provenance) {
 	r.Metadata.Properties[ProvenanceKey] = p
 	if len(p.Capability) <= 128 && capabilityRefRE.MatchString(p.Capability) {
 		r.Metadata.Extensions.Set(ctis.OpenCTEMNamespace, "capability", p.Capability)
+		return
+	}
+	// No valid capability for the task: nothing the tool put under the
+	// OpenCTEM namespace of the metadata may reach the receiver as if the
+	// runtime had stamped it.
+	delete(r.Metadata.Extensions, ctis.OpenCTEMNamespace)
+	if len(r.Metadata.Extensions) == 0 {
+		r.Metadata.Extensions = nil
 	}
 }

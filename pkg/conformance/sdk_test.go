@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -394,6 +395,54 @@ func TestFake_CTIS2OnlyAndIdempotency(t *testing.T) {
 	}
 	if code := put("0192a3b4-0000-7000-8000-00000000c003", string(raw)); code != http.StatusOK {
 		t.Fatalf("the same document under a new delivery id: %d, want 200 (a retry)", code)
+	}
+	if f.AcceptedFindings() != 1 {
+		t.Fatalf("accepted %d findings, want 1", f.AcceptedFindings())
+	}
+}
+
+// metadata.id is the producer's idempotency key, never the platform's
+// delivery id; and a retry is recognized only within the same command
+// binding: the same document committed for another command is a binding
+// mismatch, not an answer about that command's report.
+func TestFake_MetadataIDAndRetryBinding(t *testing.T) {
+	f := NewFakePlatform(true)
+	defer f.Close()
+	f.OpenCommand("0192a3b4-0000-7000-8000-0000000000a1")
+	f.OpenCommand("0192a3b4-0000-7000-8000-0000000000b2")
+	put := func(commandID, reportID string, body []byte) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPut, f.URL()+protov2.ReportPath(commandID, reportID), bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+f.APIKey)
+		req.Header.Set("Content-Type", protov2.MediaTypeCTIS)
+		req.Header.Set(protov2.HeaderContentDigest, protov2.ContentDigest(body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	// metadata.id equal to the delivery (report) id is refused.
+	doc := report("semgrep", 1, 1)
+	doc.Metadata.ID = "0192a3b4-0000-7000-8000-00000000d001"
+	raw, _ := json.Marshal(doc)
+	if code := put("", "0192a3b4-0000-7000-8000-00000000d001", raw); code != http.StatusUnprocessableEntity {
+		t.Fatalf("metadata.id == report id: %d, want 422", code)
+	}
+	// Committed for command A ...
+	doc = report("semgrep", 1, 1)
+	raw, _ = json.Marshal(doc)
+	if code := put("0192a3b4-0000-7000-8000-0000000000a1", "0192a3b4-0000-7000-8000-00000000d002", raw); code != http.StatusAccepted {
+		t.Fatalf("first delivery: %d", code)
+	}
+	// ... the same document for command B is a binding mismatch, not a retry.
+	if code := put("0192a3b4-0000-7000-8000-0000000000b2", "0192a3b4-0000-7000-8000-00000000d003", raw); code != http.StatusConflict {
+		t.Fatalf("same document for another command: %d, want 409", code)
+	}
+	// ... and for command A again it is a retry.
+	if code := put("0192a3b4-0000-7000-8000-0000000000a1", "0192a3b4-0000-7000-8000-00000000d004", raw); code != http.StatusOK {
+		t.Fatalf("retry for the same command: %d, want 200", code)
 	}
 	if f.AcceptedFindings() != 1 {
 		t.Fatalf("accepted %d findings, want 1", f.AcceptedFindings())
