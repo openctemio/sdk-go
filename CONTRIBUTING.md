@@ -58,6 +58,16 @@ Versioning follows the project rule (openctemio/openctem RFC-037): the version i
 2. **Actions › Release Prepare › Run.** Start with `dry_run` (the default) to see the proposed version and changelog preview. Run it again with `dry_run` off to open `release/vX.Y.Z → main`: the `changelog.d/` fragments are folded into `CHANGELOG.md` as `vX.Y.Z` and `pkg/sdk.Version` is set. Fill `version` to override the proposal.
 3. Merge the release PR. **Release Tag** tags the merge commit, and the tag runs the release workflows. It then opens `deps: sdk-go vX.Y.Z` in openctemio/sensor. The platform learns the release from openctem's signed release feed (openctemio/openctem RFC-037 §12), so nothing is opened there.
 
+### Intended breaking changes
+
+A change that breaks the exported API carries the `breaking-change` label and a
+`changelog.d/` fragment with an `### Upgrade notes` section that says how to
+upgrade (the `api-compat` job checks both). An intended break ships with a
+sensor branch of the same name in openctemio/sensor: the `sensor-compat` job of
+the pull request builds that branch instead of sensor `main`. Merge order: the
+SDK pull request, an SDK release, then the sensor pull request re-pinned to the
+released SDK.
+
 ### Nested modules
 
 The SDK is one Go module. Code that the platform also needs is a contract: the document format belongs in `github.com/openctemio/ctis/v2`, the platform and sensor contracts (capabilities, settings, outcomes, politeness, address scope, sources, feed transfer) in `github.com/openctemio/contract`, never in a nested module of the SDK that the platform imports.
