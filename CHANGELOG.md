@@ -8,6 +8,157 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.46.0 — 2026-11-03
+
+### Security: secret fingerprints only with a producer key
+
+- `pkg/shared/fingerprint` (the SDK's own copy of the recipes) is removed; the SDK uses CTIS recipe v2
+  (`github.com/openctemio/ctis/v2/fingerprint`, `ctis-fp/2:`). `core.GenerateSastFingerprint`,
+  `core.GenerateScaFingerprint` and `core.GenerateSecretFingerprint` are replaced by `core.SASTFingerprint`,
+  `core.SCAFingerprint` and `core.SecretFingerprint(key, file, ruleID, secret)`.
+- A secret enters a fingerprint only as HMAC-SHA256(producer key, secret); without a key the fingerprint is empty
+  (the platform computes its own). There is no unsalted path. The sensor kit creates the key once per installation in
+  its state directory (`secret-fingerprint.key`, 32 random bytes, mode 0600; it never leaves the sensor) and passes it
+  to the command executor (`SetSecretFingerprintKey`), the tool host (`Host.SecretFingerprintKey`) and the parsers
+  (`ParseOptions.SecretKey`).
+- Evidence items `ctis.MarkSensitive` cannot mark completely are dropped, never sent unmarked.
+
+### Security: the platform tenant id and the feed relay command type are bound together
+
+- `jobsig` refuses a statement carrying the platform tenant id (nil UUID) unless it is a `feed_relay` on a shared sensor, and a `feed_relay` naming an organization or reaching an organization's sensor. `JobGuard.Check` never admits a `feed_relay` command.
+
+### Security: Go 1.27.3
+
+- Built and tested with Go 1.27.3 (go.mod, CI, builder image), which fixes GO-2026-6809 (crypto/x509 certificate verification).
+
+### Upgrade notes: CTIS 2.0 only; upgrade sensors and connectors together with the platform
+
+- The SDK produces CTIS 2.0 documents only (`github.com/openctemio/ctis/v2`). There is no 1.x support, no alias and no
+  v1 fingerprint bridge. **Upgrade sensors and connectors together with the platform**: the minimum platform is the
+  first OpenCTEM release that accepts CTIS 2.0 (the CTIS 2.0 switch release); an older platform refuses every
+  document of this SDK, and this SDK's results go nowhere until the platform is upgraded.
+- Results are sent as `application/vnd.ctis+json; version=2.0` (`sensorproto/v2.MediaTypeCTIS`,
+  `ctis.MediaTypeVersioned`); `sensorproto/v2.IsCTISMediaType` accepts any 2.x.
+- The platform and sensor contracts moved out of ctis into `github.com/openctemio/contract` v1.0.0 with the same
+  package names: replace `github.com/openctemio/ctis/{capability,tooloption,settings,outcome,politeness,edgeprotect,addrscope,source}`
+  by `github.com/openctemio/contract/...`.
+- A report queued in the outbox by an earlier SDK (a 1.x document) is dropped with a reason when it is delivered.
+- The standard formats are the CTIS interoperability adapters (`github.com/openctemio/ctis/v2/interop/{sarif,cyclonedx,spdx,csaf,openvex}`
+  v0.1.0), registered with the importer by `pkg/core` (the SARIF parser, the tool host's named formats and the file
+  import tool keep reading them). `pkg/ctis` no longer has SARIF types (`SARIFLog`, `SARIFRun`,
+  `SARIFVersionControlDetails`): use `github.com/openctemio/ctis/v2/interop/sarif` (`sarif.Log`, `sarif.Run`, ...).
+
+### Upgrade notes: proxy test payloads are no longer comparable
+
+- `core.ProxyTestEcho` and `core.ProxyTestPayload` gained a map field
+  (`Endpoints`), so they can no longer be compared with `==`. Compare the
+  fields you need instead.
+
+### Behaviour change: documents carry no platform identifier
+
+- `metadata.id` is the producer's UUIDv7 (`ctis.NewReportID`), stable across retries and restarts of a delivery. The
+  client never writes the command id or the delivery (report) id into the document: the binding to the platform's
+  command stays in the request URL. A report without a valid id of its own gets one, kept in `V2Progress.DocumentID`.
+- The tool runtime names a target's asset by its position (`target-1`, ...), never by the task's target ref, and
+  leaves the task id out of the provenance (`toolrt.Provenance.TaskID` is removed). Every asset gets a document-local
+  id; ids and refs are never UUID-shaped (a tool's UUID-shaped id is refused).
+- Asset values are written in the canonical form of their type (`ctis.CanonicalAssetValue`) by the record checker, the
+  SARIF and JSON parsers and the client; a service written `host:port` gets its transport (`/tcp` by default).
+
+### Behaviour change: CTIS 2.0 members across the SDK
+
+- Asset types are the 2.0 ones (`domain_name`, `web_origin`, `service`, `host`, `identity`, `kubernetes_cluster`,
+  `ip_range`, ...). Tool manifests, task targets and scaffolds use them; a 1.x name in `consumes`/`produces` is
+  refused with the 2.0 name to use.
+- Per-target outcomes travel in `metadata.targets` (done, failed with its class, skipped, unfinished) instead of the
+  `target_outcomes`, `unfinished_targets` and `failed_targets` properties. `toolhost.UnfinishedTargetsKey` is removed.
+  The command result still carries `target_outcomes` (contract `outcome`).
+- Every finding names an asset (`asset_ref` required): a finding without one is filed on its target, or on the task's
+  only target, else refused. `ctis.CheckFindingAssets` no longer accepts an empty `asset_ref` with one asset.
+- `core.LiveHostsReport` reads open ports from service assets linked by `exposes` relationships (2.0) and drops the
+  service assets and relationships; a live address carries `last_seen_at` (no `properties.live_by`).
+- `tool.ReportInfoMetadata` has the 2.0 members a tool may set (`channel`, `source_refs`, `coverage_type`, `branch`,
+  `profiles`, `started_at`, `ended_at`, `properties`, `extensions`); `id`, `source_ref`, `source_type` and `scope` are
+  removed. The runtime's provenance states the capability in `metadata.extensions["io.openctem"].capability`.
+- `tool.Issue.Evidence` becomes an `evidence_items` entry of kind `raw_text`; `Issue.CVE` goes to `vulnerability.ids`.
+- The fake platform (`pkg/conformance`) accepts CTIS 2.x only, validates every document, refuses a `metadata.id` that
+  is not a UUIDv7 or is the command id, and treats a document committed under another delivery id as a retry.
+- Plain scan targets without a type get one from their form (`tool.InferTargetType`); a target value without the
+  canonical form of its type keeps its findings on an `unclassified` asset.
+- The capability contract checks (tool host, conformance kit) leave out the assets the runtime adds for targets, and
+  use contract v1.1.0, whose output rules name CTIS 2.0 members only (`technical.service.port`/`transport`,
+  `technical.http.status_code`, `last_seen_at`, `source_refs`, `technologies`, ...): no capability reads `properties`.
+
+### Behaviour change: one view of each target host for every task of the sensor
+
+- Task forwarders share each target host's rate across the sensor
+  (`adapt.SensorRate`, joined with `HostRate.Share`; the tool host joins the
+  process's one): two tools scanning one host no longer add up their rates.
+  On a shared sensor the host's rate is split evenly between the tenants
+  asking for it.
+- A Retry-After one task got from a host now holds the other tasks of the
+  same tenant too.
+- An edge block (a vendor block or challenge page, or a run of 403 answers)
+  cools the host down for the tenant's tasks: 15 minutes, doubling on each
+  further block up to 6 hours. Connections toward it are refused before a
+  path is chosen (no other proxy endpoint is tried) and the host is reported
+  as a blocked coverage gap with the edge's vendor.
+- Retry-After and cooldowns are kept per tenant and host; nothing a target
+  told one tenant's scans reaches another tenant's tasks.
+
+### Added: adapt.SourcePacer, an adaptive pace for systems of record
+
+- `pkg/adapt.SourcePacer` paces the requests a collector or an importer sends to one production system it reads (an inventory API such as vCenter, a domain controller, a monitoring server): additive increase per clean window, halving on 429/503/busy answers, failures, or answers three times slower than the source's own baseline, and a hold for its Retry-After.
+- Its bounds are in the one table (`adapt.SourcePace`, with the reason for each value): floor 0.2/s, default ceiling 5/s, start at half the ceiling, 10s windows. The caller's ceiling (the lowest configured or policy limit) is never exceeded.
+
+### Added: CTIS 2.0 builders
+
+- `tool.Emitter.Relationship` and the `relationship` record kind (adapter protocol, Python helper
+  `ctx.relationship`): typed edges between assets of the report.
+- `tool.Emitter.Rule` and the `rule` record kind (Python helper `ctx.rule`): the rule catalog (`rules[]`) a tool that
+  reports many findings of one rule writes once; findings name it by `rule_ref`.
+- `tool.Emit.Service(hostType, host, port, transport, svc)`: a host, its service asset and the `exposes` edge.
+- `tool.Target.Transport`, and `Target.Host`/`Port`/`URL` read a service value (`host:port/transport`).
+- Tool content releases (`tool.content[]`), rule revisions (`rules[].content_sha256`, `content_path`) and the
+  `io.openctem` extension keys pass through the tool runtime; report info is checked against CTIS like a record.
+
+### Added: feed relay (`feed.relay@1`) for a platform with no outbound access
+
+- New package `pkg/feedrelay` and `Kit.ServeFeedRelay()`: a shared (platform) sensor with internet access downloads the signed feed files the platform asks for (api RFC-142) and streams them back, so the platform needs no outbound access. The platform verifies every file against the feed's own pinned root; the relay adds no trust.
+- On by default on a shared (platform) sensor with a pinned job-signing key; the host turns it off with `SENSOR_FEED_RELAY=0` (`1` requires it and is a usage error on a sensor that cannot relay). An organization's sensor never relays. The platform offers rounds only to the relay sensors its super administrator designated. Rounds are signed by the platform's job signer (`command_type` `feed_relay`, the platform tenant id, instance scope) and verified with the pinned job-signing keys (`JobGuard.VerifyFeedRelay`); downloads only from the official origins plus `SENSOR_FEED_RELAY_ORIGINS`, through the SSRF-guarded client, with per-file and per-round caps; a pinned file whose digest differs is never uploaded.
+- New client methods `NextFeedRelay` (returns the platform's `Retry-After` with an empty answer), `UploadFeedRelayFile`, `FeedRelayDone` (`/api/v2/sensor/feed-relay/...`); `HTTPError.RetryAfterHint`. The relay honours the platform's `Retry-After` (bounded to 1 s - 30 min) and waits 15 minutes after a 403.
+
+### Added: sticky slots, connection bound and remote DNS for proxy pools
+
+- A job's first connection to a target host draws its proxy endpoint with
+  weight `weight × (0.05 + score²)`, `score` being the job-local EWMA of the
+  endpoint's tunnels and handshake time. The host keeps that endpoint for the
+  job; it moves only when the endpoint fails as a proxy, never because of a
+  target's answer.
+- Endpoints take an optional `max_conns` (0: no bound): the job keeps at most
+  that many connections open through the endpoint; a connection that finds it
+  full waits within its dial timeout.
+- `socks5h` endpoints resolve a target the job scoped by name at the proxy
+  (remote DNS) after the forwarder checked the name's addresses; address and
+  range targets, vendor hosts and every other scheme still go by the checked
+  address. New: `egress.WithScopedName` / `egress.TargetScopedByName`.
+
+### Added: per-endpoint echo tokens and idle probes in proxy tests
+
+- A `proxy_test` command may carry one echo URL per endpoint
+  (`echo.endpoints`), each with a token that names that endpoint alone, so the
+  platform can bind every observed exit address to its endpoint. A URL off the
+  pool's echo host and port fails that endpoint's test before any connection.
+- `probe: true` marks an idle probe of endpoints on probation or in
+  quarantine: only endpoints with their own echo URL are probed, each at most
+  once per 10 minutes per sensor (`upstream.ProbeGate`); the others are left
+  out of the result. New: `upstream.TestSpec.EndpointURLs` and
+  `TestSpec.Endpoints`.
+
+### Fixed: feed relay routes use the plural collection
+
+- The feed relay client calls `/api/v2/sensor/feed-relay-rounds/...` (was `/feed-relay/...`), matching the platform's route naming. The relay shipped in no release yet.
+
 ## v0.45.1 — 2026-11-01
 
 ### Upgrade notes: removed exported constants (intended break, v0.45.0 constants that no release used)
