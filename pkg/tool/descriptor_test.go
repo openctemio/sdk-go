@@ -27,7 +27,6 @@ implements:
       top_n: {key: top_ports}
       rate: {key: rate, max: 5000}
       protocol: {values: [tcp]}
-    output_shape: open_port_assets
 consumes: [domain_name, ip_address, host]
 produces: [asset:ip_address, asset:host, asset:service]
 input: {batch: list, max_targets: 5000}
@@ -67,7 +66,7 @@ func TestDescriptorCases(t *testing.T) {
 		{"duplicate implements", patch(portScanYAML, "implements", "implements: [{capability: scan.ports@1}, {capability: scan.ports@1}]"), "/implements/1/capability"},
 		{"tier below floor", patch(portScanYAML, "tier", "tier: T0"), "needs at least T1"},
 		{"T2 above floor is allowed", patch(portScanYAML, "tier", "tier: T2"), ""},
-		{"unknown output shape", patch(portScanYAML, "    output_shape", "    output_shape: rows"), "/implements/0/output_shape"},
+		{"output shape the capability does not have", patch(portScanYAML, "      protocol", "      protocol: {values: [tcp]}\n    output_shape: open_port_assets"), "/implements/0/output_shape"},
 		{"param not standard", patch(portScanYAML, "      rate", "      speed: {key: rate}"), "no standard param \"speed\""},
 		{"param key missing", patch(portScanYAML, "      top_n", "      top_n: {key: top}"), "/implements/0/params/top_n/key"},
 		{"param key type", patch(portScanYAML, "      ports", "      ports: {key: rate}"), "a port_list param needs"},
@@ -198,7 +197,7 @@ func TestDigestStableForOlderManifests(t *testing.T) {
 	}
 	q := p
 	q.Implements = slices.Clone(p.Implements)
-	q.Implements[0].OutputShape = "ip_ports"
+	q.Implements[0].Params = map[string]ParamMapping{"ports": {Key: "ports"}}
 	if p.Digest() == q.Digest() {
 		t.Fatal("an implements change must change the digest")
 	}

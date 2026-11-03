@@ -51,12 +51,6 @@ func runBundle(ctx tool.Context, task tool.Task, cfg Config) error {
 	for _, sp := range res.Skipped {
 		ctx.Log().Info("file skipped on purpose", "input", in.Name, "path", sp.Path, "reason", sp.Reason)
 	}
-	// The runtime checks each record alone, so an endpoint cannot name an
-	// asset of the report by reference; the platform resolves its origin by
-	// value (the origin asset is in the report).
-	for i := range res.Report.Endpoints {
-		res.Report.Endpoints[i].OriginRef = ""
-	}
 	if len(res.Report.Assets) > 0 || len(res.Report.Findings) > 0 || len(res.Report.Endpoints) > 0 {
 		return ctx.Emit().Report(res.Report)
 	}

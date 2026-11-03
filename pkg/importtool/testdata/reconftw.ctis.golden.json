@@ -341,6 +341,7 @@
       "kind": "page",
       "method": "GET",
       "origin": "https://www.example.com",
+      "origin_ref": "web_origin-https-www-example-com",
       "params": [
         {
           "location": "query",
@@ -359,6 +360,7 @@
       "kind": "page",
       "method": "GET",
       "origin": "https://api.example.com:8443",
+      "origin_ref": "web_origin-https-api-example-com-8443",
       "path": "/v1/users",
       "source": "js",
       "template": "/v1/users"
@@ -367,6 +369,7 @@
       "kind": "script",
       "method": "GET",
       "origin": "https://www.example.com",
+      "origin_ref": "web_origin-https-www-example-com",
       "path": "/static/app.js",
       "source": "js",
       "template": "/static/app.js"
@@ -375,6 +378,7 @@
       "kind": "page",
       "method": "GET",
       "origin": "https://www.example.com",
+      "origin_ref": "web_origin-https-www-example-com",
       "params": [
         {
           "location": "query",
@@ -389,6 +393,7 @@
       "kind": "page",
       "method": "GET",
       "origin": "https://www.example.com",
+      "origin_ref": "web_origin-https-www-example-com",
       "path": "/u/{email}/inbox",
       "source": "import",
       "template": "/u/{email}/inbox"

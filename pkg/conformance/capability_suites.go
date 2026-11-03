@@ -127,9 +127,8 @@ func (r *contractRun) scanPorts(name string, c capability.Capability) {
 }
 
 // discoverHosts: a loopback address with one listening port, probed on
-// that port, is reported live (with the probe that answered, which the
-// output contract requires), and nothing the tool was not given is
-// reported.
+// that port, is reported live (with last_seen_at, which the output contract
+// requires), and nothing the tool was not given is reported.
 func (r *contractRun) discoverHosts(name string, c capability.Capability) {
 	if !r.takes(c, "ports") {
 		r.t.Errorf("%s: the tool does not take the standard param ports, so it cannot be told which ports to probe", name)

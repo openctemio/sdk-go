@@ -74,12 +74,12 @@ func fakeTool(mode string, args []string) int {
 			_ = c.Close()
 			var port int
 			_, _ = fmt.Sscan(p, &port)
-			props := map[string]any{"host": host, "port": port, "protocol": "tcp"}
+			a := map[string]any{"type": "service", "value": net.JoinHostPort(host, p) + "/tcp",
+				"technical": map[string]any{"service": map[string]any{"port": port, "transport": "tcp", "state": "open"}}}
 			if mode == "ports-bad" {
-				delete(props, "protocol")
+				delete(a, "technical") // no technical.service: misses the output contract
 			}
-			assets = append(assets, map[string]any{"type": "service", "value": net.JoinHostPort(host, p) + "/tcp", "properties": props,
-				"technical": map[string]any{"service": map[string]any{"port": port, "transport": "tcp", "state": "open"}}})
+			assets = append(assets, a)
 		}
 	case "hosts", "hosts-extra", "hosts-bad":
 		// Host discovery: the target is live when one probe port answers.
@@ -90,15 +90,15 @@ func fakeTool(mode string, args []string) int {
 				continue
 			}
 			_ = c.Close()
-			props := map[string]any{"live_by": "tcp:" + p}
+			a := map[string]any{"type": "ip_address", "value": host, "last_seen_at": time.Now().UTC().Format(time.RFC3339)}
 			if mode == "hosts-bad" {
-				props = nil
+				delete(a, "last_seen_at")
 			}
-			assets = append(assets, map[string]any{"type": "ip_address", "value": host, "properties": props})
+			assets = append(assets, a)
 			break
 		}
 		if mode == "hosts-extra" {
-			assets = append(assets, map[string]any{"type": "ip_address", "value": "127.0.0.9", "properties": map[string]any{"live_by": "icmp"}})
+			assets = append(assets, map[string]any{"type": "ip_address", "value": "127.0.0.9", "last_seen_at": time.Now().UTC().Format(time.RFC3339)})
 		}
 	case "secrets":
 		b, _ := os.ReadFile(filepath.Join(arg(0), "config.py"))
@@ -123,8 +123,7 @@ func fakeTool(mode string, args []string) int {
 			title = string(m[1])
 		}
 		assets = append(assets, map[string]any{"type": "web_origin", "value": arg(0),
-			"technical":  map[string]any{"http": map[string]any{"status_code": resp.StatusCode, "title": title}},
-			"properties": map[string]any{"status_code": resp.StatusCode, "title": title}})
+			"technical": map[string]any{"http": map[string]any{"status_code": resp.StatusCode, "title": title}}})
 	case "crawl":
 		if eps := fakeCrawl(arg(0), arg(1)); eps != nil {
 			report["endpoints"] = eps
@@ -207,7 +206,7 @@ func fakeManifest(t *testing.T, body string, files map[string]string) string {
 }
 
 const portsTool = `tier: T1
-implements: [{capability: scan.ports@1, params: {ports: {key: ports}}, output_shape: open_port_assets}]
+implements: [{capability: scan.ports@1, params: {ports: {key: ports}}}]
 consumes: [ip_address, domain_name]
 produces: [asset:service]
 config: {type: object, additionalProperties: false, properties: {ports: {type: string, maxLength: 2048}}}
@@ -288,14 +287,14 @@ func TestContractSuite_ScopeCatchesAnOutsideRequest(t *testing.T) {
 	}
 }
 
-// A port scanner that misses the transport protocol fails the capability
+// A port scanner that misses technical.service fails the capability
 // suite and, through its fixture, the fixture contract.
 func TestContractSuite_RequiredPaths(t *testing.T) {
 	body := portsTool + "selftest: [{name: one, task: t.json, expect: e.json}]\n"
 	task := `{"targets":[{"ref":"t1","type":"ip_address","value":"127.0.0.1"}],"config":{"ports":"` + strings.Split(freeAddrListening(t), ":")[1] + `"}}`
 	r := runContract(fakeManifest(t, body, map[string]string{"t.json": task}), ContractOptions{Capability: true,
 		Env: map[string]string{fakeToolEnv: "ports-bad"}, Timeout: 20 * time.Second})
-	if !hasErr(r, "FixtureContract/one/scan.ports@1") || !hasErr(r, "properties.protocol") {
+	if !hasErr(r, "FixtureContract/one/scan.ports@1") || !hasErr(r, "technical.service.port") {
 		t.Fatalf("errors: %v", r.errs)
 	}
 }
@@ -367,7 +366,7 @@ run: {profile: exec, argv: [EXE, "{{target.value}}"], output: {format: ctis, fro
 		t.Errorf("a capability without an active suite failed: %v", r.errs)
 	}
 	// A port scanner that cannot be told its ports fails its suite.
-	noPorts := strings.Replace(portsTool, "params: {ports: {key: ports}}, ", "", 1)
+	noPorts := strings.Replace(portsTool, ", params: {ports: {key: ports}}", "", 1)
 	if r := runContract(fakeManifest(t, noPorts, nil), ContractOptions{Capability: true, Env: map[string]string{fakeToolEnv: "ports"}}); !hasErr(r, "does not take the standard param ports") {
 		t.Errorf("errors: %v", r.errs)
 	}
@@ -599,7 +598,7 @@ func TestContractSuite_DiscoverHosts(t *testing.T) {
 	if r := run("hosts-extra"); !hasErr(r, "Capability/discover.hosts@1") || !hasErr(r, "want exactly [127.0.0.1]") {
 		t.Fatalf("an address the tool was not given passed: %v", r.errs)
 	}
-	if r := run("hosts-bad"); !hasErr(r, "properties.live_by") {
+	if r := run("hosts-bad"); !hasErr(r, "last_seen_at") {
 		t.Fatalf("a live address without the probe passed: %v", r.errs)
 	}
 }

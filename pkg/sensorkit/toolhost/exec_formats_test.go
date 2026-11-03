@@ -27,10 +27,6 @@ records:
       technical.service.port: {path: /port, as: integer}
       technical.service.transport: {const: tcp}
       technical.service.state: {const: open}
-      # contract v1.0.0 scan.ports still reads these opaque properties.
-      properties.host: /ip
-      properties.port: {path: /port, as: integer}
-      properties.protocol: {const: tcp}
 `
 
 // writeTool writes a tool directory (tool.yaml + mapping.yaml) for the
@@ -51,7 +47,7 @@ name: acme-ports
 version: 1.0.0
 class: target-scan
 tier: T1
-implements: [{capability: scan.ports@1, output_shape: open_port_assets}]
+implements: [{capability: scan.ports@1}]
 consumes: [ip_address, domain_name]
 produces: [asset:service]
 permissions: {network: none}
@@ -61,7 +57,7 @@ run:
   output: %s
 `, exe, out)
 	if format == "nuclei" {
-		doc = strings.Replace(doc, "implements: [{capability: scan.ports@1, output_shape: open_port_assets}]", "implements: [{capability: vuln.templates@1}]", 1)
+		doc = strings.Replace(doc, "implements: [{capability: scan.ports@1}]", "implements: [{capability: vuln.templates@1}]", 1)
 		doc = strings.Replace(doc, "produces: [asset:service]", "produces: [finding:vulnerability, finding:misconfiguration]", 1)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "tool.yaml"), []byte(doc), 0o600); err != nil {

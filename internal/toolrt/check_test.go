@@ -346,3 +346,25 @@ func TestAssemblerRelationship(t *testing.T) {
 		t.Fatal("an unknown relationship type was accepted")
 	}
 }
+
+// An endpoint names its web_origin by origin_ref: accepted after that asset
+// was emitted, refused for an unknown or UUID-shaped reference.
+func TestCheckerEndpointOriginRef(t *testing.T) {
+	m := testManifest.Normalized()
+	m.Produces = append(m.Produces, "asset:web_origin", tool.KindEndpoint)
+	c := NewChecker(m)
+	if _, err := c.Asset(ctis.Asset{ID: "o1", Type: ctis.AssetTypeWebOrigin, Value: "https://a.example"}); err != nil {
+		t.Fatal(err)
+	}
+	ok := ctis.Endpoint{Origin: "https://a.example", OriginRef: "o1", Method: "GET", Path: "/login"}
+	if _, err := c.Endpoint(ok); err != nil {
+		t.Fatalf("endpoint after its origin: %v", err)
+	}
+	for name, ref := range map[string]string{"unknown": "o9", "uuid-shaped": "3f2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c"} {
+		e := ok
+		e.OriginRef = ref
+		if _, err := c.Endpoint(e); err == nil {
+			t.Errorf("%s origin_ref %q was accepted", name, ref)
+		}
+	}
+}

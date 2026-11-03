@@ -71,10 +71,9 @@ def run(ctx, task):
         m = TITLE_RE.search(body)
         if m:
             http["title"] = " ".join(m.group(1).decode("utf-8", "replace").split())[:512]
-        # CTIS 2.0: a web origin with its HTTP facts. The probe.http@1 contract
-        # of contract v1.0.0 also reads properties.status_code.
-        ctx.asset(target, {"type": "web_origin", "value": target.value,
-                           "technical": {"http": http}, "properties": {"status_code": status}})
+        # CTIS 2.0: a web origin with its HTTP facts (probe.http@1 reads
+        # technical.http.status_code).
+        ctx.asset(target, {"type": "web_origin", "value": target.value, "technical": {"http": http}})
         ctx.done(target)
 
 

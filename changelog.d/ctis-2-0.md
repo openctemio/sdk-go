@@ -33,7 +33,7 @@
 - Every finding names an asset (`asset_ref` required): a finding without one is filed on its target, or on the task's
   only target, else refused. `ctis.CheckFindingAssets` no longer accepts an empty `asset_ref` with one asset.
 - `core.LiveHostsReport` reads open ports from service assets linked by `exposes` relationships (2.0) and drops the
-  service assets and relationships; `properties.live_by` names the lowest open port.
+  service assets and relationships; a live address carries `last_seen_at` (no `properties.live_by`).
 - `tool.ReportInfoMetadata` has the 2.0 members a tool may set (`channel`, `source_refs`, `coverage_type`, `branch`,
   `profiles`, `started_at`, `ended_at`, `properties`, `extensions`); `id`, `source_ref`, `source_type` and `scope` are
   removed. The runtime's provenance states the capability in `metadata.extensions["io.openctem"].capability`.
@@ -42,9 +42,9 @@
   is not a UUIDv7 or is the command id, and treats a document committed under another delivery id as a retry.
 - Plain scan targets without a type get one from their form (`tool.InferTargetType`); a target value without the
   canonical form of its type keeps its findings on an `unclassified` asset.
-- The capability contract checks (tool host, conformance kit) leave out the assets the runtime adds for targets.
-  Contract v1.0.0 still names some 1.x rule paths (`properties.port`, `properties.status_code`, `properties.live_by`);
-  tools keep those opaque properties until the contract module states the 2.0 paths.
+- The capability contract checks (tool host, conformance kit) leave out the assets the runtime adds for targets, and
+  use contract v1.1.0, whose output rules name CTIS 2.0 members only (`technical.service.port`/`transport`,
+  `technical.http.status_code`, `last_seen_at`, `source_refs`, `technologies`, ...): no capability reads `properties`.
 
 ### Added: CTIS 2.0 builders
 

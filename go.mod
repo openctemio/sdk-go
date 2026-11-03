@@ -8,7 +8,7 @@ require (
 	github.com/google/go-github/v74 v74.0.0
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.20.3
-	github.com/openctemio/contract v1.0.0
+	github.com/openctemio/contract v1.1.1
 	github.com/openctemio/ctis/v2 v2.0.0-20261103034932-18bbee23044c
 	github.com/prometheus/client_golang v1.25.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3

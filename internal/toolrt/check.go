@@ -359,11 +359,23 @@ func (c *Checker) endpoint(e ctis.Endpoint) (ctis.Endpoint, error) {
 	if !c.m.Declares(tool.KindEndpoint, "") {
 		return e, c.quarantine(tool.KindEndpoint)
 	}
-	if err := validate(&ctis.Report{Endpoints: []ctis.Endpoint{e}}); err != nil {
+	// origin_ref names an asset of the report: checked against the assets
+	// accepted so far, not inside the one-endpoint report (its form is
+	// checked here: a document reference, never UUID-shaped).
+	probe := e
+	probe.OriginRef = ""
+	if err := validate(&ctis.Report{Endpoints: []ctis.Endpoint{probe}}); err != nil {
 		return e, c.reject(err)
+	}
+	if e.OriginRef != "" && !ctis.IsDocumentRef(e.OriginRef) {
+		return e, c.reject(fmt.Errorf("endpoint origin_ref %q is not a document reference", e.OriginRef))
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if e.OriginRef != "" && !c.assetIDs[e.OriginRef] {
+		c.invalid++
+		return e, fmt.Errorf("%w: endpoint origin_ref %q names no asset emitted before it", tool.ErrInvalidRecord, e.OriginRef)
+	}
 	if e.ID != "" && c.endpointIDs[e.ID] {
 		c.invalid++
 		return e, fmt.Errorf("%w: duplicate endpoint id %q", tool.ErrInvalidRecord, e.ID)

@@ -8,18 +8,15 @@ package core
 import (
 	"fmt"
 	"net/netip"
-	"strconv"
+
 	"strings"
+	"time"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 )
 
 // CapabilityHostDiscovery is the host discovery capability id.
 const CapabilityHostDiscovery = "discover.hosts"
-
-// PropLiveBy is the property of a live address that names the probe that
-// answered ("tcp:443", "icmp").
-const PropLiveBy = "live_by"
 
 // ErrNoProbePorts: a host discovery job that names no probe ports. The
 // platform sends them with every such job; a tool never guesses them.
@@ -28,8 +25,8 @@ var ErrNoProbePorts = fmt.Errorf("the host discovery job names no probe ports (p
 // LiveHostsReport turns a port probe's report into a host discovery report
 // in place: every ip_address that exposes an open service (a service asset
 // linked from it by an exposes relationship, CTIS 2.0) is kept as a live
-// address, with the lowest open port in properties.live_by ("tcp:<port>");
-// everything else (a host name, an address without an answering port, the
+// address, with last_seen_at set to when it answered (the report's
+// generated_at unless the asset states it); everything else (a host name, an address without an answering port, the
 // service assets and their relationships) is dropped, because host
 // discovery reports addresses only. targets, when not empty, also drops an
 // address that is none of the job's targets nor inside one of its ranges: a
@@ -40,19 +37,22 @@ func LiveHostsReport(report *ctis.Report, targets []string) {
 	}
 	cover := newTargetCover(targets)
 	firstPort := openPortsByHost(report)
+	seen := report.Metadata.GeneratedAt
+	if seen.IsZero() {
+		seen = time.Now().UTC()
+	}
 	kept := report.Assets[:0]
 	for _, a := range report.Assets {
 		if a.Type != ctis.AssetTypeIPAddress {
 			continue
 		}
-		p, ok := firstPort[a.ID]
-		if !ok || !cover.covers(a.Value) {
+		if _, ok := firstPort[a.ID]; !ok || !cover.covers(a.Value) {
 			continue
 		}
-		if a.Properties == nil {
-			a.Properties = ctis.Properties{}
+		if a.LastSeenAt == nil {
+			t := seen
+			a.LastSeenAt = &t
 		}
-		a.Properties[PropLiveBy] = p.Transport + ":" + strconv.Itoa(p.Port)
 		kept = append(kept, a)
 	}
 	report.Assets = kept

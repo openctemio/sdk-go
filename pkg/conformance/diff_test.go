@@ -11,7 +11,7 @@ import (
 
 func baseDiffManifest() tool.Manifest {
 	return tool.Manifest{Name: "ports", Version: "1.2.0", Class: tool.TargetScan, Tier: tool.T1,
-		Implements: []tool.Implementation{{Capability: "scan.ports@1", OutputShape: "open_port_assets",
+		Implements: []tool.Implementation{{Capability: "scan.ports@1",
 			Params: map[string]tool.ParamMapping{"ports": {}, "protocol": {Values: []string{"tcp"}}, "rate": {Max: intp(5000)}}}},
 		Consumes: []string{"ip_address", "domain_name"}, Produces: []string{"asset:service", "asset:ip_address"},
 		Config:      json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"ports":{"type":"string"},"protocol":{"type":"string"},"rate":{"type":"integer"}}}`),
@@ -41,7 +41,7 @@ func TestDiffManifests(t *testing.T) {
 		}, "1.3.0", BumpMajor, false, `no longer supports "tcp"`},
 		"narrowed bound":  {func(m *tool.Manifest) { m.Implements[0].Params["rate"] = tool.ParamMapping{Max: intp(100)} }, "1.3.0", BumpMajor, false, "bounds narrowed"},
 		"new value limit": {func(m *tool.Manifest) { m.Implements[0].Params["ports"] = tool.ParamMapping{Values: []string{"x"}} }, "1.3.0", BumpMajor, false, "now supports only"},
-		"shape changed":   {func(m *tool.Manifest) { m.Implements[0].OutputShape = "ip_ports" }, "1.3.0", BumpMajor, false, "output shape changed"},
+		"shape changed":   {func(m *tool.Manifest) { m.Implements[0].OutputShape = "rows" }, "1.3.0", BumpMajor, false, "output shape changed"},
 		"tier raised":     {func(m *tool.Manifest) { m.Tier = tool.T2 }, "1.3.0", BumpMajor, false, "minimum tier raised"},
 		"side effect": {func(m *tool.Manifest) {
 			m.Tier = tool.T2

@@ -3,11 +3,6 @@
   "assets": [
     {
       "id": "asset-1",
-      "properties": {
-        "host": "192.0.2.10",
-        "port": 443,
-        "protocol": "tcp"
-      },
       "technical": {
         "service": {
           "port": 443,
@@ -20,11 +15,6 @@
     },
     {
       "id": "asset-2",
-      "properties": {
-        "host": "192.0.2.10",
-        "port": 22,
-        "protocol": "tcp"
-      },
       "technical": {
         "service": {
           "port": 22,

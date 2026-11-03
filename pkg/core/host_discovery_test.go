@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/openctemio/contract/capability"
 
@@ -47,9 +48,9 @@ func reportMap(t *testing.T, r *ctis.Report) map[string]any {
 	return m
 }
 
-// A host discovery report keeps each answering address of the job, with
-// the lowest probe port that answered, and nothing else (no service assets,
-// no relationships).
+// A host discovery report keeps each answering address of the job, seen at
+// the report's time (last_seen_at), and nothing else (no service assets, no
+// relationships, no properties).
 func TestLiveHostsReport(t *testing.T) {
 	r := probeReport(
 		probeHost{ctis.AssetTypeIPAddress, "198.51.100.7", []int{443, 22}},
@@ -58,10 +59,16 @@ func TestLiveHostsReport(t *testing.T) {
 		probeHost{ctis.AssetTypeHost, "app.example.com", []int{80}},
 		probeHost{ctis.AssetTypeIPAddress, "198.51.100.8", nil}, // no answer
 	)
+	at := time.Date(2026, 11, 3, 4, 0, 0, 0, time.UTC)
+	r.Metadata.GeneratedAt = at
 	LiveHostsReport(r, []string{"198.51.100.0/29", "198.51.100.9", "::ffff:198.51.100.0/120"})
-	if len(r.Assets) != 2 || r.Assets[0].Value != "198.51.100.7" || r.Assets[0].Properties[PropLiveBy] != "tcp:22" ||
-		r.Assets[1].Value != "198.51.100.9" || r.Assets[1].Properties[PropLiveBy] != "tcp:80" {
+	if len(r.Assets) != 2 || r.Assets[0].Value != "198.51.100.7" || r.Assets[1].Value != "198.51.100.9" {
 		t.Fatalf("assets = %+v", r.Assets)
+	}
+	for _, a := range r.Assets {
+		if a.LastSeenAt == nil || !a.LastSeenAt.Equal(at) || len(a.Properties) != 0 {
+			t.Fatalf("asset %+v: want last_seen_at %s and no properties", a, at)
+		}
 	}
 	if len(r.Relationships) != 0 {
 		t.Fatalf("relationships kept: %+v", r.Relationships)
