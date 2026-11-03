@@ -9,7 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.20.3
 	github.com/openctemio/contract v1.1.1
-	github.com/openctemio/ctis/v2 v2.0.0
+	github.com/openctemio/ctis/v2 v2.0.1
 	github.com/openctemio/ctis/v2/interop/csaf v0.1.0
 	github.com/openctemio/ctis/v2/interop/cyclonedx v0.1.0
 	github.com/openctemio/ctis/v2/interop/openvex v0.1.0
