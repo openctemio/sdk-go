@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openctemio/ctis/importer"
+	"github.com/openctemio/ctis/v2/importer"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/internal/cirepo"
@@ -175,7 +175,8 @@ func (p *SARIFParser) Parse(ctx context.Context, data []byte, opts *ParseOptions
 	}
 	in := importer.Options{
 		Format:            importer.FormatSARIF,
-		SourceType:        "scanner",
+		Channel:           ctis.ChannelScanner,
+		SecretKey:         opts.SecretKey,
 		ToolType:          opts.ToolType,
 		DefaultConfidence: opts.DefaultConfidence,
 		DefaultAsset:      &ctis.Asset{ID: sarifNoAsset, Type: ctis.AssetTypeUnclassified, Value: sarifNoAsset},
@@ -198,7 +199,8 @@ func (p *SARIFParser) Parse(ctx context.Context, data []byte, opts *ParseOptions
 		if id == "" {
 			id = "asset-1"
 		}
-		other = &ctis.Asset{ID: id, Type: t, Value: opts.AssetValue, Name: opts.AssetValue}
+		v := ctis.NormalizeAssetName(t, opts.AssetValue)
+		other = &ctis.Asset{ID: id, Type: t, Value: v, Name: v}
 	case opts.BranchInfo != nil && strings.TrimSpace(opts.BranchInfo.RepositoryURL) != "":
 		in.Repository, in.Branch, in.CommitSHA = opts.BranchInfo.RepositoryURL, branch, commit
 	}
@@ -230,9 +232,10 @@ func (p *SARIFParser) Parse(ctx context.Context, data []byte, opts *ParseOptions
 	return report, nil
 }
 
-// sarifNoAsset is the importer's default asset; seeing it in a result means
-// no asset was named.
-const sarifNoAsset = "\x00no-asset"
+// sarifNoAsset is the id and value of the importer's default asset (a valid
+// document-local reference); seeing it in a result means no asset was
+// named.
+const sarifNoAsset = "openctem-sdk-no-asset"
 
 // sarifImport runs one SARIF conversion and files every finding on other
 // when set. A result on the default asset is an error matching
@@ -306,11 +309,12 @@ func (p *JSONParser) CanParse(data []byte) bool {
 	return hasVersion && (hasFindings || hasMetadata)
 }
 
-// Parse converts JSON to CTIS format.
+// Parse reads a CTIS 2.x document (ctis.Decode: a 1.x document is an error
+// that names the upgrade; members of a newer 2.x minor are ignored).
 func (p *JSONParser) Parse(ctx context.Context, data []byte, opts *ParseOptions) (*ctis.Report, error) {
-	var report ctis.Report
-	if err := json.Unmarshal(data, &report); err != nil {
-		return nil, fmt.Errorf("parse json: %w", err)
+	report, _, err := ctis.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("parse ctis: %w", err)
 	}
 
 	// Apply options
@@ -324,7 +328,7 @@ func (p *JSONParser) Parse(ctx context.Context, data []byte, opts *ParseOptions)
 			report.Assets = append(report.Assets, ctis.Asset{
 				ID:    assetID,
 				Type:  opts.AssetType,
-				Value: opts.AssetValue,
+				Value: ctis.NormalizeAssetName(opts.AssetType, opts.AssetValue),
 			})
 			linkTo = assetID
 		}

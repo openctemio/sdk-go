@@ -19,7 +19,7 @@ name: plain-http
 version: 0.1.0
 class: target-scan
 tier: T0
-consumes: [http_service]
+consumes: [web_origin]
 produces: ["finding:misconfiguration"]
 permissions:
   network: none
@@ -34,8 +34,8 @@ class: target-scan
 tier: T1
 implements:
   - capability: probe.http@1
-consumes: [http_service]
-produces: ["asset:http_service"]
+consumes: [web_origin]
+produces: ["asset:web_origin"]
 engine:
   name: curl
   license: curl

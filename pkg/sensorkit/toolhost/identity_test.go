@@ -256,12 +256,12 @@ func TestIdentityClearedForTasksWithoutHTTPToTargets(t *testing.T) {
 		m := httpManifest
 		m.Run = nil
 		m.Tier = tool.T1
-		m.Consumes = []string{"domain"}
-		m.Produces = []string{"asset:domain"}
+		m.Consumes = []string{"domain_name"}
+		m.Produces = []string{"asset:domain_name"}
 		if n == tool.NetTargets {
 			m.Produces = []string{"asset:host"}
 			if caps[0] == "probe.http@1" {
-				m.Produces = []string{"asset:http_service"}
+				m.Produces = []string{"asset:web_origin"}
 			}
 		}
 		m.Permissions = tool.Permissions{Network: n}
@@ -293,7 +293,7 @@ func TestIdentityClearedForTasksWithoutHTTPToTargets(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			task := identityTask()
-			task.Targets = []tool.Target{{Ref: "d", Type: "domain", Value: "example.com"}}
+			task.Targets = []tool.Target{{Ref: "d", Type: "domain_name", Value: "example.com"}}
 			task.Capability = c.capab
 			p, ierr, err := (&Host{}).prepare(ctx, c.m, task, RunOptions{})
 			if err != nil || ierr != nil {
@@ -327,7 +327,7 @@ func TestNoIdentificationSentToThirdParties(t *testing.T) {
 		task := identityTask()
 		// The request goes to the test server, the one host the tool's
 		// network permission lets it dial here.
-		task.Targets = []tool.Target{{Ref: "d", Type: "domain", Value: "127.0.0.1"}}
+		task.Targets = []tool.Target{{Ref: "d", Type: "domain_name", Value: "127.0.0.1"}}
 		task.Capability = capab
 		p, ierr, err := (&Host{}).prepare(context.Background(), m, task, RunOptions{})
 		if err != nil || ierr != nil {
@@ -349,7 +349,7 @@ func TestNoIdentificationSentToThirdParties(t *testing.T) {
 		m := httpManifest
 		m.Run = nil
 		m.Tier = tool.T1
-		m.Consumes = []string{"domain"}
+		m.Consumes = []string{"domain_name"}
 		m.Produces = []string{produces}
 		m.Permissions = tool.Permissions{Network: n}
 		m.Implements = []tool.Implementation{{Capability: capab}}
@@ -357,7 +357,7 @@ func TestNoIdentificationSentToThirdParties(t *testing.T) {
 		return m
 	}
 
-	passive := compiled(tool.NetEgressProxy, "discover.subdomains@1", "asset:domain")
+	passive := compiled(tool.NetEgressProxy, "discover.subdomains@1", "asset:domain_name")
 	s := send(t, passive, "discover.subdomains@1")
 	if s.bounty != "" || strings.Contains(s.ua, "jdoe") {
 		t.Fatalf("a passive source received the identification: %+v", s)
@@ -366,7 +366,7 @@ func TestNoIdentificationSentToThirdParties(t *testing.T) {
 		t.Fatalf("the tool's own settings were lost: %+v", s)
 	}
 
-	prober := compiled(tool.NetTargets, "probe.http@1", "asset:http_service")
+	prober := compiled(tool.NetTargets, "probe.http@1", "asset:web_origin")
 	prober.Features = &tool.Features{HTTPIdentity: true}
 	if s := send(t, prober, "probe.http@1"); s.ua != "jdoe-research" || s.bounty != "jdoe" {
 		t.Fatalf("a target-reaching http tool lost the identification: %+v", s)

@@ -20,7 +20,7 @@ var contractTool = tool.Define("contract-tool", "1.0.0").
 		"severity": {Key: "sev", Values: []string{"high", "critical"}},
 		"rate":     {Max: intPtr(500)},
 	}}).
-	Targets("domain").
+	Targets("domain_name").
 	Produces("finding:vulnerability").
 	Params(tool.ListParam("sev"), tool.IntParam("rate").Default(100).Range(1, 1000), tool.BoolParam("bad")).
 	Manifest(func(m *tool.Manifest) {

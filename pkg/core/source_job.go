@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	ctissource "github.com/openctemio/ctis/source"
+	ctissource "github.com/openctemio/contract/source"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/source"
@@ -73,7 +73,7 @@ func (f *fetchedSource) annotate(r *ctis.Report) {
 	if f == nil || r == nil {
 		return
 	}
-	r.Metadata.CoverageType = "full"
+	r.Metadata.CoverageType = ctis.CoverageFull
 	r.Metadata.Branch = &ctis.BranchInfo{Name: f.branch, CommitSHA: f.commit}
 }
 
@@ -81,7 +81,7 @@ func (f *fetchedSource) annotate(r *ctis.Report) {
 func (f *fetchedSource) emptyReport(tool string) *ctis.Report {
 	r := ctis.NewReport()
 	r.Tool = &ctis.Tool{Name: tool}
-	r.Assets = []ctis.Asset{{ID: "repository", Type: ctis.AssetTypeRepository, Value: f.repository}}
+	r.Assets = []ctis.Asset{{ID: "repository", Type: ctis.AssetTypeRepository, Value: ctis.NormalizeAssetName(ctis.AssetTypeRepository, f.repository)}}
 	f.annotate(r)
 	return r
 }

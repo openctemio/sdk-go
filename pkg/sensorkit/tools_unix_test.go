@@ -12,7 +12,7 @@ import (
 )
 
 const adapterScript = `#!/bin/sh
-echo '{"version":"1.3","metadata":{"timestamp":"2026-10-05T00:00:00Z"},"findings":[{"type":"misconfiguration","title":"adapter finding","severity":"low"},{"type":"secret","title":"undeclared adapter finding","severity":"high"}]}'
+echo '{"version":"2.0","metadata":{"generated_at":"2026-10-05T00:00:00Z"},"findings":[{"type":"misconfiguration","title":"adapter finding","severity":"low"},{"type":"secret","title":"undeclared adapter finding","severity":"high"}]}'
 `
 
 func adapterManifestYAML(name string) string {

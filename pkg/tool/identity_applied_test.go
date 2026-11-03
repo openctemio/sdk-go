@@ -15,7 +15,7 @@ func TestQueryArgs(t *testing.T) {
 
 func TestQueryPlaceholderIsValidAsAWholeArgumentOnly(t *testing.T) {
 	m := Manifest{APIVersion: APIVersion, Name: "qtool", Version: "1.0.0", Class: TargetScan, Tier: T0,
-		Consumes: []string{"domain"}, Produces: []string{"finding:misconfiguration"}, Permissions: Permissions{Network: NetTargets},
+		Consumes: []string{"domain_name"}, Produces: []string{"finding:misconfiguration"}, Permissions: Permissions{Network: NetTargets},
 		Features: &Features{HTTPQuery: true},
 		Run:      &RunSpec{Profile: ProfileExec, Argv: []string{"qtool", "{{http.query:--param}}"}, Output: &OutputSpec{Format: OutputCTIS, From: "stdout"}}}
 	if err := m.Validate(); err != nil {

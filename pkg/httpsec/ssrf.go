@@ -38,7 +38,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openctemio/ctis/addrscope"
+	"github.com/openctemio/contract/addrscope"
 )
 
 // allowLoopbackEnvVar is the env var name a test harness can set to
@@ -59,7 +59,7 @@ const allowLoopbackEnvVar = "OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK"
 // external test harnesses; this variable is for in-process overrides.
 var AllowLoopback = os.Getenv(allowLoopbackEnvVar) == "1"
 
-// The deny list is ctis addrscope (IsInternal): the one definition of an
+// The deny list is contract addrscope (IsInternal): the one definition of an
 // internal address, shared with the platform, which checks job targets with
 // it. It covers loopback, link-local (cloud metadata), CGNAT, "this"
 // network, multicast, reserved and broadcast, IETF protocol assignments,

@@ -1,34 +1,45 @@
 {
-  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "$schema": "https://schemas.openctem.io/ctis/2.0/report.json",
   "assets": [
     {
-      "properties": {
-        "host": "192.0.2.10",
-        "port": 443,
-        "protocol": "tcp"
+      "id": "asset-1",
+      "technical": {
+        "service": {
+          "port": 443,
+          "state": "open",
+          "transport": "tcp"
+        }
       },
-      "type": "open_port",
-      "value": "192.0.2.10:443"
+      "type": "service",
+      "value": "192.0.2.10:443/tcp"
     },
     {
-      "properties": {
-        "host": "192.0.2.10",
-        "port": 22,
-        "protocol": "tcp"
+      "id": "asset-2",
+      "technical": {
+        "service": {
+          "port": 22,
+          "state": "open",
+          "transport": "tcp"
+        }
       },
-      "type": "open_port",
-      "value": "192.0.2.10:22"
+      "type": "service",
+      "value": "192.0.2.10:22/tcp"
     }
   ],
   "metadata": {
+    "channel": "scanner",
+    "extensions": {
+      "io.openctem": {
+        "capability": "scan.ports@1"
+      }
+    },
     "properties": {
       "provenance": "<provenance>"
-    },
-    "source_type": "scanner"
+    }
   },
   "tool": {
     "name": "acme-ports",
     "version": "1.0.0"
   },
-  "version": "1.6"
+  "version": "2.0"
 }

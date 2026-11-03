@@ -12,7 +12,7 @@ import (
 
 var checkManifest = tool.Manifest{
 	Name: "check", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-	Consumes: []string{"domain"}, Produces: []string{"finding:vulnerability"},
+	Consumes: []string{"domain_name"}, Produces: []string{"finding:vulnerability"},
 	Permissions: tool.Permissions{Network: tool.NetNone,
 		Credentials: []tool.CredentialReq{{Name: "api_token", Kind: "token"}}},
 }
@@ -55,7 +55,7 @@ var checker = tool.WithRetest(tool.New(checkManifest, func(tool.Context, tool.Ta
 
 func retestTask() tool.Task {
 	return tool.Task{
-		Targets: []tool.Target{{Ref: "t1", Type: "domain", Value: "a.example"}, {Ref: "t2", Type: "domain", Value: "b.example"}},
+		Targets: []tool.Target{{Ref: "t1", Type: "domain_name", Value: "a.example"}, {Ref: "t2", Type: "domain_name", Value: "b.example"}},
 		Retest: []tool.RetestItem{
 			{Ref: "f-present", Target: "t1", Kind: tool.RetestFinding, RuleID: "present"},
 			{Ref: "f-gone", Target: "t1", Kind: tool.RetestFinding, RuleID: "gone"},
@@ -155,7 +155,7 @@ func TestRetestManifestRules(t *testing.T) {
 	if checkManifest.Digest() == checker.Manifest().Digest() {
 		t.Fatal("declaring retest must change the manifest digest")
 	}
-	if _, err := tool.LoadManifest([]byte("apiVersion: openctem.io/tool/v1\nname: check\nversion: 1.0.0\nclass: target-scan\ntier: T1\nconsumes: [domain]\nproduces: [finding:vulnerability]\nretest: true\nrun:\n  argv: [./check]\n")); err != nil {
+	if _, err := tool.LoadManifest([]byte("apiVersion: openctem.io/tool/v1\nname: check\nversion: 1.0.0\nclass: target-scan\ntier: T1\nconsumes: [domain_name]\nproduces: [finding:vulnerability]\nretest: true\nrun:\n  argv: [./check]\n")); err != nil {
 		t.Fatalf("tool.yaml with retest: %v", err)
 	}
 }

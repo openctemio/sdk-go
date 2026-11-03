@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 )
@@ -71,16 +72,25 @@ type Emitter interface {
 	Finding(t Target, f ctis.Finding) error
 	// Dependency emits a dependency (SBOM component) found on t.
 	Dependency(t Target, d ctis.Dependency) error
-	// Endpoint emits a method and path a web origin serves (CTIS 1.6).
+	// Endpoint emits a method and path a web origin serves.
 	// A URL in it never carries a query value or credentials.
 	Endpoint(e ctis.Endpoint) error
+	// Relationship emits a typed edge between two assets emitted before it
+	// (by their document-local ids): a host or address exposes a service, a
+	// name resolves to an address, a service serves a certificate.
+	Relationship(r ctis.Relationship) error
+	// Rule emits an entry of the report's rule catalog: a tool that reports
+	// many findings of one rule writes the rule's text once and sets
+	// rule_ref (with the same rule_id) on each finding. Optional; a rule is
+	// emitted before the findings that name it.
+	Rule(r ctis.Rule) error
 	// Report emits every record of a report (the output of a converter),
 	// plus its tool, metadata and properties (ReportInfo).
 	Report(r *ctis.Report) error
 }
 
 // ReportInfo is what a report carries besides its records: the tool's
-// vendor and capabilities, metadata such as the coverage type and branch,
+// vendor and techniques, metadata such as the coverage type and branch,
 // and properties. The runtime keeps the tool's name as the manifest's.
 type ReportInfo struct {
 	Tool       *ctis.Tool          `json:"tool,omitempty"`
@@ -88,16 +98,21 @@ type ReportInfo struct {
 	Properties ctis.Properties     `json:"properties,omitempty"`
 }
 
-// ReportInfoMetadata is the part of a report's metadata a tool may set.
+// ReportInfoMetadata is the part of a report's metadata a tool may set
+// (CTIS 2.0 member names). metadata.id, generated_at and the per-target
+// outcomes are the runtime's: a tool never names the document or the
+// receiver's job.
 type ReportInfoMetadata struct {
-	ID           string           `json:"id,omitempty"`
-	DurationMs   int              `json:"duration_ms,omitempty"`
-	SourceRef    string           `json:"source_ref,omitempty"`
-	SourceType   string           `json:"source_type,omitempty"`
-	CoverageType string           `json:"coverage_type,omitempty"`
-	Branch       *ctis.BranchInfo `json:"branch,omitempty"`
-	Scope        *ctis.Scope      `json:"scope,omitempty"`
-	Properties   ctis.Properties  `json:"properties,omitempty"`
+	DurationMs   int               `json:"duration_ms,omitempty"`
+	Channel      ctis.Channel      `json:"channel,omitempty"`
+	SourceRefs   []ctis.SourceRef  `json:"source_refs,omitempty"`
+	CoverageType ctis.CoverageType `json:"coverage_type,omitempty"`
+	Branch       *ctis.BranchInfo  `json:"branch,omitempty"`
+	Profiles     []ctis.Profile    `json:"profiles,omitempty"`
+	StartedAt    *time.Time        `json:"started_at,omitempty"`
+	EndedAt      *time.Time        `json:"ended_at,omitempty"`
+	Properties   ctis.Properties   `json:"properties,omitempty"`
+	Extensions   ctis.Extensions   `json:"extensions,omitempty"`
 }
 
 // InfoOf returns the ReportInfo of r (nil when r carries none).
@@ -107,11 +122,13 @@ func InfoOf(r *ctis.Report) *ReportInfo {
 	}
 	info := &ReportInfo{Tool: r.Tool, Properties: r.Properties}
 	md := r.Metadata
-	if md.ID != "" || md.DurationMs != 0 || md.SourceRef != "" || md.SourceType != "" || md.CoverageType != "" ||
-		md.Branch != nil || md.Scope != nil || len(md.Properties) > 0 {
-		info.Metadata = &ReportInfoMetadata{ID: md.ID, DurationMs: md.DurationMs, SourceRef: md.SourceRef,
-			SourceType: md.SourceType, CoverageType: md.CoverageType,
-			Branch: md.Branch, Scope: md.Scope, Properties: md.Properties}
+	if md.DurationMs != 0 || md.Channel != "" || len(md.SourceRefs) > 0 || md.CoverageType != "" ||
+		md.Branch != nil || len(md.Profiles) > 0 || md.StartedAt != nil || md.EndedAt != nil ||
+		len(md.Properties) > 0 || len(md.Extensions) > 0 {
+		info.Metadata = &ReportInfoMetadata{DurationMs: md.DurationMs, Channel: md.Channel,
+			SourceRefs: md.SourceRefs, CoverageType: md.CoverageType, Branch: md.Branch,
+			Profiles: md.Profiles, StartedAt: md.StartedAt, EndedAt: md.EndedAt,
+			Properties: md.Properties, Extensions: md.Extensions}
 	}
 	if info.Tool == nil && info.Metadata == nil && len(info.Properties) == 0 {
 		return nil

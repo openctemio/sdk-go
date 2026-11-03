@@ -2,10 +2,13 @@ package tool
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -21,7 +24,7 @@ type Handler func(ctx Context, job *Job, emit Emit) error
 //
 //	var Dotenv = tool.Define("dotenv", "1.0.0").
 //		Describe("Finds .env files a web server serves").
-//		Targets("http_service", "domain").
+//		Targets("web_origin", "domain_name").
 //		Produces("finding:misconfiguration").
 //		Params(
 //			tool.StringParam("path").Label("Path").Default("/.env").Pattern("^/").MaxLength(256),
@@ -189,7 +192,7 @@ func (t *builtTool) Run(ctx Context, task Task) error {
 	if err != nil {
 		return err
 	}
-	return t.handle(ctx, job, Emit{e: ctx.Emit()})
+	return t.handle(ctx, job, Emit{e: ctx.Emit(), ids: map[string]bool{}})
 }
 
 func newJob(schema *core.SettingsSchema, task Task) (*Job, error) {
@@ -414,7 +417,11 @@ func (v Value) Strings() []string {
 // Emit builds CTIS records for the common cases and sends them through the
 // task's emitter, which checks each one (CTIS validity, declared output
 // types, limits). CTIS returns the emitter for anything else.
-type Emit struct{ e Emitter }
+type Emit struct {
+	e Emitter
+	// ids are the asset ids this Emit already sent (Service links to them).
+	ids map[string]bool
+}
 
 // Issue is a finding in a few fields. Severity is critical, high, medium,
 // low or info.
@@ -432,9 +439,15 @@ type Issue struct {
 
 func (i Issue) finding(typ ctis.FindingType) ctis.Finding {
 	f := ctis.Finding{Type: typ, RuleID: i.RuleID, Title: i.Title, Severity: i.Severity,
-		Description: i.Description, Evidence: i.Evidence}
+		Description: i.Description}
+	if i.Evidence != "" {
+		f.EvidenceItems = []ctis.EvidenceItem{{Kind: ctis.EvidenceKindRawText, Text: i.Evidence}}
+	}
 	if i.CVE != "" {
-		f.Vulnerability = &ctis.VulnerabilityDetails{CVEID: i.CVE}
+		v := &ctis.VulnerabilityDetails{}
+		if v.AddID(i.CVE, "") {
+			f.Vulnerability = v
+		}
 	}
 	return f
 }
@@ -449,10 +462,62 @@ func (e Emit) Misconfiguration(t Target, i Issue) error {
 	return e.e.Finding(t, i.finding(ctis.FindingTypeMisconfiguration))
 }
 
-// Asset emits a discovered asset of a CTIS type ("domain", "ip_address",
-// "http_service", ...).
+// Asset emits a discovered asset of a CTIS 2.0 type ("domain_name",
+// "ip_address", "web_origin", ...). The value is written in the type's
+// canonical form (ctis.CanonicalAssetValue); the runtime assigns the
+// document-local id.
 func (e Emit) Asset(typ, value string) error {
-	return e.e.Asset(ctis.Asset{Type: ctis.AssetType(typ), Value: value})
+	t := ctis.AssetType(typ)
+	return e.e.Asset(ctis.Asset{Type: t, Value: ctis.NormalizeAssetName(t, value)})
+}
+
+// Service emits an open service of a host (CTIS 2.0): the host asset
+// (hostType ip_address, host or domain_name, its value), a service asset
+// "host:port/transport" and the exposes relationship between them. Both
+// assets get document-local ids derived from their canonical values, so
+// several services of one host share its asset. transport is tcp when
+// empty.
+func (e Emit) Service(hostType, host string, port int, transport string, svc *ctis.ServiceTechnical) error {
+	ht := ctis.AssetType(hostType)
+	hv := ctis.NormalizeAssetName(ht, host)
+	tr := ctis.Transport(strings.ToLower(transport))
+	if tr == "" {
+		tr = ctis.TransportTCP
+	}
+	sv, err := ctis.CanonicalService(hv, port, string(tr))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRecord, err)
+	}
+	st := ctis.ServiceTechnical{}
+	if svc != nil {
+		st = *svc
+	}
+	st.Port, st.Transport = port, tr
+	if st.State == "" {
+		st.State = ctis.PortOpen
+	}
+	hostID, svcID := localID("h", ht, hv), localID("s", ctis.AssetTypeService, sv)
+	if e.ids == nil || !e.ids[hostID] {
+		if err := e.e.Asset(ctis.Asset{ID: hostID, Type: ht, Value: hv}); err != nil {
+			return err
+		}
+		if e.ids != nil {
+			e.ids[hostID] = true
+		}
+	}
+	if err := e.e.Asset(ctis.Asset{ID: svcID, Type: ctis.AssetTypeService, Value: sv,
+		Technical: &ctis.AssetTechnical{Service: &st}}); err != nil {
+		return err
+	}
+	return e.e.Relationship(ctis.Relationship{Type: ctis.RelExposes, FromRef: hostID, ToRef: svcID})
+}
+
+// localID is a document-local asset id derived from a canonical value: a
+// prefix and 16 hex characters of its SHA-256 (never UUID-shaped, never a
+// receiver's identifier).
+func localID(prefix string, t ctis.AssetType, value string) string {
+	sum := sha256.Sum256([]byte(string(t) + "\x1f" + value))
+	return prefix + "-" + hex.EncodeToString(sum[:8])
 }
 
 // CTIS returns the task's emitter, for records the helpers do not cover.

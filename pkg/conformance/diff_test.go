@@ -11,9 +11,9 @@ import (
 
 func baseDiffManifest() tool.Manifest {
 	return tool.Manifest{Name: "ports", Version: "1.2.0", Class: tool.TargetScan, Tier: tool.T1,
-		Implements: []tool.Implementation{{Capability: "scan.ports@1", OutputShape: "open_port_assets",
+		Implements: []tool.Implementation{{Capability: "scan.ports@1",
 			Params: map[string]tool.ParamMapping{"ports": {}, "protocol": {Values: []string{"tcp"}}, "rate": {Max: intp(5000)}}}},
-		Consumes: []string{"ip_address", "domain"}, Produces: []string{"asset:open_port", "asset:ip_address"},
+		Consumes: []string{"ip_address", "domain_name"}, Produces: []string{"asset:service", "asset:ip_address"},
 		Config:      json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"ports":{"type":"string"},"protocol":{"type":"string"},"rate":{"type":"integer"}}}`),
 		Permissions: tool.Permissions{Network: tool.NetTargets}}
 }
@@ -31,8 +31,8 @@ func TestDiffManifests(t *testing.T) {
 		"unchanged":                {func(*tool.Manifest) {}, "1.2.0", BumpNone, true, ""},
 		"description patch":        {func(m *tool.Manifest) { m.Description = "faster" }, "1.2.1", BumpPatch, true, ""},
 		"description no bump":      {func(m *tool.Manifest) { m.Description = "faster" }, "1.2.0", BumpPatch, false, "need a patch"},
-		"narrowed produces":        {func(m *tool.Manifest) { m.Produces = []string{"asset:open_port"} }, "1.3.0", BumpMajor, false, "no longer produces asset:ip_address"},
-		"narrowed produces, major": {func(m *tool.Manifest) { m.Produces = []string{"asset:open_port"} }, "2.0.0", BumpMajor, true, ""},
+		"narrowed produces":        {func(m *tool.Manifest) { m.Produces = []string{"asset:service"} }, "1.3.0", BumpMajor, false, "no longer produces asset:ip_address"},
+		"narrowed produces, major": {func(m *tool.Manifest) { m.Produces = []string{"asset:service"} }, "2.0.0", BumpMajor, true, ""},
 		"narrowed consumes":        {func(m *tool.Manifest) { m.Consumes = []string{"ip_address"} }, "1.3.0", BumpMajor, false, "no longer consumes domain"},
 		"dropped capability":       {func(m *tool.Manifest) { m.Implements = nil }, "1.3.0", BumpMajor, false, "no longer implements scan.ports@1"},
 		"dropped param":            {func(m *tool.Manifest) { delete(m.Implements[0].Params, "ports") }, "1.3.0", BumpMajor, false, "no longer takes the param ports"},
@@ -41,7 +41,7 @@ func TestDiffManifests(t *testing.T) {
 		}, "1.3.0", BumpMajor, false, `no longer supports "tcp"`},
 		"narrowed bound":  {func(m *tool.Manifest) { m.Implements[0].Params["rate"] = tool.ParamMapping{Max: intp(100)} }, "1.3.0", BumpMajor, false, "bounds narrowed"},
 		"new value limit": {func(m *tool.Manifest) { m.Implements[0].Params["ports"] = tool.ParamMapping{Values: []string{"x"}} }, "1.3.0", BumpMajor, false, "now supports only"},
-		"shape changed":   {func(m *tool.Manifest) { m.Implements[0].OutputShape = "ip_ports" }, "1.3.0", BumpMajor, false, "output shape changed"},
+		"shape changed":   {func(m *tool.Manifest) { m.Implements[0].OutputShape = "rows" }, "1.3.0", BumpMajor, false, "output shape changed"},
 		"tier raised":     {func(m *tool.Manifest) { m.Tier = tool.T2 }, "1.3.0", BumpMajor, false, "minimum tier raised"},
 		"side effect": {func(m *tool.Manifest) {
 			m.Tier = tool.T2
@@ -54,8 +54,8 @@ func TestDiffManifests(t *testing.T) {
 		"config required": {func(m *tool.Manifest) {
 			m.Config = json.RawMessage(strings.Replace(string(m.Config), `"type":"object"`, `"type":"object","required":["ports"]`, 1))
 		}, "1.3.0", BumpMajor, false, "now required"},
-		"added consumes":   {func(m *tool.Manifest) { m.Consumes = append(m.Consumes, "subdomain") }, "1.3.0", BumpMinor, true, ""},
-		"added consumes p": {func(m *tool.Manifest) { m.Consumes = append(m.Consumes, "subdomain") }, "1.2.1", BumpMinor, false, "need a minor"},
+		"added consumes":   {func(m *tool.Manifest) { m.Consumes = append(m.Consumes, "host") }, "1.3.0", BumpMinor, true, ""},
+		"added consumes p": {func(m *tool.Manifest) { m.Consumes = append(m.Consumes, "host") }, "1.2.1", BumpMinor, false, "need a minor"},
 		"added capability": {func(m *tool.Manifest) {
 			m.Implements = append(m.Implements, tool.Implementation{Capability: "probe.http@1"})
 		}, "1.3.0", BumpMinor, true, ""},

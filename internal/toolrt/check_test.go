@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,8 +20,8 @@ import (
 
 var testManifest = tool.Manifest{
 	Name: "probe", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-	Consumes: []string{"http_service"},
-	Produces: []string{"asset:domain", "finding:misconfiguration"},
+	Consumes: []string{"web_origin"},
+	Produces: []string{"asset:domain_name", "finding:misconfiguration"},
 }
 
 func finding(title string) ctis.Finding {
@@ -98,13 +99,13 @@ func TestCheckerRejectsInvalidRecords(t *testing.T) {
 			_, err := c.Finding(ctis.Finding{Type: "misconfiguration", Title: "t", Severity: "apocalyptic"})
 			return err
 		},
-		"asset no value": func() error { _, err := c.Asset(ctis.Asset{Type: "domain"}); return err },
+		"asset no value": func() error { _, err := c.Asset(ctis.Asset{Type: "domain_name"}); return err },
 		"unknown member": func() error {
 			_, err := c.FindingJSON([]byte(`{"type":"misconfiguration","title":"t","severity":"high","evil":1}`))
 			return err
 		},
 		"not json":      func() error { _, err := c.AssetJSON([]byte(`{"type":`)); return err },
-		"trailing data": func() error { _, err := c.AssetJSON([]byte(`{"type":"domain","value":"a"} {}`)); return err },
+		"trailing data": func() error { _, err := c.AssetJSON([]byte(`{"type":"domain_name","value":"a"} {}`)); return err },
 		"dangling ref":  func() error { f := finding("t"); f.AssetRef = "nope"; _, err := c.Finding(f); return err },
 		"too deep": func() error {
 			_, err := c.InfoJSON([]byte(`{"properties":` + strings.Repeat(`{"a":`, 40) + "1" + strings.Repeat("}", 40) + `}`))
@@ -122,10 +123,10 @@ func TestCheckerRejectsInvalidRecords(t *testing.T) {
 		}
 	}
 	// Duplicate ids.
-	if _, err := c.Asset(ctis.Asset{ID: "a1", Type: "domain", Value: "a.example"}); err != nil {
+	if _, err := c.Asset(ctis.Asset{ID: "a1", Type: "domain_name", Value: "a.example"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Asset(ctis.Asset{ID: "a1", Type: "domain", Value: "b.example"}); !errors.Is(err, tool.ErrInvalidRecord) {
+	if _, err := c.Asset(ctis.Asset{ID: "a1", Type: "domain_name", Value: "b.example"}); !errors.Is(err, tool.ErrInvalidRecord) {
 		t.Errorf("duplicate asset id: %v", err)
 	}
 	f := finding("t")
@@ -141,8 +142,8 @@ func TestCheckerRejectsInvalidRecords(t *testing.T) {
 func TestAssemblerStatusAndReport(t *testing.T) {
 	m := testManifest.Normalized()
 	task := tool.Task{ID: "t1", Targets: []tool.Target{
-		{Ref: "a", Type: "http_service", Value: "https://a.example"},
-		{Ref: "b", Type: "http_service", Value: "https://b.example"},
+		{Ref: "a", Type: "web_origin", Value: "https://a.example"},
+		{Ref: "b", Type: "web_origin", Value: "https://b.example"},
 	}}
 	asm := NewAssembler(m, task, NewChecker(m))
 	if err := asm.Finding("a", finding("exposed")); err != nil {
@@ -165,16 +166,24 @@ func TestAssemblerStatusAndReport(t *testing.T) {
 	if r.Tool.Name != "probe" || r.Tool.Version != "v9" || r.Tool.Vendor != "Acme" {
 		t.Fatalf("tool %+v (the name must be the manifest's)", r.Tool)
 	}
-	if len(r.Assets) != 1 || r.Assets[0].ID != "target-a" || r.Findings[0].AssetRef != "target-a" {
+	if len(r.Assets) != 1 || r.Assets[0].ID != "target-1" || r.Findings[0].AssetRef != "target-1" {
 		t.Fatalf("finding not filed on its target's asset: %+v %+v", r.Assets, r.Findings)
 	}
-	ft, _ := json.Marshal(r.Properties["failed_targets"])
-	if !strings.Contains(string(ft), "b.example") || !strings.Contains(string(ft), "refused") {
-		t.Fatalf("failed_targets %s", ft)
+	if want := []ctis.TargetOutcome{{Target: "https://b.example", State: ctis.TargetFailed, Class: ctis.TargetClassUnreachable}}; !reflect.DeepEqual(r.Metadata.Targets, want) {
+		t.Fatalf("metadata.targets = %+v, want %+v", r.Metadata.Targets, want)
 	}
-	Stamp(r, Provenance{Tool: "probe", Status: tool.StatusPartial})
+	if _, ok := r.Properties["failed_targets"]; ok {
+		t.Fatal("failed targets still in properties")
+	}
+	if !ctis.IsReportID(r.Metadata.ID) || r.Metadata.Channel != ctis.ChannelScanner || r.Version != "2.0" {
+		t.Fatalf("metadata = %+v, version %s", r.Metadata, r.Version)
+	}
+	Stamp(r, Provenance{Tool: "probe", Status: tool.StatusPartial, Capability: "vuln.templates@1"})
 	if p, ok := r.Metadata.Properties[ProvenanceKey].(Provenance); !ok || p.Tool != "probe" {
 		t.Fatalf("provenance not overwritten: %#v", r.Metadata.Properties[ProvenanceKey])
+	}
+	if got := r.Metadata.Extensions[ctis.OpenCTEMNamespace]["capability"]; got != "vuln.templates@1" {
+		t.Fatalf("capability extension = %v", got)
 	}
 	if err := r.Validate(); err != nil {
 		t.Fatalf("assembled report invalid: %v", err)
@@ -197,7 +206,7 @@ func TestHTTPClientReachesOnlyAllowedHosts(t *testing.T) {
 	}))
 	defer srv.Close()
 	m := testManifest.Normalized()
-	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "http_service", Value: srv.URL}}}
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "web_origin", Value: srv.URL}}}
 	c := NewHTTPClient(m, task)
 	resp, err := c.Get(srv.URL + "/")
 	if err != nil {
@@ -241,5 +250,121 @@ func TestCheckerMasksRawSecrets(t *testing.T) {
 	}
 	if b, _ := json.Marshal(f); strings.Contains(string(b), key) {
 		t.Fatalf("raw secret in the checked finding: %s", b)
+	}
+}
+
+// A task's target refs are the platform's (often a UUID); the report names
+// a target's asset by its position and never carries the ref, and every
+// asset a tool emitted without an id gets a document-local one.
+func TestAssemblerNeverUsesTheTaskRefAsAnID(t *testing.T) {
+	m := testManifest.Normalized()
+	ref := "3f2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c"
+	task := tool.Task{ID: ref, Targets: []tool.Target{{Ref: ref, Type: "web_origin", Value: "HTTPS://A.Example:443"}}}
+	asm := NewAssembler(m, task, NewChecker(m))
+	if err := asm.Finding(ref, finding("exposed")); err != nil {
+		t.Fatal(err)
+	}
+	r := asm.Report(time.Unix(100, 0))
+	raw, _ := json.Marshal(r)
+	if strings.Contains(string(raw), ref) {
+		t.Fatalf("the task ref reached the report: %s", raw)
+	}
+	for _, a := range r.Assets {
+		if ctis.IsUUIDShaped(a.ID) || !ctis.IsDocumentRef(a.ID) {
+			t.Fatalf("asset id %q", a.ID)
+		}
+	}
+	if r.Assets[0].Value != "https://a.example" {
+		t.Fatalf("target value not canonical: %q", r.Assets[0].Value)
+	}
+	// A tool's UUID-shaped asset id is refused.
+	c := NewChecker(m)
+	if _, err := c.Asset(ctis.Asset{ID: ref, Type: ctis.AssetTypeDomainName, Value: "b.example"}); err == nil {
+		t.Fatal("a UUID-shaped asset id was accepted")
+	}
+	got, err := c.Asset(ctis.Asset{Type: ctis.AssetTypeDomainName, Value: "B.Example."})
+	if err != nil || got.ID == "" || got.Value != "b.example" {
+		t.Fatalf("asset without id = %+v, %v", got, err)
+	}
+}
+
+// The rule catalog: a rule's text is sent once; findings name it by
+// rule_ref (rule_id filled from the rule when left out); a finding naming
+// no emitted rule, or another rule_id, is refused.
+func TestAssemblerRuleCatalog(t *testing.T) {
+	m := testManifest.Normalized()
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "web_origin", Value: "https://a.example"}}}
+	asm := NewAssembler(m, task, NewChecker(m))
+	if err := asm.Rule(ctis.Rule{ID: "r1", RuleID: "exposed-git", Name: "Exposed .git", FullDescription: "long text, once"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := asm.Rule(ctis.Rule{ID: "r1", RuleID: "other"}); err == nil {
+		t.Fatal("a duplicate rule id was accepted")
+	}
+	for i := 0; i < 2; i++ {
+		f := finding("exposed")
+		f.RuleRef = "r1"
+		if err := asm.Finding("a", f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bad := finding("exposed")
+	bad.RuleRef = "r9"
+	if err := asm.Finding("a", bad); err == nil {
+		t.Fatal("a finding naming no emitted rule was accepted")
+	}
+	mismatch := finding("exposed")
+	mismatch.RuleRef, mismatch.RuleID = "r1", "another-rule"
+	if err := asm.Finding("a", mismatch); err == nil {
+		t.Fatal("a finding with another rule_id than its rule was accepted")
+	}
+	r := asm.Report(time.Unix(100, 0))
+	if len(r.Rules) != 1 || len(r.Findings) != 2 || r.Findings[0].RuleID != "exposed-git" {
+		t.Fatalf("rules %+v findings %+v", r.Rules, r.Findings)
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A relationship links two assets emitted before it, never a dangling id.
+func TestAssemblerRelationship(t *testing.T) {
+	m := testManifest.Normalized()
+	asm := NewAssembler(m, tool.Task{}, NewChecker(m))
+	for _, a := range []ctis.Asset{{ID: "d1", Type: ctis.AssetTypeDomainName, Value: "a.example"}, {ID: "d2", Type: ctis.AssetTypeDomainName, Value: "b.a.example"}} {
+		if err := asm.Asset(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := asm.Relationship(ctis.Relationship{Type: ctis.RelSubdomainOf, FromRef: "d2", ToRef: "d1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := asm.Relationship(ctis.Relationship{Type: ctis.RelSubdomainOf, FromRef: "d2", ToRef: "nope"}); err == nil {
+		t.Fatal("a dangling relationship was accepted")
+	}
+	if err := asm.Relationship(ctis.Relationship{Type: "parent_of", FromRef: "d2", ToRef: "d1"}); err == nil {
+		t.Fatal("an unknown relationship type was accepted")
+	}
+}
+
+// An endpoint names its web_origin by origin_ref: accepted after that asset
+// was emitted, refused for an unknown or UUID-shaped reference.
+func TestCheckerEndpointOriginRef(t *testing.T) {
+	m := testManifest.Normalized()
+	m.Produces = append(m.Produces, "asset:web_origin", tool.KindEndpoint)
+	c := NewChecker(m)
+	if _, err := c.Asset(ctis.Asset{ID: "o1", Type: ctis.AssetTypeWebOrigin, Value: "https://a.example"}); err != nil {
+		t.Fatal(err)
+	}
+	ok := ctis.Endpoint{Origin: "https://a.example", OriginRef: "o1", Method: "GET", Path: "/login"}
+	if _, err := c.Endpoint(ok); err != nil {
+		t.Fatalf("endpoint after its origin: %v", err)
+	}
+	for name, ref := range map[string]string{"unknown": "o9", "uuid-shaped": "3f2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c"} {
+		e := ok
+		e.OriginRef = ref
+		if _, err := c.Endpoint(e); err == nil {
+			t.Errorf("%s origin_ref %q was accepted", name, ref)
+		}
 	}
 }

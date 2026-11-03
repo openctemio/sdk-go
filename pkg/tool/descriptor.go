@@ -1,7 +1,7 @@
 package tool
 
 // The contract part of a tool descriptor: which capabilities of the
-// OpenCTEM capability taxonomy (github.com/openctemio/ctis/capability) the
+// OpenCTEM capability taxonomy (github.com/openctemio/contract/capability) the
 // tool implements and how its configuration maps to their standard params,
 // how it takes targets, how it presents itself, what engine it wraps and
 // what it does to its targets besides reading them.
@@ -20,7 +20,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/openctemio/ctis/capability"
+	"github.com/openctemio/contract/capability"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/sdk"
 )

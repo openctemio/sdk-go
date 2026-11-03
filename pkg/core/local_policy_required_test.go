@@ -93,12 +93,12 @@ func TestLocalPolicy_RequiredAbsentAdmission(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	for name, payload := range map[string]map[string]any{
-		"ip":         {"scanner": "nuclei", "target": "203.0.113.10"},
-		"domain":     {"scanner": "nuclei", "targets": []string{dir, "example.com"}},
-		"cidr":       {"scanner": "naabu", "target": "203.0.113.0/24"},
-		"image":      {"scanner": "trivy", "target": "registry.example.com/app:1"},
-		"validate":   {"executor_kind": "nuclei", "target": map[string]any{"address": "203.0.113.12:443"}},
-		"interactsh": {"scanner": "nuclei", "target": dir, "config": map[string]any{"allow_interactsh": true}},
+		"ip":          {"scanner": "nuclei", "target": "203.0.113.10"},
+		"domain_name": {"scanner": "nuclei", "targets": []string{dir, "example.com"}},
+		"cidr":        {"scanner": "naabu", "target": "203.0.113.0/24"},
+		"image":       {"scanner": "trivy", "target": "registry.example.com/app:1"},
+		"validate":    {"executor_kind": "nuclei", "target": map[string]any{"address": "203.0.113.12:443"}},
+		"interactsh":  {"scanner": "nuclei", "target": dir, "config": map[string]any{"allow_interactsh": true}},
 	} {
 		raw, _ := json.Marshal(payload)
 		typ := "scan"

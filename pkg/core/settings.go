@@ -3,12 +3,12 @@ package core
 // Tool settings: what a tool lets an administrator configure, declared as a
 // small JSON Schema in its tool manifest, and the layered values a scan runs
 // with. The contract (schema subset, validator, defaults, digest, layers,
-// common tool options) lives in github.com/openctemio/ctis/settings so the
+// common tool options) lives in github.com/openctemio/contract/settings so the
 // platform validates values with the same code as the sensor; these are
 // aliases kept for the SDK's callers. See api RFC-038.
 
 import (
-	"github.com/openctemio/ctis/settings"
+	"github.com/openctemio/contract/settings"
 )
 
 // Limits of a settings schema.

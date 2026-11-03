@@ -55,7 +55,7 @@ func (s *legacyScanner) Scan(_ context.Context, target string, opts *core.ScanOp
 			title += fmt.Sprintf(" depth %d", d)
 		}
 	}
-	r := ctis.Report{Version: "1.3", Metadata: ctis.ReportMetadata{Timestamp: mustTime()},
+	r := ctis.Report{Version: ctis.SchemaVersion, Metadata: ctis.ReportMetadata{ID: ctis.NewReportID(), GeneratedAt: mustTime()},
 		Tool:     &ctis.Tool{Name: "legacy", Version: "2.4.1"},
 		Findings: []ctis.Finding{{Type: "misconfiguration", RuleID: s.Rule, Title: title, Severity: ctis.Severity(s.Severity)}}}
 	if s.Undeclared {
@@ -110,7 +110,21 @@ func withConfig(m tool.Manifest) tool.Manifest {
 type multiScanner struct{ legacyScanner }
 
 func (m *multiScanner) ScanTargets(ctx context.Context, targets []string, opts *core.ScanOptions) (*core.ScanResult, error) {
-	return m.Scan(ctx, strings.Join(targets, "+"), opts)
+	res, err := m.Scan(ctx, strings.Join(targets, "+"), opts)
+	if err != nil || len(targets) == 0 {
+		return res, err
+	}
+	// One scan over many targets names the asset of its finding (CTIS 2.0).
+	var r ctis.Report
+	if err := json.Unmarshal(res.RawOutput, &r); err != nil {
+		return nil, err
+	}
+	r.Assets = []ctis.Asset{{ID: "a1", Type: ctis.AssetTypeDomainName, Value: targets[0]}}
+	for i := range r.Findings {
+		r.Findings[i].AssetRef = "a1"
+	}
+	res.RawOutput, _ = json.Marshal(r)
+	return res, nil
 }
 
 // legacyCollector collects one repository with the API key it is given.
@@ -123,7 +137,7 @@ func (legacyCollector) Collect(_ context.Context, o *core.CollectOptions) (*core
 	if o.APIKey != "vendor-key-123" {
 		return nil, fmt.Errorf("unauthorized (got a key of %d bytes)", len(o.APIKey))
 	}
-	r := ctis.Report{Version: "1.3", Metadata: ctis.ReportMetadata{Timestamp: mustTime()},
+	r := ctis.Report{Version: ctis.SchemaVersion, Metadata: ctis.ReportMetadata{ID: ctis.NewReportID(), GeneratedAt: mustTime()},
 		Assets: []ctis.Asset{{Type: "repository", Value: "github.com/acme/" + o.Repository, Name: o.Repository}}}
 	return &core.CollectResult{Reports: []*ctis.Report{&r}}, nil
 }
@@ -165,7 +179,10 @@ func run(t *testing.T, b tool.Tool, task tool.Task, o toolhost.RunOptions) *tool
 // compare byte for byte on what the scanner found.
 func normalize(t *testing.T, r *ctis.Report) string {
 	t.Helper()
-	cp := ctis.Report{Assets: r.Assets, Findings: r.Findings, Dependencies: r.Dependencies}
+	cp := ctis.Report{Assets: append([]ctis.Asset(nil), r.Assets...), Findings: r.Findings, Dependencies: r.Dependencies}
+	for i := range cp.Assets {
+		cp.Assets[i].Name = ""
+	}
 	b, err := testkit.Normalize(&cp)
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +197,7 @@ func TestBridgedScannerParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	direct, err := (&core.JSONParser{}).Parse(context.Background(), res.RawOutput, &core.ParseOptions{ToolName: "legacy"})
+	direct, err := (&core.JSONParser{}).Parse(context.Background(), res.RawOutput, &core.ParseOptions{ToolName: "legacy", AssetID: "target-1", AssetType: ctis.AssetTypeDomainName, AssetValue: "a.example"})
 	if err != nil {
 		t.Fatal(err)
 	}

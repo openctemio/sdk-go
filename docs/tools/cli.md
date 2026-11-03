@@ -45,7 +45,7 @@ Exit status:
 
 | Command | Does |
 |---|---|
-| `init --kind K --capability id@major [--name n] [dir]` | Writes a new tool that implements one capability of the taxonomy (see [docs/capabilities.md in ctis](https://github.com/openctemio/ctis/blob/main/docs/capabilities.md)). The kinds are `exec-sarif`, `exec-ctis`, `exec-json`, `go` and `python`. It never overwrites a file. |
+| `init --kind K --capability id@major [--name n] [dir]` | Writes a new tool that implements one capability of the taxonomy (see [docs/capabilities.md in contract](https://github.com/openctemio/contract/blob/main/docs/capabilities.md)). The kinds are `exec-sarif`, `exec-ctis`, `exec-json`, `go` and `python`. It never overwrites a file. |
 | `validate [dir]` | Loads the descriptor strictly. Errors carry a JSON pointer (`/implements/0/params/rate/max`); lint warnings follow. |
 | `run [dir] --target value[@type] [--capability id@major] [--param k=json] [--config k=v] [--content slot=dir] [--format table\|ctis]` | Runs one task offline and prints the outcome or the CTIS report. `--content` hands a local directory to a content slot the tool declares, so you can test with real templates or rules. |
 | `test [dir] [--update] [--capability] [--scope] [--fuzz 30s] [--timeout 30s]` | Runs the conformance kit (below). `--update` rewrites the fixtures' expected CTIS. |
@@ -96,8 +96,8 @@ The `--capability` suites:
 | Capability | Fixture and check |
 |---|---|
 | `scan.ports@1` | Two open ports and one closed: exactly the open ones are reported. |
-| `discover.hosts@1` | A loopback address answering on one port, probed on that port: exactly that address is reported live, with the probe that answered (`properties.live_by`). |
-| `probe.http@1` | A page with a known title: `http_service` with status 200. |
+| `discover.hosts@1` | A loopback address answering on one port, probed on that port: exactly that address is reported live, with the time it answered (`last_seen_at`). |
+| `probe.http@1` | A page with a known title: a `web_origin` with `technical.http.status_code` 200. |
 | `vuln.templates@1` | An app exposing `/.git/config` and `/.env`: at least one finding. |
 | `secrets.code@1` | A repository with fresh fake credentials: a masked value, and the raw value absent from the report and the logs. |
 | `sast.code@1` | A file with `shell=True` and `eval` of input: at least one finding. |
@@ -114,7 +114,7 @@ A self-test must not depend on the internet. A fixture task file (the JSON a `se
 {"serve": {"status": 200, "headers": {"Server": "fixture"}, "body": "<html><title>ok</title></html>",
            "paths": {"/.env": {"status": 200, "body": "SECRET=x"}}},
  "id": "selftest-sample",
- "targets": [{"ref": "t1", "type": "http_service", "value": "{{fixture.url}}"}]}
+ "targets": [{"ref": "t1", "type": "web_origin", "value": "{{fixture.url}}"}]}
 ```
 
 While the fixture runs, the kit serves it on `127.0.0.1` (a random port):
@@ -127,7 +127,7 @@ Every target `value` may use `{{fixture.url}}` (`http://127.0.0.1:PORT`), `{{fix
 
 The port changes on every run, so before comparing with the expect file (and before `--update` writes it) the kit replaces `http://127.0.0.1:PORT` by `{{fixture.url}}` and `127.0.0.1:PORT` by `{{fixture.host_port}}` in every string of the produced CTIS. The expect file holds the placeholders and is the same on every run. The server is stopped when the fixture ends.
 
-`init` writes such a fixture for tools that consume `http_service`, `website`, `web_application`, `api`, `discovered_url`, `open_port`, `service`, `host` or `ip_address`. `domain` and `subdomain` targets keep `example.com` names: the kit cannot serve a name, and the stub resolves nothing. Replace them by a served target as soon as the tool connects somewhere.
+`init` writes such a fixture for tools that consume `web_origin`, `web_application`, `api`, `service` (`{{fixture.host_port}}/tcp`), `host` or `ip_address`. `domain_name` targets keep `example.com` names: the kit cannot serve a name, and the stub resolves nothing. Replace them by a served target as soon as the tool connects somewhere.
 
 ## CI
 

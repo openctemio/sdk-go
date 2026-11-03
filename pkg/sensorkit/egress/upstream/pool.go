@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openctemio/ctis/addrscope"
+	"github.com/openctemio/contract/addrscope"
 
 	"github.com/openctemio/sdk-go/pkg/internal/absname"
 	"github.com/openctemio/sdk-go/pkg/reach"
@@ -325,7 +325,7 @@ func (noEndpointError) FailureClass() (class, reason string) {
 }
 
 // isPublic reports whether a target address is public: not private, ULA,
-// CGNAT, loopback or any other internal range (ctis addrscope).
+// CGNAT, loopback or any other internal range (contract addrscope).
 func isPublic(a netip.Addr) bool {
 	return a.IsGlobalUnicast() && !addrscope.IsInternal(a)
 }

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openctemio/ctis/edgeprotect"
+	"github.com/openctemio/contract/edgeprotect"
 )
 
 // sharedRig is a SensorRate and task controllers on one fake clock; the

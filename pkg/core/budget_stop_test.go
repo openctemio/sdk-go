@@ -97,9 +97,7 @@ func TestExecuteScan_CancelDeliversNothing(t *testing.T) {
 // instead of running it again.
 func TestExecuteScan_ResultCarriesTargetOutcomes(t *testing.T) {
 	report := ctis.NewReport()
-	report.Properties = ctis.Properties{"target_outcomes": []any{
-		map[string]any{"target": "http://203.0.113.10", "state": "failed", "class": "timeout"},
-	}}
+	report.Metadata.Targets = []ctis.TargetOutcome{{Target: "http://203.0.113.10", State: ctis.TargetFailed, Class: ctis.TargetClassTimeout}}
 	exec := core.NewDefaultCommandExecutor(&ctxPusher{})
 	reg := core.NewParserRegistry()
 	reg.Register(&cannedParser{report: *report})

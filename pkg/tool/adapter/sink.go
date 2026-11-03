@@ -84,6 +84,12 @@ func (s *sink) Dependency(ref string, d ctis.Dependency) error {
 
 func (s *sink) Endpoint(e ctis.Endpoint) error { return s.record(tool.KindEndpoint, "", e) }
 
+func (s *sink) Rule(r ctis.Rule) error { return s.record(tool.KindRule, "", r) }
+
+func (s *sink) Relationship(r ctis.Relationship) error {
+	return s.record(tool.KindRelationship, "", r)
+}
+
 func (s *sink) Info(info *tool.ReportInfo) error {
 	b, err := json.Marshal(info)
 	if err != nil {

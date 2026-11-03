@@ -3,36 +3,40 @@ package core
 import (
 	"strings"
 
-	"github.com/openctemio/sdk-go/pkg/shared/fingerprint"
+	"github.com/openctemio/ctis/v2/fingerprint"
+
 	"github.com/openctemio/sdk-go/pkg/shared/severity"
 )
 
 // =============================================================================
-// Fingerprint Generation (delegates to shared package)
+// Fingerprints (CTIS recipe ctis-fp/2, github.com/openctemio/ctis/v2/fingerprint)
 // =============================================================================
 
-// GenerateSastFingerprint creates a fingerprint for SAST/Secret findings.
-// Deprecated: Use fingerprint.GenerateSAST from pkg/shared/fingerprint instead.
-func GenerateSastFingerprint(file, ruleID string, startLine int) string {
-	return fingerprint.GenerateSAST(file, ruleID, startLine, 0)
+// SASTFingerprint is the CTIS recipe v2 fingerprint of a line-based SAST
+// finding (fingerprint.V2SAST; endLine 0 when unknown).
+func SASTFingerprint(file, ruleID string, startLine, endLine int) string {
+	return fingerprint.V2SAST(file, ruleID, startLine, endLine)
 }
 
-// GenerateScaFingerprint creates a fingerprint for SCA vulnerabilities.
-// Deprecated: Use fingerprint.GenerateSCA from pkg/shared/fingerprint instead.
-func GenerateScaFingerprint(pkgName, pkgVersion, vulnID string) string {
-	return fingerprint.GenerateSCA(pkgName, pkgVersion, vulnID)
+// SCAFingerprint is the CTIS recipe v2 fingerprint of a dependency
+// vulnerability: the versionless package (a purl, or "ecosystem/name") and
+// the vulnerability id (fingerprint.V2SCA).
+func SCAFingerprint(packageRef, vulnID string) string {
+	return fingerprint.V2SCA(packageRef, vulnID)
 }
 
-// GenerateSecretFingerprint creates a fingerprint for secret findings.
-//
-// secretValue may be the raw secret: it is masked with MaskSecret before it
-// goes into the fingerprint, so the fingerprint never carries a hash of the
-// secret itself. An unsalted hash of a short secret can be reversed by brute
-// force; a hash of the masked value reveals no more than the masked value
-// does (CTIS spec 5.2: the secret input is the masked value or a keyed hash).
-// Callers of fingerprint.GenerateSecret directly must do the same.
-func GenerateSecretFingerprint(file, ruleID string, startLine int, secretValue string) string {
-	return fingerprint.GenerateSecret(file, ruleID, startLine, MaskSecret(secretValue))
+// SecretFingerprint is the CTIS recipe v2 fingerprint of a secret finding:
+// its input is HMAC-SHA256(key, secret) (fingerprint.NewSecretDigest), never
+// the secret or a masked copy. key is the producer's secret fingerprint key
+// (at least fingerprint.MinSecretKeyBytes). Without a valid key, or without
+// a secret, it returns "": there is no unsalted path, and the receiver then
+// computes its own fingerprint.
+func SecretFingerprint(key []byte, file, ruleID, secret string) string {
+	d, err := fingerprint.NewSecretDigest(key, []byte(secret))
+	if err != nil {
+		return ""
+	}
+	return fingerprint.V2Secret(file, ruleID, d)
 }
 
 // =============================================================================

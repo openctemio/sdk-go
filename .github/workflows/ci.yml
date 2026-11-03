@@ -154,7 +154,7 @@ jobs:
           # pinned (was latest) — avoid CI-breaking tool drift
           version: v2.14.0
 
-  # pkg/ctis re-exports github.com/openctemio/ctis (generated aliases). Fails
+  # pkg/ctis re-exports github.com/openctemio/ctis/v2 (generated aliases). Fails
   # when the generated file is stale for the ctis version in go.mod, or when
   # pkg/ctis starts copying model types again — see scripts/check-ctis-parity.sh.
   ctis-parity:
@@ -254,6 +254,10 @@ jobs:
   # The sensor (github.com/openctemio/sensor, main) must build against this
   # change without edits: that is what "bump the SDK and done" means for the
   # one sensor we ship. Both builds (default and -tags platform) and vet.
+  # Paired branches: an intended break ships with a sensor branch of the same
+  # name as the pull request's head branch; when openctemio/sensor has that
+  # branch, a pull request builds it instead of main. A push (main) always
+  # builds sensor main. The branch name reaches the script only through env.
   sensor-compat:
     runs-on: ubuntu-latest
     steps:
@@ -261,10 +265,23 @@ jobs:
         with:
           path: sdk-go
 
+      - name: Pick the sensor branch (paired branch, else main)
+        id: sensor-ref
+        env:
+          HEAD_REF: ${{ github.event_name == 'pull_request' && github.head_ref || '' }}
+        run: |
+          ref=main
+          if [ -n "$HEAD_REF" ] && git check-ref-format --branch "$HEAD_REF" >/dev/null 2>&1 &&
+            git ls-remote --exit-code --heads https://github.com/openctemio/sensor.git "refs/heads/$HEAD_REF" >/dev/null; then
+            ref="$HEAD_REF"
+          fi
+          echo "sensor ref: $ref"
+          printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openctemio/sensor
-          ref: main
+          ref: ${{ steps.sensor-ref.outputs.ref }}
           path: sensor
 
       - name: Setup Go

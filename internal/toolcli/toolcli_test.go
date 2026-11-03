@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openctemio/ctis/capability"
+	"github.com/openctemio/contract/capability"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/tool"
 	"github.com/openctemio/sdk-go/pkg/tool/pack"
@@ -180,10 +180,10 @@ func TestCommands(t *testing.T) {
 	newDir := filepath.Join(t.TempDir(), "new")
 	_ = os.MkdirAll(newDir, 0o755)
 	doc, _ := os.ReadFile(filepath.Join(dir, "tool.yaml"))
-	changed := strings.Replace(string(doc), `"asset:open_port", `, "", 1)
+	changed := strings.Replace(string(doc), `"asset:service", `, "", 1)
 	changed = strings.Replace(changed, `version: "0.1.0"`, `version: "0.2.0"`, 1)
 	_ = os.WriteFile(filepath.Join(newDir, "tool.yaml"), []byte(changed), 0o600)
-	if code, out := run(t, "diff", dir, newDir); code != ExitFail || !strings.Contains(out, "breaking: no longer produces asset:open_port") || !strings.Contains(out, "major") {
+	if code, out := run(t, "diff", dir, newDir); code != ExitFail || !strings.Contains(out, "breaking: no longer produces asset:service") || !strings.Contains(out, "major") {
 		t.Fatalf("diff: %d %s", code, out)
 	}
 	if code, out := run(t, "diff", dir, dir); code != ExitOK || !strings.Contains(out, "OK") {

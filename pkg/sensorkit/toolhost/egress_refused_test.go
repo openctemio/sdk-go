@@ -3,8 +3,6 @@ package toolhost
 import (
 	"testing"
 
-	"github.com/openctemio/ctis/outcome"
-
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -60,12 +58,12 @@ func TestMarkEgressRefused(t *testing.T) {
 	if out.Status != tool.StatusPartial {
 		t.Fatalf("status %s", out.Status)
 	}
-	list, _ := out.Report.Properties[outcome.ResultKey].([]outcome.Target)
-	got := map[string]outcome.Target{}
+	list := out.Report.Metadata.Targets
+	got := map[string]ctis.TargetOutcome{}
 	for _, o := range list {
 		got[o.Target] = o
 	}
-	if o := got["https://B.example:8443/x"]; o.State != outcome.Failed || o.Class != outcome.EgressRefused {
+	if o := got["https://B.example:8443/x"]; o.State != ctis.TargetFailed || o.Class != ctis.TargetClassEgressRefused {
 		t.Fatalf("report outcome %+v (all %+v)", o, list)
 	}
 

@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	upstream "github.com/openctemio/ctis"
+	upstream "github.com/openctemio/ctis/v2"
 )
 
 // pkg/ctis re-exports the module: the types are the module's, not copies,
@@ -26,10 +26,9 @@ func TestTypesAreTheModuleTypes(t *testing.T) {
 	}
 }
 
-// The hand copy wrote recon scope type "web" and the raw recon type as a
-// capability; neither is in the schema enum. Recon output now validates.
+// Recon output of every recon type validates as CTIS 2.0.
 func TestConvertReconToCTIS_OutputValidates(t *testing.T) {
-	for _, typ := range []string{"subdomain", "dns", "port", "http_probe", "url_crawl"} {
+	for _, typ := range []string{"domain_name", "dns", "port", "http_probe", "url_crawl"} {
 		in := &ReconToCTISInput{
 			ScannerName: "fake-recon",
 			ReconType:   typ,
@@ -45,13 +44,10 @@ func TestConvertReconToCTIS_OutputValidates(t *testing.T) {
 		if err := r.Validate(); err != nil {
 			t.Errorf("%s: recon report does not validate: %v", typ, err)
 		}
-		if r.Metadata.Scope != nil && r.Metadata.Scope.Type == "web" {
-			t.Errorf("%s: scope type web is not in the schema", typ)
-		}
 		if r.Tool != nil {
-			for _, c := range r.Tool.Capabilities {
-				if c == typ && (typ == "port" || typ == "url_crawl") {
-					t.Errorf("%s: raw recon type used as capability", typ)
+			for _, tq := range r.Tool.Techniques {
+				if !tq.IsValid() {
+					t.Errorf("%s: technique %q is not in the closed set", typ, tq)
 				}
 			}
 		}

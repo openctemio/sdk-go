@@ -12,8 +12,8 @@ import (
 
 func segReport(assets, findingsPerAsset int) *ctis.Report {
 	r := &ctis.Report{
-		Version:  "1.0",
-		Metadata: ctis.ReportMetadata{ID: "r1", Timestamp: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), CoverageType: "full"},
+		Version:  ctis.SchemaVersion,
+		Metadata: ctis.ReportMetadata{ID: ctis.NewReportID(), GeneratedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), CoverageType: "full"},
 		Tool:     &ctis.Tool{Name: "semgrep", Version: "1.0"},
 		Dependencies: []ctis.Dependency{{
 			Name: "lib", Version: "1.0",
@@ -101,7 +101,7 @@ func TestSplitSegments_ByAssetCountAndBytes(t *testing.T) {
 	r := segReport(30, 2)
 	// Unreferenced assets too.
 	for i := range 10 {
-		r.Assets = append(r.Assets, ctis.Asset{ID: fmt.Sprintf("lonely%d", i), Type: ctis.AssetTypeDomain, Value: fmt.Sprintf("h%d.example", i)})
+		r.Assets = append(r.Assets, ctis.Asset{ID: fmt.Sprintf("lonely%d", i), Type: ctis.AssetTypeDomainName, Value: fmt.Sprintf("h%d.example", i)})
 	}
 	lim := SegmentLimits{MaxFindings: 1000, MaxAssets: 3, MaxBytes: 4096}
 	segs, err := SplitSegments(r, lim)

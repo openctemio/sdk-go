@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// The schema contract itself is tested in github.com/openctemio/ctis/settings;
+// The schema contract itself is tested in github.com/openctemio/contract/settings;
 // here only what the SDK adds: the manifest names a schema by digest.
 
 const testNucleiSchema = `{

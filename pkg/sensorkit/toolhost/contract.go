@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/openctemio/ctis/capability"
+	"github.com/openctemio/contract/capability"
 	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
@@ -82,7 +82,11 @@ func (p *prepared) checkContract(out *Outcome) {
 		return
 	}
 	im, _ := p.m.Implementation(p.task.Capability)
-	violations, err := c.Check(out.Report, capability.CheckOptions{Shape: im.OutputShape})
+	doc, err := reportDoc(toolrt.OutputOnly(out.Report))
+	if err != nil {
+		return
+	}
+	violations, err := c.Check(doc, capability.CheckOptions{Shape: im.OutputShape})
 	if err != nil || len(violations) == 0 {
 		return
 	}
@@ -97,4 +101,15 @@ func (p *prepared) checkContract(out *Outcome) {
 	if out.Status == tool.StatusOK {
 		out.Status = tool.StatusPartial
 	}
+}
+
+// reportDoc is a report as the JSON object the capability contract checks.
+func reportDoc(r any) (map[string]any, error) {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return nil, err
+	}
+	var doc map[string]any
+	err = json.Unmarshal(b, &doc)
+	return doc, err
 }

@@ -51,8 +51,8 @@ func liveTarget(t *testing.T) *live {
 
 func (l *live) report(findings int, tag string) *ctis.Report {
 	r := &ctis.Report{
-		Version:  "1.0",
-		Metadata: ctis.ReportMetadata{Timestamp: time.Now().UTC().Truncate(time.Second), SourceType: "scanner"},
+		Version:  ctis.SchemaVersion,
+		Metadata: ctis.ReportMetadata{ID: ctis.NewReportID(), GeneratedAt: time.Now().UTC().Truncate(time.Second), Channel: ctis.ChannelScanner},
 		Tool:     &ctis.Tool{Name: l.tool, Version: "conformance"},
 		Assets: []ctis.Asset{{
 			ID: "repo", Type: ctis.AssetTypeRepository, Value: "conformance.invalid/" + l.run, Name: "conformance " + l.run,
@@ -226,11 +226,11 @@ func TestLive_HeaderGates(t *testing.T) {
 		http.StatusBadRequest, protov2.ProblemInvalidID)
 
 	// Duplicate member names and unknown fields are not I-JSON / CTIS.
-	dup := []byte(strings.Replace(string(body), `"version":"1.0"`, `"version":"1.0","version":"1.0"`, 1))
+	dup := []byte(strings.Replace(string(body), `"version":"2.0"`, `"version":"2.0","version":"2.0"`, 1))
 	if r := l.do(t, http.MethodPut, protov2.ReportPath("", id()), dup, ctisHeaders(dup)); r.status != http.StatusUnprocessableEntity {
 		t.Fatalf("duplicate key: %d %s", r.status, r.body)
 	}
-	unk := []byte(strings.Replace(string(body), `"version":"1.0"`, `"version":"1.0","not_ctis":1`, 1))
+	unk := []byte(strings.Replace(string(body), `"version":"2.0"`, `"version":"2.0","not_ctis":1`, 1))
 	if r := l.do(t, http.MethodPut, protov2.ReportPath("", id()), unk, ctisHeaders(unk)); r.status != http.StatusUnprocessableEntity {
 		t.Fatalf("unknown field: %d %s", r.status, r.body)
 	}

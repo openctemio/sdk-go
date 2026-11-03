@@ -10,7 +10,7 @@
 //
 //	func TestDotenv(t *testing.T) {
 //		res := testkit.Run(t, dotenv.Tool, tool.Task{
-//			Targets: []tool.Target{{Ref: "a1", Type: "http_service", Value: srv.URL}},
+//			Targets: []tool.Target{{Ref: "a1", Type: "web_origin", Value: srv.URL}},
 //		})
 //		res.RequireStatus(t, tool.StatusOK)
 //		res.Golden(t, "testdata/dotenv.golden.json")
@@ -31,7 +31,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openctemio/ctis/outcome"
 	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -145,7 +144,7 @@ func Run(t testing.TB, tl tool.Tool, task tool.Task, opts ...Options) *Result {
 	res.Stats = asm.Checker().Stats()
 	toolrt.Stamp(res.Report, toolrt.Provenance{
 		Tool: m.Name, ToolVersion: m.Version, ManifestDigest: m.Digest(), Protocol: tool.ProtocolVersion,
-		Execution: "in-process (testkit)", TaskID: task.ID, Attempt: task.Attempt, Status: res.Status,
+		Execution: "in-process (testkit)", Attempt: task.Attempt, Status: res.Status,
 		Records: res.Stats.Records, Quarantined: res.Stats.Quarantined, Invalid: res.Stats.Invalid, Capped: res.Stats.Capped,
 	})
 	for _, r := range asm.Results() {
@@ -242,14 +241,15 @@ func Golden(t testing.TB, report *ctis.Report, path string) {
 
 // volatile keys are removed by Normalize wherever they appear.
 var volatile = map[string]bool{
-	"timestamp": true, "duration_ms": true, "discovered_at": true, "first_seen": true, "last_seen": true,
+	"generated_at": true, "duration_ms": true, "ended_at": true, "captured_at": true,
 	"started_at": true, "finished_at": true, "scanned_at": true, "detected_at": true,
 	"first_seen_at": true, "last_seen_at": true, "created_at": true, "updated_at": true,
 }
 
 // Normalize returns a report as stable, indented JSON: times and durations
 // removed, metadata.id removed, the runtime's provenance replaced by a
-// placeholder and its per-target outcomes (target_outcomes) removed. Two runs of a deterministic tool normalize identically.
+// placeholder and its per-target outcomes (metadata.targets) removed. Two
+// runs of a deterministic tool normalize identically.
 func Normalize(report *ctis.Report) ([]byte, error) {
 	raw, err := json.Marshal(report)
 	if err != nil {
@@ -262,16 +262,11 @@ func Normalize(report *ctis.Report) ([]byte, error) {
 		return nil, err
 	}
 	if root, ok := v.(map[string]any); ok {
-		// The per-target outcome ledger is the tool host's stamp, like the
-		// provenance: an in-process run has none.
-		if props, ok := root["properties"].(map[string]any); ok {
-			delete(props, outcome.ResultKey)
-			if len(props) == 0 {
-				delete(root, "properties")
-			}
-		}
 		if md, ok := root["metadata"].(map[string]any); ok {
 			delete(md, "id")
+			// The per-target outcome ledger is the tool host's stamp, like
+			// the provenance: an in-process run has none.
+			delete(md, "targets")
 			if props, ok := md["properties"].(map[string]any); ok {
 				if _, ok := props[toolrt.ProvenanceKey]; ok {
 					props[toolrt.ProvenanceKey] = "<provenance>"
@@ -323,6 +318,10 @@ func (s *sink) Finding(ref string, f ctis.Finding) error { return s.asm.Finding(
 func (s *sink) Dependency(_ string, d ctis.Dependency) error { return s.asm.Dependency(d) }
 
 func (s *sink) Endpoint(e ctis.Endpoint) error { return s.asm.Endpoint(e) }
+
+func (s *sink) Relationship(r ctis.Relationship) error { return s.asm.Relationship(r) }
+
+func (s *sink) Rule(r ctis.Rule) error { return s.asm.Rule(r) }
 
 func (s *sink) Info(info *tool.ReportInfo) error {
 	checked, err := s.asm.Checker().Info(info)

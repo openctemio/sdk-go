@@ -72,7 +72,7 @@ func (s *probeScanner) Scan(_ context.Context, target string, _ *core.ScanOption
 			read = "denied"
 		}
 	}
-	r := ctis.Report{Version: "1.3", Metadata: ctis.ReportMetadata{Timestamp: time.Now().UTC()},
+	r := ctis.Report{Version: ctis.SchemaVersion, Metadata: ctis.ReportMetadata{ID: ctis.NewReportID(), GeneratedAt: time.Now().UTC()},
 		Findings: []ctis.Finding{{Type: "misconfiguration", RuleID: "kb", Title: "bridged finding on " + target + " read=" + read, Severity: "medium"}}}
 	raw, _ := json.Marshal(r)
 	return &core.ScanResult{RawOutput: raw}, nil

@@ -12,7 +12,7 @@ platform. Product documentation: https://docs.openctem.io.
 OpenCTEM SDK provides Go packages for:
 - `pkg/sensorkit`: the sensor runtime in one call (identity, connection, heartbeat, commands, durable outbox, per-task tool sandbox, local policy, preflight checks and the config report)
 - `pkg/client`: the platform protocol client
-- `pkg/ctis`: the CTIS result types
+- `pkg/ctis`: the CTIS 2.0 result types
 - `pkg/httpsec`: SSRF-safe HTTP clients
 - `pkg/conformance`: a fake platform and the sensor conformance suite
 - `cmd/openctem`: `openctem tool init|validate|run|test|diff|describe` and `openctem version`, to scaffold a tool from a capability and check it with the conformance kit; signed prebuilt binaries ship with each release, no Go toolchain needed ([docs/tools/cli.md](docs/tools/cli.md#install))
@@ -74,13 +74,20 @@ func main() {
 	})
 	defer c.Close()
 
-	report := ctis.NewReport()
-	report.Tool = &ctis.Tool{Name: "my-scanner", Version: "1.0.0"}
+	report := ctis.NewReport() // CTIS 2.0: metadata.id is a new UUIDv7
+	report.Tool = &ctis.Tool{Name: "my-scanner", Version: "1.0.0",
+		Techniques: []ctis.Technique{ctis.TechniqueSAST}}
+	report.Assets = append(report.Assets, ctis.Asset{
+		ID:    "repo-1", // document-local, never a platform id
+		Type:  ctis.AssetTypeRepository,
+		Value: "github.com/example/shop", // the canonical form of its type
+	})
 	report.Findings = append(report.Findings, ctis.Finding{
 		ID:       "finding-001",
-		Type:     ctis.FindingTypeVulnerability,
+		Type:     ctis.FindingTypeWeakness,
 		Title:    "SQL Injection",
 		Severity: ctis.SeverityHigh,
+		AssetRef: "repo-1", // required in CTIS 2.0
 		Location: &ctis.FindingLocation{Path: "src/db.go", StartLine: 42},
 	})
 
@@ -91,6 +98,21 @@ func main() {
 	fmt.Printf("%+v\n", res)
 }
 ```
+
+### CTIS 2.0
+
+The SDK produces [CTIS](https://github.com/openctemio/ctis) 2.0 documents only
+(`github.com/openctemio/ctis/v2`, media type `application/vnd.ctis+json; version=2.0`).
+Upgrade sensors and connectors together with the platform: a platform before the
+CTIS 2.0 release refuses them. A document never carries a platform identifier:
+`metadata.id` is the producer's UUIDv7, ids and `*_ref` values are document-local,
+and the binding to a platform command stays in the request. Asset values use the
+canonical form of their type (`ctis.CanonicalAssetValue`), every finding names its
+asset (`asset_ref`), an open port is a `service` asset linked from its host by an
+`exposes` relationship, and per-target outcomes go in `metadata.targets`. Secret
+fingerprints use CTIS recipe v2 with a producer HMAC key only. The platform and
+sensor contracts (capabilities, settings, outcomes, politeness, address scope,
+sources) are in [`github.com/openctemio/contract`](https://github.com/openctemio/contract).
 
 ## Build a sensor in 30 lines
 
@@ -196,7 +218,7 @@ it can run; `core.CommandPoller` does the rest:
 |---|---|
 | **Slots** | `resource.Manager` sizes them from what the sensor may use: CPU cores and memory read from cgroup v2/v1 (quota, cpuset, memory limit) or the host, divided by the learned per-job cost of the sensor's tools (defaults per tool, refined from finished jobs, saved to a small JSON file). An AIMD window halves them after an OOM kill, a timeout or CPU throttling and grows back one slot per window of successes. A configured cap (`ManagerConfig.Cap`) is an upper bound, never a fixed number. |
 | **Claiming** | Takes a free slot first, polls with `limit` = free slots, claims nothing while all are busy: no prefetch, so the platform keeps work for sensors that can run it now. |
-| **Local queue** | Orders a batch by class (`verify > interactive > scheduled > background`) then priority (`critical > high > normal > low`); at most `limits.per_host_concurrency` (default 1) held commands touch one host, under the politeness keys the platform sent with the command (`host_keys`) or, from an older platform, the same keys computed by `github.com/openctemio/ctis/politeness`; a command over it is left pending, not claimed. |
+| **Local queue** | Orders a batch by class (`verify > interactive > scheduled > background`) then priority (`critical > high > normal > low`); at most `limits.per_host_concurrency` (default 1) held commands touch one host, under the politeness keys the platform sent with the command (`host_keys`) or, from an older platform, the same keys computed by `github.com/openctemio/contract/politeness`; a command over it is left pending, not claimed. |
 | **Leases** | Every heartbeat lists the held command ids (`running`) for the platform to renew. |
 | **Cancel** | A heartbeat's `cancel_command_ids` cancels those commands' contexts; they are released, not reported. |
 | **Drain** | `Stop` or a canceled context stops claiming, gives running commands `DrainGrace` (30 s) and then cancels them; unstarted and aborted commands are **released** (`POST …/commands/{id}/release`; failed with "released: …" on a platform without it) so the platform re-queues them at once. A refused `start` is never executed. |
@@ -254,7 +276,7 @@ record it emits. A simple tool is declared with the builder:
 
 ```go
 var Dotenv = tool.Define("dotenv", "1.0.0").
-	Targets("http_service").
+	Targets("web_origin").
 	Produces("finding:misconfiguration").
 	Params(tool.StringParam("path").Label("Path").Default("/.env").Pattern("^/")).
 	Handle(func(ctx tool.Context, job *tool.Job, emit tool.Emit) error {
@@ -282,7 +304,7 @@ other than root or the sensor user. Either way:
 
 - The descriptor's `config` is the tool's settings schema, in the closed
   subset of JSON Schema defined by
-  [`github.com/openctemio/ctis/settings`](https://github.com/openctemio/ctis#tool-settings)
+  [`github.com/openctemio/contract/settings`](https://github.com/openctemio/contract)
   (`Params` of the builder write it). The platform validates administrators'
   values with the same package, sends them inside the signed job
   (`settings_layers`), and the sensor resolves them against the schema before
@@ -312,7 +334,7 @@ it grows without breaking sensors: [docs/STABILITY.md](docs/STABILITY.md).
 | `pkg/retry` | Retry utilities |
 | `pkg/httpsec` | Hardened HTTP client (SafeHTTPClient) with SSRF protection |
 | `pkg/sensorproto/legacyv1` | Migration of pre-sensor settings and credentials (frozen) |
-| `pkg/ctis` | CTIS (CTEM Ingest Schema) types, re-exported from `github.com/openctemio/ctis` |
+| `pkg/ctis` | CTIS 2.0 (CTEM Interchange Schema) types, re-exported from `github.com/openctemio/ctis/v2` |
 
 ## Examples
 

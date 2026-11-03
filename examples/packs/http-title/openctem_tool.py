@@ -138,6 +138,16 @@ class Context:
     def endpoint(self, target, data):
         self._record("endpoint", target, data)
 
+    def relationship(self, data):
+        """A CTIS 2.0 edge between two assets sent before it, by their ids:
+        {"type": "exposes", "from_ref": "h1", "to_ref": "s1"}."""
+        self._record("relationship", None, data)
+
+    def rule(self, data):
+        """A rule of the report's catalog, sent before the findings that name
+        it by rule_ref: {"id": "r1", "rule_id": "...", "name": "..."}."""
+        self._record("rule", None, data)
+
     def _record(self, kind, target, data):
         self.check()
         self._wire.send({"type": "record", "kind": kind, "target": _ref(target), "data": data})
@@ -209,6 +219,8 @@ class Context:
 
 
 def _ref(target):
+    if target is None:
+        return ""
     return target.ref if isinstance(target, Target) else str(target)
 
 

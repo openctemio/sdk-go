@@ -71,7 +71,7 @@ github.com/openctemio/sdk-go
 │   ├── doctor/               BETA     Check interface and Result, for sensor-added checks
 │   ├── executor/             BETA     Backend interface + process backend
 │   └── policy/               STABLE   local/managed policy load, validate, explain (for sensor CLIs)
-├── pkg/ctis/                 STABLE   CTIS types (re-export of github.com/openctemio/ctis) + builders
+├── pkg/ctis/                 STABLE   CTIS types (re-export of github.com/openctemio/ctis/v2) + builders
 ├── pkg/push/                 STABLE   rung 0: push a CTIS or SARIF file with a scoped ingest token
 ├── pkg/httpsec/              STABLE   SSRF-safe HTTP clients (unchanged)
 ├── pkg/testkit/              STABLE   run a tool against a fake task; golden CTIS; selftest fixtures
@@ -166,7 +166,7 @@ type Manifest struct {
 	Modes       []Mode   // Daemon, Runner; empty = both
 	Tier        Tier     // T0 passive | T1 active, non-intrusive | T2 intrusive
 	Capabilities []string // stage catalogue ids ("vuln.templates", "web.probe", …)
-	Consumes    []string // CTIS asset types ("http_service", "domain", "repository", …),
+	Consumes    []string // CTIS asset types ("web_origin", "domain_name", "repository", …),
 	                     // or "file:<media type>" for parsers
 	Produces    []string // "asset:<type>", "finding:<type>", "dependency"
 	Config      *Schema  // JSON Schema, RFC-038 subset (UI hints via x-octm-*)
@@ -435,7 +435,7 @@ package dotenv
 import "github.com/openctemio/sdk-go/pkg/tool"
 
 var Tool = tool.Define("dotenv-check", "1.0.0").
-	Targets("http_service").
+	Targets("web_origin").
 	Produces("finding:misconfiguration").
 	Params(tool.StringParam("path").Label("Path").Default("/.env").Pattern("^/").MaxLength(256)).
 	Handle(func(ctx tool.Context, job *tool.Job, emit tool.Emit) error {
@@ -476,7 +476,7 @@ var Tool = tool.Define("dotenv-check", "1.0.0").
 from openctem_tool import tool, misconfig, HIGH, Unreachable
 
 @tool(name="dotenv-check", version="1.0.0", cls="target-scan", tier="T1",
-      consumes=["http_service"], produces=["finding:misconfiguration"], network="targets")
+      consumes=["web_origin"], produces=["finding:misconfiguration"], network="targets")
 def run(ctx, task, config):
     for t in task.targets:
         try:
@@ -552,7 +552,7 @@ Example exchange:
 ```json
 {"v":1,"type":"hello","protocol":[1],"runtime":{"name":"openctem-sensor","version":"0.12.0"},"limits":{"max_line":1048576,"max_records":200000}}
 {"v":1,"type":"hello","protocol":1,"sdk":{"name":"openctem-tool-python","version":"0.1.0"}}
-{"v":1,"type":"run","task":{"id":"t-81","attempt":1,"deadline":"2026-10-05T12:30:00Z","targets":[{"ref":"a1","type":"http_service","value":"https://shop.example"}],"config":{},"workdir":"/run/task"}}
+{"v":1,"type":"run","task":{"id":"t-81","attempt":1,"deadline":"2026-10-05T12:30:00Z","targets":[{"ref":"a1","type":"web_origin","value":"https://shop.example"}],"config":{},"workdir":"/run/task"}}
 {"v":1,"type":"record","kind":"finding","target":"a1","data":{"type":"misconfiguration","rule_id":"dotenv-exposed","title":".env file is publicly readable","severity":"high"}}
 {"v":1,"type":"target_status","target":"a1","status":"done"}
 {"v":1,"type":"result","status":"ok","stats":{"records":1}}
@@ -699,7 +699,7 @@ That program enrolls, holds its identity, negotiates transport v3 with fallback,
 func TestDotenv(t *testing.T) {
 	srv := testkit.HTTP(t, testkit.Routes{"/.env": {Status: 200, Body: "KEY=1"}})
 	res := testkit.Run(t, dotenv.Tool, testkit.Task{
-		Targets: []tool.Target{testkit.Target("http_service", srv.URL)},
+		Targets: []tool.Target{testkit.Target("web_origin", srv.URL)},
 	})
 	res.RequireStatus(t, tool.OK)
 	res.Golden(t, "testdata/dotenv.golden.json") // normalized CTIS; `go test -update` rewrites

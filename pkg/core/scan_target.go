@@ -473,7 +473,7 @@ var blockedRangesForOverlap = mustCIDRs(
 	"192.0.0.0/24", "198.18.0.0/15",
 	"::1/128", "::/128", "fe80::/10", "fec0::/10", "ff00::/8", "fc00::/7",
 	"fd00:ec2::254/128", "fd20:ce::254/128",
-	// IPv6 ranges that carry IPv4 addresses (ctis addrscope): a range
+	// IPv6 ranges that carry IPv4 addresses (contract addrscope): a range
 	// holding their start holds addresses that carry internal ones.
 	"64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32",
 )

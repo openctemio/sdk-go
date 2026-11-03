@@ -16,7 +16,7 @@ class: target-scan
 tier: T1
 implements:
 - capability: verify.finding@1
-consumes: [domain, ip_address, http_service, open_port]
+consumes: [domain_name, ip_address, web_origin, service]
 produces: ['finding:vulnerability']
 permissions: {network: targets}
 `
@@ -25,8 +25,8 @@ permissions: {network: targets}
 	}
 	// Another capability still constrains consumes.
 	bad := strings.Replace(doc, "verify.finding@1", "scan.ports@1", 1)
-	bad = strings.Replace(bad, "['finding:vulnerability']", "['asset:open_port']", 1)
+	bad = strings.Replace(bad, "['finding:vulnerability']", "['asset:service']", 1)
 	if _, err := LoadManifest([]byte(bad)); err == nil || !strings.Contains(err.Error(), "not an input") {
-		t.Fatalf("scan.ports@1 consuming http_service was accepted: %v", err)
+		t.Fatalf("scan.ports@1 consuming web_origin was accepted: %v", err)
 	}
 }

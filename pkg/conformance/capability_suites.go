@@ -16,7 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openctemio/ctis/capability"
+	"github.com/openctemio/contract/capability"
+	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
@@ -79,7 +80,7 @@ func (r *contractRun) runSuite(name string, c capability.Capability, task tool.T
 		r.t.Errorf("%s: the task failed: %v (stderr: %.300s)", name, out.Err, out.Stderr)
 		return nil
 	}
-	if v, _ := c.Check(out.Report, capability.CheckOptions{Shape: outputShape(r.m, c)}); len(v) > 0 {
+	if v, _ := c.Check(reportJSON(toolrt.OutputOnly(out.Report)), capability.CheckOptions{Shape: outputShape(r.m, c)}); len(v) > 0 {
 		r.t.Errorf("%s: %d record(s) miss the contract, first: %s", name, len(v), v[0])
 	}
 	for _, p := range evidenceProblems(out.Report) {
@@ -108,9 +109,9 @@ func (r *contractRun) scanPorts(name string, c capability.Capability) {
 	}
 	defer b.close()
 	closed := closedPort()
-	target, ok := r.target([][2]string{{"ip_address", "127.0.0.1"}, {"host", "127.0.0.1"}, {"domain", "localhost"}, {"subdomain", "localhost"}})
+	target, ok := r.target([][2]string{{"ip_address", "127.0.0.1"}, {"host", "127.0.0.1"}, {"domain_name", "localhost"}})
 	if !ok {
-		r.t.Errorf("%s: the tool consumes none of ip_address, host, domain, subdomain", name)
+		r.t.Errorf("%s: the tool consumes none of ip_address, host, domain_name", name)
 		return
 	}
 	want := []int{a.port(), b.port()}
@@ -126,9 +127,8 @@ func (r *contractRun) scanPorts(name string, c capability.Capability) {
 }
 
 // discoverHosts: a loopback address with one listening port, probed on
-// that port, is reported live (with the probe that answered, which the
-// output contract requires), and nothing the tool was not given is
-// reported.
+// that port, is reported live (with last_seen_at, which the output contract
+// requires), and nothing the tool was not given is reported.
 func (r *contractRun) discoverHosts(name string, c capability.Capability) {
 	if !r.takes(c, "ports") {
 		r.t.Errorf("%s: the tool does not take the standard param ports, so it cannot be told which ports to probe", name)
@@ -189,7 +189,7 @@ func fixtureApp() *httptest.Server {
 }
 
 func urlTargets(u string) [][2]string {
-	return [][2]string{{"http_service", u}, {"website", u}, {"web_application", u}, {"api", u}, {"discovered_url", u}}
+	return [][2]string{{"web_origin", u}, {"web_application", u}, {"api", u}}
 }
 
 // probeHTTP: a fixture page; the tool reports it with status 200.
@@ -200,7 +200,7 @@ func (r *contractRun) probeHTTP(name string, c capability.Capability) {
 	task := tool.Task{}
 	target, ok := r.target(urlTargets(srv.URL))
 	if !ok {
-		target, ok = r.target([][2]string{{"ip_address", "127.0.0.1"}, {"host", "127.0.0.1"}, {"domain", "localhost"}, {"subdomain", "localhost"}})
+		target, ok = r.target([][2]string{{"ip_address", "127.0.0.1"}, {"host", "127.0.0.1"}, {"domain_name", "localhost"}})
 		if !ok || !r.takes(c, "ports") {
 			r.t.Errorf("%s: the tool takes no URL, and no host with the standard param ports", name)
 			return
@@ -214,19 +214,22 @@ func (r *contractRun) probeHTTP(name string, c capability.Capability) {
 	}
 	found := false
 	for _, a := range out.Report.Assets {
-		if a.Type != ctis.AssetTypeHTTPService || !strings.Contains(a.Value, ":"+port) {
+		if a.Type != ctis.AssetTypeWebOrigin || !strings.Contains(a.Value, ":"+port) {
 			continue
 		}
 		found = true
-		if code, ok := a.Properties["status_code"].(float64); ok && code != 200 {
+		if a.Technical == nil || a.Technical.HTTP == nil {
+			continue
+		}
+		if code := a.Technical.HTTP.StatusCode; code != 0 && code != 200 {
 			r.t.Errorf("%s: status %v for the fixture page, want 200", name, code)
 		}
-		if title, ok := a.Properties["title"].(string); ok && title != "" && title != fixtureTitle {
+		if title := a.Technical.HTTP.Title; title != "" && title != fixtureTitle {
 			r.t.Errorf("%s: title %q, want %q", name, title, fixtureTitle)
 		}
 	}
 	if !found {
-		r.t.Errorf("%s: no http_service asset for the fixture %s", name, srv.URL)
+		r.t.Errorf("%s: no web_origin asset for the fixture %s", name, srv.URL)
 	}
 }
 
@@ -345,8 +348,8 @@ func (r *contractRun) scope() {
 	srv := fixtureApp()
 	defer srv.Close()
 	cands := append(urlTargets(srv.URL), [][2]string{
-		{"ip_address", "127.0.0.1"}, {"host", "127.0.0.1"}, {"domain", "localhost"}, {"subdomain", "localhost"},
-		{"open_port", fmt.Sprintf("127.0.0.1:%d", a.port())},
+		{"ip_address", "127.0.0.1"}, {"host", "127.0.0.1"}, {"domain_name", "localhost"},
+		{"service", fmt.Sprintf("127.0.0.1:%d/tcp", a.port())},
 	}...)
 	target, ok := r.target(cands)
 	if !ok {

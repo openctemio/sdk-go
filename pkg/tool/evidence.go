@@ -1,6 +1,6 @@
 package tool
 
-// Evidence of a finding or a retest verdict (CTIS 1.6 evidence_items):
+// Evidence of a finding or a retest verdict (CTIS evidence_items):
 // what the tool sent and saw, captured as it was. Builders cap what they
 // keep, hash what was captured and mark sensitive values (session cookies,
 // authorization headers, credential parameters) in the item's sensitive
@@ -55,7 +55,10 @@ func HTTPExchange(req *http.Request, reqBody []byte, resp *http.Response, respBo
 	now := time.Now().UTC()
 	item.CapturedAt = &now
 	ctis.FitEvidenceItem(&item)
-	ctis.MarkSensitive(&item)
+	if incomplete := ctis.MarkSensitive(&item); len(incomplete) > 0 {
+		// More sensitive values than spans can mark: never sent unmarked.
+		return ctis.EvidenceItem{}, false
+	}
 	return item, true
 }
 

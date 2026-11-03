@@ -2,10 +2,16 @@ package client
 
 // Protocol v2 results client (RFC-026, api docs/rfcs/RFC-026-sensor-results-ingest.md
 // §3). A report is a resource the sensor names: PUT .../results/{report_id}
-// with Content-Type application/vnd.openctem.ctis.v1+json, a required
+// with Content-Type application/vnd.ctis+json; version=2.0, a required
 // Content-Digest (RFC 9530, over the bytes as sent) and optional zstd. Large
 // reports go as self-describing segments plus a commit. A replay of the same
 // bytes is a no-op (200), so every retry reuses the report id.
+//
+// The document is CTIS 2.0. Its binding to the platform's command and
+// delivery lives only in the request (the URL path and headers), never in the
+// document: metadata.id is the producer's own UUIDv7 (ctis.NewReportID),
+// stable across retries and restarts of the same report, and is never the
+// command id or the delivery (report) id.
 
 import (
 	"bytes"
@@ -148,6 +154,10 @@ type V2Progress struct {
 	Acked map[int]string `json:"acked,omitempty"`
 	// Restarts counts report-id restarts (bounded).
 	Restarts int `json:"restarts,omitempty"`
+	// DocumentID is the metadata.id the report is sent with when the report
+	// carries no valid one of its own (a producer UUIDv7, kept across
+	// restarts so the platform recognizes a retry).
+	DocumentID string `json:"document_id,omitempty"`
 
 	// lastFindings/lastBytes describe the request being sent when an
 	// error happened (the segment a 413 refused).
@@ -174,9 +184,27 @@ type V2PushOptions struct {
 	MaxFindingsPerSegment int
 }
 
-// defaultCTISVersion is set on a report without a CTIS version: v2 requires
-// the body to state a major matching the media type.
-const defaultCTISVersion = "1.0"
+// documentID is the metadata.id a push sends: the report's own when it is a
+// producer UUIDv7 that names none of the platform's identifiers (the
+// command, the delivery), else one generated once and kept in the progress.
+func documentID(report *ctis.Report, commandID string, p *V2Progress) string {
+	id := report.Metadata.ID
+	if ctis.IsReportID(id) && !strings.EqualFold(id, commandID) && !strings.EqualFold(id, p.ReportID) {
+		return id
+	}
+	if !ctis.IsReportID(p.DocumentID) || strings.EqualFold(p.DocumentID, commandID) {
+		p.DocumentID = ctis.NewReportID()
+	}
+	return p.DocumentID
+}
+
+// canonicalAssetValues writes each asset value in the canonical form of its
+// type (a receiver refuses any other form); a value without one is kept.
+func canonicalAssetValues(assets []ctis.Asset) {
+	for i := range assets {
+		assets[i].Value = ctis.NormalizeAssetName(assets[i].Type, assets[i].Value)
+	}
+}
 
 // maxV2Restarts bounds report-id restarts in one push.
 const maxV2Restarts = 4
@@ -561,13 +589,16 @@ func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits pro
 		lease = leaseHeader(c.leases.epoch(commandID))
 	}
 	r := *report
-	r.Metadata.ID = p.ReportID // RFC-026: metadata.id empty or equal to the report id
-	if strings.TrimSpace(r.Version) == "" || !strings.HasPrefix(strings.TrimSpace(r.Version), "1") {
-		r.Version = defaultCTISVersion
+	r.Version, r.Schema = ctis.SchemaVersion, ctis.SchemaURL
+	r.Metadata.ID = documentID(report, commandID, p)
+	if r.Metadata.GeneratedAt.IsZero() {
+		r.Metadata.GeneratedAt = time.Now().UTC()
 	}
-	// Copy the slices BindFindingAssets writes to, never the caller's.
+	// Copy the slices BindFindingAssets and the canonical values write to,
+	// never the caller's.
 	r.Assets = append([]ctis.Asset(nil), report.Assets...)
 	r.Findings = append([]ctis.Finding(nil), report.Findings...)
+	canonicalAssetValues(r.Assets)
 	chunk.BindFindingAssets(&r)
 
 	segs, err := chunk.SplitSegments(&r, segmentLimits(limits, p))

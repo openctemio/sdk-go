@@ -1,8 +1,11 @@
 {
-  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "$schema": "https://schemas.openctem.io/ctis/2.0/report.json",
   "assets": [
     {
       "id": "host-app01.example.com",
+      "identifiers": {
+        "bios_uuid": "4C4C4544-0000-1000-8000-000000000001"
+      },
       "identity_hints": {
         "agent_id": "7d9a4c2e-0000-4000-8000-000000000001",
         "cloud_resource_id": "i-0123456789abcdef0",
@@ -16,36 +19,65 @@
       },
       "name": "app01.example.com",
       "properties": {
-        "bios_uuid": "4C4C4544-0000-1000-8000-000000000001",
-        "fqdn": "app01.example.com",
         "host_rdns": "app01.example.com",
-        "ip_address": "192.0.2.10",
         "local_checks_protocol": "ssh",
-        "mac_address": "00:00:5E:00:53:01 00:00:5E:00:53:02",
-        "os": "Linux Kernel 5.15.0-91-generic on Ubuntu 22.04",
-        "os_confidence": "100",
         "os_method": "LinuxDistribution",
-        "scan_ended_at": "2025-10-05T08:00:00Z",
-        "scan_started_at": "2025-10-05T07:00:00Z",
         "system_type": "general-purpose"
       },
+      "technologies": [
+        {
+          "categories": [
+            "operating-system"
+          ],
+          "confidence": 100,
+          "name": "Linux Kernel 5.15.0-91-generic on Ubuntu 22.04"
+        }
+      ],
       "type": "host",
       "value": "app01.example.com"
     },
     {
-      "id": "host-198.51.100.7",
+      "id": "service-app01.example.com:22/tcp",
+      "name": "app01.example.com:22/tcp",
+      "technical": {
+        "service": {
+          "app_protocol": "ssh",
+          "port": 22,
+          "transport": "tcp"
+        }
+      },
+      "type": "service",
+      "value": "app01.example.com:22/tcp"
+    },
+    {
+      "id": "ip_address-198.51.100.7",
       "identity_hints": {
         "netbios_name": "FILESRV"
       },
       "name": "198.51.100.7",
-      "properties": {
-        "ip_address": "198.51.100.7",
-        "os": "Microsoft Windows Server 2019",
-        "scan_ended_at": "2025-10-05T08:10:00Z",
-        "scan_started_at": "2025-10-05T08:00:00Z"
-      },
+      "technologies": [
+        {
+          "categories": [
+            "operating-system"
+          ],
+          "name": "Microsoft Windows Server 2019"
+        }
+      ],
       "type": "ip_address",
       "value": "198.51.100.7"
+    },
+    {
+      "id": "service-198.51.100.7:445/tcp",
+      "name": "198.51.100.7:445/tcp",
+      "technical": {
+        "service": {
+          "app_protocol": "cifs",
+          "port": 445,
+          "transport": "tcp"
+        }
+      },
+      "type": "service",
+      "value": "198.51.100.7:445/tcp"
     }
   ],
   "findings": [
@@ -53,21 +85,25 @@
       "asset_ref": "host-app01.example.com",
       "category": "Settings",
       "description": "This plugin displays information about the Nessus scan.",
-      "evidence": "Information about this scan :\n\nNessus version : 10.9.1\nScan name : Weekly internal\nCredentialed checks : yes, as '[redacted]' via ssh\nUser: [redacted]\npassword: [redacted]\nScan duration : 3600 sec",
+      "evidence_items": [
+        {
+          "kind": "raw_text",
+          "label": "plugin_output",
+          "text": "Information about this scan :\n\nNessus version : 10.9.1\nScan name : Weekly internal\nCredentialed checks : yes, as '[redacted]' via ssh\nUser: [redacted]\npassword: [redacted]\nScan duration : 3600 sec",
+          "version": 1
+        }
+      ],
       "message": "This plugin displays information about the Nessus scan.",
       "native": {
-        "credentialed": true,
         "detection_type": "info",
         "family": "Settings",
+        "is_credentialed": true,
         "raw_ref": "ReportHost[app01.example.com]/ReportItem[pluginID=19506,port=0,protocol=tcp]",
         "scheme": "nessus",
         "severity": "0",
         "vuln_id": "19506"
       },
-      "network": {
-        "host": "app01.example.com",
-        "protocol": "tcp"
-      },
+      "network": {},
       "rule_id": "19506",
       "rule_name": "Nessus Scan Information",
       "severity": "info",
@@ -77,6 +113,12 @@
         "plugin_type": "summary",
         "risk_factor": "None"
       },
+      "source_refs": [
+        {
+          "id": "19506",
+          "system": "nessus"
+        }
+      ],
       "title": "Nessus Scan Information",
       "type": "vulnerability"
     },
@@ -84,26 +126,27 @@
       "asset_ref": "host-app01.example.com",
       "category": "Ubuntu Local Security Checks",
       "description": "The remote Ubuntu host is missing one or more security updates.\n\nThe remote Ubuntu 22.04 LTS host has packages installed that are affected by multiple vulnerabilities as referenced in the USN-6560-1 advisory.",
-      "evidence": "- Installed package : openssh-client_1:8.9p1-3ubuntu0.4\n  - Fixed package     : openssh-client_1:8.9p1-3ubuntu0.6",
+      "evidence_items": [
+        {
+          "kind": "raw_text",
+          "label": "plugin_output",
+          "text": "- Installed package : openssh-client_1:8.9p1-3ubuntu0.4\n  - Fixed package     : openssh-client_1:8.9p1-3ubuntu0.6",
+          "version": 1
+        }
+      ],
       "message": "The remote Ubuntu host is missing one or more security updates.",
       "native": {
-        "credentialed": true,
         "family": "Ubuntu Local Security Checks",
+        "is_credentialed": true,
         "raw_ref": "ReportHost[app01.example.com]/ReportItem[pluginID=187201,port=22,protocol=tcp]",
         "scheme": "nessus",
         "severity": "3",
         "vuln_id": "187201"
       },
       "network": {
-        "host": "app01.example.com",
+        "app_protocol": "ssh",
         "port": 22,
-        "protocol": "tcp",
-        "service": "ssh"
-      },
-      "properties": {
-        "cvss_v2_vector": "CVSS2#AV:N/AC:M/Au:N/C:P/I:P/A:P",
-        "cvss_v3_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H",
-        "patch_publication_date": "2023/12/19"
+        "transport": "tcp"
       },
       "references": [
         "https://ubuntu.com/security/notices/USN-6560-1"
@@ -119,7 +162,7 @@
             "source": "iava"
           }
         ],
-        "fix_available": true,
+        "is_fix_available": true,
         "patch_published_at": "2023-12-19T00:00:00Z",
         "recommendation": "Update the affected packages."
       },
@@ -149,7 +192,7 @@
         },
         {
           "source": "tenable",
-          "system": "vpr",
+          "system": "vendor",
           "value": 6.1
         },
         {
@@ -178,26 +221,19 @@
         "vuln_publication_date": "2023/12/18",
         "xref": "USN:6560-1\nIAVA:2023-A-0701\nCWE:354\nCISA-KNOWN-EXPLOITED:2026/01/08"
       },
+      "source_refs": [
+        {
+          "id": "187201",
+          "system": "nessus"
+        }
+      ],
       "title": "Ubuntu 22.04 LTS : OpenSSH vulnerabilities (USN-6560-1)",
       "type": "vulnerability",
       "vulnerability": {
         "cpe": "cpe:/a:openbsd:openssh",
-        "cve_id": "CVE-2023-48795",
-        "cve_ids": [
-          "CVE-2023-48795",
-          "CVE-2023-51385"
-        ],
-        "cvss_score": 8.1,
-        "cvss_source": "vendor",
-        "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H",
-        "cvss_version": "3.1",
-        "cwe_id": "CWE-354",
         "cwe_ids": [
           "CWE-354"
         ],
-        "epss_score": 0.9671,
-        "exploit_available": true,
-        "exploit_maturity": "functional",
         "ids": [
           {
             "id": "CVE-2023-48795",
@@ -208,9 +244,18 @@
             "type": "cve"
           }
         ],
-        "in_cisa_kev": true,
         "published_at": "2023-12-18T00:00:00Z",
-        "vpr_score": 6.1
+        "threat_signals": [
+          {
+            "source": "tenable",
+            "type": "public_exploit"
+          },
+          {
+            "due_on": "2026-01-08",
+            "source": "cisa",
+            "type": "kev"
+          }
+        ]
       }
     },
     {
@@ -221,23 +266,27 @@
         "control_id": "c0ffee00c0ffee00c0ffee00c0ffee00",
         "control_name": "5.2.10 Ensure SSH root login is disabled",
         "framework": "cis",
-        "framework_version": "1.0.0",
-        "result": "fail"
+        "framework_version": "1.0.0"
       },
-      "evidence": "The command returned :\n\npermitrootlogin yes",
+      "evidence_items": [
+        {
+          "kind": "raw_text",
+          "label": "compliance-actual-value",
+          "text": "The command returned :\n\npermitrootlogin yes",
+          "version": 1
+        }
+      ],
+      "kind": "fail",
       "native": {
-        "credentialed": true,
         "family": "Policy Compliance",
         "instance_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "is_credentialed": true,
         "raw_ref": "ReportHost[app01.example.com]/ReportItem[pluginID=21157,port=0,protocol=tcp]",
         "scheme": "nessus",
         "severity": "2",
         "vuln_id": "21157"
       },
-      "network": {
-        "host": "app01.example.com",
-        "protocol": "tcp"
-      },
+      "network": {},
       "references": [
         "https://workbench.cisecurity.org/files/0000"
       ],
@@ -261,33 +310,40 @@
         "plugin_type": "local",
         "risk_factor": "None"
       },
+      "source_refs": [
+        {
+          "id": "21157",
+          "system": "nessus"
+        }
+      ],
       "title": "5.2.10 Ensure SSH root login is disabled",
       "type": "compliance"
     },
     {
-      "asset_ref": "host-198.51.100.7",
+      "asset_ref": "ip_address-198.51.100.7",
       "category": "Windows",
       "description": "The remote Windows host is affected by multiple vulnerabilities.\n\nThe remote Windows host is affected by multiple vulnerabilities in Microsoft Server Message Block 1.0 (SMBv1).",
-      "evidence": "Sent: 00000000ff534d4272\nReceived: 00000000ff534d4272",
+      "evidence_items": [
+        {
+          "kind": "raw_text",
+          "label": "plugin_output",
+          "text": "Sent: 00000000ff534d4272\nReceived: 00000000ff534d4272",
+          "version": 1
+        }
+      ],
       "message": "The remote Windows host is affected by multiple vulnerabilities.",
       "native": {
-        "credentialed": false,
         "family": "Windows",
+        "is_credentialed": false,
         "raw_ref": "ReportHost[198.51.100.7]/ReportItem[pluginID=97833,port=445,protocol=tcp]",
         "scheme": "nessus",
         "severity": "4",
         "vuln_id": "97833"
       },
       "network": {
-        "host": "198.51.100.7",
+        "app_protocol": "cifs",
         "port": 445,
-        "protocol": "tcp",
-        "service": "cifs"
-      },
-      "properties": {
-        "cvss_v2_vector": "CVSS2#AV:N/AC:M/Au:N/C:C/I:C/A:C",
-        "cvss_v3_vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H",
-        "patch_publication_date": "2017/03/14"
+        "transport": "tcp"
       },
       "references": [
         "https://learn.microsoft.com/en-us/security-updates/securitybulletins/2017/ms17-010",
@@ -312,7 +368,7 @@
             "source": "cert"
           }
         ],
-        "fix_available": true,
+        "is_fix_available": true,
         "patch_published_at": "2017-03-14T00:00:00Z",
         "recommendation": "Apply the patches in Microsoft Security Bulletin MS17-010.",
         "solution_type": "upgrade"
@@ -336,7 +392,7 @@
         },
         {
           "source": "tenable",
-          "system": "vpr",
+          "system": "vendor",
           "value": 9.9
         }
       ],
@@ -355,23 +411,18 @@
         "vpr_score": "9.9",
         "xref": "MSFT:MS17-010\nEDB-ID:41891\nCWE:20"
       },
+      "source_refs": [
+        {
+          "id": "97833",
+          "system": "nessus"
+        }
+      ],
       "title": "MS17-010: Security Update for Microsoft Windows SMB Server (4013389) (ETERNALBLUE) (ETERNALCHAMPION) (ETERNALROMANCE) (ETERNALSYNERGY) (WannaCry) (EternalRocks) (Petya) (uncredentialed check)",
       "type": "vulnerability",
       "vulnerability": {
-        "cve_id": "CVE-2017-0143",
-        "cve_ids": [
-          "CVE-2017-0143",
-          "CVE-2017-0144"
-        ],
-        "cvss_score": 8.1,
-        "cvss_source": "vendor",
-        "cvss_vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H",
-        "cvss_version": "3.0",
-        "cwe_id": "CWE-20",
         "cwe_ids": [
           "CWE-20"
         ],
-        "exploit_available": true,
         "ids": [
           {
             "id": "CVE-2017-0143",
@@ -397,24 +448,49 @@
             "type": "vendor"
           }
         ],
-        "in_cisa_kev": true,
-        "vpr_score": 9.9
+        "threat_signals": [
+          {
+            "source": "tenable",
+            "type": "public_exploit"
+          },
+          {
+            "source": "tenable",
+            "type": "exploited_in_wild"
+          },
+          {
+            "due_on": "2022-05-03",
+            "source": "cisa",
+            "type": "kev"
+          }
+        ]
       }
     }
   ],
   "metadata": {
+    "channel": "scanner",
     "properties": {
       "provenance": "<provenance>",
       "scan_name": "Weekly internal"
-    },
-    "source_type": "scanner"
+    }
   },
+  "relationships": [
+    {
+      "from_ref": "host-app01.example.com",
+      "to_ref": "service-app01.example.com:22/tcp",
+      "type": "exposes"
+    },
+    {
+      "from_ref": "ip_address-198.51.100.7",
+      "to_ref": "service-198.51.100.7:445/tcp",
+      "type": "exposes"
+    }
+  ],
   "tool": {
-    "capabilities": [
+    "name": "file-import",
+    "techniques": [
       "va"
     ],
-    "name": "file-import",
     "vendor": "Tenable"
   },
-  "version": "1.6"
+  "version": "2.0"
 }

@@ -122,7 +122,7 @@ func TestRunManifestWordlist(t *testing.T) {
 	}
 	h := testHost(t)
 	h.ContentRoot = root
-	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "x"}},
+	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "github.com/acme/x"}},
 		Content: []tool.TaskContent{{Slot: "labels", Packs: []tool.ContentPack{{Digest: packDigest, Path: pack}}, Files: map[string][]string{packDigest: {"s.txt"}}}}}
 	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
 	if err != nil {
@@ -148,7 +148,7 @@ func TestRunManifestInlineWordlist(t *testing.T) {
 	m := wordlistManifest("-w={{content.labels}}")
 	h := testHost(t)
 	h.ContentRoot = t.TempDir()
-	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "x"}},
+	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "github.com/acme/x"}},
 		Content: []tool.TaskContent{{Slot: "labels", Inline: []tool.InlineList{{Purpose: "dns-labels", Data: []byte("staging\nvpn\ninternal-db-7\n")}}}}}
 	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
 	if err != nil {

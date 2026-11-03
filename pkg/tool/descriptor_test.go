@@ -27,9 +27,8 @@ implements:
       top_n: {key: top_ports}
       rate: {key: rate, max: 5000}
       protocol: {values: [tcp]}
-    output_shape: open_port_assets
-consumes: [domain, subdomain, ip_address, host]
-produces: [asset:ip_address, asset:host, asset:open_port]
+consumes: [domain_name, ip_address, host]
+produces: [asset:ip_address, asset:host, asset:service]
 input: {batch: list, max_targets: 5000}
 config:
   type: object
@@ -67,7 +66,7 @@ func TestDescriptorCases(t *testing.T) {
 		{"duplicate implements", patch(portScanYAML, "implements", "implements: [{capability: scan.ports@1}, {capability: scan.ports@1}]"), "/implements/1/capability"},
 		{"tier below floor", patch(portScanYAML, "tier", "tier: T0"), "needs at least T1"},
 		{"T2 above floor is allowed", patch(portScanYAML, "tier", "tier: T2"), ""},
-		{"unknown output shape", patch(portScanYAML, "    output_shape", "    output_shape: rows"), "/implements/0/output_shape"},
+		{"output shape the capability does not have", patch(portScanYAML, "      protocol", "      protocol: {values: [tcp]}\n    output_shape: open_port_assets"), "/implements/0/output_shape"},
 		{"param not standard", patch(portScanYAML, "      rate", "      speed: {key: rate}"), "no standard param \"speed\""},
 		{"param key missing", patch(portScanYAML, "      top_n", "      top_n: {key: top}"), "/implements/0/params/top_n/key"},
 		{"param key type", patch(portScanYAML, "      ports", "      ports: {key: rate}"), "a port_list param needs"},
@@ -78,8 +77,8 @@ func TestDescriptorCases(t *testing.T) {
 		{"min on a string", patch(portScanYAML, "      ports", "      ports: {key: ports, min: 1}"), "min and max are for integer"},
 		{"min above max", patch(portScanYAML, "      rate", "      rate: {key: rate, min: 10, max: 5}"), "min above max"},
 		{"consumes outside the ports", patch(portScanYAML, "consumes", "consumes: [repository]"), "/consumes/0"},
-		{"produces outside the ports", patch(portScanYAML, "produces", "produces: [asset:open_port, finding:vulnerability]"), "/produces/1"},
-		{"produces a re-observed input", patch(portScanYAML, "produces", "produces: [asset:open_port, asset:domain]"), ""},
+		{"produces outside the ports", patch(portScanYAML, "produces", "produces: [asset:service, finding:vulnerability]"), "/produces/1"},
+		{"produces a re-observed input", patch(portScanYAML, "produces", "produces: [asset:service, asset:domain_name]"), ""},
 		{"legacy words must repeat implements", portScanYAML + "capabilities: [portscan]\n", "/capabilities/0"},
 		{"legacy word equal to the id", portScanYAML + "capabilities: [scan.ports]\n", ""},
 		{"batch unknown", patch(portScanYAML, "input", "input: {batch: many}"), "/input/batch"},
@@ -198,7 +197,7 @@ func TestDigestStableForOlderManifests(t *testing.T) {
 	}
 	q := p
 	q.Implements = slices.Clone(p.Implements)
-	q.Implements[0].OutputShape = "ip_ports"
+	q.Implements[0].Params = map[string]ParamMapping{"ports": {Key: "ports"}}
 	if p.Digest() == q.Digest() {
 		t.Fatal("an implements change must change the digest")
 	}
@@ -213,7 +212,7 @@ func TestDigestStableForOlderManifests(t *testing.T) {
 func TestBuilderImplementsMapsParams(t *testing.T) {
 	tl, err := Define("dotenv", "1.0.0").
 		Implements("vuln.templates@1").
-		Targets("http_service").
+		Targets("web_origin").
 		Produces("finding:misconfiguration").
 		Params(StringParam("path").Default("/.env"), IntParam("rate").Default(10).Range(1, 100), BoolParam("tags")).
 		BatchTargets(100).
@@ -238,7 +237,7 @@ func TestBuilderImplementsMapsParams(t *testing.T) {
 	tl, err = Define("ports", "1.0.0").Tier(T1).
 		ImplementsWith(Implementation{Capability: "scan.ports@1", Params: map[string]ParamMapping{"top_n": {Key: "top"}}}).
 		Capabilities("scan.ports").
-		Targets("ip_address").Produces("asset:open_port").
+		Targets("ip_address").Produces("asset:service").
 		Params(IntParam("top").Default(100).Range(1, 65535)).
 		Handle(func(Context, *Job, Emit) error { return nil }).
 		Build()
@@ -251,7 +250,7 @@ func TestBuilderImplementsMapsParams(t *testing.T) {
 
 	// A builder tool below the capability's tier floor does not build.
 	_, err = Define("lazy", "1.0.0").Tier(T0).Implements("scan.ports@1").
-		Targets("ip_address").Produces("asset:open_port").
+		Targets("ip_address").Produces("asset:service").
 		Handle(func(Context, *Job, Emit) error { return nil }).Build()
 	if err == nil || !strings.Contains(err.Error(), "needs at least T1") {
 		t.Fatalf("err = %v", err)
@@ -262,7 +261,7 @@ func TestRetestFeatureSpellings(t *testing.T) {
 	if !(Manifest{Retest: true}).RetestFeature() || !(Manifest{Features: &Features{Retest: true}}).RetestFeature() || (Manifest{}).RetestFeature() {
 		t.Fatal("RetestFeature")
 	}
-	r := WithRetest(Define("rt", "1.0.0").Targets("domain").Produces("finding:vulnerability").
+	r := WithRetest(Define("rt", "1.0.0").Targets("domain_name").Produces("finding:vulnerability").
 		Manifest(func(m *Manifest) { m.Features = &Features{Retest: true} }).
 		Handle(func(Context, *Job, Emit) error { return nil }).MustBuild(), func(RetestContext, Task) error { return nil })
 	if m := r.Manifest(); m.Retest || m.Validate() != nil {

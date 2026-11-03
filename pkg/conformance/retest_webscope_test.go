@@ -17,7 +17,7 @@ import (
 // when $CONFORMANCE_IGNORE_SCOPE=1.
 func retestWebTool() {
 	m := tool.Manifest{Name: "fake-tool", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-		Consumes: []string{"http_service"}, Produces: []string{"finding:misconfiguration"},
+		Consumes: []string{"web_origin"}, Produces: []string{"finding:misconfiguration"},
 		Permissions: tool.Permissions{Network: tool.NetTargets}, Features: &tool.Features{Retest: true, WebScope: true}}
 	run := func(tool.Context, tool.Task, tool.NoConfig) error { return nil }
 	adapter.Serve(tool.WithRetest(tool.New(m, run), func(ctx tool.RetestContext, task tool.Task) error {
@@ -45,7 +45,7 @@ func retestWebTool() {
 }
 
 const retestTool = `tier: T1
-consumes: [http_service]
+consumes: [web_origin]
 produces: [finding:misconfiguration]
 permissions: {network: targets}
 FEATURES

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/openctemio/sdk-go/pkg/shared/fingerprint"
+	"github.com/openctemio/ctis/v2/fingerprint"
 )
 
 // The values below are made up and match no real token format, so secret
@@ -97,21 +97,33 @@ func TestMaskSecretInText_UnknownSecretHidesWholeText(t *testing.T) {
 // The fingerprint never hashes the raw secret: two secrets with the same
 // masked value at the same place get the same fingerprint, and the
 // fingerprint equals the one built from the masked value.
-func TestGenerateSecretFingerprint_UsesMaskedValue(t *testing.T) {
-	const raw = "fake_tok_0123456789abcdefghijklmn"
-	got := GenerateSecretFingerprint("app/config.yml", "generic-api-key", 7, raw)
-	if want := fingerprint.GenerateSecret("app/config.yml", "generic-api-key", 7, MaskSecret(raw)); got != want {
-		t.Fatalf("fingerprint is not built from the masked value")
+func TestSecretFingerprint_KeyedOnly(t *testing.T) {
+	key := []byte("0123456789abcdef-producer-key")
+	raw := "fake_tok_0123456789abcdefghijklmn"
+	got := SecretFingerprint(key, "app/config.yml", "generic-api-key", raw)
+	if !strings.HasPrefix(got, fingerprint.Prefix) {
+		t.Fatalf("fingerprint %q is not recipe v2", got)
 	}
-	if rawFP := fingerprint.GenerateSecret("app/config.yml", "generic-api-key", 7, raw); got == rawFP {
-		t.Fatalf("fingerprint still hashes the raw secret")
+	// SECURITY: no unsalted path. Without a key (or a short one), or
+	// without a secret, there is no fingerprint.
+	for name, k := range map[string][]byte{"nil key": nil, "short key": []byte("short")} {
+		if fp := SecretFingerprint(k, "app/config.yml", "generic-api-key", raw); fp != "" {
+			t.Errorf("%s: fingerprint %q", name, fp)
+		}
 	}
-	// A short secret contributes nothing guessable: every short secret at
-	// the same place has the same fingerprint.
-	a := GenerateSecretFingerprint("a.env", "pw", 1, "pw-fake-01")
-	b := GenerateSecretFingerprint("a.env", "pw", 1, "pw-fake-02")
-	if a != b {
-		t.Errorf("short secrets must not influence the fingerprint")
+	if fp := SecretFingerprint(key, "app/config.yml", "generic-api-key", ""); fp != "" {
+		t.Errorf("empty secret: fingerprint %q", fp)
+	}
+	if SecretFingerprint(key, "a.env", "pw", "pw-fake-01") == SecretFingerprint(key, "a.env", "pw", "pw-fake-02") {
+		t.Error("two secrets at the same place share a fingerprint")
+	}
+	if strings.Contains(got, raw) {
+		t.Error("the fingerprint carries the secret")
+	}
+	// Another producer key gives another fingerprint (installations cannot
+	// confirm each other's secrets).
+	if other := SecretFingerprint([]byte("another-producer-key-0001"), "app/config.yml", "generic-api-key", raw); other == got {
+		t.Error("the fingerprint does not depend on the key")
 	}
 }
 

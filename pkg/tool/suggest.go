@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/openctemio/ctis"
-	"github.com/openctemio/ctis/capability"
+	"github.com/openctemio/contract/capability"
+	"github.com/openctemio/ctis/v2"
 )
 
 // Everything here only words error messages: it never changes what a
@@ -142,11 +142,24 @@ func unknownCapabilityMessage(ref string) string {
 
 // assetAliases maps words authors reach for to the CTIS asset type.
 var assetAliases = map[string]string{
-	"url":   "http_service (or discovered_url, website)",
-	"ip":    "ip_address",
-	"port":  "open_port",
-	"repo":  "repository",
-	"image": "container",
+	"url":       "web_origin (or web_application, api)",
+	"ip":        "ip_address",
+	"port":      "service",
+	"repo":      "repository",
+	"image":     "container_image (or container)",
+	"domain":    "domain_name",
+	"subdomain": "domain_name",
+	"website":   "web_origin",
+	"server":    "host",
+	"network":   "ip_range",
+	// CTIS 1.x names (no aliases on the wire in 2.0).
+	"http_service":   "web_origin",
+	"open_port":      "service",
+	"discovered_url": "web_origin (its paths are endpoints)",
+	"compute":        "host",
+	"kubernetes":     "kubernetes_cluster",
+	"iam_user":       "identity",
+	"iam_role":       "identity",
 }
 
 func assetTypeNames() []string {

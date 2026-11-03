@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openctemio/ctis/capability"
+	"github.com/openctemio/contract/capability"
 	"github.com/openctemio/sdk-go/pkg/tool"
 	"github.com/openctemio/sdk-go/pkg/webscope"
 )

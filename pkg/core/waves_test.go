@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/openctemio/ctis/politeness"
+	"github.com/openctemio/contract/politeness"
 )
 
 func TestPlanWaves(t *testing.T) {

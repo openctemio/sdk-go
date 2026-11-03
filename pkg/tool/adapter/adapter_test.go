@@ -13,7 +13,7 @@ import (
 
 var probe = tool.New(tool.Manifest{
 	Name: "probe", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-	Consumes: []string{"domain"}, Produces: []string{"finding:misconfiguration"},
+	Consumes: []string{"domain_name"}, Produces: []string{"finding:misconfiguration"},
 	Permissions: tool.Permissions{Network: tool.NetNone},
 }, func(ctx tool.Context, task tool.Task, _ tool.NoConfig) error {
 	for _, t := range task.Targets {
@@ -49,7 +49,7 @@ func TestServeProtocol(t *testing.T) {
 {"v":1,"type":"something_new"}
 {"v":1,"type":"describe"}
 {"v":1,"type":"validate","task":{"id":"t","config":{"x":1}}}
-{"v":1,"type":"run","task":{"id":"t","targets":[{"ref":"a","type":"domain","value":"a.example"}],"workdir":"/tmp"}}
+{"v":1,"type":"run","task":{"id":"t","targets":[{"ref":"a","type":"domain_name","value":"a.example"}],"workdir":"/tmp"}}
 `
 	msgs := serve(t, in)
 	types := []string{}
@@ -91,7 +91,7 @@ var retester = tool.WithRetest(probe, func(ctx tool.RetestContext, task tool.Tas
 
 func TestServeRetest(t *testing.T) {
 	in := `{"v":1,"type":"hello","protocol":[1]}
-{"v":1,"type":"run","task":{"id":"t","targets":[{"ref":"a","type":"domain","value":"a.example"}],"retest":[{"ref":"f1","target":"a","kind":"finding","rule_id":"r1"}],"workdir":"/tmp"}}
+{"v":1,"type":"run","task":{"id":"t","targets":[{"ref":"a","type":"domain_name","value":"a.example"}],"retest":[{"ref":"f1","target":"a","kind":"finding","rule_id":"r1"}],"workdir":"/tmp"}}
 `
 	var out bytes.Buffer
 	if err := ServeIO(context.Background(), retester, strings.NewReader(in), &out); err != nil {

@@ -1,7 +1,7 @@
 {
   "id": "selftest-basic",
   "targets": [
-    {"ref": "t1", "type": "http_service", "value": "http://shop.example:8080"},
-    {"ref": "t2", "type": "http_service", "value": "https://shop.example"}
+    {"ref": "t1", "type": "web_origin", "value": "http://shop.example:8080"},
+    {"ref": "t2", "type": "web_origin", "value": "https://shop.example"}
   ]
 }

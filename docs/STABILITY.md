@@ -65,7 +65,7 @@ without a tier fails the job.
 | `pkg/sensorproto/pairing` | Interactive pairing protocol (api RFC-052): wire types, commitment, SAS, codes, shared test vectors | Beta |
 | `pkg/jobsig` | Signed jobs (api RFC-040 §5.6): the DSSE envelope and statement of the platform's job signer, pinned keys, and the verifier (binding, validity, nonce and persisted sequence number) | Beta |
 | `pkg/sensorsig` | RFC 9421 request signatures of a key-bound sensor (api RFC-052 §4.3): signer, verifier, signing transport | Beta |
-| `pkg/ctis` | CTIS types: re-exports `github.com/openctemio/ctis` (generated aliases; the `ctis-parity` CI job fails when they are stale) | Stable, follows CTIS |
+| `pkg/ctis` | CTIS 2.0 types: re-exports `github.com/openctemio/ctis/v2` (generated aliases; the `ctis-parity` CI job fails when they are stale) | Stable, follows CTIS |
 | `pkg/httpsec` | SSRF-safe HTTP clients and URL validation | Stable |
 | `pkg/reach` | Per-target reach outcomes (`Classify`, `ClassifyDNS`, `Recorder`, the job result's reach summary), the polite reach probe (`Probe`) and the network-path self-check (`Control`) | Beta |
 | `pkg/tlsprobe` | What a host shows in a TLS handshake whether or not it answers HTTP (`Probe`: the leaf as `core.TLSLeaf`, `CertProblem`, and whether one HTTP request was answered, reset or refused), and the dialer through a task's egress proxy (`Dialer`) | Beta |
@@ -90,7 +90,7 @@ ships the tool binaries.
 
 **Removed:** `pkg/scanners/tenable` (a Nessus REST client and `.nessus`
 converter with no importer). Convert `.nessus` exports with
-`github.com/openctemio/ctis/importer` (format `nessus`).
+`github.com/openctemio/ctis/v2/importer` (format `nessus`).
 
 `pkg/internal/*` is private.
 

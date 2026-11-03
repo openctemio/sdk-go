@@ -66,6 +66,8 @@ func (k *Kit) toolHost() *toolhost.Host {
 			ContentRoot: k.contentRoot(),
 			// Launches wait while the host is overloaded (research/318).
 			Governor: k.ToolGovernor(),
+			// Secret fingerprints of parsed output (HMAC, never unsalted).
+			SecretFingerprintKey: k.secretFingerprintKey(),
 		}
 	})
 	return k.host
@@ -264,5 +266,9 @@ func (t manifestTool) Run(tool.Context, tool.Task) error {
 // kitTools is the state AddTool shares across calls.
 type kitTools struct {
 	hostOnce sync.Once
-	host     *toolhost.Host
+	// secretKeyOnce loads secretKey, the sensor's secret fingerprint key
+	// (SecretFingerprintKeyFile; nil: none).
+	secretKeyOnce sync.Once
+	secretKey     []byte
+	host          *toolhost.Host
 }

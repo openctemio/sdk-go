@@ -571,7 +571,7 @@ type FailureEgress struct {
 	PoolExhausted bool  `json:"pool_exhausted"`
 }
 
-// TargetOutcome is how one target of a failed command ended (ctis outcome):
+// TargetOutcome is how one target of a failed command ended (contract outcome):
 // state done, failed, skipped or unfinished; class and cause (target,
 // sensor, platform) say whose side a failed target is on.
 type TargetOutcome struct {

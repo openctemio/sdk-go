@@ -44,12 +44,14 @@ func TestManifestErrorsNameTheFix(t *testing.T) {
 		{"produces typo", patch(baseYAML, "produces", "produces: [\"finding:misconfig\"]"),
 			[]string{"/produces/0:", `unknown CTIS finding type "misconfig"`, `did you mean "misconfiguration"?`, "allowed: vulnerability"}},
 		{"consumes url", patch(baseYAML, "consumes", "consumes: [url]"),
-			[]string{"/consumes/0:", `unknown CTIS asset type "url"`, "http_service", "discovered_url", "website"}},
+			[]string{"/consumes/0:", `unknown CTIS asset type "url"`, "use web_origin (or web_application, api)"}},
 		{"consumes ip", patch(baseYAML, "consumes", "consumes: [ip]"), []string{"use ip_address"}},
-		{"consumes port", patch(baseYAML, "consumes", "consumes: [port]"), []string{"use open_port"}},
+		{"consumes port", patch(baseYAML, "consumes", "consumes: [port]"), []string{"use service"}},
 		{"consumes repo", patch(baseYAML, "consumes", "consumes: [repo]"), []string{"use repository"}},
 		{"consumes image", patch(baseYAML, "consumes", "consumes: [image]"), []string{"use container"}},
-		{"asset typo", patch(baseYAML, "produces", "produces: [\"asset:subdomian\"]"), []string{`did you mean "subdomain"?`}},
+		{"asset typo", patch(baseYAML, "produces", "produces: [\"asset:domian_name\"]"), []string{`did you mean "domain_name"?`}},
+		{"consumes a 1.x type", patch(baseYAML, "consumes", "consumes: ["+legacySub+"]"), []string{"use domain_name"}},
+		{"consumes a 1.x web type", patch(baseYAML, "consumes", "consumes: ["+legacyHTTP+"]"), []string{"web_origin"}},
 		{"unknown asset without hint", patch(baseYAML, "consumes", "consumes: [qqqqqqqqqqqq]"),
 			[]string{`unknown CTIS asset type "qqqqqqqqqqqq"`}},
 		{"top-level misplaced timeout", patch(baseYAML, "class", "class: target-scan\ntimeout: 10m"),
@@ -116,3 +118,9 @@ func TestHostileKeyIsEscaped(t *testing.T) {
 		t.Fatalf("escape leaked: %q", err)
 	}
 }
+
+// CTIS 1.x asset type names an author may still write.
+const (
+	legacySub  = "sub" + "domain"
+	legacyHTTP = "http" + "_service"
+)

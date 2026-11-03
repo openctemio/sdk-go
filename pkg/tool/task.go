@@ -89,13 +89,15 @@ type Task struct {
 
 // Target is one thing to work on.
 type Target struct {
-	// Ref is an opaque reference that links records to the platform's
-	// asset.
+	// Ref is an opaque reference the runtime uses to file records on the
+	// target. It never enters a CTIS document (the runtime names the
+	// target's asset by its position).
 	Ref string `json:"ref"`
-	// Type is a CTIS asset type ("http_service", "domain", "repository").
+	// Type is a CTIS 2.0 asset type ("web_origin", "domain_name",
+	// "service", "repository").
 	Type string `json:"type,omitempty"`
-	// Value is the target itself ("https://a.example:8443", "10.0.4.7",
-	// "/src").
+	// Value is the target itself in its type's canonical form
+	// ("https://a.example:8443", "10.0.4.7", "10.0.4.7:22/tcp", "/src").
 	Value string `json:"value"`
 	// Attrs are typed hints from the platform (port, scheme, tech, ...).
 	Attrs map[string]string `json:"attrs,omitempty"`
@@ -104,7 +106,7 @@ type Target struct {
 // URL returns the target as a URL with path appended ("" when the target
 // is not a URL or a host).
 func (t Target) URL(path string) string {
-	v := strings.TrimSpace(t.Value)
+	v := serviceHostPort(strings.TrimSpace(t.Value))
 	if !strings.Contains(v, "://") {
 		if v == "" || strings.ContainsAny(v, "/ ") {
 			return ""
@@ -123,7 +125,7 @@ func (t Target) URL(path string) string {
 
 // Host returns the target's host name or IP address ("" for a path).
 func (t Target) Host() string {
-	v := strings.TrimSpace(t.Value)
+	v := serviceHostPort(strings.TrimSpace(t.Value))
 	if strings.Contains(v, "://") {
 		if u, err := url.Parse(v); err == nil {
 			return u.Hostname()
@@ -142,7 +144,7 @@ func (t Target) Host() string {
 // Port returns the target's port: explicit, from Attrs["port"], or the
 // scheme's default (0 when unknown).
 func (t Target) Port() int {
-	v := strings.TrimSpace(t.Value)
+	v := serviceHostPort(strings.TrimSpace(t.Value))
 	var scheme string
 	if strings.Contains(v, "://") {
 		u, err := url.Parse(v)
@@ -166,6 +168,35 @@ func (t Target) Port() int {
 		return 443
 	}
 	return 0
+}
+
+// serviceHostPort returns the host:port of a CTIS service value
+// ("10.0.4.7:22/tcp"), and any other value unchanged.
+func serviceHostPort(v string) string {
+	if strings.Contains(v, "://") {
+		return v
+	}
+	i := strings.LastIndex(v, "/")
+	if i <= 0 {
+		return v
+	}
+	switch strings.ToLower(v[i+1:]) {
+	case "tcp", "udp", "sctp":
+		if _, _, err := net.SplitHostPort(v[:i]); err == nil {
+			return v[:i]
+		}
+	}
+	return v
+}
+
+// Transport returns the transport of a CTIS service value ("tcp", "udp",
+// "sctp"; "" for any other value).
+func (t Target) Transport() string {
+	v := strings.TrimSpace(t.Value)
+	if hp := serviceHostPort(v); hp != v {
+		return strings.ToLower(v[len(hp)+1:])
+	}
+	return ""
 }
 
 // Input is a file given to the task (a parser's input).

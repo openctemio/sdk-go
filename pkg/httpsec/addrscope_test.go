@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// The deny list is ctis addrscope's, the one the platform checks job
+// The deny list is contract addrscope's, the one the platform checks job
 // targets with: an IPv6 address that carries an internal IPv4 address
 // (NAT64, 6to4, Teredo) is internal, even where private ranges are
 // allowed; one that carries a public address is not.

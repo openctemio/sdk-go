@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -344,9 +345,12 @@ func (c *Client) Deliver(ctx context.Context, d *outbox.Delivery) (any, error) {
 }
 
 func (c *Client) deliverReport(ctx context.Context, d *outbox.Delivery) (any, error) {
-	var r ctis.Report
-	if err := json.Unmarshal(d.Payload, &r); err != nil {
-		return nil, outbox.Permanent(0, "the stored payload is not a CTIS report", nil, err)
+	// A report queued by an SDK before CTIS 2.0 is a 1.x document: the
+	// platform accepts 2.x only, so it is dropped with a reason instead of
+	// being sent half-read.
+	r, _, err := ctis.Decode(bytes.NewReader(d.Payload))
+	if err != nil {
+		return nil, outbox.Permanent(0, "the stored payload is not a CTIS 2.x report", nil, err)
 	}
 	assetsOnly := d.Meta.Attrs[outbox.AttrAssetsOnly] == "true"
 	if assetsOnly {

@@ -48,7 +48,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openctemio/ctis/addrscope"
+	"github.com/openctemio/contract/addrscope"
 	"golang.org/x/time/rate"
 
 	"github.com/openctemio/sdk-go/pkg/adapt"
@@ -273,7 +273,7 @@ var metadataAddrs = []netip.Addr{
 
 // publicOnly refuses what a vendor host or an egress-proxy destination
 // must never resolve to: besides alwaysRefused, every internal address of
-// ctis addrscope (the deny list the platform uses too): loopback, private,
+// contract addrscope (the deny list the platform uses too): loopback, private,
 // CGNAT, reserved ranges, and IPv6 addresses that carry an internal IPv4
 // address (NAT64, 6to4, Teredo).
 func publicOnly(a netip.Addr) bool {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/testkit"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
@@ -14,8 +15,8 @@ func dotenvTool(t *testing.T, seen *[]string) tool.Tool {
 	t.Helper()
 	tl, err := tool.Define("dotenv", "1.0.0").
 		Describe("Finds .env files a web server serves").
-		Targets("http_service", "domain").
-		Produces("finding:misconfiguration", "finding:vulnerability", "asset:domain").
+		Targets("web_origin", "domain_name").
+		Produces("finding:misconfiguration", "finding:vulnerability", "asset:domain_name").
 		Params(
 			tool.StringParam("path").Label("Path").Help("Path to probe").Default("/.env").Pattern("^/").MaxLength(64),
 			tool.IntParam("timeout").Label("Timeout (s)").Default(10).Range(1, 60),
@@ -30,7 +31,7 @@ func dotenvTool(t *testing.T, seen *[]string) tool.Tool {
 				job.Param("missing").IntOr(7) != 7 {
 				return tool.Invalid("unexpected parameter values")
 			}
-			for _, tg := range job.Targets("http_service") {
+			for _, tg := range job.Targets("web_origin") {
 				if err := emit.Misconfiguration(tg, tool.Issue{RuleID: "dotenv-exposed", Title: ".env is readable", Severity: "high"}); err != nil {
 					return err
 				}
@@ -39,10 +40,10 @@ func dotenvTool(t *testing.T, seen *[]string) tool.Tool {
 				}
 				ctx.TargetDone(tg)
 			}
-			for _, tg := range job.Targets("domain") {
+			for _, tg := range job.Targets("domain_name") {
 				ctx.TargetDone(tg) // a domain target is only counted
 			}
-			return emit.Asset("domain", "a.example")
+			return emit.Asset("domain_name", "a.example")
 		}).
 		Build()
 	if err != nil {
@@ -70,7 +71,7 @@ func TestBuilderToolRunsUnderTheRuntimeRules(t *testing.T) {
 	}
 
 	res := testkit.Run(t, tl, tool.Task{
-		Targets: []tool.Target{{Ref: "a1", Type: "http_service", Value: "https://a.example"}, {Ref: "a2", Type: "domain", Value: "a.example"}},
+		Targets: []tool.Target{{Ref: "a1", Type: "web_origin", Value: "https://a.example"}, {Ref: "a2", Type: "domain_name", Value: "a.example"}},
 		Config:  json.RawMessage(`{"extra":["a","b"]}`),
 	})
 	res.RequireStatus(t, tool.StatusOK)
@@ -83,7 +84,9 @@ func TestBuilderToolRunsUnderTheRuntimeRules(t *testing.T) {
 	var cve string
 	for _, f := range res.Report.Findings {
 		if f.Vulnerability != nil {
-			cve = f.Vulnerability.CVEID
+			if ids := ctis.CVEs(f.Vulnerability); len(ids) > 0 {
+				cve = ids[0]
+			}
 		}
 	}
 	if cve != "CVE-2024-0001" {
@@ -104,7 +107,7 @@ func TestBuilderEnforcesDeclaredParameters(t *testing.T) {
 		"string too long":   `{"path":"/` + strings.Repeat("a", 80) + `"}`,
 		"list of non-items": `{"extra":[1]}`,
 	} {
-		res := testkit.Run(t, tl, tool.Task{Targets: []tool.Target{{Ref: "a1", Type: "http_service", Value: "https://a.example"}}, Config: json.RawMessage(cfg)})
+		res := testkit.Run(t, tl, tool.Task{Targets: []tool.Target{{Ref: "a1", Type: "web_origin", Value: "https://a.example"}}, Config: json.RawMessage(cfg)})
 		if res.Status != tool.StatusFailed || res.Err == nil || res.Err.Class != tool.InvalidInput {
 			t.Errorf("%s: status %s err %v, want failed invalid_input", name, res.Status, res.Err)
 		}
@@ -115,7 +118,7 @@ func TestBuilderEnforcesDeclaredParameters(t *testing.T) {
 }
 
 func TestBuilderOutputStaysWithinProduces(t *testing.T) {
-	tl := tool.Define("narrow", "1.0.0").Targets("http_service").Produces("finding:misconfiguration").
+	tl := tool.Define("narrow", "1.0.0").Targets("web_origin").Produces("finding:misconfiguration").
 		Handle(func(ctx tool.Context, job *tool.Job, emit tool.Emit) error {
 			err := emit.Vulnerability(job.Targets()[0], tool.Issue{RuleID: "r", Title: "t", Severity: "low"})
 			if !errors.Is(err, tool.ErrUndeclaredOutput) {
@@ -124,7 +127,7 @@ func TestBuilderOutputStaysWithinProduces(t *testing.T) {
 			ctx.TargetDone(job.Targets()[0])
 			return nil
 		}).MustBuild()
-	res := testkit.Run(t, tl, tool.Task{Targets: []tool.Target{{Ref: "a1", Type: "http_service", Value: "https://a.example"}}})
+	res := testkit.Run(t, tl, tool.Task{Targets: []tool.Target{{Ref: "a1", Type: "web_origin", Value: "https://a.example"}}})
 	res.RequireStatus(t, tool.StatusPartial) // the quarantined record makes the task partial
 	if len(res.Report.Findings) != 0 {
 		t.Fatalf("quarantined finding delivered: %+v", res.Report.Findings)
@@ -161,5 +164,43 @@ func TestBuilderParserDefaultsToT0(t *testing.T) {
 		Handle(func(tool.Context, *tool.Job, tool.Emit) error { return nil }).MustBuild()
 	if m := tl.Manifest(); m.Tier != tool.T0 || m.Permissions.Network != tool.NetNone {
 		t.Fatalf("parser defaults: tier %s network %s", m.Tier, m.Permissions.Network)
+	}
+}
+
+// Emit.Service reports an open port as CTIS 2.0 does: the host, a service
+// asset per port and an exposes edge, with document-local ids.
+func TestEmitService(t *testing.T) {
+	tl := tool.Define("svc", "1.0.0").Targets("ip_address").Produces("asset:service").
+		Implements("scan.ports@1").
+		Handle(func(ctx tool.Context, job *tool.Job, emit tool.Emit) error {
+			for _, tg := range job.Targets() {
+				for _, p := range []int{443, 22} {
+					if err := emit.Service("ip_address", tg.Value, p, "", &ctis.ServiceTechnical{AppProtocol: "https"}); err != nil {
+						return err
+					}
+				}
+				ctx.TargetDone(tg)
+			}
+			return nil
+		}).MustBuild()
+	res := testkit.Run(t, tl, tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "ip_address", Value: "192.0.2.10"}}})
+	res.RequireStatus(t, tool.StatusOK)
+	r := res.Report
+	if len(r.Assets) != 3 || len(r.Relationships) != 2 {
+		t.Fatalf("assets %+v relationships %+v", r.Assets, r.Relationships)
+	}
+	for _, a := range r.Assets {
+		if !ctis.IsDocumentRef(a.ID) || ctis.IsUUIDShaped(a.ID) {
+			t.Fatalf("asset id %q", a.ID)
+		}
+	}
+	if r.Assets[1].Value != "192.0.2.10:443/tcp" || r.Assets[1].Technical.Service.State != ctis.PortOpen {
+		t.Fatalf("service %+v", r.Assets[1])
+	}
+	if rel := r.Relationships[0]; rel.Type != ctis.RelExposes || rel.FromRef != r.Assets[0].ID || rel.ToRef != r.Assets[1].ID {
+		t.Fatalf("relationship %+v", rel)
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -405,6 +405,13 @@ type ParseOptions struct {
 
 	// Defaults
 	DefaultConfidence int `json:"default_confidence"`
+
+	// SecretKey is the producer's HMAC key for secret fingerprints (CTIS
+	// recipe ctis-fp/2 secret: HMAC-SHA256(key, secret), at least 16
+	// bytes). Without a key a secret finding carries no fingerprint and the
+	// receiver computes its own; there is no unsalted path. Never
+	// serialized.
+	SecretKey []byte `json:"-"`
 }
 
 // =============================================================================

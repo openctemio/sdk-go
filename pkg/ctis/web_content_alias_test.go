@@ -2,7 +2,7 @@ package ctis
 
 import "testing"
 
-// The web content property reaches the report through the alias types.
+// The web content extension reaches the report through the alias types.
 func TestWebContentAliases(t *testing.T) {
 	in := &ReconToCTISInput{
 		ScannerName: "fake-recon", ReconType: "http_probe", Target: "a.example.test",
@@ -19,9 +19,9 @@ func TestWebContentAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, a := range r.Assets {
-		if _, ok := a.Properties[WebContentProperty]; ok {
+		if _, ok := a.Extensions[OpenCTEMNamespace][WebContentKey]; ok {
 			return
 		}
 	}
-	t.Fatal("no web_content property")
+	t.Fatal("no extensions[\"io.openctem\"].web_content")
 }

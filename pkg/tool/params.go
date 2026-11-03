@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openctemio/ctis/capability"
+	"github.com/openctemio/contract/capability"
 )
 
 // Bounds of a standard param value.

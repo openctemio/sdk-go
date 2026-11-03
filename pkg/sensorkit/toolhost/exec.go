@@ -473,7 +473,7 @@ func ingestOutput(ctx context.Context, p *prepared, format string, data []byte) 
 	}
 	switch format {
 	case tool.OutputSARIF:
-		opts := &core.ParseOptions{}
+		opts := &core.ParseOptions{SecretKey: p.secretKey}
 		if len(p.task.Targets) == 1 {
 			opts.AssetValue = p.task.Targets[0].Value
 			opts.AssetType = ctis.AssetType(p.task.Targets[0].Type)
@@ -528,7 +528,13 @@ func ingestCTIS(p *prepared, data []byte) error {
 		Findings     []json.RawMessage `json:"findings"`
 		Dependencies []json.RawMessage `json:"dependencies"`
 		Endpoints    []json.RawMessage `json:"endpoints"`
-		Properties   json.RawMessage   `json:"properties"`
+		// Relationships link assets of the report (CTIS 2.0: a host exposes
+		// a service asset).
+		Relationships []json.RawMessage `json:"relationships"`
+		// Rules is the rule catalog findings name by rule_ref.
+		Rules      []json.RawMessage `json:"rules"`
+		Properties json.RawMessage   `json:"properties"`
+		Extensions json.RawMessage   `json:"extensions"`
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
@@ -545,7 +551,11 @@ func ingestCTIS(p *prepared, data []byte) error {
 	if len(r.Metadata) > 0 {
 		var md map[string]json.RawMessage
 		if err := json.Unmarshal(r.Metadata, &md); err == nil {
-			delete(md, "timestamp")
+			// The document identity, time and per-target outcomes are the
+			// runtime's own.
+			for _, k := range []string{"id", "generated_at", "targets", "segment"} {
+				delete(md, k)
+			}
 			if b, err := json.Marshal(md); err == nil {
 				info["metadata"] = b
 			}
@@ -562,13 +572,20 @@ func ingestCTIS(p *prepared, data []byte) error {
 		}
 		p.asm.SetInfo(ri)
 	}
+	for _, rl := range r.Rules {
+		if err := ingestRecord(p, tool.KindRule, "", rl); err != nil {
+			return err
+		}
+	}
 	for _, a := range r.Assets {
 		if err := ingestRecord(p, tool.KindAsset, "", a); err != nil {
 			return err
 		}
 	}
 	for _, f := range r.Findings {
-		if err := ingestRecord(p, tool.KindFinding, "", f); err != nil {
+		// A finding of a CTIS document without an asset_ref is filed on the
+		// task's target when there is exactly one.
+		if err := ingestRecord(p, tool.KindFinding, p.asm.DefaultTargetRef(), f); err != nil {
 			return err
 		}
 	}
@@ -582,42 +599,67 @@ func ingestCTIS(p *prepared, data []byte) error {
 			return err
 		}
 	}
+	for _, rel := range r.Relationships {
+		if err := ingestRecord(p, tool.KindRelationship, "", rel); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // ingestRecord checks one record. An undeclared or invalid record is
 // skipped (counted); the output limit stops the ingest.
 func ingestRecord(p *prepared, kind, ref string, data json.RawMessage) error {
-	chk := p.asm.Checker()
-	var err error
-	switch kind {
-	case tool.KindAsset:
-		var a ctis.Asset
-		if a, err = chk.AssetJSON(data); err == nil {
-			p.asm.AddCheckedAsset(a)
-		}
-	case tool.KindFinding:
-		var f ctis.Finding
-		if f, err = chk.FindingJSON(data); err == nil {
-			err = p.asm.AddCheckedFinding(ref, f)
-		}
-	case tool.KindDependency:
-		var d ctis.Dependency
-		if d, err = chk.DependencyJSON(data); err == nil {
-			p.asm.AddCheckedDependency(d)
-		}
-	case tool.KindEndpoint:
-		var e ctis.Endpoint
-		if e, err = chk.EndpointJSON(data); err == nil {
-			p.asm.AddCheckedEndpoint(e)
-		}
-	default:
+	known, err := addRecord(p.asm, kind, ref, data)
+	if !known {
 		return fmt.Errorf("unknown record kind %q", kind)
 	}
 	if errors.Is(err, tool.ErrOutputLimit) {
 		return err
 	}
 	return nil
+}
+
+// addRecord checks one record of a kind and adds it to the report (a
+// finding without an asset is filed on target ref). known is false for a
+// kind the protocol does not have.
+func addRecord(asm *toolrt.Assembler, kind, ref string, data []byte) (known bool, err error) {
+	chk := asm.Checker()
+	switch kind {
+	case tool.KindAsset:
+		var a ctis.Asset
+		if a, err = chk.AssetJSON(data); err == nil {
+			asm.AddCheckedAsset(a)
+		}
+	case tool.KindFinding:
+		var f ctis.Finding
+		if f, err = chk.FindingJSON(data); err == nil {
+			err = asm.AddCheckedFinding(ref, f)
+		}
+	case tool.KindDependency:
+		var d ctis.Dependency
+		if d, err = chk.DependencyJSON(data); err == nil {
+			asm.AddCheckedDependency(d)
+		}
+	case tool.KindEndpoint:
+		var e ctis.Endpoint
+		if e, err = chk.EndpointJSON(data); err == nil {
+			asm.AddCheckedEndpoint(e)
+		}
+	case tool.KindRule:
+		var rl ctis.Rule
+		if rl, err = chk.RuleJSON(data); err == nil {
+			asm.AddCheckedRule(rl)
+		}
+	case tool.KindRelationship:
+		var r ctis.Relationship
+		if r, err = chk.RelationshipJSON(data); err == nil {
+			asm.AddCheckedRelationship(r)
+		}
+	default:
+		return false, nil
+	}
+	return true, err
 }
 
 // headerArgs is {{http.headers:-flag}}: the flag and "Name: value" for each

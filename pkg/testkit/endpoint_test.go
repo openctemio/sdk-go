@@ -11,7 +11,7 @@ import (
 func crawler(produces ...string) tool.Tool {
 	return tool.New(tool.Manifest{
 		Name: "ep-crawler", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-		Consumes: []string{"http_service"}, Produces: produces,
+		Consumes: []string{"web_origin"}, Produces: produces,
 		Permissions: tool.Permissions{Network: tool.NetNone},
 	}, func(ctx tool.Context, task tool.Task, _ tool.NoConfig) error {
 		r := ctis.NewReport()
@@ -28,10 +28,10 @@ func crawler(produces ...string) tool.Tool {
 	})
 }
 
-// A tool that declares endpoint emits CTIS 1.6 endpoints through the
+// A tool that declares endpoint emits CTIS endpoints through the
 // runtime's checks: a valid one is kept, an invalid one refused.
 func TestEndpointsReachTheReport(t *testing.T) {
-	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "http_service", Value: "https://app.example.com"}}}
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "web_origin", Value: "https://app.example.com"}}}
 	res := testkit.Run(t, crawler(tool.KindEndpoint), task)
 	if len(res.Report.Endpoints) != 1 || res.Report.Endpoints[0].Path != "/api/users/42" {
 		t.Fatalf("endpoints %+v", res.Report.Endpoints)
@@ -40,7 +40,7 @@ func TestEndpointsReachTheReport(t *testing.T) {
 		t.Fatalf("the invalid endpoint was not refused: %+v", res.Stats)
 	}
 	// SECURITY: a tool that does not declare endpoint cannot emit one.
-	res = testkit.Run(t, crawler("asset:discovered_url"), task)
+	res = testkit.Run(t, crawler("asset:web_origin"), task)
 	if len(res.Report.Endpoints) != 0 {
 		t.Fatalf("an undeclared endpoint was kept: %+v", res.Report.Endpoints)
 	}

@@ -1,23 +1,23 @@
 {
-  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "$schema": "https://schemas.openctem.io/ctis/2.0/report.json",
   "assets": [
     {
-      "id": "sbom-pkg:oci/shop-api@sha256%3A0000000000000000000000000000000000000000000000000000000000000001",
+      "id": "container_image-registry.example.com/shop/shop-api@sha256:0000000000000000000000000000000000000000000000000000000000000001",
       "name": "registry.example.com/shop/shop-api",
       "properties": {
         "component_type": "container",
         "version": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
       },
-      "type": "container",
-      "value": "pkg:oci/shop-api@sha256%3A0000000000000000000000000000000000000000000000000000000000000001"
+      "type": "container_image",
+      "value": "registry.example.com/shop/shop-api@sha256:0000000000000000000000000000000000000000000000000000000000000001"
     }
   ],
   "dependencies": [
     {
+      "asset_ref": "container_image-registry.example.com/shop/shop-api@sha256:0000000000000000000000000000000000000000000000000000000000000001",
       "depends_on": [
         "pkg:npm/qs@6.7.0"
       ],
-      "ecosystem": "npm",
       "id": "pkg:npm/express@4.17.1",
       "licenses": [
         "MIT"
@@ -28,34 +28,37 @@
       },
       "purl": "pkg:npm/express@4.17.1",
       "relationship": "direct",
+      "source_id": "pkg:npm/express@4.17.1",
       "type": "library",
       "version": "4.17.1"
     },
     {
-      "ecosystem": "npm",
+      "asset_ref": "container_image-registry.example.com/shop/shop-api@sha256:0000000000000000000000000000000000000000000000000000000000000001",
       "id": "pkg:npm/qs@6.7.0",
       "licenses": [
         "BSD-3-Clause"
       ],
       "name": "qs",
       "purl": "pkg:npm/qs@6.7.0",
-      "relationship": "indirect",
+      "relationship": "transitive",
+      "source_id": "pkg:npm/qs@6.7.0",
       "type": "library",
       "version": "6.7.0"
     },
     {
-      "ecosystem": "deb",
-      "id": "pkg:deb/debian/openssl@3.0.11-1~deb12u1?arch=amd64&distro=debian-12",
+      "asset_ref": "container_image-registry.example.com/shop/shop-api@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+      "id": "dep-h349e2cf48430efc4b985eea5",
       "name": "openssl",
       "purl": "pkg:deb/debian/openssl@3.0.11-1~deb12u1?arch=amd64&distro=debian-12",
       "relationship": "direct",
+      "source_id": "pkg:deb/debian/openssl@3.0.11-1~deb12u1?arch=amd64&distro=debian-12",
       "type": "library",
       "version": "3.0.11-1~deb12u1"
     }
   ],
   "findings": [
     {
-      "asset_ref": "sbom-pkg:oci/shop-api@sha256%3A0000000000000000000000000000000000000000000000000000000000000001",
+      "asset_ref": "container_image-registry.example.com/shop/shop-api@sha256:0000000000000000000000000000000000000000000000000000000000000001",
       "description": "qs before 6.7.3 allows prototype pollution.",
       "message": "qs before 6.7.3 allows prototype pollution.",
       "native": {
@@ -86,16 +89,6 @@
       "title": "CVE-2022-24999 in qs@6.7.0",
       "type": "vulnerability",
       "vulnerability": {
-        "affected_version": "6.7.0",
-        "cve_id": "CVE-2022-24999",
-        "cve_ids": [
-          "CVE-2022-24999"
-        ],
-        "cvss_score": 7.5,
-        "cvss_source": "nvd",
-        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
-        "cvss_version": "3.1",
-        "cwe_id": "CWE-1321",
         "cwe_ids": [
           "CWE-1321"
         ],
@@ -103,7 +96,6 @@
           "name": "NVD",
           "url": "https://nvd.nist.gov/vuln/detail/CVE-2022-24999"
         },
-        "ecosystem": "npm",
         "ids": [
           {
             "id": "CVE-2022-24999",
@@ -114,14 +106,15 @@
             "type": "ghsa"
           }
         ],
+        "installed_version": "6.7.0",
         "modified_at": "2023-01-10T00:00:00Z",
-        "package": "qs",
+        "package_name": "qs",
         "published_at": "2022-11-26T22:15:00Z",
         "purl": "pkg:npm/qs@6.7.0"
       }
     },
     {
-      "asset_ref": "sbom-pkg:oci/shop-api@sha256%3A0000000000000000000000000000000000000000000000000000000000000001",
+      "asset_ref": "container_image-registry.example.com/shop/shop-api@sha256:0000000000000000000000000000000000000000000000000000000000000001",
       "description": "Express.js Open Redirect in malformed URLs.",
       "message": "Express.js Open Redirect in malformed URLs.",
       "native": {
@@ -151,38 +144,33 @@
         "status": "affected"
       },
       "vulnerability": {
-        "affected_version": "4.17.1",
-        "cvss_score": 6.1,
-        "cvss_source": "vendor",
-        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
-        "cvss_version": "3.1",
-        "ecosystem": "npm",
         "ids": [
           {
             "id": "GHSA-rv95-896h-c2vc",
             "type": "ghsa"
           }
         ],
-        "package": "express",
+        "installed_version": "4.17.1",
+        "package_name": "express",
         "purl": "pkg:npm/express@4.17.1"
       }
     }
   ],
   "metadata": {
+    "channel": "scanner",
     "properties": {
       "bom_serial_number": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
       "bom_timestamp": "2026-09-30T10:00:00Z",
       "bom_version": 1,
       "cyclonedx_spec_version": "1.6",
       "provenance": "<provenance>"
-    },
-    "source_type": "scanner"
+    }
   },
   "tool": {
-    "capabilities": [
+    "name": "file-import",
+    "techniques": [
       "sca"
-    ],
-    "name": "file-import"
+    ]
   },
-  "version": "1.6"
+  "version": "2.0"
 }

@@ -71,7 +71,7 @@ func TestPythonScaffoldTestsAgainstTheKitServer(t *testing.T) {
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(target.value, timeout=5) as r:
             open("seen.txt", "w").write(str(r.status) + " " + r.headers["Server"])
-        ctx.asset(target, {"type": "http_service", "name": target.value, "value": target.value, "properties": {"status_code": r.status}})
+        ctx.asset(target, {"type": "web_origin", "name": target.value, "value": target.value, "technical": {"http": {"status_code": r.status}}})
         ctx.done(target)
 
 ` + s[j:]

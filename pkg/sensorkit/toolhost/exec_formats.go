@@ -8,8 +8,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/openctemio/ctis/importer"
-	"github.com/openctemio/ctis/importer/mapping"
+	"github.com/openctemio/ctis/v2/importer"
+	"github.com/openctemio/ctis/v2/importer/mapping"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
@@ -47,14 +47,15 @@ func ingestMapped(ctx context.Context, p *prepared, data []byte) error {
 // through the record checks. A record that names no asset goes to the
 // task's only target.
 func ingestNamed(ctx context.Context, p *prepared, format string, data []byte) error {
-	opts := importer.Options{Format: importer.Format(format), ToolName: p.m.Name, SourceType: "scanner"}
+	opts := importer.Options{Format: importer.Format(format), ToolName: p.m.Name, Channel: ctis.ChannelScanner,
+		SecretKey: p.secretKey}
 	if len(p.task.Targets) == 1 {
 		t := p.task.Targets[0]
 		typ := ctis.AssetType(t.Type)
-		if typ == "" {
+		if !typ.IsValid() {
 			typ = ctis.AssetTypeUnclassified
 		}
-		opts.DefaultAsset = &ctis.Asset{Type: typ, Value: t.Value}
+		opts.DefaultAsset = &ctis.Asset{ID: "target-1", Type: typ, Value: ctis.NormalizeAssetName(typ, t.Value)}
 	}
 	res, err := importer.Parse(ctx, bytes.NewReader(data), opts)
 	if err != nil {

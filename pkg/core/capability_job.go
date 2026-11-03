@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/openctemio/ctis/capability"
+	"github.com/openctemio/contract/capability"
 )
 
 // newScanOptions are the scan options of a job, before its config is read:

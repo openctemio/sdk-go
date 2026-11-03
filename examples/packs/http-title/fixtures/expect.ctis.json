@@ -1,24 +1,27 @@
 {
-  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "$schema": "https://schemas.openctem.io/ctis/2.0/report.json",
   "assets": [
     {
-      "properties": {
-        "server": "fixture",
-        "status_code": 200,
-        "title": "fixture"
+      "id": "asset-1",
+      "technical": {
+        "http": {
+          "status_code": 200,
+          "title": "fixture",
+          "web_server": "fixture"
+        }
       },
-      "type": "http_service",
+      "type": "web_origin",
       "value": "{{fixture.url}}"
     }
   ],
   "metadata": {
+    "channel": "scanner",
     "properties": {
       "provenance": "<provenance>"
-    },
-    "source_type": "scanner"
+    }
   },
   "tool": {
     "name": "http-title"
   },
-  "version": "1.6"
+  "version": "2.0"
 }
