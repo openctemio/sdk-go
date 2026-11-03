@@ -9,37 +9,37 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/openctemio/ctis/outcome"
+	"github.com/openctemio/contract/outcome"
 	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/reach"
 )
 
 // decodedReport is a report as the executor sees it after the tool host's
-// JSON went through the parser: list properties are []any.
-func decodedReport(t *testing.T, props map[string]any) *ctis.Report {
+// JSON went through the parser, with the given metadata.targets.
+func decodedReport(t *testing.T, targets []ctis.TargetOutcome) *ctis.Report {
 	t.Helper()
-	raw, err := json.Marshal(props)
+	in := ctis.NewReport()
+	in.Metadata.Targets = targets
+	raw, err := json.Marshal(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := ctis.NewReport()
-	if err := json.Unmarshal(raw, &r.Properties); err != nil {
+	var r ctis.Report
+	if err := json.Unmarshal(raw, &r); err != nil {
 		t.Fatal(err)
 	}
-	return r
+	return &r
 }
 
 func TestTargetOutcomes_FromReport(t *testing.T) {
 	targets := []string{"a.example", "b.example", "c.example", "d.example", "e.example"}
-	report := decodedReport(t, map[string]any{
-		outcome.ResultKey: []outcome.Target{
-			{Target: "a.example", State: outcome.Done},
-			{Target: "b.example", State: outcome.Failed, Class: outcome.Timeout},
-			{Target: "x.example", State: outcome.Done}, // not a job target
-		},
-		"unfinished_targets": []string{"c.example"},
-		"failed_targets":     []map[string]string{{"target": "d.example", "error": "exit 2"}},
+	report := decodedReport(t, []ctis.TargetOutcome{
+		{Target: "a.example", State: ctis.TargetDone},
+		{Target: "b.example", State: ctis.TargetFailed, Class: ctis.TargetClassTimeout},
+		{Target: "x.example", State: ctis.TargetDone}, // not a job target
+		{Target: "c.example", State: ctis.TargetUnfinished},
+		{Target: "d.example", State: ctis.TargetFailed, Class: ctis.TargetClassToolError},
 	})
 	got := TargetOutcomes(targets, report)
 	want := []outcome.Target{
@@ -227,13 +227,11 @@ func TestTargetOutcomesFor_RevisionOneGetsKnownClassesAndNeverDone(t *testing.T)
 }
 
 func TestTargetOutcomesFor_ReportMarksWinOverEvidence(t *testing.T) {
-	report := decodedReport(t, map[string]any{
-		outcome.ResultKey: []outcome.Target{{Target: "a.example", State: outcome.Failed, Class: outcome.EdgeChallenged, Vendor: "imperva"}},
-	})
+	report := decodedReport(t, []ctis.TargetOutcome{{Target: "a.example", State: ctis.TargetFailed, Class: ctis.TargetClassEdgeChallenged}})
 	rec := reach.NewRecorder()
 	rec.Record(reach.Observation{Target: "a.example", Class: reach.Timeout})
 	got := TargetOutcomesFor(context.Background(), []string{"a.example"}, OutcomeEvidence{Report: report, Reach: rec, Revision: 2})
-	if got[0].Class != outcome.EdgeChallenged || got[0].Vendor != "imperva" {
+	if got[0].Class != outcome.EdgeChallenged {
 		t.Fatalf("outcome = %+v", got[0])
 	}
 }
@@ -295,12 +293,11 @@ func TestOutcomeRevisionOf(t *testing.T) {
 // A tool's report cannot blame the sensor: a claimed sensor fault is read as
 // an unreachable target with no cause, in process and decoded from JSON.
 func TestTargetOutcomesFor_ReportCannotBlameSensor(t *testing.T) {
-	claim := outcome.Target{Target: "a.example", State: outcome.Failed, Class: outcome.SensorNetworkFault, Cause: outcome.CauseSensor}
-	for name, v := range map[string]any{
-		"in process": []outcome.Target{claim},
-		"decoded":    []any{map[string]any{"target": "a.example", "state": "failed", "class": "sensor_network_fault", "cause": "sensor"}},
+	for name, claim := range map[string]ctis.TargetOutcome{
+		"sensor cause": {Target: "a.example", State: ctis.TargetFailed, Class: ctis.TargetClassSensorNetworkFault, Cause: ctis.TargetCauseSensor},
+		"no cause":     {Target: "a.example", State: ctis.TargetFailed, Class: ctis.TargetClassSensorNetworkFault},
 	} {
-		report := decodedReport(t, map[string]any{outcome.ResultKey: v})
+		report := decodedReport(t, []ctis.TargetOutcome{claim})
 		got := TargetOutcomesFor(context.Background(), []string{"a.example"}, OutcomeEvidence{Report: report, Revision: 2})
 		if got[0].Class != outcome.Unreachable || got[0].Cause != "" {
 			t.Fatalf("%s: outcome = %+v", name, got[0])

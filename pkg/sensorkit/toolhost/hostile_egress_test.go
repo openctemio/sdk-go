@@ -21,6 +21,6 @@ func egressSilent() int {
 		_, _ = bufio.NewReader(c).ReadString('\n')
 		_ = c.Close()
 	}
-	fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":"gave up","severity":"low"}]}` + "\n")
+	fmt.Printf(`{"version":"2.0","metadata":{"generated_at":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":"gave up","severity":"low"}]}` + "\n")
 	return 0
 }

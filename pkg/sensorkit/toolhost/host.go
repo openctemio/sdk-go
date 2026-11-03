@@ -55,8 +55,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/openctemio/ctis/importer/mapping"
-	"github.com/openctemio/ctis/outcome"
+	"github.com/openctemio/ctis/v2/importer/mapping"
 	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/internal/toolwire"
 	"github.com/openctemio/sdk-go/pkg/adapt"
@@ -127,6 +126,13 @@ type Host struct {
 	// tenant's Retry-After and edge-block cooldowns (adapt.SensorRate).
 	// nil: the process's one (adapt.Process).
 	TargetRates *adapt.SensorRate
+	// SecretFingerprintKey is the producer's HMAC key for secret
+	// fingerprints (CTIS recipe ctis-fp/2: HMAC-SHA256(key, secret), at
+	// least 16 bytes). Output parsed by the host (SARIF and the named
+	// formats) gets a secret fingerprint only with a key; without one the
+	// fingerprint stays empty and the platform computes its own. The key
+	// never enters a report.
+	SecretFingerprintKey []byte
 	// Governor admits every tool launch under host pressure, scales the
 	// start handshake to the measured stall and counts transient start
 	// failures (research/318; resource.Manager.Governor). nil: launches
@@ -396,6 +402,8 @@ type prepared struct {
 	egress core.EgressDialer
 	// applied is the identification the task's requests carry (nil: none).
 	applied *tool.AppliedIdentity
+	// secretKey is Host.SecretFingerprintKey.
+	secretKey []byte
 }
 
 // prepare checks the manifest and the task (targets, config), admits it
@@ -477,7 +485,7 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, tool.AsError(err), nil
 	}
 	task.Egress = nil // kept in prepared only: it never travels with the task
-	p := &prepared{m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine, contentPaths: contentPaths,
+	p := &prepared{secretKey: h.SecretFingerprintKey, m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine, contentPaths: contentPaths,
 		targetRate: o.TargetRate, egress: egressDialer, applied: applied}
 	if task.IsRetest() && len(adm.Refused) > 0 {
 		// A retest never reaches a target the policy refused: its items
@@ -654,7 +662,7 @@ func (h *Host) stamp(out *Outcome, m tool.Manifest, task tool.Task, execution st
 	toolrt.Stamp(out.Report, toolrt.Provenance{
 		Tool: m.Name, ToolVersion: m.Version, ManifestDigest: m.Digest(), Protocol: toolwire.Version,
 		Execution: execution, Sandbox: out.Sandbox, Network: string(m.Permissions.Network), Sensor: h.Sensor,
-		TaskID: task.ID, Attempt: task.Attempt, Status: out.Status, Records: out.Stats.Records,
+		Attempt: task.Attempt, Status: out.Status, Records: out.Stats.Records,
 		Quarantined: out.Stats.Quarantined, Invalid: out.Stats.Invalid, Capped: out.Stats.Capped,
 		Capability: task.Capability, ContractViolations: out.Stats.ContractViolations,
 	})
@@ -1035,29 +1043,8 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 				return refuse("record for a target not in the task")
 			}
 		}
-		var err error
-		switch rec.Kind {
-		case tool.KindAsset:
-			var a ctis.Asset
-			if a, err = chk.AssetJSON(rec.Data); err == nil {
-				asm.AddCheckedAsset(a)
-			}
-		case tool.KindFinding:
-			var f ctis.Finding
-			if f, err = chk.FindingJSON(rec.Data); err == nil {
-				err = asm.AddCheckedFinding(rec.Target, f)
-			}
-		case tool.KindDependency:
-			var d ctis.Dependency
-			if d, err = chk.DependencyJSON(rec.Data); err == nil {
-				asm.AddCheckedDependency(d)
-			}
-		case tool.KindEndpoint:
-			var e ctis.Endpoint
-			if e, err = chk.EndpointJSON(rec.Data); err == nil {
-				asm.AddCheckedEndpoint(e)
-			}
-		default:
+		known, err := addRecord(asm, rec.Kind, rec.Target, rec.Data)
+		if !known {
 			return refuse("unknown record kind")
 		}
 		if err == nil && s.ctx != nil {
@@ -1283,13 +1270,10 @@ func keepsSettled(class tool.ErrorClass) bool {
 	return false
 }
 
-// UnfinishedTargetsKey is the report property listing the targets a run
-// that stopped part-way never reached.
-const UnfinishedTargetsKey = "unfinished_targets"
-
 // markUnfinished lists the targets a partial run never reached, in the
-// outcome and the report (whose coverage is then partial: nothing may be
-// auto-resolved from targets that were not scanned).
+// outcome and the report (metadata.targets, state unfinished; the coverage
+// is then partial: nothing may be auto-resolved from targets that were not
+// scanned).
 func markUnfinished(out *Outcome, unfinished []tool.Target) {
 	if len(unfinished) == 0 || out.Report == nil {
 		return
@@ -1299,64 +1283,36 @@ func markUnfinished(out *Outcome, unfinished []tool.Target) {
 		values = append(values, t.Value)
 	}
 	out.Unfinished = values
-	if out.Report.Properties == nil {
-		out.Report.Properties = ctis.Properties{}
-	}
-	out.Report.Properties[UnfinishedTargetsKey] = values
-	out.Report.Metadata.CoverageType = "partial"
+	out.Report.Metadata.CoverageType = ctis.CoveragePartial
 }
 
 // markOutcomes writes each target's outcome into the report of a run that
-// delivers (ok or partial) as the target_outcomes property (ctis outcome):
-// done, failed with its class, skipped (refused or excluded) or unfinished.
-// A failed or canceled run delivers nothing, so it carries none.
+// delivers (ok or partial) as CTIS metadata.targets, replacing what the
+// tool wrote there: done, failed with its class, skipped (refused or
+// excluded) or unfinished. A failed or canceled run delivers nothing, so it
+// carries none.
 func markOutcomes(out *Outcome) {
 	if out.Report == nil || (out.Status != tool.StatusOK && out.Status != tool.StatusPartial) {
 		return
 	}
-	list := make([]outcome.Target, 0, len(out.Targets)+len(out.Unfinished))
+	list := make([]ctis.TargetOutcome, 0, len(out.Targets)+len(out.Unfinished))
+	seen := make(map[string]bool, cap(list))
 	for _, t := range out.Targets {
-		if o, ok := targetOutcome(t); ok {
+		if o, ok := toolrt.TargetOutcomeOf(t.Value, t.State, t.Class); ok && !seen[o.Target] {
+			seen[o.Target] = true
 			list = append(list, o)
 		}
 	}
 	for _, v := range out.Unfinished {
-		list = append(list, outcome.Target{Target: v, State: outcome.Unfinished})
+		if v != "" && !seen[v] {
+			seen[v] = true
+			list = append(list, ctis.TargetOutcome{Target: v, State: ctis.TargetUnfinished})
+		}
 	}
 	if len(list) == 0 {
 		return
 	}
-	if out.Report.Properties == nil {
-		out.Report.Properties = ctis.Properties{}
-	}
-	out.Report.Properties[outcome.ResultKey] = list
-}
-
-// targetOutcome is a target's outcome in the shared contract.
-func targetOutcome(t TargetOutcome) (outcome.Target, bool) {
-	o := outcome.Target{Target: t.Value}
-	switch t.State {
-	case tool.StateDone:
-		o.State = outcome.Done
-	case tool.StateFailed:
-		o.State, o.Class = outcome.Failed, outcome.ToolError
-		switch t.Class {
-		case tool.Timeout:
-			o.Class = outcome.Timeout
-		case tool.TargetUnreachable, tool.NotFound:
-			o.Class = outcome.Unreachable
-		case tool.EgressRefused:
-			o.Class = outcome.EgressRefused
-		}
-	case tool.StateSkipped:
-		o.State, o.Class = outcome.Skipped, outcome.Excluded
-		if t.Class == tool.RefusedByPolicy {
-			o.Class = outcome.Refused
-		}
-	default:
-		return o, false
-	}
-	return o, o.Valid()
+	out.Report.Metadata.Targets = list
 }
 
 // wireVerdictCode is the verdict code an out-of-process tool may give: a

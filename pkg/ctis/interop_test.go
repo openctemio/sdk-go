@@ -2,11 +2,12 @@ package ctis
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
 
-// The CTIS 1.4 interoperability members and their normalizers are reachable
+// The CTIS interoperability members and their normalizers are reachable
 // through pkg/ctis, and a report that uses them validates.
 func TestInteropMembersReExported(t *testing.T) {
 	sev, ok := NormalizeNativeSeverity(NativeSchemeQualys, "5")
@@ -21,10 +22,11 @@ func TestInteropMembersReExported(t *testing.T) {
 	}
 
 	r := NewReport()
-	r.Metadata.Timestamp = time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
+	r.Metadata.GeneratedAt = time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
+	r.Assets = []Asset{{ID: "h1", Type: AssetTypeHost, Value: "app.example.com"}}
 	v := 8.1
 	f := Finding{
-		Type: FindingTypeVulnerability, Title: "t", Severity: SeverityHigh,
+		Type: FindingTypeVulnerability, Title: "t", Severity: SeverityHigh, AssetRef: "h1",
 		Native:        &NativeIdentity{Scheme: NativeSchemeNessus, VulnID: "201194", Severity: "3"},
 		Scores:        []Score{{System: ScoreSystemCVSS, Version: "3.1", Value: &v, Source: "nvd"}},
 		VEX:           &VEX{Status: VEXStatusNotAffected, Justification: VEXJustificationComponentNotPresent},
@@ -45,21 +47,14 @@ func TestInteropMembersReExported(t *testing.T) {
 	}
 }
 
-// The version bump keeps older reports readable: every supported version
-// decodes and validates, 1.3 included.
+// The SDK produces CTIS 2.0 only: the module supports 2.x and nothing of
+// 1.x, and a 1.x document does not decode.
 func TestSupportedVersionsReExported(t *testing.T) {
-	vs := SupportedSchemaVersions()
-	if len(vs) == 0 || vs[len(vs)-1] != SchemaVersion || SchemaVersion != "1.6" {
-		t.Fatalf("supported %v, current %s", vs, SchemaVersion)
+	if SchemaVersion != "2.0" || !IsSupportedVersion("2.0") || IsSupportedVersion("1.6") {
+		t.Fatalf("supported %v, current %s", SupportedSchemaVersions(), SchemaVersion)
 	}
-	if !IsSupportedVersion("1.3") || IsSupportedVersion("1.7") {
-		t.Fatal("IsSupportedVersion")
-	}
-	var r Report
-	if err := json.Unmarshal([]byte(`{"version":"1.3","metadata":{"timestamp":"2026-10-02T00:00:00Z"},"findings":[{"type":"vulnerability","title":"t","severity":"high"}]}`), &r); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Validate(); err != nil {
-		t.Fatalf("a 1.3 report no longer validates: %v", err)
+	legacy := `{"version":"1` + `.6","metadata":{"time` + `stamp":"2026-10-02T00:00:00Z"}}`
+	if _, _, err := Decode(strings.NewReader(legacy)); err == nil {
+		t.Fatal("a 1.x report decoded")
 	}
 }

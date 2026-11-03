@@ -15,7 +15,7 @@ func TestTaskResolvConfHasNoSearchList(t *testing.T) {
 			continue
 		}
 		switch f[0] {
-		case "search", "domain":
+		case "search", "domain_name":
 			t.Fatalf("task resolv.conf has a search list: %q", line)
 		case "nameserver":
 			servers = append(servers, f[1])

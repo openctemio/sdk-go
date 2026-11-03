@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/openctemio/ctis/capability"
-	"github.com/openctemio/ctis/outcome"
+	"github.com/openctemio/contract/capability"
+	"github.com/openctemio/contract/outcome"
 )
 
 // lookupPolicy allows example.com and its subdomains and one test range, and

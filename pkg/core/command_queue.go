@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openctemio/ctis/politeness"
+	"github.com/openctemio/contract/politeness"
 	"github.com/openctemio/sdk-go/pkg/resource"
 )
 
@@ -375,7 +375,7 @@ const DefaultPerHostConcurrency = 1
 // service or an address, "host/owner" of a repository, the path of a local
 // directory (politeness.HostOf).
 //
-// Deprecated: use github.com/openctemio/ctis/politeness, the one
+// Deprecated: use github.com/openctemio/contract/politeness, the one
 // definition the platform uses too (HostOf, Keys).
 func HostKey(target string) string {
 	return politeness.HostOf(target)

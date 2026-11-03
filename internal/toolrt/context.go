@@ -24,6 +24,8 @@ type Sink interface {
 	Finding(ref string, f ctis.Finding) error
 	Dependency(ref string, d ctis.Dependency) error
 	Endpoint(e ctis.Endpoint) error
+	Relationship(r ctis.Relationship) error
+	Rule(r ctis.Rule) error
 	Info(info *tool.ReportInfo) error
 	Target(ref string, state tool.TargetState, err *tool.Error)
 	Progress(done, total int, msg string)
@@ -57,6 +59,7 @@ type ContextConfig struct {
 // credentials, and HTTP reaches only what the network permission allows.
 func NewContext(ctx context.Context, cfg ContextConfig) tool.Context {
 	c := &runCtx{Context: ctx, cfg: cfg, checker: NewChecker(cfg.Manifest), targets: map[string]bool{}, items: map[string]bool{}}
+	c.checker.AllowTaskTargets(cfg.Task.Targets)
 	for _, t := range cfg.Task.Targets {
 		c.targets[t.Ref] = true
 	}
@@ -188,6 +191,12 @@ func (e emitter) Finding(t tool.Target, f ctis.Finding) error {
 	if t.Ref != "" && !e.c.targets[t.Ref] {
 		return fmt.Errorf("%w: target %q is not in the task", tool.ErrInvalidRecord, t.Ref)
 	}
+	// A finding that names neither an asset nor a target is filed on the
+	// task's target when there is exactly one (CTIS 2.0: every finding
+	// names an asset of the document).
+	if t.Ref == "" && f.AssetRef == "" && len(e.c.cfg.Task.Targets) == 1 {
+		t = e.c.cfg.Task.Targets[0]
+	}
 	checked, err := e.c.checker.Finding(f)
 	if err != nil {
 		_ = e.c.cfg.Sink.Finding(t.Ref, f)
@@ -223,8 +232,32 @@ func (e emitter) Endpoint(ep ctis.Endpoint) error {
 	return e.c.cfg.Sink.Endpoint(checked)
 }
 
-// Report emits the report's info, then its assets, findings, dependencies
-// and endpoints. The first output-limit error stops it; other refused
+func (e emitter) Relationship(r ctis.Relationship) error {
+	if e.c.cfg.Task.IsRetest() {
+		return tool.ErrRetestRecord
+	}
+	checked, err := e.c.checker.Relationship(r)
+	if err != nil {
+		_ = e.c.cfg.Sink.Relationship(r)
+		return err
+	}
+	return e.c.cfg.Sink.Relationship(checked)
+}
+
+func (e emitter) Rule(r ctis.Rule) error {
+	if e.c.cfg.Task.IsRetest() {
+		return tool.ErrRetestRecord
+	}
+	checked, err := e.c.checker.Rule(r)
+	if err != nil {
+		_ = e.c.cfg.Sink.Rule(r)
+		return err
+	}
+	return e.c.cfg.Sink.Rule(checked)
+}
+
+// Report emits the report's info, then its rules, assets, findings, dependencies,
+// endpoints and relationships. The first output-limit error stops it; other refused
 // records are skipped and the first such error is returned.
 func (e emitter) Report(r *ctis.Report) error {
 	if e.c.cfg.Task.IsRetest() {
@@ -255,6 +288,11 @@ func (e emitter) Report(r *ctis.Report) error {
 			return err
 		}
 	}
+	for _, rl := range r.Rules {
+		if err := keep(e.Rule(rl)); err != nil {
+			return err
+		}
+	}
 	for _, a := range r.Assets {
 		if err := keep(e.Asset(a)); err != nil {
 			return err
@@ -272,6 +310,11 @@ func (e emitter) Report(r *ctis.Report) error {
 	}
 	for _, ep := range r.Endpoints {
 		if err := keep(e.Endpoint(ep)); err != nil {
+			return err
+		}
+	}
+	for _, rel := range r.Relationships {
+		if err := keep(e.Relationship(rel)); err != nil {
 			return err
 		}
 	}

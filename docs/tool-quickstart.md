@@ -35,7 +35,7 @@ cd hello-tool
 ```
 
 A tool implements **capabilities** from a closed list ([capabilities.md in
-ctis](https://github.com/openctemio/ctis/blob/main/docs/capabilities.md)). The capability fixes the phase, the
+contract](https://github.com/openctemio/contract/blob/main/docs/capabilities.md)). The capability fixes the phase, the
 minimum tier, the target types the tool may take and the output every report must carry, and it is how a scan finds
 your tool. `init` writes `tool.yaml`, `main.go`, a self-test fixture, a `Makefile`, a CI workflow and a
 `pack.yaml` (step 8). It never overwrites a file.
@@ -55,7 +55,7 @@ implements:                       # the capabilities it serves, with the param m
   - capability: vuln.templates@1
     params:
       rate: {}                    # the platform's standard "rate" param reaches config key "rate"
-consumes: [http_service, website, web_application]       # input types
+consumes: [web_origin, web_application]                  # input types (CTIS 2.0)
 produces: ["finding:misconfiguration"]                   # anything else is refused
 config:                           # typed parameters, a closed JSON Schema subset
   additionalProperties: false
@@ -146,8 +146,8 @@ No platform is needed. The CLI runs your program through the same host and sandb
 ```bash
 make build                                        # go build -o bin/hello-tool .
 python3 -m http.server 8000 --bind 127.0.0.1 &
-openctem tool run . --target http://127.0.0.1:8000/@http_service --format table
-openctem tool run . --target http://127.0.0.1:8000/@http_service --format ctis   # the report a sensor sends
+openctem tool run . --target http://127.0.0.1:8000/@web_origin --format table
+openctem tool run . --target http://127.0.0.1:8000/@web_origin --format ctis   # the report a sensor sends
 openctem tool test --update . ; openctem tool test .     # record, review, then check the fixtures
 openctem tool test --capability --scope --fuzz 30s .     # capability suite, scope check, fuzzing
 ```
@@ -159,7 +159,7 @@ In `go test`, three layers, all in [`examples/hello-tool/main_test.go`](../examp
 
 ```go
 // 1. In-process, with the rules the runtime applies (declared outputs, CTIS validity, size limits).
-res := testkit.Run(t, newTool(), tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "http_service", Value: url}}})
+res := testkit.Run(t, newTool(), tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "web_origin", Value: url}}})
 res.RequireStatus(t, tool.StatusOK)
 
 // 2. The built program against adapter protocol v1: handshake, describe equals tool.yaml, stdout is

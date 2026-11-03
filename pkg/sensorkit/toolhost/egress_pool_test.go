@@ -65,7 +65,7 @@ func TestPooledTaskRefusedOnUnconfinedSandbox(t *testing.T) {
 	h.Backend = statusBackend{Backend: executor.Current(), st: executor.Status{}}
 	m := tool.Manifest{
 		Name: "pool-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-		Consumes: []string{"domain"}, Produces: []string{"finding:misconfiguration"},
+		Consumes: []string{"domain_name"}, Produces: []string{"finding:misconfiguration"},
 		Permissions: tool.Permissions{Network: tool.NetTargets},
 		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{h.Self}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
 	}

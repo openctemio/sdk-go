@@ -1,5 +1,5 @@
 // Package source fetches the code of a platform code scan: exactly one
-// commit of one repository (ctis source.Repository), read-only, into a
+// commit of one repository (contract source.Repository), read-only, into a
 // private directory a scanner then reads. It is the one fetch mechanism for
 // every sensor and collector, so the hardening lives in one place.
 //
@@ -39,7 +39,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	ctissource "github.com/openctemio/ctis/source"
+	ctissource "github.com/openctemio/contract/source"
 
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 )

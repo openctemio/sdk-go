@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	ctissource "github.com/openctemio/ctis/source"
+	ctissource "github.com/openctemio/contract/source"
 )
 
 // gitServer serves bare repositories under a temp root over HTTPS with git

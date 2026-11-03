@@ -65,13 +65,16 @@ def run(ctx, task):
         except (OSError, ValueError) as e:
             ctx.failed(target, "target_unreachable", e)
             continue
-        props = {"status_code": status}
+        http = {"status_code": status}
         if headers.get("server"):
-            props["server"] = headers["server"][:256]
+            http["web_server"] = headers["server"][:256]
         m = TITLE_RE.search(body)
         if m:
-            props["title"] = " ".join(m.group(1).decode("utf-8", "replace").split())[:512]
-        ctx.asset(target, {"type": "http_service", "value": target.value, "properties": props})
+            http["title"] = " ".join(m.group(1).decode("utf-8", "replace").split())[:512]
+        # CTIS 2.0: a web origin with its HTTP facts. The probe.http@1 contract
+        # of contract v1.0.0 also reads properties.status_code.
+        ctx.asset(target, {"type": "web_origin", "value": target.value,
+                           "technical": {"http": http}, "properties": {"status_code": status}})
         ctx.done(target)
 
 

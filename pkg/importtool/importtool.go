@@ -38,7 +38,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openctemio/ctis/importer"
+	"github.com/openctemio/ctis/v2/importer"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -72,9 +72,10 @@ var Manifest = tool.Manifest{
 	Tier:        tool.T0,
 	Consumes:    []string{"file:application/xml", "file:application/json", "file:application/zip"},
 	Produces: []string{
-		"asset:host", "asset:ip_address", "asset:domain", "asset:repository", "asset:container",
-		"asset:unclassified", "asset:subdomain", "asset:http_service", "asset:certificate", "asset:storage", "endpoint",
-		"finding:vulnerability", "finding:compliance", "dependency",
+		"asset:host", "asset:ip_address", "asset:domain_name", "asset:repository", "asset:container",
+		"asset:container_image", "asset:package", "asset:unclassified", "asset:web_origin", "asset:service",
+		"asset:certificate", "asset:storage", "asset:web_application", "endpoint",
+		"finding:vulnerability", "finding:weakness", "finding:misconfiguration", "finding:compliance", "dependency",
 	},
 	Permissions: tool.Permissions{Network: tool.NetNone, Filesystem: tool.FSWorkdir},
 	Resources: tool.Resources{
@@ -212,7 +213,7 @@ func parseOne(ctx tool.Context, in *resolved, all []resolved, cfg Config) (*impo
 	opts := importer.Options{
 		Format:      in.format,
 		Limits:      importer.Limits{MaxInputBytes: MaxInputBytes},
-		SourceType:  "scanner",
+		Channel:     ctis.ChannelScanner,
 		MinSeverity: ctis.Severity(cfg.MinSeverity),
 	}
 	if in.format == importer.FormatQualys {

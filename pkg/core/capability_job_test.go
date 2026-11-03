@@ -26,7 +26,7 @@ func (c *capScanner) ToolContract() *ToolContract {
 	desc := json.RawMessage(`{"name":"ports"}`)
 	sum := sha256.Sum256(desc)
 	return &ToolContract{APIVersion: "openctem.io/tool/v1", Digest: "sha256:" + hex.EncodeToString(sum[:]), Version: "1.0.0",
-		Class: "target-scan", Tier: "T1", Produces: []string{"asset:open_port"},
+		Class: "target-scan", Tier: "T1", Produces: []string{"asset:service"},
 		Implements: []string{"scan.ports@1"}, Batch: true, Origin: ToolOriginBuiltin, Descriptor: desc}
 }
 

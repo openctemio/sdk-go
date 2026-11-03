@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openctemio/ctis/outcome"
+	"github.com/openctemio/contract/outcome"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 

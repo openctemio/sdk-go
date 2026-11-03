@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/openctemio/ctis"
+	"github.com/openctemio/ctis/v2"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
 
@@ -75,8 +75,21 @@ func (a *Assembler) Verdict(ref string, r tool.VerdictReport) error {
 				ptrs[i] = &v.Evidence[i]
 			}
 			// Marks only (never masks): a value the tool did not mark is
-			// marked here, so the platform masks it.
-			ctis.MarkSensitive(ptrs...)
+			// marked here, so the platform masks it. An item that cannot be
+			// marked completely is dropped, never sent unmarked.
+			if incomplete := ctis.MarkSensitive(ptrs...); len(incomplete) > 0 {
+				drop := make(map[int]bool, len(incomplete))
+				for _, i := range incomplete {
+					drop[i] = true
+				}
+				kept := v.Evidence[:0]
+				for i, it := range v.Evidence {
+					if !drop[i] {
+						kept = append(kept, it)
+					}
+				}
+				v.Evidence = kept
+			}
 		}
 	}
 	a.mu.Lock()

@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openctemio/ctis/capability"
+	"github.com/openctemio/contract/capability"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/internal/absname"
 	"github.com/openctemio/sdk-go/pkg/reach"

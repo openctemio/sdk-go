@@ -20,7 +20,7 @@ func walker(features *tool.Features) tool.Tool {
 	}
 	return tool.New(tool.Manifest{
 		Name: "walker", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1, Features: features,
-		Consumes: []string{"http_service"}, Produces: []string{"finding:misconfiguration"},
+		Consumes: []string{"web_origin"}, Produces: []string{"finding:misconfiguration"},
 		Config: []byte(`{"type":"object","additionalProperties":false,"properties":{"paths":{"type":"array","items":{"type":"string"}}}}`),
 	}, func(ctx tool.Context, task tool.Task, c cfg) error {
 		for _, t := range task.Targets {
@@ -65,7 +65,7 @@ func recorder(t *testing.T) (*httptest.Server, func() []string) {
 func TestWebScopeEnforcedOnContextHTTP(t *testing.T) {
 	srv, seen := recorder(t)
 	task := tool.Task{
-		Targets:  []tool.Target{{Ref: "a1", Type: "http_service", Value: srv.URL}},
+		Targets:  []tool.Target{{Ref: "a1", Type: "web_origin", Value: srv.URL}},
 		Config:   []byte(`{"paths":["/public","/admin/panel","/ADMIN/x","/public/../admin/y","/go"]}`),
 		WebScope: &webscope.Scope{DenyPaths: []string{"/admin"}},
 	}
@@ -86,7 +86,7 @@ func TestWebScopeEnforcedOnContextHTTP(t *testing.T) {
 func TestWebScopeRefusesUndeclaredTool(t *testing.T) {
 	srv, seen := recorder(t)
 	task := tool.Task{
-		Targets:  []tool.Target{{Ref: "a1", Type: "http_service", Value: srv.URL}},
+		Targets:  []tool.Target{{Ref: "a1", Type: "web_origin", Value: srv.URL}},
 		Config:   []byte(`{"paths":["/public"]}`),
 		WebScope: &webscope.Scope{DenyPaths: []string{"/admin"}},
 	}

@@ -87,7 +87,7 @@ func TestHTTPExchangeMarksCredentials(t *testing.T) {
 		t.Fatalf("match %+v", it.Match)
 	}
 	rep := ctis.NewReport()
-	rep.Assets = []ctis.Asset{{ID: "a", Type: ctis.AssetTypeDomain, Value: "app.example.com"}}
+	rep.Assets = []ctis.Asset{{ID: "a", Type: ctis.AssetTypeDomainName, Value: "app.example.com"}}
 	rep.Findings = []ctis.Finding{{Type: ctis.FindingTypeVulnerability, Title: "lfi", Severity: ctis.SeverityHigh, AssetRef: "a", EvidenceItems: []ctis.EvidenceItem{it}}}
 	if err := rep.Validate(); err != nil {
 		t.Fatalf("the item is not valid CTIS: %v", err)
@@ -187,7 +187,7 @@ func TestFixedNeedsTheAttemptsExchange(t *testing.T) {
 	for _, r := range []string{"with-exchange", "no-evidence", "no-response", "too-much", "unmarked"} {
 		items = append(items, tool.RetestItem{Ref: r, Target: "t1", Kind: tool.RetestFinding, RuleID: r})
 	}
-	res := testkit.Run(t, webCheck(t), tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "domain", Value: "app.example.com"}}, Retest: items})
+	res := testkit.Run(t, webCheck(t), tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "domain_name", Value: "app.example.com"}}, Retest: items})
 	got := map[string]tool.RetestVerdict{}
 	for _, v := range res.Verdicts {
 		got[v.Ref] = v

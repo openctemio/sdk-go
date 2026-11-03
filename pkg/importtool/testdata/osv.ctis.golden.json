@@ -1,55 +1,74 @@
 {
-  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "$schema": "https://schemas.openctem.io/ctis/2.0/report.json",
   "assets": [
     {
-      "id": "osv-services/api/go.mod",
+      "id": "unclassified-services/api/go.mod",
       "name": "services/api/go.mod",
       "properties": {
         "source_type": "lockfile"
       },
-      "type": "repository",
+      "type": "unclassified",
       "value": "services/api/go.mod"
     },
     {
-      "id": "osv-web/package-lock.json",
+      "id": "unclassified-web/package-lock.json",
       "name": "web/package-lock.json",
       "properties": {
         "source_type": "lockfile"
       },
-      "type": "repository",
+      "type": "unclassified",
       "value": "web/package-lock.json"
     }
   ],
   "dependencies": [
     {
-      "ecosystem": "go",
-      "id": "services/api/go.mod|Go:golang.org/x/net@0.17.0",
+      "asset_ref": "unclassified-services/api/go.mod",
+      "id": "dep-h727614532db02846899695c9",
+      "locations": [
+        {
+          "path": "services/api/go.mod"
+        }
+      ],
       "name": "golang.org/x/net",
-      "path": "services/api/go.mod",
+      "purl": "pkg:golang/golang.org/x/net@0.17.0",
+      "type": "library",
       "version": "0.17.0"
     },
     {
-      "ecosystem": "go",
-      "id": "services/api/go.mod|Go:github.com/google/uuid@1.6.0",
+      "asset_ref": "unclassified-services/api/go.mod",
+      "id": "dep-hc04dca19c1cf214221834c39",
+      "locations": [
+        {
+          "path": "services/api/go.mod"
+        }
+      ],
       "name": "github.com/google/uuid",
-      "path": "services/api/go.mod",
+      "purl": "pkg:golang/github.com/google/uuid@1.6.0",
+      "type": "library",
       "version": "1.6.0"
     },
     {
-      "ecosystem": "npm",
-      "id": "web/package-lock.json|npm:lodash@4.17.20",
+      "asset_ref": "unclassified-web/package-lock.json",
+      "id": "dep-h7c2530538f77b0544896bece",
+      "locations": [
+        {
+          "path": "web/package-lock.json"
+        }
+      ],
       "name": "lodash",
-      "path": "web/package-lock.json",
       "properties": {
         "dependency_groups": "prod"
       },
+      "purl": "pkg:npm/lodash@4.17.20",
+      "type": "library",
       "version": "4.17.20"
     }
   ],
   "findings": [
     {
-      "asset_ref": "osv-services/api/go.mod",
+      "asset_ref": "unclassified-services/api/go.mod",
       "description": "HTTP/2 CONTINUATION flood in net/http\n\nAn attacker may cause an HTTP/2 endpoint to read arbitrary amounts of header data.",
+      "fingerprint": "ctis-fp/2:75b1770fa6081ddeab77a45293652c0b4a8dab688faae3b4437797f17590e6db",
       "message": "HTTP/2 CONTINUATION flood in net/http",
       "native": {
         "raw_ref": "Go:golang.org/x/net@0.17.0/GO-2024-2687",
@@ -69,7 +88,7 @@
             "url": "https://github.com/advisories/GHSA-4v7x-pqxf-cx7m"
           }
         ],
-        "fix_available": true,
+        "is_fix_available": true,
         "recommendation": "Upgrade golang.org/x/net to 0.23.0 or later.",
         "solution_type": "upgrade"
       },
@@ -93,21 +112,10 @@
       "title": "GO-2024-2687: HTTP/2 CONTINUATION flood in net/http",
       "type": "vulnerability",
       "vulnerability": {
-        "affected_version": "0.17.0",
         "affected_version_range": "<0.23.0",
-        "cve_id": "CVE-2023-45288",
-        "cve_ids": [
-          "CVE-2023-45288"
-        ],
-        "cvss_source": "ghsa",
-        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
-        "cvss_version": "3.1",
-        "cwe_id": "CWE-400",
         "cwe_ids": [
           "CWE-400"
         ],
-        "ecosystem": "go",
-        "fixed_version": "0.23.0",
         "fixed_versions": [
           "0.23.0"
         ],
@@ -125,15 +133,17 @@
             "type": "cve"
           }
         ],
+        "installed_version": "0.17.0",
         "modified_at": "2024-06-01T00:00:00Z",
-        "package": "golang.org/x/net",
+        "package_name": "golang.org/x/net",
         "published_at": "2024-04-03T21:12:01Z",
         "purl": "pkg:golang/golang.org/x/net@0.17.0"
       }
     },
     {
-      "asset_ref": "osv-web/package-lock.json",
+      "asset_ref": "unclassified-web/package-lock.json",
       "description": "Command Injection in lodash",
+      "fingerprint": "ctis-fp/2:6abe56893ec68996754ad41a6ca062a6ac511f282e22919ce5896d1809ef6af8",
       "message": "Command Injection in lodash",
       "native": {
         "raw_ref": "npm:lodash@4.17.20/GHSA-35jh-r3h4-6jhm",
@@ -151,7 +161,7 @@
             "url": "https://nvd.nist.gov/vuln/detail/CVE-2021-23337"
           }
         ],
-        "fix_available": true,
+        "is_fix_available": true,
         "recommendation": "Upgrade lodash to 4.17.21 or later.",
         "solution_type": "upgrade"
       },
@@ -173,22 +183,11 @@
       "title": "GHSA-35jh-r3h4-6jhm: Command Injection in lodash",
       "type": "vulnerability",
       "vulnerability": {
-        "affected_version": "4.17.20",
         "affected_version_range": "<4.17.21",
-        "cve_id": "CVE-2021-23337",
-        "cve_ids": [
-          "CVE-2021-23337"
-        ],
-        "cvss_source": "ghsa",
-        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
-        "cvss_version": "3.1",
-        "cwe_id": "CWE-77",
         "cwe_ids": [
           "CWE-77",
           "CWE-94"
         ],
-        "ecosystem": "npm",
-        "fixed_version": "4.17.21",
         "fixed_versions": [
           "4.17.21"
         ],
@@ -202,24 +201,25 @@
             "type": "cve"
           }
         ],
+        "installed_version": "4.17.20",
         "modified_at": "2024-01-01T00:00:00Z",
-        "package": "lodash",
+        "package_name": "lodash",
         "published_at": "2021-05-06T16:05:51Z",
         "purl": "pkg:npm/lodash@4.17.20"
       }
     }
   ],
   "metadata": {
+    "channel": "scanner",
     "properties": {
       "provenance": "<provenance>"
-    },
-    "source_type": "scanner"
+    }
   },
   "tool": {
-    "capabilities": [
+    "name": "file-import",
+    "techniques": [
       "sca"
-    ],
-    "name": "file-import"
+    ]
   },
-  "version": "1.6"
+  "version": "2.0"
 }

@@ -661,7 +661,7 @@ func TestSaveProgressSurvivesRestart(t *testing.T) {
 
 func TestImportLegacyRetryQueue(t *testing.T) {
 	legacy := t.TempDir()
-	item := `{"id":"x","type":"findings","report":{"version":"1.0","findings":[{"title":"t"}]},"created_at":"2026-01-01T00:00:00Z"}`
+	item := `{"id":"x","type":"findings","report":{"version":"2.0","findings":[{"title":"t"}]},"created_at":"2026-01-01T00:00:00Z"}`
 	_ = os.WriteFile(filepath.Join(legacy, "a.json"), []byte(item), 0o600)
 	_ = os.WriteFile(filepath.Join(legacy, "hb.json"), []byte(`{"type":"heartbeat","report":{"x":1}}`), 0o600)
 	_ = os.WriteFile(filepath.Join(legacy, "notes.txt"), []byte("keep"), 0o600)

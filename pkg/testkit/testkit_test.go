@@ -19,7 +19,7 @@ import (
 // is a misconfiguration.
 var dotenv = tool.New(tool.Manifest{
 	Name: "dotenv-check", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-	Consumes: []string{"http_service"}, Produces: []string{"finding:misconfiguration"},
+	Consumes: []string{"web_origin"}, Produces: []string{"finding:misconfiguration"},
 }, func(ctx tool.Context, task tool.Task, _ tool.NoConfig) error {
 	for _, t := range task.Targets {
 		resp, err := ctx.HTTP().Get(t.URL("/.env"))
@@ -53,10 +53,10 @@ func envServer(t *testing.T) *httptest.Server {
 
 func TestDotenvGoldenIsStable(t *testing.T) {
 	srv := envServer(t)
-	task := tool.Task{Targets: []tool.Target{{Ref: "a1", Type: "http_service", Value: srv.URL}}}
+	task := tool.Task{Targets: []tool.Target{{Ref: "a1", Type: "web_origin", Value: srv.URL}}}
 	first := Run(t, dotenv, task)
 	first.RequireStatus(t, tool.StatusOK)
-	if len(first.Report.Findings) != 1 || first.Report.Findings[0].AssetRef != "target-a1" {
+	if len(first.Report.Findings) != 1 || first.Report.Findings[0].AssetRef != "target-1" {
 		t.Fatalf("report %+v", first.Report)
 	}
 	a, err := Normalize(first.Report)
@@ -81,8 +81,8 @@ func TestDotenvGoldenIsStable(t *testing.T) {
 func TestUnreachableTargetIsPartial(t *testing.T) {
 	srv := envServer(t)
 	task := tool.Task{Targets: []tool.Target{
-		{Ref: "a1", Type: "http_service", Value: srv.URL},
-		{Ref: "dead", Type: "http_service", Value: "http://127.0.0.1:1"},
+		{Ref: "a1", Type: "web_origin", Value: srv.URL},
+		{Ref: "dead", Type: "web_origin", Value: "http://127.0.0.1:1"},
 	}}
 	res := Run(t, dotenv, task)
 	res.RequireStatus(t, tool.StatusPartial)
@@ -97,13 +97,13 @@ func TestHTTPOutsideTheTargetsIsRefused(t *testing.T) {
 	srv := envServer(t)
 	probe := tool.New(tool.Manifest{
 		Name: "pivot", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-		Consumes: []string{"http_service"}, Produces: []string{"finding:misconfiguration"},
+		Consumes: []string{"web_origin"}, Produces: []string{"finding:misconfiguration"},
 	}, func(ctx tool.Context, task tool.Task, _ tool.NoConfig) error {
 		// other runs on 127.0.0.1 too, so reach it by name.
 		_, err := ctx.HTTP().Get(strings.Replace(other.URL, "127.0.0.1", "localhost", 1) + "/.env")
 		return err
 	})
-	res := Run(t, probe, tool.Task{Targets: []tool.Target{{Ref: "a", Type: "http_service", Value: srv.URL}}})
+	res := Run(t, probe, tool.Task{Targets: []tool.Target{{Ref: "a", Type: "web_origin", Value: srv.URL}}})
 	if res.Status != tool.StatusFailed || !strings.Contains(res.Err.Error(), "not allowed") {
 		t.Fatalf("status %s err %v", res.Status, res.Err)
 	}
@@ -115,7 +115,7 @@ func TestCredentialsAndRedaction(t *testing.T) {
 	var gotUndeclared error
 	tl := tool.New(tool.Manifest{
 		Name: "feed", Version: "1.0.0", Class: tool.Connector, Tier: tool.T0,
-		Produces:    []string{"asset:domain"},
+		Produces:    []string{"asset:domain_name"},
 		Permissions: tool.Permissions{Network: tool.NetVendor, VendorHosts: []string{"api.example.com"}, Credentials: []tool.CredentialReq{{Name: "api_key", Kind: "api_key"}}},
 	}, func(ctx tool.Context, _ tool.Task, _ tool.NoConfig) error {
 		_, gotUndeclared = ctx.Secret("db_password")
@@ -125,7 +125,7 @@ func TestCredentialsAndRedaction(t *testing.T) {
 		}
 		ctx.Log().Info("calling the API with key " + k.Reveal())
 		ctx.Log().Info("as an attribute", "key", k.Reveal(), "typed", k)
-		return ctx.Emit().Asset(ctis.Asset{Type: "domain", Value: "a.example"})
+		return ctx.Emit().Asset(ctis.Asset{Type: "domain_name", Value: "a.example"})
 	})
 	res := Run(t, tl, tool.Task{}, Options{Secrets: map[string]string{"api_key": "sk-live-123456", "db_password": "hunter2"}})
 	res.RequireStatus(t, tool.StatusOK)
@@ -143,7 +143,7 @@ func TestCredentialsAndRedaction(t *testing.T) {
 func TestRuntimeRulesInTests(t *testing.T) {
 	sneaky := tool.New(tool.Manifest{
 		Name: "sneaky", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-		Consumes: []string{"domain"}, Produces: []string{"finding:misconfiguration"},
+		Consumes: []string{"domain_name"}, Produces: []string{"finding:misconfiguration"},
 	}, func(ctx tool.Context, task tool.Task, _ tool.NoConfig) error {
 		err := ctx.Emit().Asset(ctis.Asset{Type: "ip_address", Value: "10.0.0.1"})
 		if !errors.Is(err, tool.ErrUndeclaredOutput) {
@@ -154,7 +154,7 @@ func TestRuntimeRulesInTests(t *testing.T) {
 		}
 		return nil
 	})
-	res := Run(t, sneaky, tool.Task{Targets: []tool.Target{{Ref: "d", Type: "domain", Value: "a.example"}}})
+	res := Run(t, sneaky, tool.Task{Targets: []tool.Target{{Ref: "d", Type: "domain_name", Value: "a.example"}}})
 	res.RequireStatus(t, tool.StatusPartial)
 	if res.Stats.Quarantined["asset:ip_address"] != 1 || len(res.Report.Assets) != 0 {
 		t.Fatalf("stats %+v assets %+v", res.Stats, res.Report.Assets)

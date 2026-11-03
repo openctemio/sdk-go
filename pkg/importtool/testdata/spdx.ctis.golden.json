@@ -1,23 +1,23 @@
 {
-  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "$schema": "https://schemas.openctem.io/ctis/2.0/report.json",
   "assets": [
     {
-      "id": "sbom-pkg:npm/web-frontend@3.1.0",
+      "id": "package-pkg:npm/web-frontend",
       "name": "web-frontend",
       "properties": {
         "package_purpose": "application",
         "version": "3.1.0"
       },
-      "type": "repository",
-      "value": "pkg:npm/web-frontend@3.1.0"
+      "type": "package",
+      "value": "pkg:npm/web-frontend"
     }
   ],
   "dependencies": [
     {
+      "asset_ref": "package-pkg:npm/web-frontend",
       "depends_on": [
         "SPDXRef-Package-loose-envify-1.4.0"
       ],
-      "ecosystem": "npm",
       "id": "SPDXRef-Package-react-18.2.0",
       "licenses": [
         "MIT"
@@ -30,21 +30,24 @@
       },
       "purl": "pkg:npm/react@18.2.0",
       "relationship": "direct",
+      "source_id": "SPDXRef-Package-react-18.2.0",
       "version": "18.2.0"
     },
     {
-      "ecosystem": "npm",
+      "asset_ref": "package-pkg:npm/web-frontend",
       "id": "SPDXRef-Package-loose-envify-1.4.0",
       "licenses": [
         "MIT"
       ],
       "name": "loose-envify",
       "purl": "pkg:npm/loose-envify@1.4.0",
-      "relationship": "indirect",
+      "relationship": "transitive",
+      "source_id": "SPDXRef-Package-loose-envify-1.4.0",
       "version": "1.4.0"
     }
   ],
   "metadata": {
+    "channel": "scanner",
     "properties": {
       "provenance": "<provenance>",
       "sbom_created": "2026-09-28T09:30:00Z",
@@ -52,14 +55,13 @@
       "sbom_namespace": "https://sbom.example.com/web-frontend-0b6f1a9c",
       "sbom_tools": "example-sbom-generator-1.2.0",
       "spdx_version": "SPDX-2.3"
-    },
-    "source_type": "scanner"
+    }
   },
   "tool": {
-    "capabilities": [
+    "name": "file-import",
+    "techniques": [
       "sca"
-    ],
-    "name": "file-import"
+    ]
   },
-  "version": "1.6"
+  "version": "2.0"
 }

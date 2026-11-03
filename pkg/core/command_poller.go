@@ -20,8 +20,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/openctemio/ctis/outcome"
-	ctissource "github.com/openctemio/ctis/source"
+	"github.com/openctemio/contract/outcome"
+	ctissource "github.com/openctemio/contract/source"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
@@ -120,7 +120,7 @@ type CommandResult struct {
 	// is not a refusal (ClassifyFailure).
 	Failure *Failure `json:"failure,omitempty"`
 	// TargetOutcomes is how each target of a completed scan command ended
-	// (ctis outcome.ResultKey): the platform settles the targets with an
+	// (contract outcome.ResultKey): the platform settles the targets with an
 	// outcome and hands out only the unfinished ones again.
 	// On a failed command they are the targets settled before the failure
 	// (FailureTargetOutcomes).
@@ -153,7 +153,7 @@ type ScanCommandPayload struct {
 	// (run_watch.go). It can only shorten the job.
 	Deadline time.Time `json:"deadline,omitzero"`
 	// OutcomeRevision is the highest per-target outcome revision the platform
-	// accepts (ctis outcome.Revision). Absent: 1. The sensor sends the classes
+	// accepts (contract outcome.Revision). Absent: 1. The sensor sends the classes
 	// that say why a target was not covered (a name that is gone, an edge
 	// that blocked, the sensor's own network) only at 2 or more; below it
 	// they go as the closest class the platform knows.
@@ -1673,6 +1673,8 @@ type DefaultCommandExecutor struct {
 	collectors map[string]Collector
 	pusher     Pusher
 	parsers    *ParserRegistry
+	// secretKey is the producer's secret fingerprint key (nil: none).
+	secretKey []byte
 	// assetResolver names the asset a scan target's findings belong to; nil
 	// leaves it to the parser.
 	assetResolver AssetResolver
@@ -1852,6 +1854,14 @@ func (e *DefaultCommandExecutor) ScanTargetPolicy() *ScanTargetPolicy {
 // emit SARIF (betterleaks, semgrep, trivy, nuclei).
 func (e *DefaultCommandExecutor) SetParserRegistry(r *ParserRegistry) {
 	e.parsers = r
+}
+
+// SetSecretFingerprintKey sets the producer's HMAC key for secret
+// fingerprints (CTIS recipe ctis-fp/2: HMAC-SHA256(key, secret), at least
+// 16 bytes). Parsers get it in ParseOptions.SecretKey; without it a secret
+// finding carries no fingerprint. The key never enters a report.
+func (e *DefaultCommandExecutor) SetSecretFingerprintKey(key []byte) {
+	e.secretKey = append([]byte(nil), key...)
 }
 
 // AssetResolver returns the asset a scan of target (already validated) should
@@ -2165,7 +2175,7 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 		if err != nil {
 			return atStage(StageParse, fmt.Errorf("parse failed: %w", err))
 		}
-		parseOpts := &ParseOptions{ToolName: scanner.Name()}
+		parseOpts := &ParseOptions{ToolName: scanner.Name(), SecretKey: e.secretKey}
 		if target != "" && filepath.IsAbs(target) {
 			// Filesystem scan: report repo-relative paths, so a finding's
 			// fingerprint does not depend on where the code was checked out.
@@ -2593,9 +2603,9 @@ func (e *DefaultCommandExecutor) SetVerbose(v bool) {
 
 // CTIS coverage_type values (spec 4.5).
 const (
-	coverageTypeFull        = "full"
-	coverageTypePartial     = "partial"
-	coverageTypeIncremental = "incremental"
+	coverageTypeFull        = ctis.CoverageFull
+	coverageTypePartial     = ctis.CoveragePartial
+	coverageTypeIncremental = ctis.CoverageIncremental
 )
 
 // addReachMetadata puts what rec recorded in the result's metadata, unless
@@ -2617,7 +2627,7 @@ func addReachMetadata(res *CommandResult, rec *reach.Recorder) {
 // reachCoverageType makes a full coverage partial when the job's recorder
 // saw targets it could not reach: what the scan did not report on them is
 // not "no findings".
-func reachCoverageType(ctx context.Context, coverage string) string {
+func reachCoverageType(ctx context.Context, coverage ctis.CoverageType) ctis.CoverageType {
 	if coverage != coverageTypeFull {
 		return coverage
 	}
@@ -2633,7 +2643,7 @@ func reachCoverageType(ctx context.Context, coverage string) string {
 // reports only on full coverage.
 //
 //   - A run the scanner says stopped part-way (ScanResult.Error), with
-//     targets it could not scan (properties.failed_targets) or with hosts
+//     targets it could not scan (metadata.targets failed or unfinished) or with hosts
 //     it could not fully cover (ScanResult.CoverageGaps) is partial, even
 //     when the parser declared full.
 //   - Otherwise a value the parser declared is kept.
@@ -2641,7 +2651,7 @@ func reachCoverageType(ctx context.Context, coverage string) string {
 //     default-branch-gated auto-resolve, and the runtime cannot tell that the
 //     checkout was the whole repository.
 //   - Anything else, a completed run over its targets, is full.
-func scanCoverageType(report *ctis.Report, r *ScanResult) string {
+func scanCoverageType(report *ctis.Report, r *ScanResult) ctis.CoverageType {
 	declared := report.Metadata.CoverageType
 	if (r != nil && (r.Error != "" || r.HasCoverageGaps())) || hasFailedTargets(report) {
 		if declared == coverageTypeIncremental {
@@ -2671,30 +2681,22 @@ func emptyScanReport(ctx context.Context, tool string, r *ScanResult) *ctis.Repo
 	return report
 }
 
-// hasFailedTargets reports whether a report lists targets the run could not
-// scan (recon scanners record them in properties.failed_targets).
+// hasFailedTargets reports whether a report's metadata.targets lists a
+// target the run could not scan (failed or unfinished).
 func hasFailedTargets(report *ctis.Report) bool {
-	v, ok := report.Properties["failed_targets"]
-	if !ok || v == nil {
-		return false
+	for _, t := range report.Metadata.Targets {
+		if t.State == ctis.TargetFailed || t.State == ctis.TargetUnfinished {
+			return true
+		}
 	}
-	switch t := v.(type) {
-	case []string:
-		return len(t) > 0
-	case []any:
-		return len(t) > 0
-	case string:
-		return t != ""
-	default:
-		return true
-	}
+	return false
 }
 
 // collectCoverageType is the coverage_type a collector's report declares:
 // the collector's own value (an import that knows it is a complete export,
 // such as a Tenable scan, says full), else partial. The runtime cannot know
 // that an external source returned everything.
-func collectCoverageType(report *ctis.Report) string {
+func collectCoverageType(report *ctis.Report) ctis.CoverageType {
 	if report.Metadata.CoverageType != "" {
 		return report.Metadata.CoverageType
 	}

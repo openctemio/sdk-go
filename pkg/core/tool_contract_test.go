@@ -21,7 +21,7 @@ func (fakeContractScanner) IsInstalled(context.Context) (bool, string, error) { 
 
 func (contractScanner) ToolContract() *ToolContract {
 	return &ToolContract{APIVersion: "openctem.io/tool/v1", Digest: "sha256:abc", Version: "1.0.0",
-		Class: "target-scan", Tier: "T1", Network: "targets", Produces: []string{"asset:http_service"}}
+		Class: "target-scan", Tier: "T1", Network: "targets", Produces: []string{"asset:web_origin"}}
 }
 
 // A scanner ported to the tool contract is reported with its contract in

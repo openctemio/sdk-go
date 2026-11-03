@@ -28,7 +28,7 @@ to start (never a shell).
 
 A tool states which capabilities of the OpenCTEM capability taxonomy it
 implements (`implements: [{capability: scan.ports@1, params: {...}}]`, see
-[docs/capabilities.md in ctis](https://github.com/openctemio/ctis/blob/main/docs/capabilities.md)).
+[docs/capabilities.md in contract](https://github.com/openctemio/contract/blob/main/docs/capabilities.md)).
 The capability carries the phase, the tier floor, the input and output types
 and the required output; the tool maps the capability's standard params to its
 own config keys.
@@ -57,8 +57,8 @@ runtime → {"v":1,"type":"describe"}
 tool    → {"v":1,"type":"manifest","manifest":{ ...tool.yaml as JSON, without run... }}
 runtime → {"v":1,"type":"validate","task":{...}}          (optional)
 tool    → {"v":1,"type":"validation","ok":true}
-runtime → {"v":1,"type":"run","task":{"id":"...","targets":[{"ref":"t1","type":"http_service","value":"https://a.example"}],"config":{...},"workdir":"/run/task","credentials":[...]}}
-tool    → {"v":1,"type":"record","kind":"finding","target":"t1","data":{ one CTIS finding }}
+runtime → {"v":1,"type":"run","task":{"id":"...","targets":[{"ref":"t1","type":"web_origin","value":"https://a.example"}],"config":{...},"workdir":"/run/task","credentials":[...]}}
+tool    → {"v":1,"type":"record","kind":"finding","target":"t1","data":{ one CTIS 2.0 finding }}
 tool    → {"v":1,"type":"target_status","target":"t1","status":"done"}
 tool    → {"v":1,"type":"result","status":"ok"}
 ```
@@ -67,6 +67,17 @@ Message types (runtime to tool): `hello`, `describe`, `validate`, `run`, `cancel
 Message types (tool to runtime): `hello`, `manifest`, `validation`, `log`,
 `progress`, `record`, `report_info`, `target_status`, `artifact`, `heartbeat`,
 `verdict` (retest tasks), `result`.
+
+A `record` is one CTIS 2.0 object, by `kind`: `asset`, `finding`,
+`dependency`, `endpoint`, `relationship` (an edge between two assets sent
+before it, by their ids: a host `exposes` a service asset) or `rule` (an entry
+of the report's rule catalog, sent before the findings that name it by
+`rule_ref`). Asset values are written in the canonical form of their type
+(`ctis.CanonicalAssetValue`); ids and `*_ref` values are document-local and
+never UUID-shaped. An asset without an id gets one from the runtime; a finding
+without `asset_ref` is filed on its `target` (or on the task's only target).
+The runtime owns `metadata.id` (a new UUIDv7), `generated_at` and
+`metadata.targets`; the task id and target refs never enter the document.
 
 **Ignore what you do not know.** Unknown message types and unknown members are
 ignored, except during the handshake. A newer runtime may send more.
@@ -89,14 +100,14 @@ ignored, except during the handshake. A newer runtime may send more.
 - **Stopping part-way:** when the run stops after some targets were settled
   (the tool crashes or reports a failure, goes silent past its idle timeout,
   or a time limit hits), the task ends `partial`: the accepted records are
-  delivered and the targets never settled are listed as `unfinished_targets`.
+  delivered and the targets never settled are listed in the report's `metadata.targets` as `unfinished`.
   A cancel, a policy refusal or rejected output still fails the task. The
   platform can also ask for what a stalled task finished (`stop_command_ids`
   in the heartbeat answer): the run is stopped the same way and delivers
   its settled targets as `partial`.
 - **Per-target outcomes:** a task that delivers (`ok` or `partial`) carries each
-  target's outcome in the report's `target_outcomes` property and in the
-  command result (the ctis `outcome` contract): `done`, `failed` (`timeout`,
+  target's outcome in the report's `metadata.targets` (CTIS 2.0) and in the
+  command result (the `outcome` package of the contract module): `done`, `failed` (`timeout`,
   `unreachable` or `tool_error`, from the target's error class), `skipped`
   (`refused` or `excluded`) or `unfinished`. The platform settles every target
   with an outcome and runs only the unfinished ones again.

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openctemio/ctis/capability"
+	"github.com/openctemio/contract/capability"
 	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/conformance"
 	"github.com/openctemio/sdk-go/pkg/sdk"
@@ -83,7 +83,7 @@ func GitLabCI() string { return gitlabCI }
 func cmdInit(args []string, stdout, stderr io.Writer) int {
 	fs := flags("init", stderr)
 	kind := fs.String("kind", "", "exec-sarif, exec-ctis, exec-json, go or python")
-	capRef := fs.String("capability", "", "the capability the tool implements (id@major, see ctis docs/capabilities.md)")
+	capRef := fs.String("capability", "", "the capability the tool implements (id@major, see the contract module docs/capabilities.md)")
 	name := fs.String("name", "", "the tool name (default: my-<capability>)")
 	pos, err := parseInterspersed(fs, args)
 	if err != nil || len(pos) > 1 || !slices.Contains(kinds, *kind) || *capRef == "" {
@@ -159,26 +159,25 @@ type scaffoldFile struct {
 // value from here, so a scaffold's self-test sends no traffic to a host on
 // the internet: the entries that look like internet names (example.com and
 // its subdomains, reserved by RFC 2606) are only used for types a stub
-// resolves to nothing (domain, subdomain) or never connects to (the rest).
+// resolves to nothing (domain_name) or never connects to (the rest).
 var sampleValues = map[string]string{
-	"domain": "example.com", "subdomain": "www.example.com",
-	"repository": "fixtures/repo", "container": "registry.example.com/app:1.0",
-	"cloud_account": "123456789012", "network": "192.0.2.0/24", "subnet": "192.0.2.0/24",
+	"domain_name": "www.example.com",
+	"repository":  "fixtures/repo", "container": "registry.example.com/app:1.0",
+	"cloud_account": "123456789012", "ip_range": "192.0.2.0/24", "subnet": "192.0.2.0/24",
 }
 
 // servedValues are fixture target values for the types the conformance kit
 // can serve from its loopback fixture server: the placeholders the kit
 // replaces by the server's address when it runs the fixture.
 var servedValues = map[string]string{
-	"http_service": "{{fixture.url}}", "website": "{{fixture.url}}", "web_application": "{{fixture.url}}",
-	"api": "{{fixture.url}}", "discovered_url": "{{fixture.url}}/login",
-	"open_port": "{{fixture.host_port}}", "service": "{{fixture.host_port}}",
-	"host": "{{fixture.host}}", "ip_address": "{{fixture.host}}",
+	"web_origin": "{{fixture.url}}", "web_application": "{{fixture.url}}", "api": "{{fixture.url}}",
+	"service": "{{fixture.host_port}}/tcp",
+	"host":    "{{fixture.host}}", "ip_address": "{{fixture.host}}",
 }
 
 // servedOrder is the preference among the served types a capability consumes:
 // URLs first, then services, then hosts.
-var servedOrder = []string{"http_service", "website", "web_application", "api", "discovered_url", "open_port", "service", "host", "ip_address"}
+var servedOrder = []string{"web_origin", "web_application", "api", "service", "host", "ip_address"}
 
 // fixtureServe is the default serve member of a scaffold fixture: a small
 // page the stub tool may fetch (the kit answers it on 127.0.0.1).
@@ -476,7 +475,7 @@ func makefile(kind, name string) string {
 func execStub(kind, name string) string {
 	out := map[string]string{
 		KindExecSARIF: `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"` + name + `","rules":[]}},"results":[]}]}`,
-		KindExecCTIS:  `{"version":"1.4","metadata":{"timestamp":"2026-01-01T00:00:00Z"}}`,
+		KindExecCTIS:  `{"version":"2.0","metadata":{"generated_at":"2026-01-01T00:00:00Z"}}`,
 		KindExecJSON:  ``,
 	}[kind]
 	return "#!/bin/sh\n" +
@@ -489,10 +488,10 @@ func execStub(kind, name string) string {
 func mappingStub(c capability.Capability) string {
 	kind, set := "finding", "      type: {const: vulnerability}\n      title: /title\n      severity: {path: /severity, default: info}\n      rule_id: /id\n"
 	if !slices.Contains(c.OutPorts, capability.PortFinding) {
-		kind, set = "asset", "      type: {const: domain}\n      value: /value\n"
+		kind, set = "asset", "      type: {const: domain_name}\n      value: /value\n"
 	}
 	return "# Declarative mapping of the CLI's JSON Lines output to CTIS (ctis/importer/mapping).\n" +
-		"apiVersion: openctem.io/mapping/v1\nsource: jsonl\nrecords:\n  - when: {path: /id, exists: true}\n    kind: " + kind + "\n    set:\n" + set
+		"apiVersion: openctem.io/mapping/v2\nsource: jsonl\nrecords:\n  - when: {path: /id, exists: true}\n    kind: " + kind + "\n    set:\n" + set
 }
 
 func goMain(c capability.Capability) string {

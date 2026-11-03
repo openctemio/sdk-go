@@ -51,7 +51,7 @@ func TestSARIFParser_AssetRule(t *testing.T) {
 	noCI(t)
 	r := parseSARIF(t, []byte(provLog), nil)
 	a := r.Assets[0]
-	if a.Value != "https://github.com/example/shop" || a.Type != ctis.AssetTypeRepository {
+	if a.Value != "github.com/example/shop" || a.Type != ctis.AssetTypeRepository {
 		t.Errorf("provenance asset = %+v", a)
 	}
 	if a.Properties["commit_sha"] != "abc123" || a.Properties["branch"] != "main" || a.Properties["source"] != "sarif_version_control_provenance" {
@@ -72,7 +72,7 @@ func TestSARIFParser_AssetRule(t *testing.T) {
 		t.Errorf("branch = %+v", b)
 	}
 
-	bi := &ctis.BranchInfo{Name: "dev", RepositoryURL: "github.com/example/branchrepo", IsDefaultBranch: true, CommitSHA: "fff"}
+	bi := &ctis.BranchInfo{Name: "dev", RepositoryURL: "https://github.com/example/branchrepo", IsDefaultBranch: true, CommitSHA: "fff"}
 	r = parseSARIF(t, []byte(provLog), &core.ParseOptions{BranchInfo: bi})
 	if r.Assets[0].Value != "github.com/example/branchrepo" {
 		t.Errorf("branch-info asset = %+v", r.Assets[0])
@@ -137,15 +137,15 @@ func TestSARIFParser_ToolTypeAndConfidence(t *testing.T) {
 	  "results":[{"ruleId":"r1","message":{"text":"m"}}]}]}`)
 	repo := "github.com/example/shop"
 	r := parseSARIF(t, log, &core.ParseOptions{AssetValue: repo})
-	if r.Findings[0].Type == ctis.FindingTypeSecret || slicesContain(r.Tool.Capabilities, "secret") {
-		t.Errorf("unknown tool typed secret: %s %v", r.Findings[0].Type, r.Tool.Capabilities)
+	if r.Findings[0].Type == ctis.FindingTypeSecret || slicesContain(techniques(r.Tool), "secret") {
+		t.Errorf("unknown tool typed secret: %s %v", r.Findings[0].Type, r.Tool.Techniques)
 	}
 	if r.Findings[0].Confidence != 90 {
 		t.Errorf("default confidence = %d, want 90", r.Findings[0].Confidence)
 	}
 	r = parseSARIF(t, log, &core.ParseOptions{AssetValue: repo, ToolType: "secret", DefaultConfidence: 40})
-	if r.Findings[0].Type != ctis.FindingTypeSecret || !reflect.DeepEqual(r.Tool.Capabilities, []string{"secret"}) {
-		t.Errorf("ToolType secret: type %s, capabilities %v", r.Findings[0].Type, r.Tool.Capabilities)
+	if r.Findings[0].Type != ctis.FindingTypeSecret || !reflect.DeepEqual(techniques(r.Tool), []string{"secret"}) {
+		t.Errorf("ToolType secret: type %s, capabilities %v", r.Findings[0].Type, r.Tool.Techniques)
 	}
 	if r.Findings[0].Confidence != 40 {
 		t.Errorf("confidence = %d, want 40", r.Findings[0].Confidence)
@@ -219,8 +219,8 @@ func TestSARIFParser_ModuleMapping(t *testing.T) {
 			t.Errorf("finding %d type = %s, want secret", i, r.Findings[i].Type)
 		}
 	}
-	if !reflect.DeepEqual(r.Tool.Capabilities, []string{"secret"}) {
-		t.Errorf("capabilities = %v", r.Tool.Capabilities)
+	if !reflect.DeepEqual(techniques(r.Tool), []string{"secret"}) {
+		t.Errorf("capabilities = %v", r.Tool.Techniques)
 	}
 
 	// A secret scanner's raw match never reaches the report.
@@ -243,4 +243,16 @@ func TestSARIFParser_ModuleMapping(t *testing.T) {
 	if r.Findings[0].Type != ctis.FindingTypeVulnerability || r.Findings[1].Type != ctis.FindingTypeMisconfiguration {
 		t.Errorf("trivy types = %s, %s", r.Findings[0].Type, r.Findings[1].Type)
 	}
+}
+
+// techniques are a tool's techniques as strings.
+func techniques(t *ctis.Tool) []string {
+	if t == nil {
+		return nil
+	}
+	out := make([]string, 0, len(t.Techniques))
+	for _, x := range t.Techniques {
+		out = append(out, string(x))
+	}
+	return out
 }

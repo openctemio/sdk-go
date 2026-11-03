@@ -12,7 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openctemio/ctis/capability"
+	"github.com/openctemio/contract/capability"
+	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -230,7 +231,7 @@ func (r *contractRun) fixtureContract() {
 				r.t.Errorf("FixtureContract/%s/%s: the task failed: %v", f.Name, c.Ref(), out.Err)
 				continue
 			}
-			if v, _ := c.Check(out.Report, capability.CheckOptions{Shape: outputShape(r.m, c)}); len(v) > 0 {
+			if v, _ := c.Check(reportJSON(toolrt.OutputOnly(out.Report)), capability.CheckOptions{Shape: outputShape(r.m, c)}); len(v) > 0 {
 				r.t.Errorf("FixtureContract/%s/%s: %d record(s) miss the contract, first: %s", f.Name, c.Ref(), len(v), v[0])
 			}
 		}
@@ -312,30 +313,20 @@ func reportJSON(r *ctis.Report) map[string]any {
 	return doc
 }
 
-// openPorts are the ports a report says are open, in either shape of
-// scan.ports.
+// openPorts are the ports a report says are open: the service assets of
+// CTIS 2.0 (technical.service.port, state open or not stated).
 func openPorts(r *ctis.Report) []int {
 	var out []int
-	addPort := func(v any) {
-		if f, ok := v.(float64); ok && !slices.Contains(out, int(f)) {
-			out = append(out, int(f))
-		}
+	if r == nil {
+		return nil
 	}
-	assets, _ := reportJSON(r)["assets"].([]any)
-	for _, a := range assets {
-		am, _ := a.(map[string]any)
-		if am["type"] == "open_port" {
-			props, _ := am["properties"].(map[string]any)
-			addPort(props["port"])
+	for _, a := range r.Assets {
+		if a.Type != ctis.AssetTypeService || a.Technical == nil || a.Technical.Service == nil {
+			continue
 		}
-		if tech, ok := am["technical"].(map[string]any); ok {
-			if ip, ok := tech["ip_address"].(map[string]any); ok {
-				ports, _ := ip["ports"].([]any)
-				for _, p := range ports {
-					pm, _ := p.(map[string]any)
-					addPort(pm["port"])
-				}
-			}
+		st := a.Technical.Service
+		if st.Port > 0 && (st.State == "" || st.State == ctis.PortOpen) && !slices.Contains(out, st.Port) {
+			out = append(out, st.Port)
 		}
 	}
 	slices.Sort(out)

@@ -86,7 +86,7 @@ func TestApplyParamsTypes(t *testing.T) {
 	m := Manifest{Name: "probe", Version: "1.0.0", Class: TargetScan, Tier: T1,
 		Implements: []Implementation{{Capability: "probe.http@1", Params: map[string]ParamMapping{
 			"ports": {}, "tech_detect": {Key: "td"}}}},
-		Consumes: []string{"domain"}, Produces: []string{"asset:http_service"},
+		Consumes: []string{"domain_name"}, Produces: []string{"asset:web_origin"},
 		Config: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"ports":{"type":"array","items":{"type":"string"}},"td":{"type":"boolean"}}}`)}
 	if err := m.Validate(); err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func TestApplyParamsTypes(t *testing.T) {
 
 	n := Manifest{Name: "nuc", Version: "1.0.0", Class: TargetScan, Tier: T1,
 		Implements: []Implementation{{Capability: "vuln.templates@1", Params: map[string]ParamMapping{"tags": {}, "severity": {}}}},
-		Consumes:   []string{"domain"}, Produces: []string{"finding:vulnerability"},
+		Consumes:   []string{"domain_name"}, Produces: []string{"finding:vulnerability"},
 		Config: json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"tags":{"type":"array","items":{"type":"string"}},"severity":{"type":"array","items":{"type":"string"}}}}`)}
 	for _, bad := range []string{`"x"`, `[""]`, `[1]`, `["` + strings.Repeat("a", 300) + `"]`} {
 		if _, err := n.ApplyParams(Task{Capability: "vuln.templates@1", Params: map[string]json.RawMessage{"tags": json.RawMessage(bad)}}); err == nil {

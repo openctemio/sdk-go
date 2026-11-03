@@ -1322,6 +1322,7 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 		parsers.Register(p)
 	}
 	executor.SetParserRegistry(parsers)
+	executor.SetSecretFingerprintKey(k.secretFingerprintKey())
 	executor.SetTemplateVerifier(k.s.templates)
 	// Packs a signed job pins come from the content cache.
 	if cache := k.contentCache(); cache != nil {

@@ -20,8 +20,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"mime"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/openctemio/ctis/v2"
 )
 
 // ProtocolVersion is the protocol level a v2 response announces.
@@ -59,9 +62,10 @@ func CommitPath(commandID, reportID string) string {
 	return ReportPath(commandID, reportID) + "/commit"
 }
 
-// Media types and encodings.
+// Media types and encodings. MediaTypeCTIS is the CTIS 2.0 media type with
+// its version (ctis.MediaTypeVersioned); IsCTISMediaType accepts any 2.x.
 const (
-	MediaTypeCTIS    = "application/vnd.openctem.ctis.v1+json"
+	MediaTypeCTIS    = ctis.MediaTypeVersioned
 	MediaTypeProblem = "application/problem+json"
 	MediaTypeJSON    = "application/json"
 
@@ -498,11 +502,24 @@ func (h *Hello) SupportsResults() bool {
 		}
 	}
 	for _, m := range h.MediaTypes {
-		if strings.EqualFold(m, MediaTypeCTIS) {
+		if IsCTISMediaType(m) {
 			hasType = true
 		}
 	}
 	return hasFeature && hasType
+}
+
+// IsCTISMediaType reports whether v is the CTIS media type
+// (application/vnd.ctis+json) with a version parameter of major 2. A
+// version-less or 1.x media type is not: producers and the platform move to
+// CTIS 2.0 together.
+func IsCTISMediaType(v string) bool {
+	mt, params, err := mime.ParseMediaType(v)
+	if err != nil || !strings.EqualFold(mt, ctis.MediaType) {
+		return false
+	}
+	major, _, _ := strings.Cut(params["version"], ".")
+	return major == strconv.Itoa(ctis.SchemaMajor)
 }
 
 // SupportsEncoding reports whether the server accepts a content coding.

@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/openctemio/ctis/tooloption"
+	"github.com/openctemio/contract/tooloption"
 )
 
 // SettingsSchemaProvider is a Scanner that declares its settings schema (api

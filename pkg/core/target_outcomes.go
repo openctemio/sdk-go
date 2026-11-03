@@ -1,13 +1,12 @@
 package core
 
-// Per-target outcomes of a scan command (ctis outcome): the result says how
-// each of the job's targets ended, so the platform settles every target with
-// an outcome and hands only the unfinished ones out again. The ledger is
+// Per-target outcomes of a scan command (contract outcome): the result says
+// how each of the job's targets ended, so the platform settles every target
+// with an outcome and hands only the unfinished ones out again. The ledger is
 // built from what the run already reports: the targets refused before the
-// run, the per-target outcomes the tool host writes into
-// the report (target_outcomes), the targets a run that stopped part-way
-// never reached (unfinished_targets) and the targets a scanner says it could
-// not scan (failed_targets).
+// run and the per-target outcomes of the report (CTIS metadata.targets: the
+// tool host writes done, failed, skipped and unfinished; a scanner states
+// the targets it could not scan).
 //
 // A target is done only when the run covered it. The run's own evidence of the
 // targets it did not cover counts too: a host the rate controller gave up on
@@ -21,7 +20,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/openctemio/ctis/outcome"
+	"github.com/openctemio/contract/outcome"
 	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/reach"
@@ -48,7 +47,7 @@ type OutcomeEvidence struct {
 }
 
 // OutcomeRevisionNewClasses is the outcome revision that adds the classes
-// that say why a target was not covered (ctis outcome.Revision).
+// that say why a target was not covered (contract outcome.Revision).
 const OutcomeRevisionNewClasses = 2
 
 // TargetOutcomes returns one outcome per target the scanner ran over, in
@@ -218,103 +217,21 @@ func (p *ScanCommandPayload) outcomes(ran []outcome.Target, refused []RefusedTar
 	return out
 }
 
-// reportOutcomes reads the per-target marks of a report: the tool host's
-// explicit outcomes first, then the targets a run that stopped part-way
-// never reached, then failed targets.
+// reportOutcomes reads the per-target marks of a report: its CTIS
+// metadata.targets (the tool host writes them for every target; a tool may
+// state its own), bounded by outcome.MaxTargets.
 func reportOutcomes(report *ctis.Report) []outcome.Target {
-	// Copy: the in-process list is the report's own and must not be edited.
-	out := append([]outcome.Target(nil), explicitOutcomes(report.Properties[outcome.ResultKey])...)
-	// A tool's report is not evidence about the sensor: only the sensor's own
-	// reach control may charge it, so a claimed sensor fault is downgraded.
-	for i := range out {
-		if out[i].Class == outcome.SensorNetworkFault {
-			out[i].Class = outcome.Unreachable
+	n := min(len(report.Metadata.Targets), outcome.MaxTargets)
+	out := make([]outcome.Target, 0, n)
+	for _, t := range report.Metadata.Targets[:n] {
+		o := outcome.Target{Target: t.Target, State: outcome.State(t.State), Class: outcome.Class(t.Class)}
+		// A tool's report is not evidence about the sensor: only the
+		// sensor's own reach control may charge it, so a claimed sensor
+		// fault is downgraded, and the side is the sensor's to decide.
+		if o.Class == outcome.SensorNetworkFault {
+			o.Class = outcome.Unreachable
 		}
-		out[i].Cause = ""
-	}
-	for _, t := range stringList(report.Properties[unfinishedTargetsKey]) {
-		out = append(out, outcome.Target{Target: t, State: outcome.Unfinished})
-	}
-	for _, t := range failedTargetList(report.Properties["failed_targets"]) {
-		out = append(out, outcome.Target{Target: t, State: outcome.Failed, Class: outcome.ToolError})
-	}
-	return out
-}
-
-// unfinishedTargetsKey is the report property a run that stopped part-way
-// lists its unreached targets in (toolhost.UnfinishedTargetsKey).
-const unfinishedTargetsKey = "unfinished_targets"
-
-// explicitOutcomes reads a report's target_outcomes property, as decoded
-// from JSON ([]any of objects) or set in process ([]outcome.Target).
-func explicitOutcomes(v any) []outcome.Target {
-	switch list := v.(type) {
-	case []outcome.Target:
-		return list
-	case []any:
-		out := make([]outcome.Target, 0, min(len(list), outcome.MaxTargets))
-		for i, e := range list {
-			if i == outcome.MaxTargets {
-				break
-			}
-			m, ok := e.(map[string]any)
-			if !ok {
-				continue
-			}
-			t, _ := m["target"].(string)
-			s, _ := m["state"].(string)
-			c, _ := m["class"].(string)
-			cause, _ := m["cause"].(string)
-			reason, _ := m["reason"].(string)
-			vendor, _ := m["vendor"].(string)
-			out = append(out, outcome.Target{Target: t, State: outcome.State(s), Class: outcome.Class(c),
-				Cause: outcome.Cause(cause), Reason: reason, Vendor: vendor})
-		}
-		return out
-	}
-	return nil
-}
-
-// stringList reads a property holding a list of strings.
-func stringList(v any) []string {
-	switch list := v.(type) {
-	case []string:
-		return list
-	case []any:
-		out := make([]string, 0, min(len(list), outcome.MaxTargets))
-		for i, e := range list {
-			if i == outcome.MaxTargets {
-				break
-			}
-			if s, ok := e.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
-	return nil
-}
-
-// failedTargetList reads the targets of a failed_targets property: a list
-// of target strings or of objects with a "target" member.
-func failedTargetList(v any) []string {
-	list, ok := v.([]any)
-	if !ok {
-		return stringList(v)
-	}
-	out := make([]string, 0, min(len(list), outcome.MaxTargets))
-	for i, e := range list {
-		if i == outcome.MaxTargets {
-			break
-		}
-		switch t := e.(type) {
-		case string:
-			out = append(out, t)
-		case map[string]any:
-			if s, ok := t["target"].(string); ok {
-				out = append(out, s)
-			}
-		}
+		out = append(out, o)
 	}
 	return out
 }

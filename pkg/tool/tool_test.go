@@ -24,7 +24,7 @@ type probeConfig struct {
 
 var probeManifest = Manifest{
 	Name: "probe", Version: "1.0.0", Class: TargetScan, Tier: T1,
-	Consumes: []string{"http_service"}, Produces: []string{"finding:misconfiguration"},
+	Consumes: []string{"web_origin"}, Produces: []string{"finding:misconfiguration"},
 }
 
 func TestSchemaForIsDeterministicAndValid(t *testing.T) {

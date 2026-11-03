@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/openctemio/ctis/importer"
+	"github.com/openctemio/ctis/v2/importer"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/testkit"
@@ -52,17 +52,16 @@ func parserFor(format string) (outputParser, []byte, bool) {
 			true
 	case tool.OutputCTIS:
 		return func(_ context.Context, data []byte) ([]byte, int, error) {
-				var r ctis.Report
-				d := json.NewDecoder(bytes.NewReader(data))
-				d.DisallowUnknownFields()
-				if err := d.Decode(&r); err != nil {
+				// CTIS 2.x only (a 1.x document is an error).
+				r, _, err := ctis.Decode(bytes.NewReader(data))
+				if err != nil {
 					return nil, 0, err
 				}
 				if err := r.Validate(); err != nil {
 					return nil, 0, err
 				}
 				return report(&r)
-			}, []byte(`{"version":"1.4","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"vulnerability","title":"t","severity":"high"}]}`),
+			}, []byte(`{"version":"2.0","metadata":{"id":"0192a3b4-0000-7000-8000-000000000001","generated_at":"2026-01-01T00:00:00Z"},"assets":[{"id":"a1","type":"domain_name","value":"a.example"}],"findings":[{"type":"vulnerability","title":"t","severity":"high","asset_ref":"a1"}]}`),
 			true
 	case tool.OutputJSONLCTIS:
 		return func(_ context.Context, data []byte) ([]byte, int, error) {

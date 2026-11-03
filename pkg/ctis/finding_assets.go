@@ -80,12 +80,10 @@ func CheckFindingAssets(r *Report) error {
 
 	var e *FindingAssetError
 	for i := range r.Findings {
+		// CTIS 2.0: asset_ref is required and names an asset of the report.
 		var asset *Asset
-		switch ref := r.Findings[i].AssetRef; {
-		case ref != "":
+		if ref := r.Findings[i].AssetRef; ref != "" {
 			asset = byID[ref]
-		case len(r.Assets) == 1:
-			asset = &r.Assets[0]
 		}
 		if asset != nil && strings.TrimSpace(asset.Value) != "" {
 			continue

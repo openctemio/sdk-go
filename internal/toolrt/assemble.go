@@ -3,6 +3,10 @@ package toolrt
 import (
 	"fmt"
 	"maps"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,14 +57,12 @@ func NewAssembler(m tool.Manifest, task tool.Task, c *Checker) *Assembler {
 		}
 		a.items[it.Ref] = it
 	}
+	c.AllowTaskTargets(task.Targets)
 	for _, t := range task.Targets {
 		if _, dup := a.targets[t.Ref]; !dup {
 			a.order = append(a.order, t.Ref)
 		}
 		a.targets[t.Ref] = t
-		if t.Type != "" {
-			c.AllowTarget(t.Type, t.Value)
-		}
 	}
 	return a
 }
@@ -104,6 +106,9 @@ func (a *Assembler) Finding(ref string, f ctis.Finding) error {
 		}
 		f.AssetRef = id
 	}
+	if f.AssetRef == "" {
+		return errNoFindingAsset
+	}
 	f, err := a.checker.Finding(f)
 	if err != nil {
 		return err
@@ -124,10 +129,47 @@ func (a *Assembler) AddCheckedFinding(ref string, f ctis.Finding) error {
 		}
 		f.AssetRef = id
 	}
+	if f.AssetRef == "" {
+		return errNoFindingAsset
+	}
 	a.mu.Lock()
 	a.report.Findings = append(a.report.Findings, f)
 	a.mu.Unlock()
 	return nil
+}
+
+// targetAssetPrefix starts the id of an asset the runtime adds for a task
+// target (to file findings on).
+const targetAssetPrefix = "target-"
+
+// OutputOnly returns a copy of r without the assets the runtime added for
+// the task's targets: they are the task's input, so a capability's output
+// contract does not judge them.
+func OutputOnly(r *ctis.Report) *ctis.Report {
+	if r == nil {
+		return nil
+	}
+	cp := *r
+	cp.Assets = make([]ctis.Asset, 0, len(r.Assets))
+	for _, a := range r.Assets {
+		if !strings.HasPrefix(a.ID, targetAssetPrefix) {
+			cp.Assets = append(cp.Assets, a)
+		}
+	}
+	return &cp
+}
+
+// errNoFindingAsset refuses a finding that names no asset and no target
+// (CTIS 2.0: every finding names an asset of the document).
+var errNoFindingAsset = fmt.Errorf("%w: the finding names no asset (asset_ref) and no target", tool.ErrInvalidRecord)
+
+// DefaultTargetRef is the ref a finding without an asset or target is filed
+// on: the task's target when it has exactly one, else "".
+func (a *Assembler) DefaultTargetRef() string {
+	if len(a.order) == 1 {
+		return a.order[0]
+	}
+	return ""
 }
 
 // Dependency checks and adds a dependency.
@@ -161,6 +203,40 @@ func (a *Assembler) Endpoint(e ctis.Endpoint) error {
 func (a *Assembler) AddCheckedEndpoint(e ctis.Endpoint) {
 	a.mu.Lock()
 	a.report.Endpoints = append(a.report.Endpoints, e)
+	a.mu.Unlock()
+}
+
+// Rule checks and adds a rule of the catalog.
+func (a *Assembler) Rule(r ctis.Rule) error {
+	r, err := a.checker.Rule(r)
+	if err != nil {
+		return err
+	}
+	a.AddCheckedRule(r)
+	return nil
+}
+
+// AddCheckedRule adds a rule the checker already accepted.
+func (a *Assembler) AddCheckedRule(r ctis.Rule) {
+	a.mu.Lock()
+	a.report.Rules = append(a.report.Rules, r)
+	a.mu.Unlock()
+}
+
+// Relationship checks and adds a relationship.
+func (a *Assembler) Relationship(r ctis.Relationship) error {
+	r, err := a.checker.Relationship(r)
+	if err != nil {
+		return err
+	}
+	a.AddCheckedRelationship(r)
+	return nil
+}
+
+// AddCheckedRelationship adds a relationship the checker already accepted.
+func (a *Assembler) AddCheckedRelationship(r ctis.Relationship) {
+	a.mu.Lock()
+	a.report.Relationships = append(a.report.Relationships, r)
 	a.mu.Unlock()
 }
 
@@ -202,13 +278,25 @@ func (a *Assembler) targetAsset(ref string) (string, error) {
 	if ok {
 		return id, nil
 	}
-	if !ctis.AssetType(t.Type).IsValid() || t.Value == "" {
-		// Nothing to file on: the finding stays without an asset (the
-		// platform's ingest decides).
-		return "", nil
+	typ := ctis.AssetType(t.Type)
+	if typ == "" {
+		// A plain target of a scan command: its type from its form.
+		typ = tool.InferTargetType(t.Value)
 	}
-	id = "target-" + ref
-	as, err := a.checker.TargetAsset(ctis.Asset{ID: id, Type: ctis.AssetType(t.Type), Value: t.Value, Name: t.Value})
+	if !typ.IsValid() || t.Value == "" {
+		// CTIS 2.0: every finding names an asset of the document.
+		return "", fmt.Errorf("%w: target %q has no CTIS asset type and value to file a finding on", tool.ErrInvalidRecord, ref)
+	}
+	// The id is document-local and derived from the target's position, never
+	// from the task's ref (which may be a receiver's identifier).
+	id = targetAssetPrefix + strconv.Itoa(slices.Index(a.order, ref)+1)
+	if _, cerr := ctis.CanonicalAssetValue(typ, canonicalValue(ctis.Asset{Type: typ, Value: t.Value})); cerr != nil {
+		// A target value without the canonical form of its type (a local
+		// checkout path given as a repository): the findings stay on an
+		// unclassified asset of that value rather than being lost.
+		typ = ctis.AssetTypeUnclassified
+	}
+	as, err := a.checker.TargetAsset(ctis.Asset{ID: id, Type: typ, Value: t.Value, Name: t.Value})
 	if err != nil {
 		return "", fmt.Errorf("asset of target %q: %w", ref, err)
 	}
@@ -307,38 +395,36 @@ func (a *Assembler) Status(runErr *tool.Error) tool.Status {
 	return tool.StatusOK
 }
 
-// failedTarget is a target the tool did not complete, in the report's
-// properties ("failed_targets").
-type failedTarget struct {
-	Target string `json:"target"`
-	Error  string `json:"error"`
-}
-
 // Report returns the assembled report. The tool's name is the manifest's
 // (a tool cannot claim to be another one); tool.version is what the tool
 // reported (the engine it runs). The adapter's own version is in the
-// provenance.
+// provenance. metadata.id is a new producer UUIDv7 (ctis.NewReportID): the
+// runtime never names the receiver's job in the document. Every target the
+// tool did not complete is in metadata.targets as failed.
 func (a *Assembler) Report(now time.Time) *ctis.Report {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	r := a.report
 	r.Version = ctis.SchemaVersion
 	r.Schema = ctis.SchemaURL
-	r.Metadata = ctis.ReportMetadata{Timestamp: now, SourceType: "scanner"}
+	r.Metadata = ctis.ReportMetadata{ID: ctis.NewReportID(), GeneratedAt: now, Channel: ctis.ChannelScanner}
 	if info := a.info; info != nil {
 		if info.Tool != nil {
 			t := *info.Tool
 			r.Tool = &t
 		}
 		if md := info.Metadata; md != nil {
-			if md.SourceType != "" {
-				r.Metadata.SourceType = md.SourceType
+			if md.Channel != "" {
+				r.Metadata.Channel = md.Channel
 			}
-			r.Metadata.ID, r.Metadata.DurationMs, r.Metadata.SourceRef = md.ID, max(md.DurationMs, 0), md.SourceRef
+			r.Metadata.DurationMs = max(md.DurationMs, 0)
+			r.Metadata.SourceRefs = slices.Clone(md.SourceRefs)
 			r.Metadata.CoverageType = md.CoverageType
 			r.Metadata.Branch = md.Branch
-			r.Metadata.Scope = md.Scope
+			r.Metadata.Profiles = slices.Clone(md.Profiles)
+			r.Metadata.StartedAt, r.Metadata.EndedAt = md.StartedAt, md.EndedAt
 			r.Metadata.Properties = maps.Clone(md.Properties)
+			r.Metadata.Extensions = maps.Clone(md.Extensions)
 		}
 		r.Properties = maps.Clone(info.Properties)
 	}
@@ -346,31 +432,54 @@ func (a *Assembler) Report(now time.Time) *ctis.Report {
 		r.Tool = &ctis.Tool{}
 	}
 	r.Tool.Name = a.m.Name
-	var failed []failedTarget
 	for _, ref := range a.order {
 		if res, ok := a.results[ref]; ok && res.State == tool.StateFailed {
-			msg := ""
+			var class tool.ErrorClass
 			if res.Error != nil {
-				msg = res.Error.Detail
-				if msg == "" {
-					msg = string(res.Error.Class)
-				}
+				class = res.Error.Class
 			}
-			failed = append(failed, failedTarget{Target: res.Target.Value, Error: msg})
+			if o, ok := TargetOutcomeOf(res.Target.Value, tool.StateFailed, class); ok {
+				r.Metadata.Targets = append(r.Metadata.Targets, o)
+			}
 		}
-	}
-	if len(failed) > 0 {
-		if r.Properties == nil {
-			r.Properties = ctis.Properties{}
-		}
-		r.Properties["failed_targets"] = failed
 	}
 	return &r
 }
 
+// TargetOutcomeOf is the CTIS metadata.targets entry of a target that ended
+// in state with error class (failed: its class; skipped: refused by policy
+// or excluded). It reports false for a state that has no outcome.
+func TargetOutcomeOf(value string, state tool.TargetState, class tool.ErrorClass) (ctis.TargetOutcome, bool) {
+	o := ctis.TargetOutcome{Target: value}
+	switch state {
+	case tool.StateDone:
+		o.State = ctis.TargetDone
+	case tool.StateFailed:
+		o.State, o.Class = ctis.TargetFailed, ctis.TargetClassToolError
+		switch class {
+		case tool.Timeout:
+			o.Class = ctis.TargetClassTimeout
+		case tool.TargetUnreachable, tool.NotFound:
+			o.Class = ctis.TargetClassUnreachable
+		case tool.EgressRefused:
+			o.Class = ctis.TargetClassEgressRefused
+		}
+	case tool.StateSkipped:
+		o.State, o.Class = ctis.TargetSkipped, ctis.TargetClassExcluded
+		if class == tool.RefusedByPolicy {
+			o.Class = ctis.TargetClassRefused
+		}
+	default:
+		return o, false
+	}
+	return o, value != ""
+}
+
 // Provenance is what the runtime stamps on every report: which tool and
-// manifest produced it, under which sandbox, for which task, and what the
-// runtime refused.
+// manifest produced it, under which sandbox, and what the runtime refused.
+// It is an opaque metadata property (receivers give properties no
+// meaning) and never carries a receiver's identifier: the task the report
+// answers is bound by the transport, not by the document.
 type Provenance struct {
 	Tool           string         `json:"tool"`
 	ToolVersion    string         `json:"tool_version"`
@@ -380,7 +489,6 @@ type Provenance struct {
 	Sandbox        any            `json:"sandbox,omitempty"`
 	Network        string         `json:"network,omitempty"`
 	Sensor         string         `json:"sensor,omitempty"`
-	TaskID         string         `json:"task_id,omitempty"`
 	Attempt        int            `json:"attempt,omitempty"`
 	Status         tool.Status    `json:"status"`
 	Records        int            `json:"records"`
@@ -393,10 +501,20 @@ type Provenance struct {
 	ContractViolations int `json:"contract_violations,omitempty"`
 }
 
-// Stamp writes p into r's metadata properties, replacing anything there.
+// capabilityRefRE is the form of the capability claim of the io.openctem
+// extension namespace (id@major).
+var capabilityRefRE = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+@[1-9][0-9]{0,2}$`)
+
+// Stamp writes p into r's metadata properties, replacing anything there,
+// and states the capability the task ran in
+// metadata.extensions["io.openctem"].capability (a hint to the receiver,
+// which binds the report to its own command).
 func Stamp(r *ctis.Report, p Provenance) {
 	if r.Metadata.Properties == nil {
 		r.Metadata.Properties = ctis.Properties{}
 	}
 	r.Metadata.Properties[ProvenanceKey] = p
+	if len(p.Capability) <= 128 && capabilityRefRE.MatchString(p.Capability) {
+		r.Metadata.Extensions.Set(ctis.OpenCTEMNamespace, "capability", p.Capability)
+	}
 }

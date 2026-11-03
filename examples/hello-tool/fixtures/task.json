@@ -5,5 +5,5 @@
     "status": 200
   },
   "id": "selftest-missing-header",
-  "targets": [{"ref": "t1", "type": "http_service", "value": "{{fixture.url}}"}]
+  "targets": [{"ref": "t1", "type": "web_origin", "value": "{{fixture.url}}"}]
 }

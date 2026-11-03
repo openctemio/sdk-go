@@ -31,7 +31,7 @@ func TestExecContentPlaceholders(t *testing.T) {
 	}
 	h := testHost(t)
 	h.ContentRoot = root
-	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "x"}},
+	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "github.com/acme/x"}},
 		Content: []tool.TaskContent{{Slot: "templates", Packs: []tool.ContentPack{{Digest: packDigest, Path: a}, {Digest: packDigest, Path: b}}}}}
 	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
 	if err != nil {

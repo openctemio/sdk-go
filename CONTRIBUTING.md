@@ -60,7 +60,7 @@ Versioning follows the project rule (openctemio/openctem RFC-037): the version i
 
 ### Nested modules
 
-The SDK is one Go module. Code that the platform also needs is a contract and belongs in ctis (the feed transfer moved there as `github.com/openctemio/ctis/transfer`), never in a nested module of the SDK that the platform imports.
+The SDK is one Go module. Code that the platform also needs is a contract: the document format belongs in `github.com/openctemio/ctis/v2`, the platform and sensor contracts (capabilities, settings, outcomes, politeness, address scope, sources, feed transfer) in `github.com/openctemio/contract`, never in a nested module of the SDK that the platform imports.
 
 ## License
 

@@ -109,13 +109,13 @@ func (manifestOnly) Run(tool.Context, tool.Task) error { return nil }
 // its key top.
 var capTool = tool.Define("cap-ports", "1.0.0").
 	ImplementsWith(tool.Implementation{Capability: "scan.ports@1", Params: map[string]tool.ParamMapping{"top_n": {Key: "top"}}}).
-	Targets("domain").Produces("asset:open_port").
+	Targets("domain_name").Produces("asset:service").
 	Params(tool.IntParam("top").Default(10).Range(1, 65535)).
 	Manifest(func(m *tool.Manifest) { m.Permissions.Network = tool.NetNone }).
 	BatchTargets(10).
 	Handle(func(ctx tool.Context, job *tool.Job, emit tool.Emit) error {
 		for _, t := range job.Targets() {
-			a := ctis.Asset{Type: "open_port", Value: t.Value + ":443",
+			a := ctis.Asset{Type: "service", Value: t.Value + ":443",
 				Properties: ctis.Properties{"host": t.Value, "port": 443, "protocol": "tcp", "top": job.Param("top").Int()}}
 			if err := emit.CTIS().Asset(a); err != nil {
 				return err
@@ -159,7 +159,7 @@ func TestCapabilityJobReachesTheTool(t *testing.T) {
 // insecureTool skips TLS verification toward its targets (tool.yaml http).
 var insecureTool = tool.Define("insecure-ports", "1.0.0").
 	ImplementsWith(tool.Implementation{Capability: "scan.ports@1"}).
-	Targets("domain").Produces("asset:open_port").
+	Targets("domain_name").Produces("asset:service").
 	Manifest(func(m *tool.Manifest) {
 		m.Permissions.Network = tool.NetTargets
 		m.HTTP = &tool.HTTPSpec{TLS: &tool.TLSSpec{InsecureSkipVerify: true}}

@@ -1,8 +1,11 @@
 {
-  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "$schema": "https://schemas.openctem.io/ctis/2.0/report.json",
   "assets": [
     {
       "id": "host-db01.example.com",
+      "identifiers": {
+        "cloud_resource_id": "i-0fedcba9876543210"
+      },
       "identity_hints": {
         "agent_id": "a1b2c3d4-0000-4000-8000-000000000020",
         "cloud_resource_id": "i-0fedcba9876543210",
@@ -16,41 +19,100 @@
         "cloud_service": "VM",
         "dns_domain": "example.com",
         "dns_hostname": "db01",
-        "fqdn": "db01.example.com",
-        "ip_address": "192.0.2.20",
-        "ipv6_address": "2001:db8::20",
         "last_pc_scanned_at": "2025-10-01T00:00:00Z",
-        "last_scan_at": "2025-10-05T07:00:00Z",
         "last_vm_auth_scanned_at": "2025-10-05T07:00:00Z",
         "last_vm_scan_duration_s": "812",
         "last_vm_scanned_at": "2025-10-05T07:00:00Z",
         "network_id": "0",
-        "os": "Ubuntu 22.04.4 LTS",
         "qualys_asset_criticality_score": "4",
-        "qualys_asset_id": "2000001",
         "qualys_asset_risk_score": "620",
-        "qualys_host_id": "100001",
         "qualys_trurisk_score": "640",
         "tracking_method": "AGENT"
       },
+      "source_refs": [
+        {
+          "id": "host_id:100001",
+          "system": "qualys"
+        },
+        {
+          "id": "asset_id:2000001",
+          "system": "qualys"
+        }
+      ],
       "tags": [
         "Production",
         "Databases"
+      ],
+      "technologies": [
+        {
+          "categories": [
+            "operating-system"
+          ],
+          "name": "Ubuntu 22.04.4 LTS"
+        }
       ],
       "type": "host",
       "value": "db01.example.com"
     },
     {
-      "id": "host-198.51.100.21",
+      "id": "service-db01.example.com:22/tcp",
+      "name": "db01.example.com:22/tcp",
+      "technical": {
+        "service": {
+          "app_protocol": "ssh",
+          "port": 22,
+          "transport": "tcp"
+        }
+      },
+      "type": "service",
+      "value": "db01.example.com:22/tcp"
+    },
+    {
+      "id": "service-db01.example.com:443/tcp",
+      "name": "db01.example.com:443/tcp",
+      "technical": {
+        "service": {
+          "port": 443,
+          "transport": "tcp"
+        }
+      },
+      "type": "service",
+      "value": "db01.example.com:443/tcp"
+    },
+    {
+      "id": "ip_address-198.51.100.21",
       "name": "198.51.100.21",
       "properties": {
-        "ip_address": "198.51.100.21",
-        "os": "Windows Server 2019",
-        "qualys_host_id": "100002",
         "tracking_method": "IP"
       },
+      "source_refs": [
+        {
+          "id": "host_id:100002",
+          "system": "qualys"
+        }
+      ],
+      "technologies": [
+        {
+          "categories": [
+            "operating-system"
+          ],
+          "name": "Windows Server 2019"
+        }
+      ],
       "type": "ip_address",
       "value": "198.51.100.21"
+    },
+    {
+      "id": "service-198.51.100.21:445/tcp",
+      "name": "198.51.100.21:445/tcp",
+      "technical": {
+        "service": {
+          "port": 445,
+          "transport": "tcp"
+        }
+      },
+      "type": "service",
+      "value": "198.51.100.21:445/tcp"
     }
   ],
   "findings": [
@@ -58,7 +120,14 @@
       "asset_ref": "host-db01.example.com",
       "category": "General remote services",
       "description": "The SSH transport protocol with some extensions allows a man-in-the-middle to drop messages.\nThe remote host negotiates an affected cipher.",
-      "evidence": "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.4\nLogin: [redacted]\npassword = [redacted]",
+      "evidence_items": [
+        {
+          "kind": "raw_text",
+          "label": "results",
+          "text": "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.4\nLogin: [redacted]\npassword = [redacted]",
+          "version": 1
+        }
+      ],
       "native": {
         "detection_type": "confirmed",
         "family": "General remote services",
@@ -70,10 +139,9 @@
         "vuln_id": "38909"
       },
       "network": {
-        "host": "db01.example.com",
+        "app_protocol": "ssh",
         "port": 22,
-        "protocol": "tcp",
-        "service": "ssh"
+        "transport": "tcp"
       },
       "references": [
         "https://nvd.nist.gov/vuln/detail/CVE-2023-48795",
@@ -88,10 +156,10 @@
             "url": "https://ubuntu.com/security/notices/USN-6560-1"
           }
         ],
-        "fix_available": true,
+        "is_fix_available": true,
         "patch_published_at": "2023-12-18T00:00:00Z",
         "recommendation": "Upgrade OpenSSH.\nRefer to USN-6560-1.",
-        "solution_type": "patch"
+        "solution_type": "vendor_fix"
       },
       "rule_id": "38909",
       "rule_name": "SSH Prefix Truncation Vulnerability (Terrapin)",
@@ -155,12 +223,18 @@
         "vuln_type": "Vulnerability"
       },
       "source_lifecycle": {
-        "first_found": "2025-01-10T00:00:00Z",
-        "last_fixed": "2025-06-01T00:00:00Z",
-        "last_found": "2025-10-05T07:00:00Z",
+        "first_found_at": "2025-01-10T00:00:00Z",
+        "last_fixed_at": "2025-06-01T00:00:00Z",
+        "last_found_at": "2025-10-05T07:00:00Z",
         "state": "reopened",
         "times_found": 41
       },
+      "source_refs": [
+        {
+          "id": "38909",
+          "system": "qualys"
+        }
+      ],
       "status": "open",
       "tags": [
         "exploit_public",
@@ -171,15 +245,6 @@
       "title": "SSH Prefix Truncation Vulnerability (Terrapin)",
       "type": "vulnerability",
       "vulnerability": {
-        "cve_id": "CVE-2023-48795",
-        "cve_ids": [
-          "CVE-2023-48795"
-        ],
-        "cvss_score": 5.9,
-        "cvss_source": "vendor",
-        "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N",
-        "cvss_version": "3.1",
-        "exploit_available": true,
         "ids": [
           {
             "id": "CVE-2023-48795",
@@ -191,9 +256,18 @@
             "type": "vendor"
           }
         ],
-        "in_cisa_kev": true,
         "modified_at": "2025-08-01T00:00:00Z",
-        "published_at": "2023-12-19T00:00:00Z"
+        "published_at": "2023-12-19T00:00:00Z",
+        "threat_signals": [
+          {
+            "source": "qualys",
+            "type": "public_exploit"
+          },
+          {
+            "source": "qualys",
+            "type": "kev"
+          }
+        ]
       }
     },
     {
@@ -201,7 +275,14 @@
       "category": "Database",
       "confidence": 50,
       "description": "The installed version may be affected.",
-      "evidence": "Package installed version: postgresql-14 14.10",
+      "evidence_items": [
+        {
+          "kind": "raw_text",
+          "label": "results",
+          "text": "Package installed version: postgresql-14 14.10",
+          "version": 1
+        }
+      ],
       "native": {
         "detection_type": "potential",
         "family": "Database",
@@ -236,23 +317,21 @@
         "vuln_type": "Potential Vulnerability"
       },
       "source_lifecycle": {
-        "first_found": "2025-10-05T07:00:00Z",
-        "last_found": "2025-10-05T07:00:00Z",
+        "first_found_at": "2025-10-05T07:00:00Z",
+        "last_found_at": "2025-10-05T07:00:00Z",
         "state": "new",
         "times_found": 1
       },
+      "source_refs": [
+        {
+          "id": "105943",
+          "system": "qualys"
+        }
+      ],
       "status": "open",
       "title": "PostgreSQL Multiple Vulnerabilities",
       "type": "vulnerability",
       "vulnerability": {
-        "cve_id": "CVE-2024-0985",
-        "cve_ids": [
-          "CVE-2024-0985"
-        ],
-        "cvss_score": 8,
-        "cvss_source": "vendor",
-        "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:U/C:H/I:H/A:H",
-        "cvss_version": "3.1",
         "ids": [
           {
             "id": "CVE-2024-0985",
@@ -266,7 +345,14 @@
       "asset_ref": "host-db01.example.com",
       "category": "Information gathering",
       "description": "The time it took to scan the host.",
-      "evidence": "Host scan time - 812 seconds",
+      "evidence_items": [
+        {
+          "kind": "raw_text",
+          "label": "results",
+          "text": "Host scan time - 812 seconds",
+          "version": 1
+        }
+      ],
       "native": {
         "detection_type": "info",
         "family": "Information gathering",
@@ -287,6 +373,12 @@
       "source_lifecycle": {
         "state": "active"
       },
+      "source_refs": [
+        {
+          "id": "45038",
+          "system": "qualys"
+        }
+      ],
       "status": "open",
       "title": "Host Scan Time - Scanner",
       "type": "vulnerability"
@@ -303,9 +395,8 @@
         "vuln_id": "999999"
       },
       "network": {
-        "host": "db01.example.com",
         "port": 443,
-        "protocol": "tcp"
+        "transport": "tcp"
       },
       "rule_id": "999999",
       "severity": "critical",
@@ -314,21 +405,34 @@
         "type": "Confirmed"
       },
       "source_lifecycle": {
-        "first_found": "2025-02-01T00:00:00Z",
-        "last_fixed": "2025-09-15T00:00:00Z",
-        "last_found": "2025-09-01T00:00:00Z",
+        "first_found_at": "2025-02-01T00:00:00Z",
+        "last_fixed_at": "2025-09-15T00:00:00Z",
+        "last_found_at": "2025-09-01T00:00:00Z",
         "state": "fixed",
         "times_found": 12
       },
+      "source_refs": [
+        {
+          "id": "999999",
+          "system": "qualys"
+        }
+      ],
       "status": "resolved",
       "title": "Qualys QID 999999",
       "type": "vulnerability"
     },
     {
-      "asset_ref": "host-198.51.100.21",
+      "asset_ref": "ip_address-198.51.100.21",
       "category": "Windows",
       "description": "The SMBv1 server mishandles specially crafted packets.",
-      "evidence": "%windir%\\system32\\srv.sys Version is 10.0.17763.1\nUser: [redacted]",
+      "evidence_items": [
+        {
+          "kind": "raw_text",
+          "label": "results",
+          "text": "%windir%\\system32\\srv.sys Version is 10.0.17763.1\nUser: [redacted]",
+          "version": 1
+        }
+      ],
       "native": {
         "detection_type": "confirmed",
         "family": "Windows",
@@ -340,9 +444,8 @@
         "vuln_id": "91345"
       },
       "network": {
-        "host": "198.51.100.21",
         "port": 445,
-        "protocol": "tcp"
+        "transport": "tcp"
       },
       "references": [
         "https://nvd.nist.gov/vuln/detail/CVE-2017-0144"
@@ -354,9 +457,9 @@
             "source": "vendor"
           }
         ],
-        "fix_available": true,
+        "is_fix_available": true,
         "recommendation": "Apply MS17-010.",
-        "solution_type": "patch"
+        "solution_type": "vendor_fix"
       },
       "rule_id": "91345",
       "rule_name": "Microsoft SMB Server Remote Code Execution Vulnerability (MS17-010)",
@@ -383,11 +486,17 @@
         "vuln_type": "Vulnerability"
       },
       "source_lifecycle": {
-        "first_found": "2025-03-01T00:00:00Z",
-        "last_found": "2025-10-05T07:00:00Z",
+        "first_found_at": "2025-03-01T00:00:00Z",
+        "last_found_at": "2025-10-05T07:00:00Z",
         "state": "active",
         "times_found": 30
       },
+      "source_refs": [
+        {
+          "id": "91345",
+          "system": "qualys"
+        }
+      ],
       "status": "open",
       "tags": [
         "zero_day",
@@ -398,38 +507,55 @@
       "title": "Microsoft SMB Server Remote Code Execution Vulnerability (MS17-010)",
       "type": "vulnerability",
       "vulnerability": {
-        "cve_id": "CVE-2017-0144",
-        "cve_ids": [
-          "CVE-2017-0144"
-        ],
-        "cvss_score": 8.1,
-        "cvss_source": "vendor",
-        "cvss_vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H",
-        "cvss_version": "3.0",
-        "exploit_available": true,
         "ids": [
           {
             "id": "CVE-2017-0144",
             "type": "cve"
           }
         ],
-        "published_at": "2017-03-14T00:00:00Z"
+        "published_at": "2017-03-14T00:00:00Z",
+        "threat_signals": [
+          {
+            "source": "qualys",
+            "type": "exploited_in_wild"
+          },
+          {
+            "source": "qualys",
+            "type": "weaponized"
+          }
+        ]
       }
     }
   ],
   "metadata": {
+    "channel": "scanner",
     "properties": {
-      "generated_at": "2025-10-05T08:30:00Z",
       "provenance": "<provenance>"
-    },
-    "source_type": "scanner"
+    }
   },
+  "relationships": [
+    {
+      "from_ref": "host-db01.example.com",
+      "to_ref": "service-db01.example.com:22/tcp",
+      "type": "exposes"
+    },
+    {
+      "from_ref": "host-db01.example.com",
+      "to_ref": "service-db01.example.com:443/tcp",
+      "type": "exposes"
+    },
+    {
+      "from_ref": "ip_address-198.51.100.21",
+      "to_ref": "service-198.51.100.21:445/tcp",
+      "type": "exposes"
+    }
+  ],
   "tool": {
-    "capabilities": [
+    "name": "file-import",
+    "techniques": [
       "va"
     ],
-    "name": "file-import",
     "vendor": "Qualys"
   },
-  "version": "1.6"
+  "version": "2.0"
 }

@@ -294,7 +294,27 @@ func (b *scannerBridge) deliver(ctx tool.Context, s core.Scanner, targets []tool
 		if err != nil {
 			return fail(err)
 		}
-		if err := ctx.Emit().Report(report); err != nil {
+		// A legacy scanner's finding that names no asset is about the one
+		// target this scan covered (CTIS 2.0: every finding names an asset).
+		var onTarget []ctis.Finding
+		if len(targets) == 1 {
+			kept := report.Findings[:0:0]
+			for _, f := range report.Findings {
+				if f.AssetRef == "" {
+					onTarget = append(onTarget, f)
+				} else {
+					kept = append(kept, f)
+				}
+			}
+			report.Findings = kept
+		}
+		err = ctx.Emit().Report(report)
+		for _, f := range onTarget {
+			if ferr := ctx.Emit().Finding(targets[0], f); ferr != nil && (err == nil || errors.Is(ferr, tool.ErrOutputLimit)) {
+				err = ferr
+			}
+		}
+		if err != nil {
 			if errors.Is(err, tool.ErrOutputLimit) {
 				return nil // the runtime ends the task partial
 			}

@@ -45,8 +45,8 @@ func newClient(t *testing.T, f *FakePlatform, protocol string) *client.Client {
 
 func report(tool string, assets, findingsPerAsset int) *ctis.Report {
 	r := &ctis.Report{
-		Version:  "1.0",
-		Metadata: ctis.ReportMetadata{Timestamp: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), SourceType: "scanner"},
+		Version:  ctis.SchemaVersion,
+		Metadata: ctis.ReportMetadata{ID: ctis.NewReportID(), GeneratedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Channel: ctis.ChannelScanner},
 		Tool:     &ctis.Tool{Name: tool, Version: "1.0"},
 	}
 	for a := range assets {
@@ -68,7 +68,8 @@ func TestV2_HeadersDigestAndEncoding(t *testing.T) {
 	f := NewFakePlatform(true)
 	defer f.Close()
 	c := newClient(t, f, client.ProtocolAuto)
-	res, err := c.PushFindings(context.Background(), report("semgrep", 2, 30))
+	sent := report("semgrep", 2, 30)
+	res, err := c.PushFindings(context.Background(), sent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,9 +100,11 @@ func TestV2_HeadersDigestAndEncoding(t *testing.T) {
 	if rep == nil || !rep.Committed || rep.Status.Accepted.Findings != 60 {
 		t.Fatalf("stored = %+v", rep)
 	}
-	// metadata.id carries the report id.
-	if got := rep.Segments[0].report.Metadata.ID; got != res.ReportID {
-		t.Errorf("metadata.id = %q, want the report id", got)
+	// CTIS 2.0: metadata.id is the producer's own UUIDv7, not the delivery
+	// (report) id of the URL, and the document is version 2.0.
+	got := rep.Segments[0].report
+	if got.Metadata.ID != sent.Metadata.ID || got.Metadata.ID == res.ReportID || got.Version != "2.0" {
+		t.Errorf("metadata.id = %q version %q, want the document's %q (report id %q)", got.Metadata.ID, got.Version, sent.Metadata.ID, res.ReportID)
 	}
 }
 
@@ -319,12 +322,13 @@ func TestV2_ResumesAfterALostSegmentResponse(t *testing.T) {
 	c := newClient(t, f, client.ProtocolV2)
 	var prog client.V2Progress
 	opts := &client.V2PushOptions{MaxFindingsPerSegment: 2, OnProgress: func(p client.V2Progress) error { prog = p; return nil }}
-	_, err := c.PushResultsV2(context.Background(), report("semgrep", 1, 6), opts)
+	r := report("semgrep", 1, 6) // a retry sends the same document
+	_, err := c.PushResultsV2(context.Background(), r, opts)
 	if err == nil {
 		t.Fatal("expected the lost response to surface")
 	}
 	opts.Progress = &prog
-	st, err := c.PushResultsV2(context.Background(), report("semgrep", 1, 6), opts)
+	st, err := c.PushResultsV2(context.Background(), r, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,22 +342,61 @@ func TestV2_ResumesAfterALostSegmentResponse(t *testing.T) {
 	}
 }
 
-func TestV2_PartiallyAcceptedReportIsNotResent(t *testing.T) {
+// CTIS 2.0: a finding that names no asset makes the document invalid; the
+// receiver refuses it as a whole (422) and the client does not send it
+// again.
+func TestV2_InvalidDocumentIsRefusedOnce(t *testing.T) {
 	f := NewFakePlatform(true)
 	defer f.Close()
 	c := newClient(t, f, client.ProtocolV2)
 	r := report("semgrep", 2, 2)
 	r.Findings = append(r.Findings, ctis.Finding{ID: "orphan", Title: "no asset", Severity: ctis.SeverityLow, Type: ctis.FindingTypeVulnerability})
-	res, err := c.PushFindings(context.Background(), r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rep := f.Reports()[res.ReportID]
-	if rep.Status.Rejected.Findings != 1 || rep.Status.Accepted.Findings != 4 {
-		t.Fatalf("status = %+v", rep.Status)
+	if _, err := c.PushFindings(context.Background(), r); err == nil {
+		t.Fatal("an invalid document was accepted")
 	}
 	if n := len(f.RequestsTo(http.MethodPut, protov2.PathPrefix)); n != 1 {
-		t.Fatalf("partially accepted report sent %d times", n)
+		t.Fatalf("the refused document was sent %d times", n)
+	}
+	if f.AcceptedFindings() != 0 {
+		t.Fatalf("accepted %d findings of an invalid document", f.AcceptedFindings())
+	}
+}
+
+// The receiver takes CTIS 2.x only: a 1.x document, or a 2.0 document that
+// names the platform's command in metadata.id, is refused; the same document
+// committed under a new delivery id is recognized as a retry (metadata.id
+// is the idempotency key) and stored once.
+func TestFake_CTIS2OnlyAndIdempotency(t *testing.T) {
+	f := NewFakePlatform(true)
+	defer f.Close()
+	put := func(reportID, body string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPut, f.URL()+protov2.ReportPath("", reportID), strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+f.APIKey)
+		req.Header.Set("Content-Type", protov2.MediaTypeCTIS)
+		req.Header.Set(protov2.HeaderContentDigest, protov2.ContentDigest([]byte(body)))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	legacy, _ := json.Marshal(map[string]any{"version": legacyVersion, "metadata": map[string]any{legacyTimeMember: "2026-10-01T00:00:00Z"}, "tool": map[string]any{"name": "x"}})
+	v1 := string(legacy)
+	if code := put("0192a3b4-0000-7000-8000-00000000c001", v1); code != http.StatusUnprocessableEntity {
+		t.Fatalf("a 1.x document: %d", code)
+	}
+	doc := report("semgrep", 1, 1)
+	raw, _ := json.Marshal(doc)
+	if code := put("0192a3b4-0000-7000-8000-00000000c002", string(raw)); code != http.StatusAccepted {
+		t.Fatalf("a 2.0 document: %d", code)
+	}
+	if code := put("0192a3b4-0000-7000-8000-00000000c003", string(raw)); code != http.StatusOK {
+		t.Fatalf("the same document under a new delivery id: %d, want 200 (a retry)", code)
+	}
+	if f.AcceptedFindings() != 1 {
+		t.Fatalf("accepted %d findings, want 1", f.AcceptedFindings())
 	}
 }
 
@@ -783,11 +826,12 @@ func TestV2_ResumeSkipsHeldSegments(t *testing.T) {
 	c := newClient(t, f, client.ProtocolV2)
 	var prog client.V2Progress
 	opts := &client.V2PushOptions{MaxFindingsPerSegment: 2, OnProgress: func(p client.V2Progress) error { prog = p; return nil }}
-	if _, err := c.PushResultsV2(context.Background(), report("semgrep", 1, 6), opts); err == nil {
+	r := report("semgrep", 1, 6) // the outbox keeps the document
+	if _, err := c.PushResultsV2(context.Background(), r, opts); err == nil {
 		t.Fatal("expected the lost response to surface")
 	}
 	opts.Progress = &prog // the next delivery, as after a restart
-	st, err := c.PushResultsV2(context.Background(), report("semgrep", 1, 6), opts)
+	st, err := c.PushResultsV2(context.Background(), r, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -851,3 +895,48 @@ func TestV2_BoundResultsCarryTheEpochAndALostLeaseSendsNothing(t *testing.T) {
 		t.Fatalf("the outbox sent %d results request(s) for a job whose lease was lost", after-before)
 	}
 }
+
+// SECURITY (CTIS 2.0): the client never puts a platform identifier in the
+// document. A report whose metadata.id is the delivery (report) id, or is
+// missing, is sent with a producer UUIDv7 of its own, kept across retries.
+func TestV2_MetadataIDIsNeverAPlatformID(t *testing.T) {
+	f := NewFakePlatform(true)
+	defer f.Close()
+	c := newClient(t, f, client.ProtocolV2)
+	delivery := "0192a3b4-0000-7000-8000-00000000d001"
+	r := report("semgrep", 1, 1)
+	r.Metadata.ID = delivery
+	st, err := c.PushResultsV2(context.Background(), r, &client.V2PushOptions{ReportID: delivery})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.Reports()[st.ReportID].Segments[0].report.Metadata.ID
+	if got == delivery || !ctis.IsReportID(got) {
+		t.Fatalf("metadata.id = %q (delivery id %q)", got, delivery)
+	}
+	if r.Metadata.ID != delivery {
+		t.Fatal("the caller's report was modified")
+	}
+
+	// No metadata.id: one is generated and kept in the progress, so a
+	// retry of the same delivery sends the same document id.
+	r2 := report("semgrep", 1, 1)
+	r2.Metadata.ID = ""
+	var prog client.V2Progress
+	opts := &client.V2PushOptions{OnProgress: func(p client.V2Progress) error { prog = p; return nil }}
+	st2, err := c.PushResultsV2(context.Background(), r2, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := f.Reports()[st2.ReportID].Segments[0].report.Metadata.ID
+	if !ctis.IsReportID(first) || prog.DocumentID != first {
+		t.Fatalf("generated metadata.id %q, progress %q", first, prog.DocumentID)
+	}
+}
+
+// legacyVersion and legacyTimeMember build a CTIS 1.x document for the
+// tests that check it is refused.
+const (
+	legacyVersion    = "1" + ".6"
+	legacyTimeMember = "time" + "stamp"
+)

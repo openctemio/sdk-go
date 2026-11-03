@@ -115,10 +115,14 @@ type FakePlatform struct {
 	mu    sync.Mutex
 	fault Fault
 	// v3 serves sensor protocol v3 (EnableV3); nil: v2 only.
-	v3        *fakeV3
-	seq       int
-	requests  []Request
-	reports   map[string]*StoredReport
+	v3       *fakeV3
+	seq      int
+	requests []Request
+	reports  map[string]*StoredReport
+	// docs maps a document's metadata.id to the report it was first
+	// committed under: the idempotency key of a delivery (CTIS 2.0, per
+	// credential; the fake has one credential).
+	docs      map[string]string
 	commands  map[string]string // id -> "pending" | "acknowledged" | "running" | "completed" | "failed"
 	cmdErrors map[string]string
 	cmdResult map[string]json.RawMessage
@@ -302,6 +306,7 @@ func NewFakePlatform(v2 bool) *FakePlatform {
 		Control:   v2,
 		Limits:    protov2.DefaultLimits(),
 		reports:   map[string]*StoredReport{},
+		docs:      map[string]string{},
 		commands:  map[string]string{},
 		cmdErrors: map[string]string{},
 		cmdResult: map[string]json.RawMessage{},
@@ -847,8 +852,7 @@ func decodeBody(enc string, body []byte) ([]byte, error) {
 
 // putSegment validates a v2 content request the way RFC-026 §3.3 orders it.
 func (f *FakePlatform) putSegment(w http.ResponseWriter, r *http.Request, body []byte, commandID, reportID string, seq int, whole bool) {
-	ct := r.Header.Get("Content-Type")
-	if !strings.EqualFold(strings.TrimSpace(strings.Split(ct, ";")[0]), protov2.MediaTypeCTIS) {
+	if !protov2.IsCTISMediaType(r.Header.Get("Content-Type")) {
 		f.problem(w, http.StatusUnsupportedMediaType, protov2.ProblemUnsupportedMediaType)
 		return
 	}
@@ -874,15 +878,11 @@ func (f *FakePlatform) putSegment(w http.ResponseWriter, r *http.Request, body [
 		f.problem(w, http.StatusBadRequest, "invalid-encoding")
 		return
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	var rep ctis.Report
-	if err := dec.Decode(&rep); err != nil {
-		f.problem(w, http.StatusUnprocessableEntity, protov2.ProblemSchemaInvalid)
-		return
-	}
-	if !protov2CTISMajor(rep.Version) || rep.Tool == nil || rep.Tool.Name == "" ||
-		(rep.Metadata.ID != "" && rep.Metadata.ID != reportID) {
+	// CTIS 2.x only (a 1.x document is an error), valid, with a producer
+	// UUIDv7 metadata.id that is none of the platform's identifiers.
+	rep, _, err := ctis.Decode(bytes.NewReader(raw))
+	if err != nil || rep.Validate() != nil || rep.Tool == nil || rep.Tool.Name == "" ||
+		!ctis.IsReportID(rep.Metadata.ID) || rep.Metadata.ID == commandID {
 		f.problem(w, http.StatusUnprocessableEntity, protov2.ProblemSchemaInvalid)
 		return
 	}
@@ -898,6 +898,15 @@ func (f *FakePlatform) putSegment(w http.ResponseWriter, r *http.Request, body [
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := time.Now().UTC()
+	// A document already committed under another report is a retry: the
+	// platform answers with what it has and stores nothing twice.
+	if prev, ok := f.docs[rep.Metadata.ID]; ok && prev != reportID {
+		if old := f.reports[prev]; old != nil && old.Committed {
+			writeJSON(w, http.StatusOK, old.Status)
+			return
+		}
+	}
+	f.docs[rep.Metadata.ID] = reportID
 	st := f.reports[reportID]
 	if st == nil {
 		st = &StoredReport{ReportID: reportID, CommandID: commandID, Segments: map[int]segment{},
@@ -944,11 +953,6 @@ func contains(xs []string, s string) bool {
 		}
 	}
 	return false
-}
-
-func protov2CTISMajor(v string) bool {
-	major, _, _ := strings.Cut(strings.TrimSpace(v), ".")
-	return major == "1"
 }
 
 // finishLocked marks a report committed and computes its outcome, rejecting

@@ -20,7 +20,7 @@ MANIFEST = {
     "description": "Flags HTTP services served without TLS (from the address; no network).",
     "class": "target-scan",
     "tier": "T0",
-    "consumes": ["http_service"],
+    "consumes": ["web_origin"],
     "produces": ["finding:misconfiguration"],
     "permissions": {"network": "none"},
     "selftest": [{"name": "basic", "task": "testdata/task.json", "expect": "testdata/expect.json"}],

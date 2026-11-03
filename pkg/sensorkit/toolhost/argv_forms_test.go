@@ -46,7 +46,7 @@ func TestExecArgvForms(t *testing.T) {
 		}
 	}
 	// SECURITY: a list item that would be a flag is refused, like any value.
-	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "x"}}, Config: json.RawMessage(`{"resolver":"-o=/etc/x"}`)}
+	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "github.com/acme/x"}}, Config: json.RawMessage(`{"resolver":"-o=/etc/x"}`)}
 	out, _ := testHost(t).RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
 	if out.Status != tool.StatusFailed || out.Err.Class != tool.InvalidInput {
 		t.Fatalf("flag injection through an optional value: %s %v", out.Status, out.Err)

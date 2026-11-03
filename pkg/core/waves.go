@@ -12,7 +12,7 @@ import (
 	"context"
 	"slices"
 
-	"github.com/openctemio/ctis/politeness"
+	"github.com/openctemio/contract/politeness"
 )
 
 // PlanWaves cuts targets into at most maxWaves waves of whole hosts

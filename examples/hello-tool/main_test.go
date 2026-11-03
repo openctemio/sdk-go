@@ -39,7 +39,7 @@ func serve(t *testing.T, header string) string {
 }
 
 func taskFor(url string) tool.Task {
-	return tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "http_service", Value: url}}}
+	return tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "web_origin", Value: url}}}
 }
 
 // In-process, with the rules the runtime applies: a missing header is one

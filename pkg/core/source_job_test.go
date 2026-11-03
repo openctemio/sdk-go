@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	ctissource "github.com/openctemio/ctis/source"
+	ctissource "github.com/openctemio/contract/source"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/source"

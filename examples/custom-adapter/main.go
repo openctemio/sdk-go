@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/openctemio/ctis/importer"
+	"github.com/openctemio/ctis/v2/importer"
 	"github.com/openctemio/sdk-go/pkg/client"
 )
 

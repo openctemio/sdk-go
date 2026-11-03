@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/openctemio/ctis/importer"
-	"github.com/openctemio/ctis/importer/mapping"
+	"github.com/openctemio/ctis/v2/importer"
+	"github.com/openctemio/ctis/v2/importer/mapping"
 	"gopkg.in/yaml.v3"
 )
 

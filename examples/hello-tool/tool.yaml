@@ -15,7 +15,7 @@ implements:
   - capability: vuln.templates@1
     params:
       rate: {}
-consumes: [http_service, website, web_application]
+consumes: [web_origin, web_application]
 produces: ["finding:misconfiguration"]
 config:
   additionalProperties: false

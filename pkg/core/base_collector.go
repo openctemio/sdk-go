@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -209,17 +211,18 @@ func (c *GitHubCollector) Collect(ctx context.Context, opts *CollectOptions) (*C
 
 	// Fetch code scanning alerts
 	report := ctis.NewReport()
+	report.Metadata.Channel = ctis.ChannelIntegration
 	report.Tool = &ctis.Tool{
-		Name:         "GitHub Code Scanning",
-		Capabilities: []string{"sast"},
+		Name:       "GitHub Code Scanning",
+		Techniques: []ctis.Technique{ctis.TechniqueSAST},
 	}
 
-	// Add repository as asset
+	// Add repository as asset (canonical repository value: host/owner/name).
 	repoFullName := fmt.Sprintf("%s/%s", c.owner, c.repo)
 	report.Assets = append(report.Assets, ctis.Asset{
 		ID:          "repo-1",
 		Type:        ctis.AssetTypeRepository,
-		Value:       fmt.Sprintf("https://github.com/%s", repoFullName),
+		Value:       ctis.NormalizeAssetName(ctis.AssetTypeRepository, "github.com/"+repoFullName),
 		Name:        repoFullName,
 		Criticality: ctis.CriticalityHigh,
 	})
@@ -240,7 +243,7 @@ func (c *GitHubCollector) Collect(ctx context.Context, opts *CollectOptions) (*C
 	for i, alert := range alerts {
 		finding := ctis.Finding{
 			ID:          fmt.Sprintf("github-%d", alert.Number),
-			Type:        ctis.FindingTypeVulnerability,
+			Type:        ctis.FindingTypeWeakness,
 			Title:       alert.Rule.Description,
 			Description: alert.MostRecentInstance.Message.Text,
 			Severity:    mapGitHubSeverity(alert.Rule.Severity),
@@ -253,18 +256,12 @@ func (c *GitHubCollector) Collect(ctx context.Context, opts *CollectOptions) (*C
 				EndLine:   alert.MostRecentInstance.Location.EndLine,
 			},
 			References: []string{alert.HTMLURL},
+			SourceRefs: []ctis.SourceRef{{System: "github", ID: strconv.Itoa(alert.Number)}},
 		}
 
-		// Add CWE if available
-		if len(alert.Rule.Tags) > 0 {
-			for _, tag := range alert.Rule.Tags {
-				if len(tag) > 4 && tag[:4] == "cwe-" {
-					finding.Vulnerability = &ctis.VulnerabilityDetails{
-						CWEID: tag,
-					}
-					break
-				}
-			}
+		// Add CWEs if available ("cwe-79", "external/cwe/cwe-079").
+		if cwes := githubCWEs(alert.Rule.Tags); len(cwes) > 0 {
+			finding.Vulnerability = &ctis.VulnerabilityDetails{CWEIDs: cwes}
 		}
 
 		report.Findings = append(report.Findings, finding)
@@ -428,15 +425,17 @@ func (c *WebhookCollector) Collect(ctx context.Context, opts *CollectOptions) (*
 		return nil, ctx.Err()
 	case data := <-c.dataChan:
 		// Parse the received data
-		report := ctis.NewReport()
-		if err := json.Unmarshal(data, report); err != nil {
+		// A CTIS 2.x document (a 1.x document is refused with an error
+		// that names the upgrade).
+		report, _, err := ctis.Decode(bytes.NewReader(data))
+		if err != nil {
 			return nil, fmt.Errorf("parse webhook data: %w", err)
 		}
 
 		return &CollectResult{
 			SourceName:  c.name,
 			SourceType:  c.sourceType,
-			Reports:     []*ctis.Report{report},
+			Reports:     []*ctis.Report{&report},
 			TotalItems:  len(report.Findings),
 			CollectedAt: time.Now().Unix(),
 		}, nil
@@ -526,4 +525,28 @@ func (c *WebhookCollector) authorized(r *http.Request) bool {
 func (c *WebhookCollector) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"healthy"}`))
+}
+
+// githubCWEs returns the CWE ids of GitHub rule tags in the CTIS form
+// "CWE-<n>" (no leading zeros), in tag order and without duplicates.
+func githubCWEs(tags []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, tag := range tags {
+		t := strings.ToLower(tag)
+		i := strings.LastIndex(t, "cwe-")
+		if i < 0 {
+			continue
+		}
+		n, err := strconv.Atoi(t[i+4:])
+		if err != nil || n <= 0 {
+			continue
+		}
+		id := "CWE-" + strconv.Itoa(n)
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }

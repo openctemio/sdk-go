@@ -17,7 +17,7 @@ import (
 // fixed. It reports every target done.
 var retestTool = tool.WithRetest(tool.New(tool.Manifest{
 	Name: "retest-tool", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-	Consumes: []string{"domain"}, Produces: []string{"finding:misconfiguration"},
+	Consumes: []string{"domain_name"}, Produces: []string{"finding:misconfiguration"},
 	Permissions: tool.Permissions{Network: tool.NetTargets},
 }, func(tool.Context, tool.Task, tool.NoConfig) error { return nil }),
 	func(ctx tool.RetestContext, task tool.Task) error {
@@ -49,7 +49,7 @@ func targetValue(task tool.Task, ref string) string {
 
 func retestTask() tool.Task {
 	return tool.Task{
-		Targets: []tool.Target{{Ref: "t1", Type: "domain", Value: "a.example"}, {Ref: "t2", Type: "domain", Value: "b.example"}},
+		Targets: []tool.Target{{Ref: "t1", Type: "domain_name", Value: "a.example"}, {Ref: "t2", Type: "domain_name", Value: "b.example"}},
 		Retest: []tool.RetestItem{
 			{Ref: "f1", Target: "t1", Kind: tool.RetestFinding, RuleID: "present"},
 			{Ref: "f2", Target: "t1", Kind: tool.RetestFinding, RuleID: "gone"},

@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/openctemio/ctis/importer"
+	"github.com/openctemio/ctis/v2/importer"
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -34,7 +34,7 @@ func runBundle(ctx tool.Context, task tool.Task, cfg Config) error {
 	res, err := importer.ParseBundle(ctx, files, importer.Options{
 		Limits:      importer.Limits{MaxInputBytes: MaxInputBytes},
 		Bundle:      BundleLimits,
-		SourceType:  "scanner",
+		Channel:     ctis.ChannelScanner,
 		MinSeverity: ctis.Severity(cfg.MinSeverity),
 	})
 	if err != nil {

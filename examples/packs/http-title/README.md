@@ -15,5 +15,5 @@ confined: a destination that is not a target of the task is refused there, whate
 ```bash
 openctem tool validate .                    # pack.yaml, tool.yaml and the rules between them
 openctem tool test --capability --scope .   # self-test, the probe.http suite and the scope check
-openctem tool run . --target http://127.0.0.1:8080@http_service
+openctem tool run . --target http://127.0.0.1:8080@web_origin
 ```

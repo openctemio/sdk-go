@@ -45,7 +45,7 @@ func CheckEvidenceItems(items []ctis.EvidenceItem) error {
 		}
 	}
 	rep := ctis.NewReport()
-	rep.Assets = []ctis.Asset{{ID: "a", Type: ctis.AssetTypeDomain, Value: "evidence.invalid"}}
+	rep.Assets = []ctis.Asset{{ID: "a", Type: ctis.AssetTypeDomainName, Value: "evidence.invalid"}}
 	rep.Findings = []ctis.Finding{{Type: ctis.FindingTypeVulnerability, Title: "evidence", Severity: ctis.SeverityInfo,
 		AssetRef: "a", EvidenceItems: items}}
 	if err := rep.Validate(); err != nil {

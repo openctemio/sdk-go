@@ -154,7 +154,7 @@ jobs:
           # pinned (was latest) — avoid CI-breaking tool drift
           version: v2.14.0
 
-  # pkg/ctis re-exports github.com/openctemio/ctis (generated aliases). Fails
+  # pkg/ctis re-exports github.com/openctemio/ctis/v2 (generated aliases). Fails
   # when the generated file is stale for the ctis version in go.mod, or when
   # pkg/ctis starts copying model types again — see scripts/check-ctis-parity.sh.
   ctis-parity:

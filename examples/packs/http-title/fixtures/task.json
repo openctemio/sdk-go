@@ -11,7 +11,7 @@
   "targets": [
     {
       "ref": "t1",
-      "type": "http_service",
+      "type": "web_origin",
       "value": "{{fixture.url}}"
     }
   ]

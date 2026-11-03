@@ -16,17 +16,21 @@ import (
 var updateGolden = flag.Bool("update", false, "rewrite testdata goldens")
 
 // portMapping is a YAML mapping of the jsonl-cli fixture's output.
-const portMapping = `apiVersion: openctem.io/mapping/v1
+const portMapping = `apiVersion: openctem.io/mapping/v2
 source: jsonl
 records:
   - when: {path: /port, exists: true}
     kind: asset
     set:
-      type: {const: open_port}
-      value: {template: "{ip}:{port}", vars: {ip: /ip, port: /port}}
+      type: {const: service}
+      value: {template: "{ip}:{port}/tcp", vars: {ip: /ip, port: /port}}
+      technical.service.port: {path: /port, as: integer}
+      technical.service.transport: {const: tcp}
+      technical.service.state: {const: open}
+      # contract v1.0.0 scan.ports still reads these opaque properties.
       properties.host: /ip
       properties.port: {path: /port, as: integer}
-      properties.protocol: {path: /protocol, lower: true, default: tcp}
+      properties.protocol: {const: tcp}
 `
 
 // writeTool writes a tool directory (tool.yaml + mapping.yaml) for the
@@ -48,8 +52,8 @@ version: 1.0.0
 class: target-scan
 tier: T1
 implements: [{capability: scan.ports@1, output_shape: open_port_assets}]
-consumes: [ip_address, domain]
-produces: [asset:open_port]
+consumes: [ip_address, domain_name]
+produces: [asset:service]
 permissions: {network: none}
 run:
   profile: exec
@@ -58,7 +62,7 @@ run:
 `, exe, out)
 	if format == "nuclei" {
 		doc = strings.Replace(doc, "implements: [{capability: scan.ports@1, output_shape: open_port_assets}]", "implements: [{capability: vuln.templates@1}]", 1)
-		doc = strings.Replace(doc, "produces: [asset:open_port]", "produces: [finding:vulnerability, finding:misconfiguration]", 1)
+		doc = strings.Replace(doc, "produces: [asset:service]", "produces: [finding:vulnerability, finding:misconfiguration]", 1)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "tool.yaml"), []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
@@ -121,7 +125,7 @@ func TestExecJSONLWithMapping(t *testing.T) {
 // refused before the tool starts; so is a missing one.
 func TestExecMappingTamperRefused(t *testing.T) {
 	m, dir := writeTool(t, "jsonl", portMapping)
-	if err := os.WriteFile(filepath.Join(dir, "mapping.yaml"), []byte(strings.Replace(portMapping, "open_port", "domain", 1)), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "mapping.yaml"), []byte(strings.Replace(portMapping, "service", "domain_name", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out := runExecTool(t, m, dir, "jsonl-cli", tool.Task{})
@@ -149,7 +153,7 @@ func TestLoadManifestRefusesBadMappings(t *testing.T) {
 		"json without mapping": {"", "{format: json, from: stdout}", "needs a mapping file"},
 		"mapping on ctis":      {"x", "{format: ctis, from: stdout, mapping: mapping.yaml}", "only for the json and jsonl formats"},
 		"escaping path":        {"", "{format: jsonl, from: stdout, mapping: ../m.yaml}", "inside the manifest"},
-		"invalid mapping":      {"apiVersion: openctem.io/mapping/v1\nsource: jsonl\nrecords: [{kind: shell}]\n", "{format: jsonl, from: stdout, mapping: mapping.yaml}", "/run/output/mapping"},
+		"invalid mapping":      {"apiVersion: openctem.io/mapping/v2\nsource: jsonl\nrecords: [{kind: shell}]\n", "{format: jsonl, from: stdout, mapping: mapping.yaml}", "/run/output/mapping"},
 		"two documents":        {portMapping + "---\nx: 1\n", "{format: jsonl, from: stdout, mapping: mapping.yaml}", "more than one YAML document"},
 		"unknown format":       {"", "{format: xlsx, from: stdout}", "/run/output/format"},
 	} {
@@ -158,7 +162,7 @@ func TestLoadManifestRefusesBadMappings(t *testing.T) {
 			if tc.mapping != "" {
 				_ = os.WriteFile(filepath.Join(dir, "mapping.yaml"), []byte(tc.mapping), 0o600)
 			}
-			doc := fmt.Sprintf("apiVersion: openctem.io/tool/v1\nname: x-tool\nversion: 1.0.0\nclass: target-scan\ntier: T1\nconsumes: [domain]\nproduces: [asset:open_port]\npermissions: {network: none}\nrun: {profile: exec, argv: [%q], output: %s}\n", exe, tc.out)
+			doc := fmt.Sprintf("apiVersion: openctem.io/tool/v1\nname: x-tool\nversion: 1.0.0\nclass: target-scan\ntier: T1\nconsumes: [domain_name]\nproduces: [asset:service]\npermissions: {network: none}\nrun: {profile: exec, argv: [%q], output: %s}\n", exe, tc.out)
 			_ = os.WriteFile(filepath.Join(dir, "tool.yaml"), []byte(doc), 0o600)
 			_, err := tool.LoadManifestFile(filepath.Join(dir, "tool.yaml"))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -171,7 +175,7 @@ func TestLoadManifestRefusesBadMappings(t *testing.T) {
 // A CLI writing a named ctis/importer format needs no mapping and no code.
 func TestExecNamedImporterFormat(t *testing.T) {
 	m, dir := writeTool(t, "nuclei", "")
-	out := runExecTool(t, m, dir, "nuclei-cli", tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "domain", Value: "a.example"}}, Capability: "vuln.templates@1"})
+	out := runExecTool(t, m, dir, "nuclei-cli", tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "domain_name", Value: "a.example"}}, Capability: "vuln.templates@1"})
 	if out.Status != tool.StatusOK || len(out.Report.Findings) != 1 {
 		t.Fatalf("status %s err %v stats %+v logs %+v", out.Status, out.Err, out.Stats, out.Logs)
 	}

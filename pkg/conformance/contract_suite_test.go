@@ -37,7 +37,7 @@ var awsKeyRE = regexp.MustCompile(`AKIA[A-Z2-7]{16}`)
 //	crawl <url> <scope>    follows links from the URL, keeping to the web
 //	                       scope file ($CONFORMANCE_IGNORE_SCOPE=1: ignores it)
 func fakeTool(mode string, args []string) int {
-	report := map[string]any{"version": "1.6", "metadata": map[string]any{"timestamp": "2026-01-01T00:00:00Z"}}
+	report := map[string]any{"version": "2.0", "metadata": map[string]any{"generated_at": "2026-01-01T00:00:00Z"}}
 	var assets, findings []map[string]any
 	arg := func(i int) string {
 		if i < len(args) {
@@ -78,7 +78,8 @@ func fakeTool(mode string, args []string) int {
 			if mode == "ports-bad" {
 				delete(props, "protocol")
 			}
-			assets = append(assets, map[string]any{"type": "open_port", "value": net.JoinHostPort(host, p), "properties": props})
+			assets = append(assets, map[string]any{"type": "service", "value": net.JoinHostPort(host, p) + "/tcp", "properties": props,
+				"technical": map[string]any{"service": map[string]any{"port": port, "transport": "tcp", "state": "open"}}})
 		}
 	case "hosts", "hosts-extra", "hosts-bad":
 		// Host discovery: the target is live when one probe port answers.
@@ -104,7 +105,7 @@ func fakeTool(mode string, args []string) int {
 		for _, k := range awsKeyRE.FindAllString(string(b), -1) {
 			f := map[string]any{"type": "secret", "rule_id": "aws-access-key", "title": "AWS access key", "severity": "high",
 				"location": map[string]any{"path": "config.py", "start_line": 1},
-				"secret":   map[string]any{"secret_type": "aws_access_key", "masked_value": k[:4] + "****"}}
+				"secret":   map[string]any{"type": "aws_access_key", "masked_value": k[:4] + "****"}}
 			if os.Getenv("CONFORMANCE_LEAK") == "1" {
 				f["description"] = "found " + k
 			}
@@ -121,10 +122,13 @@ func fakeTool(mode string, args []string) int {
 		if m := regexp.MustCompile(`<title>([^<]*)</title>`).FindSubmatch(body); m != nil {
 			title = string(m[1])
 		}
-		assets = append(assets, map[string]any{"type": "http_service", "value": arg(0),
+		assets = append(assets, map[string]any{"type": "web_origin", "value": arg(0),
+			"technical":  map[string]any{"http": map[string]any{"status_code": resp.StatusCode, "title": title}},
 			"properties": map[string]any{"status_code": resp.StatusCode, "title": title}})
 	case "crawl":
-		assets = fakeCrawl(arg(0), arg(1))
+		if eps := fakeCrawl(arg(0), arg(1)); eps != nil {
+			report["endpoints"] = eps
+		}
 	case "templates":
 		// Requests /.git/config, /.env and /env (a redirect to /.env),
 		// skipping what the web scope (arg 1) denies unless
@@ -152,7 +156,7 @@ func fakeTool(mode string, args []string) int {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				findings = append(findings, map[string]any{"type": "misconfiguration", "rule_id": "exposed" + strings.ReplaceAll(p, "/", "-"),
-					"title": p + " exposed", "asset_value": arg(0), "severity": "medium"})
+					"title": p + " exposed", "severity": "medium"})
 			}
 		}
 	case "evidence":
@@ -164,7 +168,7 @@ func fakeTool(mode string, args []string) int {
 		if os.Getenv("CONFORMANCE_UNMARKED") != "1" {
 			ex["sensitive"] = []any{map[string]any{"pointer": "/http/request/headers/0/value", "kind": "authorization"}}
 		}
-		findings = append(findings, map[string]any{"type": "misconfiguration", "rule_id": "dotenv", "title": ".env exposed", "asset_value": arg(0),
+		findings = append(findings, map[string]any{"type": "misconfiguration", "rule_id": "dotenv", "title": ".env exposed",
 			"severity": "high", "evidence_items": []any{ex}})
 	default:
 		return 2
@@ -204,8 +208,8 @@ func fakeManifest(t *testing.T, body string, files map[string]string) string {
 
 const portsTool = `tier: T1
 implements: [{capability: scan.ports@1, params: {ports: {key: ports}}, output_shape: open_port_assets}]
-consumes: [ip_address, domain]
-produces: [asset:open_port]
+consumes: [ip_address, domain_name]
+produces: [asset:service]
 config: {type: object, additionalProperties: false, properties: {ports: {type: string, maxLength: 2048}}}
 permissions: {network: targets}
 run: {profile: exec, argv: [EXE, "{{target.value}}", "{{config.ports}}"], output: {format: ctis, from: stdout}}
@@ -332,8 +336,8 @@ func TestContractSuite_Secrets(t *testing.T) {
 func TestContractSuite_ProbeHTTP(t *testing.T) {
 	body := `tier: T1
 implements: [{capability: probe.http@1}]
-consumes: [http_service]
-produces: [asset:http_service]
+consumes: [web_origin]
+produces: [asset:web_origin]
 permissions: {network: targets}
 run: {profile: exec, argv: [EXE, "{{target.value}}"], output: {format: ctis, from: stdout}}
 `
@@ -348,8 +352,8 @@ run: {profile: exec, argv: [EXE, "{{target.value}}"], output: {format: ctis, fro
 func TestContractSuite_FindsNothing(t *testing.T) {
 	body := `tier: T1
 implements: [{capability: vuln.templates@1}, {capability: sast.code@1}, {capability: sca.deps@1}, {capability: discover.subdomains@1}]
-consumes: [http_service, repository, domain]
-produces: [finding:vulnerability, asset:subdomain]
+consumes: [web_origin, repository, domain_name]
+produces: [finding:vulnerability, asset:domain_name]
 permissions: {network: targets}
 run: {profile: exec, argv: [EXE, "{{target.value}}"], output: {format: ctis, from: stdout}}
 `
@@ -454,7 +458,7 @@ var linkRE = regexp.MustCompile(`(?:href|action)="([^"]+)"|fetch\("([^"]+)"\)`)
 
 // fakeCrawl follows the links of the start page and its children (depth
 // 2), checking each against the web scope file unless told to ignore it,
-// and reports every page it fetched as a discovered_url.
+// and reports every page it fetched as an endpoint of its origin.
 func fakeCrawl(start, scopeFile string) []map[string]any {
 	var scope *webscope.Scope
 	if b, err := os.ReadFile(scopeFile); err == nil {
@@ -489,8 +493,11 @@ func fakeCrawl(start, scopeFile string) []map[string]any {
 			}
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 			_ = resp.Body.Close()
-			assets = append(assets, map[string]any{"type": "discovered_url", "value": u.String(),
-				"properties": map[string]any{"host": u.Hostname()}})
+			path := u.EscapedPath()
+			if path == "" {
+				path = "/"
+			}
+			assets = append(assets, map[string]any{"origin": u.Scheme + "://" + u.Host, "path": path, "method": "GET"})
 			for _, m := range linkRE.FindAllStringSubmatch(string(body), -1) {
 				ref := m[1] + m[2]
 				if l, err := u.Parse(ref); err == nil {
@@ -505,8 +512,8 @@ func fakeCrawl(start, scopeFile string) []map[string]any {
 
 const crawlTool = `tier: T1
 implements: [{capability: crawl.web@1}]
-consumes: [http_service]
-produces: [asset:discovered_url]
+consumes: [web_origin]
+produces: [endpoint]
 permissions: {network: targets}
 FEATURES
 run: {profile: exec, argv: [EXE, "{{target.value}}", "{{task.web_scope_file}}"], output: {format: ctis, from: stdout}}
@@ -532,7 +539,7 @@ func TestContractSuite_WebScope(t *testing.T) {
 
 const templatesTool = `tier: T1
 implements: [{capability: vuln.templates@1}]
-consumes: [http_service]
+consumes: [web_origin]
 produces: [finding:misconfiguration]
 permissions: {network: targets}
 FEATURES
@@ -563,7 +570,7 @@ func TestContractSuite_VulnTemplatesWebScope(t *testing.T) {
 func TestContractSuite_EvidenceMarked(t *testing.T) {
 	body := `tier: T1
 implements: [{capability: vuln.templates@1}]
-consumes: [http_service]
+consumes: [web_origin]
 produces: [finding:misconfiguration]
 permissions: {network: targets}
 run: {profile: exec, argv: [EXE, "{{target.value}}"], output: {format: ctis, from: stdout}}

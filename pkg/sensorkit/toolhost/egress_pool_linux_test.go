@@ -110,13 +110,13 @@ func TestConfinedTaskReachesItsTargetThroughThePool(t *testing.T) {
 	exe, _ := os.Executable()
 	m := tool.Manifest{
 		Name: "pool-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-		Consumes: []string{"open_port"}, Produces: []string{"finding:misconfiguration"},
+		Consumes: []string{"service"}, Produces: []string{"finding:misconfiguration"},
 		Permissions: tool.Permissions{Network: tool.NetTargets},
 		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
 	}
 	h := testHost(t)
 	h.Backend = be
-	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "open_port", Value: target.Addr().String()}}, Egress: pool}
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "service", Value: target.Addr().String()}}, Egress: pool}
 	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,
 		Env: map[string]string{"TOOLHOST_HOSTILE": "egress-pool-probe", "TOOLHOST_TARGET": target.Addr().String()}})
 	if err != nil {

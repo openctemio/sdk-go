@@ -308,9 +308,9 @@ func TestQueryParameterOnContextHTTP(t *testing.T) {
 	defer srv.Close()
 	m := targetHTTPManifest()
 	m.Features = &tool.Features{HTTPIdentity: true, HTTPQuery: true}
-	m.Consumes = []string{"domain"}
+	m.Consumes = []string{"domain_name"}
 	task := httpTask
-	task.Targets = []tool.Target{{Ref: "d", Type: "domain", Value: "127.0.0.1"}}
+	task.Targets = []tool.Target{{Ref: "d", Type: "domain_name", Value: "127.0.0.1"}}
 	task.OrgHTTP = &core.OrgHTTPPolicy{Query: &core.HTTPQuery{Name: "scan", Value: "acme-1"}}
 	p, ierr := prepareWithTask(t, m, nil, task)
 	if ierr != nil {

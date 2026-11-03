@@ -253,7 +253,7 @@ v1 in 2026-10). `client.Config.Protocol` is `auto` (default) or `v2`, which
 are the same; `v1` is refused. The client reads `GET /api/v2/sensor/hello`
 for the features and limits. Results go as
 `PUT /api/v2/sensor[/commands/{command_id}]/results/{report_id}` with
-`Content-Type: application/vnd.openctem.ctis.v1+json`, a `Content-Digest`
+`Content-Type: application/vnd.ctis+json; version=2.0`, a `Content-Digest`
 (sha-256 of the bytes as sent) and zstd. Reports over the per-request limits
 are sent as segments (each a complete CTIS document with the report's tool,
 metadata and the assets its findings reference; `chunk.SplitSegments`) and a
@@ -330,10 +330,10 @@ Large data moves in two directions, and each direction has one code path
   manifest proves the set is complete, and the outbox is the encrypted, capped
   store-and-forward spool.
 - **Pull** (published feed to platform or sensor): the contract module
-  `github.com/openctemio/ctis/transfer` (`transfer` and `transfer/bundle`),
+  `github.com/openctemio/contract/transfer` (`transfer` and `transfer/bundle`),
   which lived here as `pkg/transfer` until v0.1.0 of that module. It is a
   format shared by the platform, the feed publishers and sensors, so it is
-  part of ctis and the platform never depends on the SDK. Its DSSE envelope
+  part of the contract module and the platform never depends on the SDK. Its DSSE envelope
   is restated byte-identical to `pkg/jobsig` (the same golden vector is in
   both test suites).
 
@@ -387,8 +387,8 @@ carry names, origins, sizes and errors, never record content.
 
 ### Per-host politeness keys
 
-The keys are defined once, in the CTIS contract
-(`github.com/openctemio/ctis/politeness`), which the platform imports too:
+The keys are defined once, in the contract module
+(`github.com/openctemio/contract/politeness`), which the platform imports too:
 which hosts a job touches and when two jobs touch the same host (api
 `docs/rfcs/RFC-090-work-pool.md`). A name, the host of a URL or a service,
 an address (with the marker of its /24 or /120 bucket) and a range (one key
@@ -551,4 +551,5 @@ See the [Security Guide](./SECURITY.md) for detailed information.
 - [SDK README](../README.md) - Quick start guide
 - [Security Guide](./SECURITY.md) - Security best practices
 - [OpenCTEM documentation](https://docs.openctem.io) - product and API documentation
-- [CTIS module](https://github.com/openctemio/ctis) - CTIS type definitions (`pkg/ctis` re-exports them)
+- [CTIS module](https://github.com/openctemio/ctis) - CTIS 2.0 type definitions, module `github.com/openctemio/ctis/v2` (`pkg/ctis` re-exports them)
+- [Contract module](https://github.com/openctemio/contract) - platform and sensor contracts (capabilities, settings, outcomes, politeness, address scope, sources, feed transfer)

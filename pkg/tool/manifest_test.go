@@ -70,7 +70,7 @@ func TestLoadManifestValid(t *testing.T) {
 		time.Duration(m.Resources.Timeout) != 20*time.Minute || m.Run.Profile != ProfileExec {
 		t.Fatalf("decoded %+v", m)
 	}
-	if !m.Declares(KindFinding, "vulnerability") || m.Declares(KindAsset, "domain") || m.Declares(KindDependency, "") {
+	if !m.Declares(KindFinding, "vulnerability") || m.Declares(KindAsset, "domain_name") || m.Declares(KindDependency, "") {
 		t.Fatal("Declares")
 	}
 	if s, err := m.ConfigSchema(); err != nil || s.Property("ruleset") == nil {
@@ -86,8 +86,8 @@ func TestManifestCases(t *testing.T) {
 	}{
 		{"valid", baseYAML, ""},
 		{"json form", `{"apiVersion":"openctem.io/tool/v1","name":"j-tool","version":"0.1.0","class":"parser","tier":"T0","consumes":["file:application/sarif+json"],"produces":["finding:vulnerability"]}`, ""},
-		{"connector", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain]\npermissions: {network: vendor, vendor_hosts: [api.example.com, \"api.example.com:8443\"], credentials: [{name: api_key, kind: api_key, required: true}]}\n", ""},
-		{"connector vendor host from config", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain]\nconfig: {type: object, additionalProperties: false, properties: {base_url: {type: string, format: uri}}}\npermissions: {vendor_hosts: [\"${config.base_url}\"]}\n", ""},
+		{"connector", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain_name]\npermissions: {network: vendor, vendor_hosts: [api.example.com, \"api.example.com:8443\"], credentials: [{name: api_key, kind: api_key, required: true}]}\n", ""},
+		{"connector vendor host from config", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain_name]\nconfig: {type: object, additionalProperties: false, properties: {base_url: {type: string, format: uri}}}\npermissions: {vendor_hosts: [\"${config.base_url}\"]}\n", ""},
 		{"enricher", "apiVersion: openctem.io/tool/v1\nname: enr\nversion: 1.0.0\nclass: enricher\ntier: T0\nconsumes: [finding:vulnerability]\nproduces: [finding:vulnerability]\n", ""},
 		{"adapter run", patch(baseYAML, "run", "run: {argv: [python3, dotenv.py]}"), ""},
 		{"wrong apiVersion", patch(baseYAML, "apiVersion", "apiVersion: openctem.io/tool/v2"), "/apiVersion"},
@@ -110,17 +110,17 @@ func TestManifestCases(t *testing.T) {
 		{"no produces", patch(baseYAML, "produces", ""), "/produces"},
 		{"unknown produced type", patch(baseYAML, "produces", "produces: [finding:rumor]"), "/produces/0"},
 		{"bad produce kind", patch(baseYAML, "produces", "produces: [report]"), "/produces/0"},
-		{"enricher creating assets", "apiVersion: openctem.io/tool/v1\nname: enr\nversion: 1.0.0\nclass: enricher\ntier: T0\nconsumes: [finding:vulnerability]\nproduces: [asset:domain]\n", "/produces/0"},
+		{"enricher creating assets", "apiVersion: openctem.io/tool/v1\nname: enr\nversion: 1.0.0\nclass: enricher\ntier: T0\nconsumes: [finding:vulnerability]\nproduces: [asset:domain_name]\n", "/produces/0"},
 		{"secret in config (sensitive)", patch(baseYAML, "config", "config: {type: object, additionalProperties: false, properties: {key: {type: string, x-octm-sensitive: true}}}"), "/config/properties/key"},
 		{"secret in config (name)", patch(baseYAML, "config", "config: {type: object, additionalProperties: false, properties: {api_token: {type: string}}}"), "/config/properties/api_token"},
 		{"config outside the subset", patch(baseYAML, "config", "config: {type: object, additionalProperties: false, properties: {a: {oneOf: [{type: string}]}}}"), "/config"},
-		{"resolver network on a target scan", "apiVersion: openctem.io/tool/v1\nname: dns\nversion: 1.0.0\nclass: target-scan\ntier: T0\nconsumes: [domain]\nproduces: [asset:domain]\npermissions: {network: resolver}\n", ""},
+		{"resolver network on a target scan", "apiVersion: openctem.io/tool/v1\nname: dns\nversion: 1.0.0\nclass: target-scan\ntier: T0\nconsumes: [domain_name]\nproduces: [asset:domain_name]\npermissions: {network: resolver}\n", ""},
 		{"resolver network on a parser", "apiVersion: openctem.io/tool/v1\nname: p\nversion: 1.0.0\nclass: parser\ntier: T0\nconsumes: [file:text/plain]\nproduces: [finding:secret]\npermissions: {network: resolver}\n", "/permissions/network"},
 		{"targets network on a parser", "apiVersion: openctem.io/tool/v1\nname: p\nversion: 1.0.0\nclass: parser\ntier: T0\nconsumes: [file:text/plain]\nproduces: [finding:secret]\npermissions: {network: targets}\n", "/permissions/network"},
-		{"connector without vendor hosts", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain]\n", "/permissions/vendor_hosts"},
-		{"connector with targets network", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain]\npermissions: {network: targets}\n", "/permissions/network"},
-		{"vendor host from a missing key", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain]\npermissions: {vendor_hosts: [\"${config.nope}\"]}\n", "/permissions/vendor_hosts/0"},
-		{"bad vendor host", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain]\npermissions: {vendor_hosts: [\"http://x/\"]}\n", "/permissions/vendor_hosts/0"},
+		{"connector without vendor hosts", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain_name]\n", "/permissions/vendor_hosts"},
+		{"connector with targets network", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain_name]\npermissions: {network: targets}\n", "/permissions/network"},
+		{"vendor host from a missing key", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain_name]\npermissions: {vendor_hosts: [\"${config.nope}\"]}\n", "/permissions/vendor_hosts/0"},
+		{"bad vendor host", "apiVersion: openctem.io/tool/v1\nname: feed\nversion: 1.0.0\nclass: connector\ntier: T0\nproduces: [asset:domain_name]\npermissions: {vendor_hosts: [\"http://x/\"]}\n", "/permissions/vendor_hosts/0"},
 		{"bad credential kind", patch(baseYAML, "permissions", "permissions: {network: none, credentials: [{name: k, kind: magic}]}"), "/permissions/credentials/0/kind"},
 		{"duplicate credential", patch(patch(baseYAML, "run", "run: {argv: [x]}"), "permissions", "permissions: {network: none, credentials: [{name: k, kind: token}, {name: k, kind: token}]}"), "/permissions/credentials/1/name"},
 		{"capability not allowed", patch(baseYAML, "permissions", "permissions: {network: none, linux_caps: [SYS_ADMIN]}"), "/permissions/linux_caps/0"},

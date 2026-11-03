@@ -236,7 +236,7 @@ func TestRefusedTargetIsNeverTouched(t *testing.T) {
 	refused, refusedHits := recorder(t)
 	h := testHost(t)
 	h.Policy = &fakePolicy{deny: map[string]bool{refused.URL: true}}
-	task := tool.Task{ID: "adm-1", Targets: []tool.Target{{Ref: "ok", Value: allowed.URL}, {Ref: "no", Value: refused.URL}}}
+	task := tool.Task{ID: "adm-1", Targets: []tool.Target{{Ref: "ok", Type: "web_origin", Value: allowed.URL}, {Ref: "no", Type: "web_origin", Value: refused.URL}}}
 	out, err := h.RunBuiltin(context.Background(), dialTool, task, RunOptions{})
 	if err != nil {
 		t.Fatal(err)

@@ -53,13 +53,13 @@ func TestConfinedTaskReachesOnlyItsTargets(t *testing.T) {
 	exe, _ := os.Executable()
 	m := tool.Manifest{
 		Name: "egress-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-		Consumes: []string{"open_port"}, Produces: []string{"finding:misconfiguration"},
+		Consumes: []string{"service"}, Produces: []string{"finding:misconfiguration"},
 		Permissions: tool.Permissions{Network: tool.NetTargets},
 		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
 	}
 	h := testHost(t)
 	h.Backend = be
-	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "open_port", Value: target}}}
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "service", Value: target}}}
 	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,
 		Env: map[string]string{"TOOLHOST_HOSTILE": "egress-probe", "TOOLHOST_TARGET": target}})
 	if err != nil {
@@ -127,13 +127,13 @@ func TestConfinedPortScannerDialsPinnedAddress(t *testing.T) {
 	exe, _ := os.Executable()
 	m := tool.Manifest{
 		Name: "socks-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-		Consumes: []string{"domain"}, Produces: []string{"finding:misconfiguration"},
+		Consumes: []string{"domain_name"}, Produces: []string{"finding:misconfiguration"},
 		Permissions: tool.Permissions{Network: tool.NetTargets},
 		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
 	}
 	h := testHost(t)
 	h.Backend = be
-	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "domain", Value: "localhost"}}}
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "domain_name", Value: "localhost"}}}
 	run := func(env map[string]string) *Outcome {
 		env["TOOLHOST_HOSTILE"], env["TOOLHOST_NAME"], env["TOOLHOST_PORT"] = "socks-probe", "localhost", port
 		out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: env})
@@ -234,13 +234,13 @@ func TestConfinedTaskKeepsToScopeLimits(t *testing.T) {
 	exe, _ := os.Executable()
 	m := tool.Manifest{
 		Name: "limits-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-		Consumes: []string{"http_service"}, Produces: []string{"finding:misconfiguration"},
+		Consumes: []string{"web_origin"}, Produces: []string{"finding:misconfiguration"},
 		Permissions: tool.Permissions{Network: tool.NetTargets},
 		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
 	}
 	h := testHost(t)
 	h.Backend = be
-	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "http_service", Value: target + "/api/"}},
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "web_origin", Value: target + "/api/"}},
 		Limits: []scopelimit.Limit{{Host: "localhost", Ports: strconv.Itoa(port), PathPrefix: "/api"}}}
 	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,
 		Env: map[string]string{"TOOLHOST_HOSTILE": "limits-probe", "TOOLHOST_TARGET": target, "TOOLHOST_OTHER_PORT": strconv.Itoa(otherPort)}})
@@ -300,13 +300,13 @@ func TestConfinedTaskKeepsToWebScope(t *testing.T) {
 	exe, _ := os.Executable()
 	m := tool.Manifest{
 		Name: "webscope-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-		Consumes: []string{"http_service"}, Produces: []string{"finding:misconfiguration"},
+		Consumes: []string{"web_origin"}, Produces: []string{"finding:misconfiguration"},
 		Permissions: tool.Permissions{Network: tool.NetTargets}, Features: &tool.Features{WebScope: true},
 		Run: &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
 	}
 	h := testHost(t)
 	h.Backend = be
-	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "http_service", Value: target}},
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "web_origin", Value: target}},
 		WebScope: &webscope.Scope{DenyPaths: []string{"/admin"}}}
 	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,
 		Env: map[string]string{"TOOLHOST_HOSTILE": "webscope-probe", "TOOLHOST_TARGET": target}})
@@ -375,13 +375,13 @@ func TestConfinedTaskEndsAfterASilentHost(t *testing.T) {
 	exe, _ := os.Executable()
 	m := tool.Manifest{
 		Name: "egress-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
-		Consumes: []string{"open_port"}, Produces: []string{"finding:misconfiguration"},
+		Consumes: []string{"service"}, Produces: []string{"finding:misconfiguration"},
 		Permissions: tool.Permissions{Network: tool.NetTargets},
 		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
 	}
 	h := testHost(t)
 	h.Backend = be
-	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "open_port", Value: target}}}
+	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "service", Value: target}}}
 	done := make(chan *Outcome, 1)
 	go func() {
 		out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,

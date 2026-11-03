@@ -8,7 +8,7 @@ import (
 
 func TestCheckFindingAssets(t *testing.T) {
 	repo := Asset{ID: "a1", Type: AssetTypeRepository, Value: "github.com/org/app"}
-	host := Asset{ID: "a2", Type: AssetTypeDomain, Value: "example.com"}
+	host := Asset{ID: "a2", Type: AssetTypeDomainName, Value: "example.com"}
 
 	cases := []struct {
 		name       string
@@ -18,12 +18,10 @@ func TestCheckFindingAssets(t *testing.T) {
 		{"nil report", nil, nil},
 		{"no findings", &Report{}, nil},
 		{"ref names an asset", &Report{Assets: []Asset{repo, host}, Findings: []Finding{{AssetRef: "a2"}, {AssetRef: "a1"}}}, nil},
-		{"empty ref, exactly one asset", &Report{Assets: []Asset{repo}, Findings: []Finding{{}}}, nil},
-		{"empty ref, one asset with no id", &Report{Assets: []Asset{{Type: AssetTypeRepository, Value: "x"}}, Findings: []Finding{{}}}, nil},
+		{"empty ref is unresolved even with one asset (asset_ref is required)", &Report{Assets: []Asset{repo}, Findings: []Finding{{}}}, []int{0}},
 		{"no assets", &Report{Findings: []Finding{{}, {}}}, []int{0, 1}},
 		{"empty ref, two assets is ambiguous", &Report{Assets: []Asset{repo, host}, Findings: []Finding{{AssetRef: "a1"}, {}}}, []int{1}},
 		{"ref to a missing asset", &Report{Assets: []Asset{repo}, Findings: []Finding{{AssetRef: "a1"}, {AssetRef: "nope"}}}, []int{1}},
-		{"asset_value is not a reference", &Report{Findings: []Finding{{AssetValue: "github.com/org/app", AssetType: AssetTypeRepository}}}, []int{0}},
 		{"asset without a value is not stored", &Report{Assets: []Asset{{ID: "a1", Type: AssetTypeRepository, Value: " "}}, Findings: []Finding{{AssetRef: "a1"}}}, []int{0}},
 	}
 	for _, tc := range cases {
@@ -59,7 +57,7 @@ func TestCheckFindingAssets(t *testing.T) {
 func TestCheckFindingAssets_ErrorIsBoundedAndContentFree(t *testing.T) {
 	r := &Report{}
 	for i := 0; i < 50; i++ {
-		r.Findings = append(r.Findings, Finding{Title: "SECRET-TITLE", AssetValue: "secret-host"})
+		r.Findings = append(r.Findings, Finding{Title: "SECRET-TITLE", AssetRef: "secret-host"})
 	}
 	err := CheckFindingAssets(r)
 	var fe *FindingAssetError

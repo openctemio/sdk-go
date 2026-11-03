@@ -34,7 +34,7 @@ func TestFixtureServePlaceholders(t *testing.T) {
 		{"none", "example.com", "example.com"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir, f := writeFixture(t, `{`+serve+`"id":"x","targets":[{"ref":"t1","type":"http_service","value":"`+tc.value+`"}]}`)
+			dir, f := writeFixture(t, `{`+serve+`"id":"x","targets":[{"ref":"t1","type":"web_origin","value":"`+tc.value+`"}]}`)
 			fx, err := loadFixtureTask(dir, f)
 			if err != nil {
 				t.Fatal(err)
@@ -49,14 +49,14 @@ func TestFixtureServePlaceholders(t *testing.T) {
 }
 
 func TestFixtureServeRefusals(t *testing.T) {
-	target := `"targets":[{"ref":"t1","type":"http_service","value":"{{fixture.url}}"}]`
+	target := `"targets":[{"ref":"t1","type":"web_origin","value":"{{fixture.url}}"}]`
 	for _, tc := range []struct{ name, body, want string }{
 		{"crlf value", `{"serve":{"headers":{"X":"a\r\nSet-Cookie: b=c"}},` + target + `}`, "CR or LF"},
 		{"crlf name", `{"serve":{"headers":{"X\nY":"a"}},` + target + `}`, "CR, LF"},
 		{"crlf path header", `{"serve":{"paths":{"/a":{"headers":{"X":"a\nb"}}}},` + target + `}`, "CR or LF"},
 		{"bad status", `{"serve":{"status":99},` + target + `}`, "status 99"},
 		{"path without slash", `{"serve":{"paths":{"a":{}}},` + target + `}`, "does not start with /"},
-		{"unknown placeholder", `{"serve":{},"targets":[{"ref":"t1","type":"http_service","value":"{{fixture.nope}}"}]}`, "unknown placeholder"},
+		{"unknown placeholder", `{"serve":{},"targets":[{"ref":"t1","type":"web_origin","value":"{{fixture.nope}}"}]}`, "unknown placeholder"},
 		{"placeholder without serve", `{` + target + `}`, "needs a serve member"},
 		{"unknown serve key", `{"serve":{"bodie":"x"},` + target + `}`, "unknown field"},
 		{"big body", `{"serve":{"body":"` + strings.Repeat("a", maxServeBody+1) + `"},` + target + `}`, "over"},
@@ -93,7 +93,7 @@ func TestFixtureServeRefusals(t *testing.T) {
 
 func TestFixtureServeAnswersAndStripsServe(t *testing.T) {
 	dir, f := writeFixture(t, `{"serve":{"status":200,"headers":{"Server":"fixture"},"body":"hello","paths":{"/.env":{"status":403,"body":"SECRET=x","headers":{"X-A":"b"}}}},
-"id":"x","targets":[{"ref":"t1","type":"http_service","value":"{{fixture.url}}"}]}`)
+"id":"x","targets":[{"ref":"t1","type":"web_origin","value":"{{fixture.url}}"}]}`)
 	fx, err := loadFixtureTask(dir, f)
 	if err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestFixtureServeAnswersAndStripsServe(t *testing.T) {
 }
 
 func TestFixtureServeTLS(t *testing.T) {
-	dir, f := writeFixture(t, `{"serve":{"tls":true,"body":"s"},"targets":[{"ref":"t1","type":"http_service","value":"{{fixture.url}}"}]}`)
+	dir, f := writeFixture(t, `{"serve":{"tls":true,"body":"s"},"targets":[{"ref":"t1","type":"web_origin","value":"{{fixture.url}}"}]}`)
 	fx, err := loadFixtureTask(dir, f)
 	if err != nil {
 		t.Fatal(err)

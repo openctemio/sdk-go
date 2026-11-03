@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/openctemio/ctis/edgeprotect"
+	"github.com/openctemio/contract/edgeprotect"
 )
 
 // SensorRate is what every task of one sensor shares about a target host

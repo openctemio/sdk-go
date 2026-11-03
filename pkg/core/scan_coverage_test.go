@@ -56,7 +56,7 @@ func pushedCoverage(t *testing.T, res core.ScanResult, parsed ctis.Report) strin
 	if len(pusher.PushFindingsCalls) != 1 {
 		t.Fatalf("want one push, got %d", len(pusher.PushFindingsCalls))
 	}
-	return pusher.PushFindingsCalls[0].Report.Metadata.CoverageType
+	return string(pusher.PushFindingsCalls[0].Report.Metadata.CoverageType)
 }
 
 // Every pushed scan report states its coverage (CTIS spec 4.5): a receiver
@@ -79,7 +79,7 @@ func TestExecuteScan_ReportStatesCoverage(t *testing.T) {
 	}
 
 	failed := base()
-	failed.Properties = ctis.Properties{"failed_targets": []string{"a.example.test"}}
+	failed.Metadata.Targets = []ctis.TargetOutcome{{Target: "a.example.test", State: ctis.TargetFailed, Class: ctis.TargetClassToolError}}
 	if got := pushedCoverage(t, core.ScanResult{}, failed); got != "partial" {
 		t.Errorf("failed targets: coverage %q, want partial", got)
 	}
@@ -145,7 +145,7 @@ func emptyRunCoverage(t *testing.T, res core.ScanResult) string {
 	if rep.Tool == nil || rep.Tool.Name != "fakescan" || len(rep.Findings) != 0 || len(rep.Assets) != 0 {
 		t.Fatalf("the empty report names the tool and nothing else, got %+v", rep)
 	}
-	return rep.Metadata.CoverageType
+	return string(rep.Metadata.CoverageType)
 }
 
 // A run that found nothing is only full when it covered everything: a

@@ -38,7 +38,7 @@ func Explicit(opts *core.ParseOptions) (ctis.Asset, bool) {
 		return ctis.Asset{
 			ID:          id,
 			Type:        t,
-			Value:       opts.AssetValue,
+			Value:       ctis.NormalizeAssetName(t, opts.AssetValue),
 			Name:        opts.AssetValue,
 			Criticality: ctis.CriticalityHigh,
 			Properties:  ctis.Properties{"source": "parse_options"},
@@ -60,7 +60,7 @@ func Explicit(opts *core.ParseOptions) (ctis.Asset, bool) {
 		return ctis.Asset{
 			ID:          id,
 			Type:        ctis.AssetTypeRepository,
-			Value:       bi.RepositoryURL,
+			Value:       ctis.NormalizeAssetName(ctis.AssetTypeRepository, bi.RepositoryURL),
 			Name:        bi.RepositoryURL,
 			Criticality: ctis.CriticalityHigh,
 			Properties:  props,
@@ -116,7 +116,7 @@ func repoAsset(id, value, branch, commit, source string) ctis.Asset {
 	return ctis.Asset{
 		ID:          id,
 		Type:        ctis.AssetTypeRepository,
-		Value:       value,
+		Value:       ctis.NormalizeAssetName(ctis.AssetTypeRepository, value),
 		Name:        value,
 		Criticality: ctis.CriticalityHigh,
 		Properties:  props,

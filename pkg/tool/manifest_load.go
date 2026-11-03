@@ -235,17 +235,40 @@ const (
 	KindAsset      = "asset"
 	KindFinding    = "finding"
 	KindDependency = "dependency"
-	// KindEndpoint is a method and path a web origin serves (CTIS 1.6
+	// KindEndpoint is a method and path a web origin serves (CTIS
 	// endpoints[]).
 	KindEndpoint = "endpoint"
+	// KindRelationship is a typed edge between two assets the task reported
+	// (CTIS relationships[]: a host exposes a service, a name resolves to
+	// an address). It adds no asset of its own, so a manifest never declares
+	// it: both ends passed the asset checks.
+	KindRelationship = "relationship"
+	// KindRule is an entry of the report's rule catalog (CTIS rules[]): the
+	// text of a rule written once, which findings name by rule_ref. Like a
+	// relationship it is never declared.
+	KindRule = "rule"
 )
 
 // Declares reports whether the manifest produces records of kind ("asset",
 // "finding", "dependency") and CTIS type typ ("" for dependencies).
 func (m Manifest) Declares(kind, typ string) bool {
+	if kind == KindRelationship || kind == KindRule {
+		return true
+	}
 	want := kind
 	if kind != KindDependency && kind != KindEndpoint {
 		want = kind + ":" + typ
 	}
 	return slices.Contains(m.Produces, want)
+}
+
+// ProducesFindings reports whether the manifest produces findings of any
+// type.
+func (m Manifest) ProducesFindings() bool {
+	for _, p := range m.Produces {
+		if strings.HasPrefix(p, KindFinding+":") {
+			return true
+		}
+	}
+	return false
 }

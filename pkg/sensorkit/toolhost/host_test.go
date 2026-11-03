@@ -20,7 +20,6 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 
-	"github.com/openctemio/ctis/outcome"
 	"github.com/openctemio/sdk-go/internal/toolwire"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
@@ -33,7 +32,7 @@ import (
 // what it could see of its environment.
 var echoTool = tool.New(tool.Manifest{
 	Name: "echo-tool", Version: "1.2.0", Class: tool.TargetScan, Tier: tool.T1,
-	Consumes: []string{"domain"}, Produces: []string{"finding:misconfiguration", "asset:domain"},
+	Consumes: []string{"domain_name"}, Produces: []string{"finding:misconfiguration", "asset:domain_name"},
 	Permissions: tool.Permissions{Network: tool.NetNone, Credentials: []tool.CredentialReq{{Name: "api_key", Kind: "api_key"}}},
 }, func(ctx tool.Context, task tool.Task, _ tool.NoConfig) error {
 	if k, err := ctx.Secret("api_key"); err == nil {
@@ -84,7 +83,7 @@ func TestMain(m *testing.M) {
 
 var hostileManifest = tool.Manifest{
 	Name: "hostile", Version: "0.0.1", Class: tool.TargetScan, Tier: tool.T1,
-	Consumes: []string{"domain"}, Produces: []string{"finding:misconfiguration"},
+	Consumes: []string{"domain_name"}, Produces: []string{"finding:misconfiguration"},
 	Permissions: tool.Permissions{Network: tool.NetNone, Credentials: []tool.CredentialReq{{Name: "api_key", Kind: "api_key"}}},
 	Resources:   tool.Resources{IdleTimeout: tool.Duration(2 * time.Second), Timeout: tool.Duration(30 * time.Second), MaxRecords: 50},
 }
@@ -228,7 +227,7 @@ func hostile(mode string) int {
 	case "sarif-cli":
 		fmt.Println(`{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"cli","rules":[{"id":"R1","shortDescription":{"text":"rule"}}]}},"results":[{"ruleId":"R1","level":"error","message":{"text":"bad thing"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"main.go"},"region":{"startLine":3}}}]}]}]}`)
 	case "ctis-cli":
-		fmt.Println(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":"from cli","severity":"high"},{"type":"secret","title":"undeclared","severity":"high"}]}`)
+		fmt.Println(`{"version":"2.0","metadata":{"generated_at":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":"from cli","severity":"high"},{"type":"secret","title":"undeclared","severity":"high"}]}`)
 		return 2
 	case "egress-probe":
 		// A CONNECT to its target through the proxy it was given, one to a
@@ -257,7 +256,7 @@ func hostile(mode string) int {
 		} else {
 			res = append(res, "direct=blocked")
 		}
-		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
+		fmt.Printf(`{"version":"2.0","metadata":{"generated_at":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
 		return 0
 	case "egress-silent":
 		return egressSilent()
@@ -278,7 +277,7 @@ func hostile(mode string) int {
 			_ = c.Close()
 		}
 		seen := strings.Join(append(os.Environ(), os.Args...), " ")
-		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"description":%q,"severity":"low"}]}`+"\n", "target="+code, seen)
+		fmt.Printf(`{"version":"2.0","metadata":{"generated_at":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"description":%q,"severity":"low"}]}`+"\n", "target="+code, seen)
 		return 0
 	case "socks-probe":
 		return socksProbe()
@@ -309,7 +308,7 @@ func hostile(mode string) int {
 			_ = conn.Close()
 		}
 		res = append(res, "port="+other)
-		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
+		fmt.Printf(`{"version":"2.0","metadata":{"generated_at":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
 		return 0
 	case "webscope-probe":
 		// HTTP requests to its web-scoped target through the proxy it was
@@ -335,11 +334,11 @@ func hostile(mode string) int {
 			direct = "reached"
 		}
 		res = append(res, "direct="+direct)
-		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
+		fmt.Printf(`{"version":"2.0","metadata":{"generated_at":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
 		return 0
 	case "argv-cli":
 		// Reports its arguments, as a finding title.
-		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(os.Args[1:], "|"))
+		fmt.Printf(`{"version":"2.0","metadata":{"generated_at":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(os.Args[1:], "|"))
 		return 0
 	case "env-cli":
 		// Reports, as a finding title, which vendor variables it can see.
@@ -349,7 +348,7 @@ func hostile(mode string) int {
 				seen = append(seen, k)
 			}
 		}
-		fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":"seen:%s","severity":"low"}]}`+"\n", strings.Join(seen, ","))
+		fmt.Printf(`{"version":"2.0","metadata":{"generated_at":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":"seen:%s","severity":"low"}]}`+"\n", strings.Join(seen, ","))
 		return 0
 	}
 	return 0
@@ -388,7 +387,7 @@ func testHost(t *testing.T) *Host {
 	return &Host{Self: exe, Sensor: "test-sensor", RuntimeName: "toolhost-test"}
 }
 
-var oneTarget = []tool.Target{{Ref: "t1", Type: "domain", Value: "a.example"}}
+var oneTarget = []tool.Target{{Ref: "t1", Type: "domain_name", Value: "a.example"}}
 
 func hostileRun(t *testing.T, mode string, m tool.Manifest, task tool.Task) *Outcome {
 	t.Helper()
@@ -408,7 +407,7 @@ func hostileRun(t *testing.T, mode string, m tool.Manifest, task tool.Task) *Out
 }
 
 func TestBuiltinRunsOutOfProcess(t *testing.T) {
-	task := tool.Task{ID: "task-1", Targets: []tool.Target{{Ref: "t1", Type: "domain", Value: "a.example"}, {Ref: "t2", Type: "domain", Value: "b.example"}}}
+	task := tool.Task{ID: "task-1", Targets: []tool.Target{{Ref: "t1", Type: "domain_name", Value: "a.example"}, {Ref: "t2", Type: "domain_name", Value: "b.example"}}}
 	out, err := testHost(t).RunBuiltin(context.Background(), echoTool, task, RunOptions{
 		Credentials: map[string]string{"api_key": "sk-live-abcdef", "db_password": "hunter2"}})
 	if err != nil {
@@ -431,10 +430,15 @@ func TestBuiltinRunsOutOfProcess(t *testing.T) {
 		t.Fatalf("artifacts %+v", out.Artifacts)
 	}
 	prov, _ := json.Marshal(out.Report.Metadata.Properties["provenance"])
-	for _, want := range []string{`"tool":"echo-tool"`, `"task_id":"task-1"`, `"sensor":"test-sensor"`, `"manifest_digest":"sha256:`, "built-in"} {
+	for _, want := range []string{`"tool":"echo-tool"`, `"sensor":"test-sensor"`, `"manifest_digest":"sha256:`, "built-in"} {
 		if !strings.Contains(string(prov), want) {
 			t.Errorf("provenance %s lacks %s", prov, want)
 		}
+	}
+	// The task id is the platform's: it stays in the transport, never in
+	// the document.
+	if raw, _ := json.Marshal(out.Report); strings.Contains(string(raw), "task-1") {
+		t.Errorf("the platform task id reached the report: %s", prov)
 	}
 	// The same tool in-process (testkit) gives the same CTIS.
 	in := testkit.Run(t, echoTool, task, testkit.Options{Secrets: map[string]string{"api_key": "sk-live-abcdef"}})
@@ -641,7 +645,7 @@ func TestAdapterSchemaMatchesWire(t *testing.T) {
 // Each target the tool settles counts toward the job's progress (the
 // heartbeat's done count), once per target.
 func TestSettledTargetsCountAsProgress(t *testing.T) {
-	task := tool.Task{ID: "task-p", Targets: []tool.Target{{Ref: "t1", Type: "domain", Value: "a.example"}, {Ref: "t2", Type: "domain", Value: "b.example"}}}
+	task := tool.Task{ID: "task-p", Targets: []tool.Target{{Ref: "t1", Type: "domain_name", Value: "a.example"}, {Ref: "t2", Type: "domain_name", Value: "b.example"}}}
 	prog := core.NewProgress(2)
 	ctx := core.WithProgress(context.Background(), prog)
 	out, err := testHost(t).RunBuiltin(ctx, echoTool, task, RunOptions{
@@ -658,7 +662,7 @@ func TestSettledTargetsCountAsProgress(t *testing.T) {
 	}
 }
 
-var twoTargets = []tool.Target{{Ref: "t1", Type: "domain", Value: "a.example"}, {Ref: "t2", Type: "domain", Value: "b.example"}}
+var twoTargets = []tool.Target{{Ref: "t1", Type: "domain_name", Value: "a.example"}, {Ref: "t2", Type: "domain_name", Value: "b.example"}}
 
 func hostileRunCtx(t *testing.T, ctx context.Context, mode string) *Outcome {
 	t.Helper()
@@ -707,15 +711,12 @@ func TestStoppedPartwayKeepsSettledTargets(t *testing.T) {
 			if len(out.Unfinished) != 1 || out.Unfinished[0] != "b.example" {
 				t.Fatalf("unfinished %v", out.Unfinished)
 			}
-			if got, _ := json.Marshal(out.Report.Properties[UnfinishedTargetsKey]); string(got) != `["b.example"]` {
-				t.Fatalf("report unfinished_targets %s", got)
-			}
 			if out.Report.Metadata.CoverageType != "partial" {
 				t.Fatalf("coverage %q", out.Report.Metadata.CoverageType)
 			}
 			want := `[{"target":"a.example","state":"done"},{"target":"b.example","state":"unfinished"}]`
-			if got, _ := json.Marshal(out.Report.Properties[outcome.ResultKey]); string(got) != want {
-				t.Fatalf("report target_outcomes %s", got)
+			if got, _ := json.Marshal(out.Report.Metadata.Targets); string(got) != want {
+				t.Fatalf("report metadata.targets %s", got)
 			}
 		})
 	}
@@ -731,7 +732,7 @@ func TestCanceledAfterSettlingStaysCanceled(t *testing.T) {
 	if out.Status != tool.StatusCanceled || len(out.Unfinished) != 0 {
 		t.Fatalf("status %s err %v unfinished %v", out.Status, out.Err, out.Unfinished)
 	}
-	if _, ok := out.Report.Properties[outcome.ResultKey]; ok {
+	if len(out.Report.Metadata.Targets) != 0 {
 		t.Fatal("a canceled run carries target outcomes")
 	}
 }
@@ -800,6 +801,6 @@ func socksProbe() int {
 		}
 	}
 	res = append(res, "outside="+socks(net.IPv4(192, 0, 2, 1), 80))
-	fmt.Printf(`{"version":"1.3","metadata":{"timestamp":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
+	fmt.Printf(`{"version":"2.0","metadata":{"generated_at":"2026-01-01T00:00:00Z"},"findings":[{"type":"misconfiguration","title":%q,"severity":"low"}]}`+"\n", strings.Join(res, " "))
 	return 0
 }

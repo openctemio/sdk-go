@@ -1,16 +1,16 @@
 {
-  "$schema": "https://raw.githubusercontent.com/openctemio/ctis/main/schemas/v1/report.json",
+  "$schema": "https://schemas.openctem.io/ctis/2.0/report.json",
   "assets": [
     {
-      "id": "target-t1",
+      "id": "target-1",
       "name": "http://shop.example:8080",
-      "type": "http_service",
+      "type": "web_origin",
       "value": "http://shop.example:8080"
     }
   ],
   "findings": [
     {
-      "asset_ref": "target-t1",
+      "asset_ref": "target-1",
       "description": "Traffic to http://shop.example:8080 is not encrypted.",
       "rule_id": "http-plaintext",
       "severity": "medium",
@@ -19,13 +19,13 @@
     }
   ],
   "metadata": {
+    "channel": "scanner",
     "properties": {
       "provenance": "<provenance>"
-    },
-    "source_type": "scanner"
+    }
   },
   "tool": {
     "name": "http-plaintext"
   },
-  "version": "1.6"
+  "version": "2.0"
 }
