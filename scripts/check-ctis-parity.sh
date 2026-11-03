@@ -20,8 +20,7 @@ GENERATED="$PKG/zz_generated_aliases.go"
 
 # Struct types pkg/ctis may declare itself: SDK behavior around the module's
 # types, not part of the CTIS model.
-# SARIFLog/SARIFRun: the module's SARIF root types plus versionControlProvenance.
-SDK_ONLY_STRUCTS="FindingAssetError SARIFVersionControlDetails SARIFLog SARIFRun"
+SDK_ONLY_STRUCTS="FindingAssetError"
 
 cd "$ROOT"
 export GOWORK=off

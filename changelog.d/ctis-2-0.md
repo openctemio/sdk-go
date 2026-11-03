@@ -10,6 +10,10 @@
   package names: replace `github.com/openctemio/ctis/{capability,tooloption,settings,outcome,politeness,edgeprotect,addrscope,source}`
   by `github.com/openctemio/contract/...`.
 - A report queued in the outbox by an earlier SDK (a 1.x document) is dropped with a reason when it is delivered.
+- The standard formats are the CTIS interoperability adapters (`github.com/openctemio/ctis/v2/interop/{sarif,cyclonedx,spdx,csaf,openvex}`
+  v0.1.0), registered with the importer by `pkg/core` (the SARIF parser, the tool host's named formats and the file
+  import tool keep reading them). `pkg/ctis` no longer has SARIF types (`SARIFLog`, `SARIFRun`,
+  `SARIFVersionControlDetails`): use `github.com/openctemio/ctis/v2/interop/sarif` (`sarif.Log`, `sarif.Run`, ...).
 
 ### Behaviour change: documents carry no platform identifier
 

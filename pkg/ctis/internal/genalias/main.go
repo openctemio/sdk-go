@@ -31,17 +31,10 @@ const module = "github.com/openctemio/ctis/v2"
 
 // skip names upstream identifiers that pkg/ctis implements itself (the
 // value is the file) or leaves out (the value says why).
-var skip = map[string]string{
-	// SARIF is converted by core.SARIFParser through the module's importer
-	// package (input limits, asset rule); the bare converter is not
-	// re-exported, so the SDK has one SARIF path.
-	"FromSARIF": "left out: use core.SARIFParser",
-	// SARIFLog and SARIFRun add versionControlProvenance (and
-	// SARIFRun.Repository) to the module's SARIF model; the nested SARIF
-	// types are the module's.
-	"SARIFLog": "sarif.go",
-	"SARIFRun": "sarif.go",
-}
+// The standard formats (SARIF, CycloneDX, ...) are not in the core module
+// since CTIS 2.0: they are the interop adapters, registered by pkg/core
+// (interop.go).
+var skip = map[string]string{}
 
 func main() {
 	out := "zz_generated_aliases.go"
