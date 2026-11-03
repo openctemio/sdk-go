@@ -368,3 +368,37 @@ func TestCheckerEndpointOriginRef(t *testing.T) {
 		}
 	}
 }
+
+// A tool cannot pass off its own io.openctem metadata as the runtime's
+// stamp: without a valid capability for the task the namespace is cleared,
+// and with one the runtime's capability wins.
+func TestStampClearsToolSuppliedOpenCTEMNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		name, capability string
+		wantCapability   any
+		wantNamespace    bool
+	}{
+		{"no capability", "", nil, false},
+		{"malformed capability", "Scan Ports", nil, false},
+		{"valid capability", "scan.ports@1", "scan.ports@1", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &ctis.Report{}
+			r.Metadata.Extensions.Set(ctis.OpenCTEMNamespace, "capability", "vuln.templates@1")
+			r.Metadata.Extensions.Set(ctis.OpenCTEMNamespace, "rule_source", "platform")
+			r.Metadata.Extensions.Set("com.example.tool", "k", "v")
+			Stamp(r, Provenance{Tool: "probe", Capability: tc.capability})
+			_, hasNS := r.Metadata.Extensions[ctis.OpenCTEMNamespace]
+			if hasNS != tc.wantNamespace {
+				t.Fatalf("io.openctem present = %v, want %v (%v)", hasNS, tc.wantNamespace, r.Metadata.Extensions)
+			}
+			got, _ := r.Metadata.Extensions.Get(ctis.OpenCTEMNamespace, "capability")
+			if got != tc.wantCapability {
+				t.Fatalf("capability = %v, want %v", got, tc.wantCapability)
+			}
+			if v, _ := r.Metadata.Extensions.Get("com.example.tool", "k"); v != "v" {
+				t.Fatalf("another namespace was touched: %v", r.Metadata.Extensions)
+			}
+		})
+	}
+}

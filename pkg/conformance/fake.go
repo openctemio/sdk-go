@@ -882,7 +882,7 @@ func (f *FakePlatform) putSegment(w http.ResponseWriter, r *http.Request, body [
 	// UUIDv7 metadata.id that is none of the platform's identifiers.
 	rep, _, err := ctis.Decode(bytes.NewReader(raw))
 	if err != nil || rep.Validate() != nil || rep.Tool == nil || rep.Tool.Name == "" ||
-		!ctis.IsReportID(rep.Metadata.ID) || rep.Metadata.ID == commandID {
+		!ctis.IsReportID(rep.Metadata.ID) || rep.Metadata.ID == commandID || rep.Metadata.ID == reportID {
 		f.problem(w, http.StatusUnprocessableEntity, protov2.ProblemSchemaInvalid)
 		return
 	}
@@ -898,24 +898,34 @@ func (f *FakePlatform) putSegment(w http.ResponseWriter, r *http.Request, body [
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := time.Now().UTC()
-	// A document already committed under another report is a retry: the
-	// platform answers with what it has and stores nothing twice.
+	// The command binding is checked first: a report id bound to another
+	// command, or a retry of a document committed for another command, is a
+	// binding mismatch, never an answer about someone else's report.
+	st := f.reports[reportID]
+	if st != nil && st.CommandID != commandID {
+		f.problemLocked(w, http.StatusConflict, protov2.ProblemBindingMismatch)
+		return
+	}
+	// A document already committed under another report of the same command
+	// is a retry: the platform answers with what it has and stores nothing
+	// twice.
 	if prev, ok := f.docs[rep.Metadata.ID]; ok && prev != reportID {
-		if old := f.reports[prev]; old != nil && old.Committed {
-			writeJSON(w, http.StatusOK, old.Status)
-			return
+		if old := f.reports[prev]; old != nil {
+			if old.CommandID != commandID {
+				f.problemLocked(w, http.StatusConflict, protov2.ProblemBindingMismatch)
+				return
+			}
+			if old.Committed {
+				writeJSON(w, http.StatusOK, old.Status)
+				return
+			}
 		}
 	}
 	f.docs[rep.Metadata.ID] = reportID
-	st := f.reports[reportID]
 	if st == nil {
 		st = &StoredReport{ReportID: reportID, CommandID: commandID, Segments: map[int]segment{},
 			Status: protov2.Status{ReportID: reportID, CommandID: commandID, State: protov2.StateReceiving, ReceivedAt: now, Errors: []protov2.ItemError{}}}
 		f.reports[reportID] = st
-	}
-	if st.CommandID != commandID {
-		f.problemLocked(w, http.StatusConflict, protov2.ProblemBindingMismatch)
-		return
 	}
 	if old, ok := st.Segments[seq]; ok {
 		if old.digest == digest {

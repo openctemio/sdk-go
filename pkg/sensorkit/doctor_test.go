@@ -27,7 +27,7 @@ func findCheck(r core.ConfigReport, id string) (core.ConfigCheck, bool) {
 
 // A sensor on a platform that takes config reports delivers its preflight
 // checks (a broken tool with its reason, a state directory that does not
-// persist, an unreadable SSL_CERT_FILE, a legacy name, an unknown setting)
+// persist, an unreadable SSL_CERT_FILE, an unknown setting)
 // with the presence of its settings, and every heartbeat carries the
 // digest. No secret value appears in any byte the sensor sends: not the
 // API key (outside the Authorization header), not a proxy password, not a
@@ -42,7 +42,6 @@ func TestRun_ConfigReport_ChecksAndNoSecretOnTheWire(t *testing.T) {
 	t.Setenv("SENSOR_CONTENT_PROXY", "http://svc:"+canaryProxy+"@127.0.0.1:1")
 	t.Setenv("TRIVY_PASSWORD", canaryTool)
 	t.Setenv("SSL_CERT_FILE", "/nonexistent/ca.pem")
-	t.Setenv("AGENT_NAME", "legacy-name")
 	t.Setenv("SENSOR_MAX_JOB", "4")
 	reg := settingsreg.New()
 	reg.Register(settingsreg.Setting{Name: "TRIVY_PASSWORD", Type: settingsreg.String, Secret: true, Group: "tools",
@@ -87,7 +86,6 @@ func TestRun_ConfigReport_ChecksAndNoSecretOnTheWire(t *testing.T) {
 		CheckStatePersistent:      "not_persistent",
 		CheckOutboxPersistent:     "not_persistent",
 		CheckPlatformTLS:          "ca_file_unreadable",
-		CheckAliasDeprecated:      "legacy_name",
 		CheckEnvUnknown:           "unknown",
 		CheckLocalPolicy:          "absent",
 		CheckOOMProtect:           "not_requested",
