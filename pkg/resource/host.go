@@ -57,6 +57,8 @@ type ProbeResult struct {
 	OOMKills uint64
 	// Signals are the host pressure readings (research/318).
 	Signals PressureSignals
+	// At is when the probe was taken (zero: unknown).
+	At time.Time
 }
 
 // Prober reads the host's resources. The zero value probes the running
@@ -137,7 +139,7 @@ func (p *Prober) Probe() ProbeResult {
 	cur.periods, cur.throttled = cg.throttling()
 	cur.oomKills, cur.hasOOM = cg.oomKills()
 
-	out := ProbeResult{}
+	out := ProbeResult{At: now}
 	p.mu.Lock()
 	prev := p.prev
 	p.prev = cur

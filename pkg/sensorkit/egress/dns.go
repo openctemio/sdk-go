@@ -45,7 +45,7 @@ func (f *Forwarder) AnswerDNS(ctx context.Context, query []byte) ([]byte, error)
 		resp.RCode = dnsmessage.RCodeNameError
 		return resp.Pack()
 	}
-	rec := Record{Time: time.Now().UTC(), Protocol: "dns", Host: name}
+	rec := Record{Time: time.Now().UTC(), Protocol: "dns", Host: shown(name)}
 	addrs, rerr := f.resolveName(ctx, name)
 	if rerr != nil {
 		resp.RCode = dnsmessage.RCodeNameError

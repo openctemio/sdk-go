@@ -460,27 +460,46 @@ func egressRate(config json.RawMessage, m tool.Manifest) float64 {
 	return 1000
 }
 
-// egressLog turns the forwarder's refusals into the task's log lines (the
-// first few; the outcome keeps every record).
+// egressLog turns the forwarder's refusals into the task's log lines: one
+// line per distinct refusal (host, port, protocol and reason), with a count
+// when it repeated, the first few distinct ones only (the outcome keeps
+// every record), and a tail counting the distinct destinations left out.
 func egressLog(recs []egress.Record) []LogLine {
-	var out []LogLine
-	n := 0
+	type key struct {
+		host, protocol, reason string
+		port                   int
+	}
+	var order []key
+	counts := map[key]int{}
 	for _, r := range recs {
 		if r.Verdict != egress.Refused {
 			continue
 		}
-		n++
-		if len(out) < maxEgressLogLines {
-			dest := r.Host
-			if r.Port > 0 {
-				dest = net.JoinHostPort(r.Host, fmt.Sprint(r.Port))
-			}
-			out = append(out, LogLine{Level: "warn", Msg: "egress refused " + dest + " (" + r.Protocol + "): " + r.Reason,
-				Fields: map[string]any{"egress": "refused", "host": r.Host, "port": r.Port, "protocol": r.Protocol}})
+		k := key{r.Host, r.Protocol, r.Reason, r.Port}
+		if counts[k] == 0 {
+			order = append(order, k)
 		}
+		counts[k]++
 	}
-	if n > len(out) {
-		out = append(out, LogLine{Level: "warn", Msg: fmt.Sprintf("egress refused %d more destinations", n-len(out))})
+	var out []LogLine
+	for i, k := range order {
+		if i == maxEgressLogLines {
+			break
+		}
+		dest := k.host
+		if k.port > 0 {
+			dest = net.JoinHostPort(k.host, fmt.Sprint(k.port))
+		}
+		fields := map[string]any{"egress": "refused", "host": k.host, "port": k.port, "protocol": k.protocol}
+		msg := "egress refused " + dest + " (" + k.protocol + "): " + k.reason
+		if c := counts[k]; c > 1 {
+			msg += fmt.Sprintf(" (x%d)", c)
+			fields["count"] = c
+		}
+		out = append(out, LogLine{Level: "warn", Msg: msg, Fields: fields})
+	}
+	if more := len(order) - len(out); more > 0 {
+		out = append(out, LogLine{Level: "warn", Msg: fmt.Sprintf("egress refused %d more destinations", more)})
 	}
 	return out
 }

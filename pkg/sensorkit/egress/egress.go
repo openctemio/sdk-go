@@ -250,6 +250,16 @@ func New(scope Scope, limits Limits) *Forwarder {
 
 func normName(n string) string { return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(n)), ".") }
 
+// shown is how a normalised name appears in a record or a refusal reason:
+// the root name (which normName reduces to "") as ".", so a log line never
+// names an empty host. Admission still works on the normalised name.
+func shown(h string) string {
+	if h == "" {
+		return "."
+	}
+	return h
+}
+
 // Key is the key Tally.Targets counts a target name under: lower case, no
 // trailing dot, no brackets. An address or range target is counted under
 // its prefix (netip.Prefix.String of the prefix in Scope.Prefixes).
@@ -362,7 +372,7 @@ func (f *Forwarder) resolveHost(ctx context.Context, host string) ([]netip.Addr,
 		}
 		return out, nil
 	}
-	return nil, fmt.Errorf("%w: %s is not a target", ErrRefused, h)
+	return nil, fmt.Errorf("%w: %s is not a target", ErrRefused, shown(h))
 }
 
 func (f *Forwarder) isVendor(h string) bool {

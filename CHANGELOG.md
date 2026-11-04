@@ -8,6 +8,24 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.46.2 — 2026-11-04
+
+### Changed: sensor v3 proto synced with the platform
+
+- `proto/sensor-v3` is copied again from the platform. The only change is the documented `content_type` of an ingest chunk (`application/vnd.ctis+json; version=2.0`, CTIS 2.0); fields, numbers and types are unchanged, so the wire format is the same.
+
+### Fixed: the egress log names the root DNS query and folds repeated refusals
+
+- A refused query for the root name (sent by a tool's DNS library) is recorded and logged as `.`, not as an empty host. Admission is unchanged: it is still refused.
+- A task's log shows one line per distinct refusal (host, port, protocol, reason) with a `count` field and an `(xN)` suffix when it repeated. The cap of 20 lines and the "N more destinations" tail now count distinct destinations.
+
+### Fixed: a sensor no longer claims a job for every slot its own claims made up
+
+- The resource manager counts the memory of running jobs back as budget, so the slot count does not shrink because jobs run. It counted every running job, including one claimed after the (cached, up to 10 s old) probe or one still starting: the probe did not show that job's memory yet, so each claim added a slot, and a sensor with room for one job claimed a second, third, ... until the CPU bound. Once those jobs took their memory the sensor reported fewer slots than the jobs it held (for example 2 jobs running, 1 slot).
+- Only jobs that had run for `ManagerConfig.JobSettle` (default 3 x `ProbeInterval`, 30 s) when the probe was taken count back now. A host shared by several sensors no longer gets more jobs than its free memory fits.
+- `ProbeResult.At` is when a probe was taken.
+- The poller's "Not polling: all N slots busy" line names the live slot count and the jobs running, not its upper bound (64 without `SENSOR_MAX_JOBS`).
+
 ## v0.46.1 — 2026-11-03
 
 ### Security: the tool runtime and the test receiver tighten two CTIS 2.0 checks
