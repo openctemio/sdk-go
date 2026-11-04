@@ -460,3 +460,51 @@ func TestBreakerGapNamesTheCause(t *testing.T) {
 		})
 	}
 }
+
+// A host that answered and then resets some requests (an edge or an
+// intrusion-prevention device refusing the paths it dislikes) is up: the
+// resets slow it down but never open its breaker, so the rest of the scan
+// still runs. Only BlockRun resets in a row, with no answer between them,
+// make it a block.
+func TestResetsAfterAnswersSlowTheHostButDoNotCutItOff(t *testing.T) {
+	c, _ := testCtl(t, 100)
+	c.ReportHTTP("h", 200, "")
+	start := c.Rate("h")
+	for range 3 {
+		for range TargetRate.BlockRun - 1 {
+			c.Report("h", Event{Signal: Failed, Reason: ReasonReset})
+		}
+		c.ReportHTTP("h", 404, "") // an answer breaks the run
+	}
+	if err := c.Acquire(context.Background(), "h"); err != nil {
+		t.Fatalf("resets after answers opened the breaker: %v", err)
+	}
+	if _, n := c.Gaps(); n != 0 {
+		t.Fatalf("resets after answers made a gap")
+	}
+	if r := c.Rate("h"); r >= start {
+		t.Fatalf("rate %v not lowered from %v by the resets", r, start)
+	}
+	for range TargetRate.BlockRun {
+		c.Report("h", Event{Signal: Failed, Reason: ReasonReset})
+	}
+	gaps, n := c.Gaps()
+	if n != 1 || gaps[0].Reason != GapBlocked {
+		t.Fatalf("gaps %+v, want one blocked gap after %d resets in a row", gaps, TargetRate.BlockRun)
+	}
+	if err := c.Acquire(context.Background(), "h"); !errors.Is(err, ErrHostUnavailable) {
+		t.Fatalf("a host resetting every request was not backed off: %v", err)
+	}
+}
+
+// A host that resets before it ever answered is still a failure: the
+// breaker opens after BreakerFailures.
+func TestResetsBeforeAnyAnswerOpenTheBreaker(t *testing.T) {
+	c, _ := testCtl(t, 100)
+	for range TargetRate.BreakerFailures {
+		c.Report("h", Event{Signal: Failed, Reason: ReasonReset})
+	}
+	if err := c.Acquire(context.Background(), "h"); !errors.Is(err, ErrHostUnavailable) {
+		t.Fatalf("breaker not open: %v", err)
+	}
+}

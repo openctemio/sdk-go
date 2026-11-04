@@ -245,6 +245,9 @@ type hostState struct {
 	floorStrike int
 	answered    bool
 	run403      int
+	// runReset counts resets in a row from a host that answered before
+	// (resetRefusal).
+	runReset int
 	openPorts   []int
 
 	min       float64
@@ -393,7 +396,7 @@ func (c *HostRate) Report(host string, e Event) {
 		c.close(h, &ch)
 	case Answered:
 		h.oks++
-		h.fails, h.run403, h.answered = 0, 0, true
+		h.fails, h.run403, h.runReset, h.answered = 0, 0, 0, true
 		c.close(h, &ch)
 		if c.shared != nil {
 			c.shared.answered(c.tenant, host)
@@ -447,6 +450,10 @@ func (c *HostRate) Report(host string, e Event) {
 			}
 		}
 	case Failed:
+		if e.Reason == ReasonReset && h.answered {
+			c.resetRefusal(h, now, &ch)
+			break
+		}
 		h.bad++
 		h.fails++
 		c.decrease(h, now, e.Reason, &ch)
@@ -456,6 +463,39 @@ func (c *HostRate) Report(host string, e Event) {
 	}
 	c.mu.Unlock()
 	c.emit(ch)
+}
+
+// resetRefusal handles a connection reset from a host that answered before
+// in this task. Measured on production nuclei runs (7 days): resets opened
+// 364 host breakers against 34 for timeouts, mostly on hosts behind a CDN
+// or an intrusion-prevention device that answers ordinary requests and
+// resets the ones whose path or payload it dislikes. Such a host is up: a
+// reset refuses one request, as a 403 does, and the breaker's five failures
+// in a row then cut the host off for the rest of the scan, every
+// remaining check unrun. So a reset after answers slows the host down (the
+// rate halves, as for any push-back) and counts toward a block only after
+// BlockRun resets in a row with no answer between them; it never opens the
+// breaker on its own. A host that resets before it ever answered stays a
+// failure (Failed), and a half-open probe that gets a reset trips again.
+// Called with c.mu held.
+func (c *HostRate) resetRefusal(h *hostState, now time.Time, ch *[]Change) {
+	h.bad++
+	c.decrease(h, now, ReasonReset, ch)
+	if h.brk == halfOpen {
+		c.trip(h, now, ReasonReset, ch)
+		return
+	}
+	h.runReset++
+	if h.runReset < c.b.BlockRun {
+		return
+	}
+	h.runReset = 0
+	detail := fmt.Sprintf("%d consecutive connection resets after the host answered", c.b.BlockRun)
+	c.setGap(h, GapBlocked, detail)
+	c.trip(h, now, ReasonBlocked, ch)
+	if c.shared != nil {
+		c.shared.block(c.tenant, h.name, edgeprotect.Verdict{}, detail)
+	}
 }
 
 // ReportDial feeds the outcome of a connection attempt to host:port. A
