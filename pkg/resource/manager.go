@@ -55,6 +55,13 @@ type ManagerConfig struct {
 	// reserved: it is compressible, and scanners yield it to the sensor
 	// (core.ScannerPriority).
 	ReservedMemBytes int64
+	// JobSettle is how long a job runs before the memory it holds is
+	// taken to show in a probe (default 3 x ProbeInterval). Only the
+	// memory of jobs that ran that long before the probe counts back as
+	// budget: a job claimed after the probe, or one still starting, has
+	// not taken its memory yet, and counting it back would grow the slots
+	// with every claim.
+	JobSettle time.Duration
 	// OnError receives non-fatal errors (loading or saving the history).
 	OnError func(error)
 	// Governor configures the host pressure governor (research/318).
@@ -82,6 +89,9 @@ type Manager struct {
 	// lastSlots is the last slot count computed (what a congestion
 	// signal halves).
 	lastSlots int
+	// starts are the start times of the jobs running, oldest first, as
+	// far as the manager saw them (trackJobs).
+	starts []time.Time
 }
 
 // NewManager creates a Manager. A history that cannot be loaded is reported
@@ -95,6 +105,9 @@ func NewManager(cfg ManagerConfig) *Manager {
 	}
 	if cfg.ProbeInterval <= 0 {
 		cfg.ProbeInterval = 10 * time.Second
+	}
+	if cfg.JobSettle <= 0 {
+		cfg.JobSettle = 3 * cfg.ProbeInterval
 	}
 	p := cfg.Prober
 	if p == nil {
@@ -213,10 +226,15 @@ func (m *Manager) slots(r ProbeResult, active int) int {
 	cores, mem := m.demand()
 	res := r.Resources
 	// The memory the running jobs hold comes back when they end: count it
-	// as budget, so the slot count does not shrink because jobs run.
+	// as budget, so the slot count does not shrink because jobs run. Only
+	// jobs that had run for JobSettle when the probe was taken: the probe
+	// does not show the memory of a younger job yet, and counting it back
+	// would add a slot with every claim (the sensor then holds more jobs
+	// than fit once they all take their memory).
+	settled := m.settledJobs(active, r.At)
 	budget := res.MemAvailableBytes
 	if budget > 0 {
-		budget += int64(active) * mem
+		budget += int64(settled) * mem
 		if res.MemTotalBytes > 0 {
 			budget = min(budget, res.MemTotalBytes)
 		}
@@ -239,6 +257,38 @@ func (m *Manager) slots(r ProbeResult, active int) int {
 	m.lastSlots = n
 	m.mu.Unlock()
 	return n
+}
+
+// settledJobs records that active jobs run now and returns how many of
+// them had run for JobSettle when the probe taken at probeAt was.
+func (m *Manager) settledJobs(active int, probeAt time.Time) int {
+	now := m.prober.now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.trackJobsLocked(active, now)
+	if probeAt.IsZero() {
+		return 0
+	}
+	n := 0
+	for _, s := range m.starts {
+		if probeAt.Sub(s) >= m.cfg.JobSettle {
+			n++
+		}
+	}
+	return n
+}
+
+// trackJobsLocked brings starts to active entries: a new job starts now,
+// and when jobs ended the oldest entries go (which ones ended is not
+// known; dropping the oldest counts back less, never more).
+func (m *Manager) trackJobsLocked(active int, now time.Time) {
+	active = max(active, 0)
+	for len(m.starts) < active {
+		m.starts = append(m.starts, now)
+	}
+	if len(m.starts) > active {
+		m.starts = append([]time.Time(nil), m.starts[len(m.starts)-active:]...)
+	}
 }
 
 // reserved is the memory the slots leave free (ReservedMemBytes).

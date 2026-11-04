@@ -1041,7 +1041,9 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 	if free <= 0 {
 		p.backlog.Store(true)
 		if p.verbose.Load() {
-			fmt.Printf("[command-poller] Not polling: all %d slots busy\n", p.maxConcurrent)
+			// The live slot count (what fits the CPU, memory and host
+			// pressure now), not the poller's upper bound.
+			fmt.Printf("[command-poller] Not polling: all %d slots busy (%d jobs running)\n", p.slotLimit(), len(p.sem))
 		}
 		return
 	}
