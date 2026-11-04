@@ -69,9 +69,9 @@ func TestLookupOnlyCapability(t *testing.T) {
 
 // SECURITY: every capability that connects to its targets keeps refusing a
 // name that does not resolve: it is removed from the job (never handed to
-// the tool) with reason unresolvable, whatever domain it is under. Only the
-// lookup-only capability reads a dead name outside the allowed domains as a
-// policy denial.
+// the tool) with reason unresolvable, whatever domain it is under. The
+// lookup-only capability reports a dead name outside the allowed domains
+// as unresolvable too, with rule targets.allow.
 func TestAdmitCommandTargets_UnresolvableByCapability(t *testing.T) {
 	lp := lookupLP(t)
 	ctx := context.Background()
@@ -96,8 +96,8 @@ func TestAdmitCommandTargets_UnresolvableByCapability(t *testing.T) {
 			}
 			d := r["dead.other.test"]
 			if LookupOnlyCapability(ref) {
-				if d.Reason != RefusedTargetDenied || d.Rule != "targets.allow" {
-					t.Fatalf("lookup-only: a dead name outside the allowed domains must be denied, got %+v", d)
+				if d.Reason != RefusedTargetUnresolvable || d.Rule != "targets.allow" || d.DNS != "name_gone" {
+					t.Fatalf("lookup-only: a dead name outside the allowed domains is unresolvable (rule targets.allow), got %+v", d)
 				}
 				return
 			}
@@ -158,11 +158,12 @@ func TestAdmitCommandTargets_LookupOnlyDeadNames(t *testing.T) {
 		}
 	})
 
-	t.Run("a dead name outside the allowed domains refuses the job", func(t *testing.T) {
+	t.Run("a dead name outside the allowed domains settles as unresolvable", func(t *testing.T) {
 		cmd := cmdWith("c", "scan", map[string]any{"scanner": "dnsx", "capability": "resolve.dns@1",
 			"targets": []string{"dead.other.test"}})
 		adm, err := lp.AdmitCommandTargets(ctx, cmd)
-		if !isRule(err, "targets.allow") || adm.Settled {
+		if err != nil || !adm.Settled || len(adm.Refused) != 1 ||
+			adm.Refused[0].Reason != RefusedTargetUnresolvable || adm.Refused[0].Rule != "targets.allow" {
 			t.Fatalf("admission %+v err %v", adm, err)
 		}
 	})
@@ -238,7 +239,7 @@ func TestDefaultCommandExecutor_LookupOnlyDeadNames(t *testing.T) {
 	for _, r := range listed {
 		got[r.Target] = r.Reason
 	}
-	if got["gone.example.com"] != RefusedTargetUnresolvable || got["dead.other.test"] != RefusedTargetDenied {
+	if got["gone.example.com"] != RefusedTargetUnresolvable || got["dead.other.test"] != RefusedTargetUnresolvable {
 		t.Fatalf("refused %+v", listed)
 	}
 }
