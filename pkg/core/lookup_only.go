@@ -10,8 +10,11 @@ package core
 // The name is still checked: the domain deny list applies before any lookup
 // (checkHost), and with targets.allow set the name must lie under an allowed
 // domain, since a name without addresses cannot be matched against the
-// allowed ranges. A name that fails that check is refused by the policy
-// (denied_by_policy), as before.
+// allowed ranges. Such a name is still not looked up, but it is reported as
+// what it is, a name that does not resolve (unresolvable, rule targets.allow):
+// the policy did not deny it, there is nothing to match, and a retry on
+// another sensor cannot change that. A name that resolves and falls outside
+// the allowed ranges, or matches targets.deny, stays denied_by_policy.
 //
 // Every capability that connects to its targets keeps the fail-closed rule:
 // a name whose addresses cannot be checked is never handed to its tool.
@@ -50,10 +53,10 @@ func payloadCapability(payload []byte) string {
 }
 
 // lookupOnlyRefusal is the refusal of a lookup-only job's target: err as the
-// target check returned it, except that a name that does not resolve and,
-// with targets.allow set, is not under an allowed domain is refused by the
-// policy (rule targets.allow, reason denied_by_policy) instead of being
-// reported as a name without an answer. Any other error stays as it is.
+// target check returned it. A name that does not resolve and, with
+// targets.allow set, is not under an allowed domain is still not looked up,
+// but keeps the reason unresolvable (with the lookup failure kind) and gains
+// the rule targets.allow in its detail. Any other error stays as it is.
 func (lp *LocalPolicy) lookupOnlyRefusal(target string, err error) error {
 	var te *targetRefusalError
 	if err == nil || !errors.As(err, &te) || te.reason != RefusedTargetUnresolvable {
@@ -66,7 +69,8 @@ func (lp *LocalPolicy) lookupOnlyRefusal(target string, err error) error {
 	if name != "" && lp.nameAllowed(name) {
 		return err
 	}
-	return markTarget(RefusedTargetDenied, refuse("targets.allow", "%s does not resolve and is not under an allowed domain", name))
+	return &targetRefusalError{reason: RefusedTargetUnresolvable, dns: te.dns,
+		err: refuse("targets.allow", "%s does not resolve and is not under an allowed domain", name)}
 }
 
 // hostNameOf is the host of a target (a URL, host:port or host), lower case,
