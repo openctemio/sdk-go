@@ -26,6 +26,9 @@ var credTool = tool.New(tool.Manifest{
 		if k, err := ctx.Secret(name); err == nil {
 			v := k.Reveal()
 			ctx.Log().Info("key " + v)
+			for _, part := range strings.Split(v, ":") {
+				ctx.Log().Info("part " + part)
+			}
 			got = append(got, name+"="+v[:6])
 		}
 	}
@@ -129,5 +132,36 @@ func TestOrganizationCredentialsReachTheTask(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("the platform was asked %d times for two tasks", calls.Load())
+	}
+}
+
+func TestRedactionValuesCoverPairParts(t *testing.T) {
+	got := redactionValues("token-0123456789:org-0042")
+	want := []string{"token-0123456789:org-0042", "token-0123456789", "org-0042"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("redaction %v", got)
+	}
+	if got := redactionValues("ab:cd-shrt"); fmt.Sprint(got) != "[ab:cd-shrt]" {
+		t.Fatalf("short parts redacted alone: %v", got)
+	}
+	if got := redactionValues("abc"); len(got) != 0 {
+		t.Fatalf("3-character value: %v", got)
+	}
+}
+
+// A tool that prints one part of a pair key alone has it scrubbed too.
+func TestPairPartsRedactedFromTaskOutput(t *testing.T) {
+	ctx := core.WithToolCredentials(context.Background(), func(context.Context, string) (*core.ToolCredentialSet, error) {
+		return &core.ToolCredentialSet{Values: map[string]string{"alpha": "org-aaa-part-one:org-aaa-part-two"}}, nil
+	})
+	out, err := testHost(t).RunBuiltin(ctx, credTool, tool.Task{Targets: oneTarget}, RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := fmt.Sprintf("%+v %s %+v", out.Logs, out.Stderr, out.Report)
+	for _, part := range []string{"org-aaa-part-one", "org-aaa-part-two"} {
+		if strings.Contains(all, part) {
+			t.Fatalf("%s reached the outcome: %s", part, all)
+		}
 	}
 }

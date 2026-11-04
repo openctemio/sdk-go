@@ -521,9 +521,7 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 			continue
 		}
 		p.creds = append(p.creds, toolwire.Credential{Name: req.Name, Value: v})
-		if len(v) >= 4 {
-			p.secrets = append(p.secrets, v)
-		}
+		p.secrets = append(p.secrets, redactionValues(v)...)
 	}
 	slices.SortFunc(p.secrets, func(a, b string) int { return len(b) - len(a) })
 	// Under the task root, which the sandbox hides from every other task.

@@ -3,6 +3,7 @@ package toolhost
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -34,4 +35,27 @@ func taskCredentials(ctx context.Context, m tool.Manifest, local map[string]stri
 		set = &core.ToolCredentialSet{}
 	}
 	return core.MergeToolCredentials(set, local), nil
+}
+
+// minRedactedPart is the shortest colon-separated part of a credential that
+// is redacted on its own.
+const minRedactedPart = 8
+
+// redactionValues are what the task's output is scrubbed of for one
+// credential: the whole value (at least 4 characters), and each part of a
+// pair ("TOKEN:ORG_ID", "EMAIL:KEY", "HOST:KEY") of at least 8 characters,
+// since a tool that splits the value may print a part alone.
+func redactionValues(v string) []string {
+	var out []string
+	if len(v) >= 4 {
+		out = append(out, v)
+	}
+	if strings.Contains(v, ":") {
+		for _, part := range strings.Split(v, ":") {
+			if len(part) >= minRedactedPart && part != v {
+				out = append(out, part)
+			}
+		}
+	}
+	return out
 }
