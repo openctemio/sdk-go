@@ -247,8 +247,8 @@ type hostState struct {
 	run403      int
 	// runReset counts resets in a row from a host that answered before
 	// (resetRefusal).
-	runReset int
-	openPorts   []int
+	runReset  int
+	openPorts []int
 
 	min       float64
 	throttled bool
