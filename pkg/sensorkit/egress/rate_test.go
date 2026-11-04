@@ -100,9 +100,10 @@ func resetServer(t *testing.T) (string, int) {
 	return "127.0.0.1", ln.Addr().(*net.TCPAddr).Port
 }
 
-// A host that resets connection after connection trips its breaker: the
-// forwarder then refuses connections to it (503) instead of hammering it,
-// and the host is a coverage gap of the task.
+// A host that answered once and then resets connection after connection is
+// read as blocking the scan after BlockRun resets in a row (adapt's
+// resetRefusal): the forwarder then refuses connections to it (503)
+// instead of hammering it, and the host is a coverage gap of the task.
 func TestForwarderBreakerOnResets(t *testing.T) {
 	host, port := resetServer(t)
 	f := New(Scope{Prefixes: []netip.Prefix{pfx("127.0.0.1/32")}}, Limits{})
@@ -112,7 +113,7 @@ func TestForwarderBreakerOnResets(t *testing.T) {
 		t.Fatalf("first connection: %q", got)
 	}
 	var refused string
-	for range 3 * adapt.TargetRate.BreakerFailures {
+	for range 2 * adapt.TargetRate.BlockRun {
 		got := connect(t, proxyAddr, target)
 		if strings.HasPrefix(got, "503") {
 			refused = got
@@ -123,8 +124,8 @@ func TestForwarderBreakerOnResets(t *testing.T) {
 		t.Fatalf("the breaker never opened: %+v", f.TargetRate().Summary())
 	}
 	gaps, total := f.TargetRate().Gaps()
-	if total != 1 || gaps[0].Host != host || gaps[0].Reason != adapt.GapBreakerOpen {
-		t.Fatalf("gaps %+v (%d), want %s breaker_open", gaps, total, host)
+	if total != 1 || gaps[0].Host != host || gaps[0].Reason != adapt.GapBlocked {
+		t.Fatalf("gaps %+v (%d), want %s blocked", gaps, total, host)
 	}
 }
 
