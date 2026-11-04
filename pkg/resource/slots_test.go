@@ -199,30 +199,88 @@ func TestManager_SlotsAndCongestion(t *testing.T) {
 	}
 }
 
-// Running jobs' memory counts as budget: slots do not shrink because the
-// sensor is busy.
+// Running jobs' memory counts as budget once they have run for JobSettle
+// before the probe: slots do not shrink because the sensor is busy.
 func TestManager_RunningJobsMemoryIsBudget(t *testing.T) {
-	m := NewManager(ManagerConfig{Cap: 10, Tools: []string{"trivy"}, ReservedMemBytes: -1})
-	r := ProbeResult{Resources: HostResources{CPUCores: 16, MemTotalBytes: 8 * gib, MemAvailableBytes: 2 * gib}}
+	now := time.Unix(2_000_000, 0)
+	m := NewManager(ManagerConfig{Cap: 10, Tools: []string{"trivy"}, ReservedMemBytes: -1,
+		Prober: &Prober{Now: func() time.Time { return now }}})
+	r := ProbeResult{At: now, Resources: HostResources{CPUCores: 16, MemTotalBytes: 8 * gib, MemAvailableBytes: 2 * gib}}
 	if got := m.slots(r, 0); got != 2 {
 		t.Fatalf("idle %d, want 2", got)
 	}
+	settleJobs(m, 4, now)
 	if got := m.slots(r, 4); got != 6 { // 2 GiB free + 4 x 1 GiB held
 		t.Fatalf("with 4 running %d, want 6", got)
 	}
+	settleJobs(m, 100, now)
 	if got := m.slots(r, 100); got != 8 { // capped by total memory
 		t.Fatalf("budget not capped by total: %d", got)
+	}
+}
+
+// settleJobs makes n jobs look started long enough before now to count.
+func settleJobs(m *Manager, n int, now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.starts = nil
+	m.trackJobsLocked(n, now.Add(-time.Hour))
+}
+
+// A job claimed after the probe, or one still starting, has not taken its
+// memory: it is not counted back, so each claim does not add a slot. Before
+// this, a sensor with room for one job claimed a second (the probe still
+// showed the first job's memory free and the first job's estimate was added
+// back), and reported one slot with two jobs running once both took their
+// memory.
+func TestManager_YoungJobsDoNotGrowTheSlots(t *testing.T) {
+	now := time.Unix(2_000_000, 0)
+	m := NewManager(ManagerConfig{Cap: 10, Tools: []string{"trivy"}, ReservedMemBytes: -1,
+		Prober: &Prober{Now: func() time.Time { return now }}})
+	// 1.5 GiB free, trivy needs 1 GiB a job: one slot.
+	r := ProbeResult{At: now, Resources: HostResources{CPUCores: 16, MemTotalBytes: 8 * gib, MemAvailableBytes: 3 * gib / 2}}
+	if got := m.slots(r, 0); got != 1 {
+		t.Fatalf("idle %d, want 1", got)
+	}
+	// The job is claimed; the next poll reuses the same (cached) probe.
+	now = now.Add(2 * time.Second)
+	if got := m.slots(r, 1); got != 1 {
+		t.Fatalf("one young job on the same probe: %d slots, want 1 (no room for a second)", got)
+	}
+	// A fresh probe while the job is still starting: still not counted back.
+	r.At = now.Add(5 * time.Second)
+	now = r.At
+	if got := m.slots(r, 1); got != 1 {
+		t.Fatalf("one starting job: %d slots, want 1", got)
+	}
+	// Once settled, its memory shows in the probe and counts back: 0.5 GiB
+	// free + 1 GiB held = still one slot, and it never was two.
+	now = now.Add(time.Minute)
+	r = ProbeResult{At: now, Resources: HostResources{CPUCores: 16, MemTotalBytes: 8 * gib, MemAvailableBytes: gib / 2}}
+	if got := m.slots(r, 1); got != 1 {
+		t.Fatalf("settled job: %d slots, want 1", got)
+	}
+	// Jobs that end drop out (oldest first): one running again after three.
+	settleJobs(m, 3, now)
+	now = now.Add(time.Second)
+	if got := m.slots(r, 1); got != 1 {
+		t.Fatalf("after jobs ended: %d slots, want 1", got)
+	}
+	if n := len(m.starts); n != 1 {
+		t.Fatalf("tracked %d jobs, want 1", n)
 	}
 }
 
 // The slots leave memory for the sensor itself (api RFC-035 §5.2): by
 // default a tenth of what it may use, 256 MiB to 1 GiB.
 func TestManager_ReservesMemoryForTheSensor(t *testing.T) {
-	r := ProbeResult{Resources: HostResources{CPUCores: 16, MemTotalBytes: 8 * gib, MemAvailableBytes: 2 * gib}}
+	now := time.Unix(2_000_000, 0)
+	r := ProbeResult{At: now, Resources: HostResources{CPUCores: 16, MemTotalBytes: 8 * gib, MemAvailableBytes: 2 * gib}}
 	m := NewManager(ManagerConfig{Cap: 10, Tools: []string{"trivy"}}) // trivy: 1 GiB a job
 	if got := m.slots(r, 0); got != 1 {                               // 2 GiB - 819 MiB reserved
 		t.Fatalf("idle %d, want 1", got)
 	}
+	settleJobs(m, 4, now)
 	if got := m.slots(r, 4); got != 5 { // 2 GiB + 4 x 1 GiB held - 819 MiB
 		t.Fatalf("with 4 running %d, want 5", got)
 	}
@@ -233,6 +291,7 @@ func TestManager_ReservesMemoryForTheSensor(t *testing.T) {
 	}
 	// An explicit reserve.
 	m = NewManager(ManagerConfig{Cap: 10, Tools: []string{"trivy"}, ReservedMemBytes: gib})
+	settleJobs(m, 4, now)
 	if got := m.slots(r, 4); got != 5 {
 		t.Fatalf("1 GiB reserved, 4 running: %d, want 5", got)
 	}
