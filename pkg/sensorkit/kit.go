@@ -140,7 +140,10 @@ type Options struct {
 	// ToolCredentials returns the credentials the operator stored for a
 	// contract tool, by credential name (nil: none). Only those the tool's
 	// manifest declares are delivered, inside the task's run message,
-	// never in the environment, argv or a file another task can read.
+	// never in the environment, argv or a file another task can read. In a
+	// platform job the organization's credentials for the tool win, and
+	// these fill the names it left unset only on the organization's own
+	// sensor (core.MergeToolCredentials).
 	ToolCredentials func(tool string) map[string]string
 	// Tools is an operator allowlist of tool names (SENSOR_TOOLS, deprecated):
 	// scanners whose name (or As name) is not in it are neither run nor
@@ -1352,6 +1355,11 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	executor.SetEgressPolicy(k.s.scanEgress.policy(k.s.shared))
 	if ec, ok := any(k.client).(core.EgressCredentials); ok {
 		executor.SetEgressCredentials(ec)
+	}
+	// Tools that declare credentials ask the platform, per task, for the
+	// keys the job's organization stored for them.
+	if tc, ok := any(k.client).(core.JobToolCredentials); ok {
+		executor.SetToolCredentials(tc)
 	}
 	k.executor.Store(executor)
 	if r := k.opts.CommandAssetResolver; r != nil {

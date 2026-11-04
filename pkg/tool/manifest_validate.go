@@ -32,7 +32,7 @@ const (
 	maxDescription = 1024
 	maxArgv        = 64
 	maxArgLen      = 4096
-	maxCredentials = 16
+	maxCredentials = 64
 	maxMemory      = 64 << 30
 	maxTimeout     = 24 * time.Hour
 	maxOutputBytes = 1 << 30

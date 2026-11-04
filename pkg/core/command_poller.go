@@ -1699,6 +1699,9 @@ type DefaultCommandExecutor struct {
 	// sourceCreds fetches the credential of a code-scan job's source
 	// (SetSourceCredentials); nil refuses jobs whose source names one.
 	sourceCreds atomic.Pointer[sourceCredentialsBox]
+	// toolCreds fetches the organization's credentials of a job's tool
+	// (SetToolCredentials); nil: tools get the operator's only.
+	toolCreds atomic.Pointer[toolCredentialsBox]
 }
 
 // SetLocalPolicy makes the executor enforce the sensor-local policy (api
@@ -2044,6 +2047,9 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		opts.Egress = pool
 		ctx = WithEgressDialer(ctx, pool)
 	}
+	// Tools that declare credentials ask the platform, per task, for the
+	// keys the command's organization stored for them.
+	ctx = e.withJobToolCredentials(ctx, cmd.ID)
 
 	local := e.local.Load()
 	if err := applyJobConfig(opts, payload.Config, local); err != nil {

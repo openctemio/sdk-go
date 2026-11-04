@@ -145,7 +145,9 @@ type Host struct {
 type RunOptions struct {
 	// Credentials the operator stored for this tool. Only those the
 	// manifest declares are delivered; a declared required one that is
-	// missing fails the task before it starts.
+	// missing fails the task before it starts. In a platform job the
+	// organization's credentials (core.ToolCredentialsFrom) win over them
+	// (core.MergeToolCredentials).
 	Credentials map[string]string
 	// WritePaths the task may write besides its directory (a built-in
 	// tool's cache).
@@ -388,6 +390,9 @@ type prepared struct {
 	refusedItems map[string]bool
 	// rateLine says the local policy changed the rate (nil: it did not).
 	rateLine *LogLine
+	// credLine says the organization's credentials could not be fetched
+	// (nil: they were, or the tool takes none).
+	credLine *LogLine
 	// targetRate is RunOptions.TargetRate.
 	targetRate float64
 	// mapping turns an exec tool's json or jsonl output into CTIS.
@@ -505,8 +510,10 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		}
 		p.task.Retest = kept
 	}
+	creds, credLine := taskCredentials(ctx, m, o.Credentials)
+	p.credLine = credLine
 	for _, req := range m.Permissions.Credentials {
-		v, ok := o.Credentials[req.Name]
+		v, ok := creds[req.Name]
 		if !ok || v == "" {
 			if req.Required {
 				return nil, tool.AsError(tool.Invalid("credential %q is required and not configured on this sensor", req.Name)), nil
@@ -1253,6 +1260,9 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 	out.Verdicts = p.verdicts(runErr)
 	if p.rateLine != nil {
 		out.Logs = append(out.Logs, *p.rateLine)
+	}
+	if p.credLine != nil {
+		out.Logs = append(out.Logs, *p.credLine)
 	}
 	out.Identity = p.applied
 	s.h.stamp(out, p.m, p.task, execution)

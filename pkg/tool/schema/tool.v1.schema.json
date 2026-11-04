@@ -88,7 +88,7 @@
         "vendor_hosts": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 270}},
         "filesystem": {"enum": ["workdir", "scan-roots-read-only"]},
         "credentials": {
-          "type": "array", "maxItems": 16,
+          "type": "array", "maxItems": 64,
           "items": {
             "type": "object",
             "additionalProperties": false,
