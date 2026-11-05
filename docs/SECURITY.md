@@ -797,8 +797,8 @@ A tool that dials raw sockets without honouring the proxy variables gets "networ
 Modes (`SENSOR_SANDBOX` for sensorkit): `auto` (default) enforces what the
 host supports and logs what it cannot; `required` refuses to start unless
 every control is enforced; `off` runs tools as plain child processes.
-Where `auto` finds no sandbox at all (it is Linux only, so every macOS or
-Windows sensor; or a Linux host where the launcher does not work), tools of
+Where `auto` runs on a host with no sandbox at all (it is Linux only, so
+every macOS or Windows sensor), tools of
 tier T1 and above, the ones that contact their targets, are refused before
 they run (`core.RefusalUnconfinedSandbox`, `executor.Status.RefusesActiveTools`);
 passive T0 lookups still run. `SENSOR_SANDBOX=off` is the operator's explicit

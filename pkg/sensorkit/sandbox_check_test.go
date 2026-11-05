@@ -51,7 +51,7 @@ func TestSandboxUnconfinedCheck(t *testing.T) {
 		status string
 	}{
 		{"sandboxed", executor.Status{Mode: executor.ModeAuto, Sandboxed: true}, "sandboxed", core.CheckPass},
-		{"not available", executor.Status{Mode: executor.ModeAuto, Missing: []string{"sandbox: available on Linux only"}}, "active_refused", core.CheckFail},
+		{"not available", executor.Status{Mode: executor.ModeAuto, NoSandboxOnHost: true, Missing: []string{"sandbox: available on Linux only"}}, "active_refused", core.CheckFail},
 		{"turned off", executor.Status{Mode: executor.ModeOff}, "acknowledged", core.CheckWarn},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

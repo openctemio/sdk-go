@@ -10,7 +10,9 @@ func TestStatusUnconfined(t *testing.T) {
 	}{
 		{Status{Mode: ModeAuto, Sandboxed: true}, "", false},
 		{Status{Mode: ModeRequired, Sandboxed: true}, "", false},
-		{Status{Mode: ModeAuto}, UnconfinedRefused, true},
+		{Status{Mode: ModeAuto, NoSandboxOnHost: true}, UnconfinedRefused, true},
+		// A Linux host where the sandbox could not start: Missing says why.
+		{Status{Mode: ModeAuto}, "", false},
 		{Status{Mode: ModeOff}, UnconfinedAcknowledged, false},
 		{Status{}, "", false},
 	} {

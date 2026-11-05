@@ -9,13 +9,13 @@ import (
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
 
-// SECURITY: where the sandbox is not available (macOS, or a Linux host
-// where the launcher does not work) and the operator did not turn it off,
+// SECURITY: where the host has no sandbox (it is Linux only: macOS,
+// Windows) and the operator did not turn it off,
 // a tool that contacts its targets (T1 and above) is refused before it
 // runs; a passive (T0) tool still runs. SENSOR_SANDBOX=off is the explicit
 // acknowledgement; a sandboxed host runs every tier.
 func TestUnconfinedSandboxRefusesActiveTools(t *testing.T) {
-	unavailable := executor.Status{Backend: "process", Mode: executor.ModeAuto, Missing: []string{"sandbox: available on Linux only"}}
+	unavailable := executor.Status{Backend: "process", Mode: executor.ModeAuto, NoSandboxOnHost: true, Missing: []string{"sandbox: available on Linux only"}}
 	off := executor.Status{Backend: "process", Mode: executor.ModeOff}
 	sandboxed := executor.Status{Backend: "process", Mode: executor.ModeAuto, Sandboxed: true}
 	cases := []struct {

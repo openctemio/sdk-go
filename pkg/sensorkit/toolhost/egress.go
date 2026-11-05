@@ -403,7 +403,7 @@ func (h *Host) checkUnconfined(m tool.Manifest) *tool.Error {
 	if !st.RefusesActiveTools() || !m.Tier.Exceeds(tool.T0) {
 		return nil
 	}
-	why := "the tool sandbox is not available on this host"
+	why := "this host has no tool sandbox"
 	if len(st.Missing) > 0 {
 		why += " (" + strings.Join(st.Missing, "; ") + ")"
 	}
