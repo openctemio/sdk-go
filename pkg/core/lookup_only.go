@@ -20,9 +20,11 @@ package core
 // a name whose addresses cannot be checked is never handed to its tool.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net"
+	"net/netip"
 	"net/url"
 	"strings"
 )
@@ -50,6 +52,59 @@ func payloadCapability(payload []byte) string {
 		return ""
 	}
 	return p.Capability
+}
+
+// registryOnlyCapabilities are the capabilities whose tool asks a registry
+// or another third party about a name and never connects to the target nor
+// resolves it: the answer does not depend on the name having an address
+// (RDAP answers for the registered domain at its registry, resolving or
+// not). For these, a plain domain name is checked by name only (the domain
+// deny list, and with targets.allow set the allowed domains) and is handed
+// to the tool whether or not it resolves. A name outside the allowed domains
+// still needs addresses inside the allowed ranges, so it is checked as for
+// any other capability. An address, a range, a URL or a path is checked as
+// ever.
+var registryOnlyCapabilities = map[string]bool{"lookup.rdap": true}
+
+// RegistryOnlyCapability reports whether capability ("lookup.rdap" or
+// "lookup.rdap@1") only asks a registry about its targets: it never
+// connects to them and never needs their addresses.
+func RegistryOnlyCapability(capability string) bool {
+	key, _, _ := strings.Cut(strings.ToLower(strings.TrimSpace(capability)), "@")
+	return registryOnlyCapabilities[key]
+}
+
+// plainDomainName is target as a lower-case domain name when it is one: a
+// dotted host name with no scheme, port, path, wildcard or address literal.
+func plainDomainName(target string) (string, bool) {
+	t := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(target)), ".")
+	if t == "" || !strings.Contains(t, ".") || strings.ContainsAny(t, "/:@*[] \t") {
+		return "", false
+	}
+	if _, err := netip.ParseAddr(t); err == nil {
+		return "", false
+	}
+	return t, true
+}
+
+// checkRegistryName is CheckTarget for a registry-only job: a plain domain
+// name is checked by name, never resolved (see registryOnlyCapabilities).
+// Anything else, a sensor that requires a local policy and has none, and a
+// name outside the allowed domains go through CheckTarget.
+func (lp *LocalPolicy) checkRegistryName(ctx context.Context, target string) error {
+	name, ok := plainDomainName(target)
+	if !ok || lp.failsClosed() {
+		return lp.CheckTarget(ctx, target)
+	}
+	if lp.Present() {
+		if d := lp.nameDenied(name); d != nil {
+			return refuse("targets.deny", "%s matches %s", name, d)
+		}
+		if lp.targetsAllowSet && !lp.nameAllowed(name) {
+			return lp.CheckTarget(ctx, target)
+		}
+	}
+	return nil
 }
 
 // lookupOnlyRefusal is the refusal of a lookup-only job's target: err as the

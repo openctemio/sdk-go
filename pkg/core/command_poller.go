@@ -2299,7 +2299,7 @@ func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payloa
 		details []RefusedTarget
 	)
 	for _, t := range raw {
-		v, err := policy.ValidateFor(ctx, payload.Scanner, t)
+		v, err := e.validateScanTarget(ctx, policy, payload, t)
 		if err != nil && LookupOnlyCapability(payload.Capability) {
 			err = e.local.Load().lookupOnlyRefusal(t, err)
 		}
@@ -2336,6 +2336,26 @@ func (e *DefaultCommandExecutor) validateScanTargets(ctx context.Context, payloa
 		return nil, details, &refusedTargetsError{err: err, refused: details}
 	}
 	return out, details, nil
+}
+
+// validateScanTarget is policy.ValidateFor for one target. A registry-only
+// capability (lookup.rdap) takes a plain domain name without resolving it:
+// the name's syntax and the local policy's name rules are checked, and the
+// name is never looked up, since the tool asks a registry and never
+// connects to the target (RegistryOnlyCapability).
+func (e *DefaultCommandExecutor) validateScanTarget(ctx context.Context, policy *ScanTargetPolicy, payload *ScanCommandPayload, t string) (string, error) {
+	if _, ok := plainDomainName(t); !ok || !RegistryOnlyCapability(payload.Capability) || policy == nil || policy.Disabled {
+		return policy.ValidateFor(ctx, payload.Scanner, t)
+	}
+	if err := checkTargetSyntax(t); err != nil {
+		return "", err
+	}
+	if policy.Local.Present() || policy.Local.failsClosed() {
+		if err := policy.Local.checkRegistryName(ctx, t); err != nil {
+			return "", err
+		}
+	}
+	return t, nil
 }
 
 // allUnresolvable reports whether every refused target is a name that does
