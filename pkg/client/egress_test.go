@@ -14,11 +14,11 @@ import (
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
-// A proxy pool's credentials and its report go for the command under the
-// lease the sensor holds, on v2 HTTPS.
-func TestEgressCredentialsAndReport(t *testing.T) {
-	var credBody, reportBody []byte
-	var credEpoch, reportEpoch string
+// A proxy pool's report goes for the command under the lease the sensor
+// holds, its epoch inside the body, on v2 HTTPS.
+func TestEgressReport(t *testing.T) {
+	var reportBody []byte
+	var reportEpoch string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", protov2.MediaTypeJSON)
 		w.Header().Set(protov2.HeaderProtocol, "2")
@@ -30,10 +30,6 @@ func TestEgressCredentialsAndReport(t *testing.T) {
 		switch r.URL.Path {
 		case protov2.PathPrefix + "/commands/c1/start":
 			_, _ = w.Write([]byte(`{"id":"c1","status":"running","lease_epoch":4}`))
-		case protov2.PathPrefix + "/commands/c1/" + protov2.EgressCredentialsAction:
-			credBody, _ = io.ReadAll(r.Body)
-			credEpoch = r.Header.Get(protov2.HeaderLeaseEpoch)
-			_, _ = w.Write([]byte(`{"credentials":[{"endpoint_id":"e1","username":"u","password":"p"}]}`))
 		case protov2.PathPrefix + "/commands/c1/" + protov2.EgressReportAction:
 			reportBody, _ = io.ReadAll(r.Body)
 			reportEpoch = r.Header.Get(protov2.HeaderLeaseEpoch)
@@ -48,13 +44,6 @@ func TestEgressCredentialsAndReport(t *testing.T) {
 	if err := c.StartCommand(ctx, "c1"); err != nil {
 		t.Fatal(err)
 	}
-	creds, err := c.EgressCredentials(ctx, "c1", "pool-1")
-	if err != nil || len(creds) != 1 || creds[0] != (upstream.Credential{EndpointID: "e1", Username: "u", Password: "p"}) {
-		t.Fatalf("credentials %+v %v", creds, err)
-	}
-	if string(credBody) != `{"pool_id":"pool-1"}` || credEpoch != "4" {
-		t.Fatalf("credentials request %s epoch %q", credBody, credEpoch)
-	}
 	eps := make([]upstream.EndpointReport, 70)
 	for i := range eps {
 		eps[i] = upstream.EndpointReport{EndpointID: "e", OK: 1, LastError: strings.Repeat("x", 300)}
@@ -66,20 +55,21 @@ func TestEgressCredentialsAndReport(t *testing.T) {
 	if err := json.Unmarshal(reportBody, &got); err != nil || reportEpoch != "4" {
 		t.Fatalf("report %s %v epoch %q", reportBody, err, reportEpoch)
 	}
+	if got.LeaseEpoch != 4 {
+		t.Fatalf("report lease epoch %d, want 4 in the body", got.LeaseEpoch)
+	}
 	if got.PoolID != "pool-1" || len(got.Endpoints) != protov2.MaxEgressReportEndpoints || len(got.Endpoints[0].LastError) != protov2.MaxEgressLastError {
 		t.Fatalf("report bounds: %d endpoints, last_error %d", len(got.Endpoints), len(got.Endpoints[0].LastError))
 	}
-	if _, err := c.EgressCredentials(ctx, "", "pool-1"); err == nil {
+	if err := c.EgressReport(ctx, "", upstream.Report{PoolID: "pool-1"}); err == nil {
 		t.Fatal("no command id accepted")
-	}
-	if _, err := c.EgressCredentials(ctx, "c2", "pool-1"); err == nil {
-		t.Fatal("a 404 was not an error")
 	}
 }
 
-// Protocol v3 carries neither: they stay on v2 HTTPS.
+// Protocol v3 carries neither the secrets fetch nor the egress report: they
+// stay on v2 HTTPS.
 func TestV3DoesNotCarryEgress(t *testing.T) {
-	for _, a := range []string{protov2.EgressCredentialsAction, protov2.EgressReportAction} {
+	for _, a := range []string{protov2.SecretsAction, protov2.EgressReportAction} {
 		if v3Carries(http.MethodPost, "/commands/c1/"+a) {
 			t.Fatalf("v3 carries %s", a)
 		}

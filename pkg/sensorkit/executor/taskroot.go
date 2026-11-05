@@ -21,7 +21,7 @@ func NewTaskDir(prefix string) (string, error) {
 	if err := ensurePrivateDir(root); err != nil {
 		return "", err
 	}
-	dir, err := os.MkdirTemp(root, prefix)
+	dir, err := os.MkdirTemp(root, instancePrefix(root, prefix))
 	if err != nil {
 		return "", fmt.Errorf("executor: task directory: %w", err)
 	}

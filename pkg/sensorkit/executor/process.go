@@ -237,7 +237,7 @@ func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 	if len(id) > 40 {
 		id = id[:40]
 	}
-	dir, err := os.MkdirTemp(b.cfg.WorkRoot, "task-"+id+"-"+hex.EncodeToString(rnd[:])+"-")
+	dir, err := os.MkdirTemp(b.cfg.WorkRoot, instancePrefix(TaskRoot(), "task")+id+"-"+hex.EncodeToString(rnd[:])+"-")
 	if err != nil {
 		return nil, fmt.Errorf("executor: task directory: %w", err)
 	}

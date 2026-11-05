@@ -53,6 +53,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return h.failedOutcome(m, task, ierr), nil
 	}
 	defer func() { _ = os.RemoveAll(p.workdir) }()
+	defer p.forget()
 	if isMappedFormat(m.Run.Output.Format) {
 		// Loaded before the tool starts: a missing, invalid or changed
 		// mapping file refuses the task instead of wasting a scan.
@@ -80,7 +81,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	}
 	defer eg.stop()
 	t, err := be.Prepare(executor.TaskSpec{
-		ID: m.Name, Argv: argv, Env: core.ScannerEnvironFor(envOwner(m), o.Env), SetEnv: o.Env, Dir: p.workdir,
+		ID: m.Name, Argv: argv, Env: h.taskEnv(m, o.Env), SetEnv: h.taskSetEnv(o.Env), Dir: p.workdir,
 		WritePaths: append([]string{p.workdir}, o.WritePaths...), ReadPaths: p.contentPaths, Limits: o.Limits,
 		Network: networkClass(m.Permissions.Network), Stdout: stdout, Stderr: stderr,
 		Hooks:       executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: core.ApplyScannerPriority, Finished: core.ReapScannerProcess},

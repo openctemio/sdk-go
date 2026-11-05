@@ -2,10 +2,13 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/openctemio/contract/secretref"
 
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress/upstream"
 )
@@ -27,20 +30,49 @@ func (s *egressScanner) Scan(ctx context.Context, target string, opts *ScanOptio
 
 func (s *egressScanner) Name() string { return "rec" }
 
-type fakeEgressCreds struct {
+// fakeSecrets answers a job's secret fetches (client.Secrets).
+type fakeSecrets struct {
 	mu    sync.Mutex
 	calls []string
 	err   error
+	// missing answers every ref as missing (disabled).
+	missing bool
 }
 
-func (f *fakeEgressCreds) EgressCredentials(_ context.Context, cmdID, poolID string) ([]upstream.Credential, error) {
+func (f *fakeSecrets) Secrets(_ context.Context, cmdID, task string, set secretref.Set, refs []string) (*secretref.Answer, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, cmdID+"/"+poolID)
+	f.calls = append(f.calls, cmdID+"/"+task+"/"+strings.Join(refs, ","))
 	if f.err != nil {
 		return nil, f.err
 	}
-	return []upstream.Credential{{EndpointID: "e1", Username: "u", Password: "p"}}, nil
+	ans := &secretref.Answer{CommandID: cmdID, LeaseEpoch: 1}
+	for _, id := range refs {
+		if f.missing {
+			ans.Missing = append(ans.Missing, secretref.Missing{ID: id, Reason: secretref.MissingDisabled})
+			continue
+		}
+		ref, _ := set.Lookup(id)
+		v := json.RawMessage(`{"endpoints":[{"id":"e1","username":"u","password":"p"}]}`)
+		if ref.Kind == secretref.KindProviderKey {
+			v = json.RawMessage(`{"key":"` + fakeKey(ref.Ref) + `"}`)
+		}
+		ans.Secrets = append(ans.Secrets, secretref.Secret{ID: id, Kind: ref.Kind, Value: v, Provenance: secretref.ProvenanceTenant})
+	}
+	return ans, nil
+}
+
+// fakeKey is a provider key the fake platform holds for provider id.
+func fakeKey(id string) string { return "platform-key-" + id + "-0123456789" }
+
+// poolRef is the job's egress proxy ref for pool id.
+func poolRef(id string) secretref.Ref {
+	return secretref.Ref{ID: "p1", Kind: secretref.KindEgressProxy, Class: secretref.ClassProvider, Ref: id,
+		Audience: []string{secretref.AudiencePool}, Consumer: secretref.ConsumerForwarder, Required: true, Local: secretref.LocalNever}
+}
+
+func poolSecrets(poolID string, f SecretsFetcher) *JobSecrets {
+	return NewJobSecrets("c1", &secretref.Set{V: 1, Local: secretref.LocalAllow, Refs: []secretref.Ref{poolRef(poolID)}}, false, f)
 }
 
 func testEgress(auth bool) *upstream.Config {
@@ -51,11 +83,15 @@ func testEgress(auth bool) *upstream.Config {
 		}}
 }
 
-func runEgressScan(t *testing.T, e *DefaultCommandExecutor, sc Scanner, egress *upstream.Config) error {
+func runEgressScan(t *testing.T, e *DefaultCommandExecutor, sc Scanner, egress *upstream.Config, js ...*JobSecrets) error {
 	t.Helper()
 	e.AddScanner(sc)
 	e.SetScanTargetPolicy(newTestPolicy())
-	_, err := e.Execute(context.Background(), scanCommand(t, ScanCommandPayload{Scanner: "rec", Target: "example.com", Egress: egress}))
+	ctx := context.Background()
+	if len(js) > 0 {
+		ctx = WithJobSecrets(ctx, js[0])
+	}
+	_, err := e.Execute(ctx, scanCommand(t, ScanCommandPayload{Scanner: "rec", Target: "example.com", Egress: egress}))
 	return err
 }
 
@@ -72,14 +108,14 @@ func egressRefusalRule(t *testing.T, err error) string {
 }
 
 // A pooled job reaches the scanner with the pool (options and context);
-// credentials are fetched once, only when an endpoint has some.
+// credentials are fetched once, only when an endpoint has some, through
+// the job's egress_proxy ref for exactly this pool.
 func TestEgressJobHandsThePoolToTheScanner(t *testing.T) {
 	for _, auth := range []bool{false, true} {
 		sc := &egressScanner{}
-		creds := &fakeEgressCreds{}
+		creds := &fakeSecrets{}
 		e := NewDefaultCommandExecutor(nil)
-		e.SetEgressCredentials(creds)
-		if err := runEgressScan(t, e, sc, testEgress(auth)); err != nil {
+		if err := runEgressScan(t, e, sc, testEgress(auth), poolSecrets("pool-1", creds)); err != nil {
 			t.Fatal(err)
 		}
 		pool, ok := sc.options.Egress.(*upstream.Pool)
@@ -90,7 +126,7 @@ func TestEgressJobHandsThePoolToTheScanner(t *testing.T) {
 		if auth {
 			want = 1
 		}
-		if len(creds.calls) != want || (auth && creds.calls[0] != "c1/pool-1") {
+		if len(creds.calls) != want || (auth && creds.calls[0] != "c1/egress/p1") {
 			t.Fatalf("auth=%v: credential fetches %v", auth, creds.calls)
 		}
 	}
@@ -125,15 +161,20 @@ func TestEgressJobRefusals(t *testing.T) {
 		sc    func() Scanner
 		cfg   *upstream.Config
 		rule  string
+		js    *JobSecrets
 	}{
-		{"not routed", nil, func() Scanner { return &recordingScanner{} }, testEgress(false), RefusalEgressUnavailable},
-		{"direct only", func(e *DefaultCommandExecutor) { e.SetEgressPolicy(EgressPolicy{DirectOnly: true}) }, nil, testEgress(false), RefusalEgressRefusedByHost},
-		{"empty pool", nil, nil, empty, RefusalEgressUnavailable},
-		{"allow list", func(e *DefaultCommandExecutor) { e.SetEgressPolicy(EgressPolicy{Allow: allow}) }, nil, testEgress(false), RefusalEgressRefusedByHost},
-		{"no credential fetch", nil, nil, testEgress(true), RefusalEgressUnavailable},
-		{"credential fetch fails", func(e *DefaultCommandExecutor) {
-			e.SetEgressCredentials(&fakeEgressCreds{err: errors.New("404 command_not_found")})
-		}, nil, testEgress(true), RefusalEgressUnavailable},
+		{"not routed", nil, func() Scanner { return &recordingScanner{} }, testEgress(false), RefusalEgressUnavailable, nil},
+		{"direct only", func(e *DefaultCommandExecutor) { e.SetEgressPolicy(EgressPolicy{DirectOnly: true}) }, nil, testEgress(false), RefusalEgressRefusedByHost, nil},
+		{"empty pool", nil, nil, empty, RefusalEgressUnavailable, nil},
+		{"allow list", func(e *DefaultCommandExecutor) { e.SetEgressPolicy(EgressPolicy{Allow: allow}) }, nil, testEgress(false), RefusalEgressRefusedByHost, nil},
+		{"no secret list", nil, nil, testEgress(true), RefusalEgressUnavailable, nil},
+		{"no fetcher", nil, nil, testEgress(true), RefusalEgressUnavailable, poolSecrets("pool-1", nil)},
+		{"credential fetch fails", nil, nil, testEgress(true), RefusalEgressUnavailable,
+			poolSecrets("pool-1", &fakeSecrets{err: errors.New("404 command_not_found")})},
+		{"the list names another pool", nil, nil, testEgress(true), RefusalEgressUnavailable,
+			poolSecrets("pool-2", &fakeSecrets{})},
+		{"the platform holds no value", nil, nil, testEgress(true), RefusalEgressUnavailable,
+			poolSecrets("pool-1", &fakeSecrets{missing: true})},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,7 +186,11 @@ func TestEgressJobRefusals(t *testing.T) {
 			if tc.sc != nil {
 				sc = tc.sc()
 			}
-			err := runEgressScan(t, e, sc, tc.cfg)
+			var js []*JobSecrets
+			if tc.js != nil {
+				js = append(js, tc.js)
+			}
+			err := runEgressScan(t, e, sc, tc.cfg, js...)
 			if got := egressRefusalRule(t, err); got != tc.rule {
 				t.Fatalf("rule %s, want %s (%v)", got, tc.rule, err)
 			}

@@ -53,6 +53,9 @@ type taskEgress struct {
 	// stuck is set when the forwarder did not stop within
 	// forwarderStopGrace: the task goes on without waiting for it.
 	stuck bool
+	// passive: the tool's network is vendor; it never connects to its
+	// targets, so a refused connection says nothing about a target.
+	passive bool
 
 	// changes are the first rate changes (adapt.TargetRate.MaxChanges);
 	// moreChanges counts the rest.
@@ -76,13 +79,21 @@ func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared
 		return nil, nil
 	}
 	scope := h.taskScope(ctx, p.m, p.task)
+	if p.m.Permissions.Network == tool.NetVendor {
+		// The hosts the task's delivered provider keys may be sent to: a
+		// keyed host is reachable only when its key was delivered.
+		scope.Vendor = append(scope.Vendor, p.keyed...)
+	}
 	dir, err := executor.NewTaskDir("egress-")
 	if err != nil {
 		return nil, err
 	}
 	ceiling := h.rateCeiling(p)
 	e := &taskEgress{dir: dir, proxy: filepath.Join(dir, "proxy.sock"), dns: filepath.Join(dir, "dns.sock"),
-		fw: egress.New(scope, egress.Limits{Rate: ceiling, PerHostRate: ceiling})}
+		fw: egress.New(scope, egress.Limits{Rate: ceiling, PerHostRate: ceiling}), passive: p.m.Permissions.Network == tool.NetVendor}
+	if h.lookupVendor != nil {
+		e.fw.LookupVendor = h.lookupVendor
+	}
 	e.fw.Upstream = egress.UpstreamDNS("")
 	e.fw.SearchDomains = egress.SearchDomains("")
 	// The job's recorder when the caller set one (the command poller does),
@@ -178,7 +189,10 @@ func (e *taskEgress) finish(out *Outcome, targets []tool.Target) []LogLine {
 	out.Egress, out.EgressDropped = e.stop()
 	tally := e.fw.Tally()
 	out.EgressTally = &tally
-	unreached := markEgressRefused(out, targets, tally)
+	unreached := 0
+	if !e.passive {
+		unreached = markEgressRefused(out, targets, tally)
+	}
 	s := e.fw.TargetRate().Summary()
 	out.TargetRate = &s
 	if !e.fw.Reach.Empty() {
@@ -365,6 +379,10 @@ func (h *Host) checkLimits(m tool.Manifest, task tool.Task) *tool.Error {
 	case tool.NetNone:
 		return nil
 	case tool.NetTargets, tool.NetResolver:
+	case tool.NetVendor:
+		// A vendor tool never connects to its targets (its scope admits
+		// none of them, only its vendor hosts), so the targets' port and
+		// path limits cannot be exceeded; the scope must still be enforced.
 	default:
 		return tool.AsError(tool.Refused(fmt.Sprintf("the job's targets are limited to some ports or paths; tool %s reaches the network as %q, not only its targets",
 			m.Name, m.Permissions.Network)))

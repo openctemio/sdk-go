@@ -28,6 +28,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/netctx"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/legacyv1"
 )
@@ -49,6 +50,7 @@ const (
 	CheckTemplateKeys         = "policy.template_keys"
 	CheckCommandPoller        = "runtime.command_poller"
 	CheckDNSSearch            = "network.dns_search"
+	CheckTaskRootMemory       = "runtime.task_root_memory"
 	EnvSSLCertFile            = "SSL_CERT_FILE"
 	EnvSSLCertDir             = "SSL_CERT_DIR"
 	unknownEnvPrefixSensor    = "SENSOR_"
@@ -521,6 +523,31 @@ func (k *Kit) checkStorage() {
 	}
 	k.checkState()
 	k.checkOutbox()
+	k.checkTaskRoot()
+}
+
+// checkTaskRoot removes the task directories a sensor that stopped left
+// behind (with what its tools wrote in them) and reports whether the task
+// root is in memory: a file a tool writes for its run (a provider
+// configuration with the keys it received) then never reaches a disk.
+func (k *Kit) checkTaskRoot() {
+	if n, err := executor.SweepStaleTaskDirs(); err != nil {
+		_, _ = fmt.Fprintf(k.errw, "Warning: task directories left by an earlier run could not be removed: %v\n", err)
+	} else if n > 0 {
+		_, _ = fmt.Fprintf(k.errw, "Removed %d task director(ies) left by an earlier run\n", n)
+	}
+	inMem, known := executor.TaskRootInMemory()
+	params := map[string]core.ConfigParam{"path": core.ParamPath(executor.TaskRoot())}
+	switch {
+	case !known:
+		return
+	case inMem:
+		k.ReportCheck(core.ConfigCheck{ID: CheckTaskRootMemory, Status: core.CheckPass, Code: "in_memory", Params: params})
+	default:
+		k.ReportCheck(core.ConfigCheck{ID: CheckTaskRootMemory, Status: core.CheckWarn, Code: "on_disk", Params: params,
+			Summary: "the task directory root is on disk: files a tool writes for its run (with the keys it received) reach the disk until the task ends"})
+		_, _ = fmt.Fprintf(k.errw, "Warning: the task directory root %s is on disk; mount a tmpfs there (or set TMPDIR to one) so what tools write for a run never reaches a disk\n", executor.TaskRoot())
+	}
 }
 
 // checkState reports whether the state directory survives a recreate.

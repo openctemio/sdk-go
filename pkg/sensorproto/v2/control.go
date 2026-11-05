@@ -412,68 +412,15 @@ type SourceCredentialResponse struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
-// ToolCredentialsAction is the action of POST /commands/{id}/tool-credentials:
-// the sensor holding a scan command's lease (HeaderLeaseEpoch) asks, for one
-// task of the command's tool, for the third-party source keys the command's
-// organization stored for that tool (ToolCredentialsRequest). The platform
-// reads the organization from the command, never from the request, answers
-// only the leasing sensor and only for the command's own tool, else 404
-// command_not_found. Asked once per task; never logged, never stored on the
-// command. Not carried by protocol v3: it stays on v2 HTTPS.
-const ToolCredentialsAction = "tool-credentials"
-
-// MaxToolCredentials bounds the credentials of one answer (the most a tool
-// manifest declares).
-const MaxToolCredentials = 64
-
-// ToolCredentialsRequest is the body of POST /commands/{id}/tool-credentials.
-type ToolCredentialsRequest struct {
-	Tool string `json:"tool"`
-}
-
-// ToolCredential is one credential, by the name the tool's manifest
-// declares (permissions.credentials).
-type ToolCredential struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
-}
-
-// ToolCredentialsResponse is the answer of POST /commands/{id}/tool-credentials.
-// LocalFallback says whether credentials the sensor's operator stored may
-// fill the names the organization left unset: true on an organization's own
-// sensor, false on a shared sensor (its operator's keys are not the
-// organization's).
-type ToolCredentialsResponse struct {
-	Credentials   []ToolCredential `json:"credentials"`
-	LocalFallback bool             `json:"local_fallback"`
-}
-
-// EgressCredentialsAction is the action of POST /commands/{id}/egress-credentials:
-// the sensor holding a scan command's lease (HeaderLeaseEpoch) asks for the
-// credentials of the proxy pool the command's egress block names
-// (EgressCredentialsRequest). The platform answers only the leasing sensor
-// and only for the pool currently effective for it, else 404
-// command_not_found. Never logged, never stored on the command. Not carried
-// by protocol v3: it stays on v2 HTTPS.
-const EgressCredentialsAction = "egress-credentials"
-
-// EgressCredentialsRequest is the body of POST /commands/{id}/egress-credentials.
-type EgressCredentialsRequest struct {
-	PoolID string `json:"pool_id"`
-}
-
-// EgressCredential is one endpoint's credentials.
-type EgressCredential struct {
-	EndpointID string `json:"endpoint_id"`
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-}
-
-// EgressCredentialsResponse is the answer of POST /commands/{id}/egress-credentials:
-// the endpoints of the pool that have credentials.
-type EgressCredentialsResponse struct {
-	Credentials []EgressCredential `json:"credentials"`
-}
+// SecretsAction is the action of POST /commands/{id}/secrets: the sensor
+// holding a command's lease asks for the values of secret refs the
+// command's signed job lists (contract secretref: FetchRequest in, a
+// SealedAnswer out, sealed to a single-use key in the signed request
+// body). The request must be RFC 9421-signed by the sensor's key-bound
+// identity; the lease epoch is the body's, never a header. Every refusal
+// is 404 command_not_found. Not carried by protocol v3: it stays on v2
+// HTTPS.
+const SecretsAction = "secrets"
 
 // EgressReportAction is the action of POST /commands/{id}/egress-report:
 // the per-endpoint signals of a job that ran through a proxy pool
@@ -491,8 +438,11 @@ const MaxEgressLastError = 200
 // EgressReport is the body of POST /commands/{id}/egress-report. It never
 // carries credentials or URLs with userinfo.
 type EgressReport struct {
-	PoolID    string                 `json:"pool_id"`
-	Endpoints []EgressEndpointReport `json:"endpoints"`
+	// LeaseEpoch is the epoch of the lease the sensor holds on the
+	// command: the signed body decides the lease, not a header.
+	LeaseEpoch int64                  `json:"lease_epoch"`
+	PoolID     string                 `json:"pool_id"`
+	Endpoints  []EgressEndpointReport `json:"endpoints"`
 }
 
 // EgressEndpointReport is one endpoint's connection attempts over the job,

@@ -536,3 +536,36 @@ func OpenResponseAny(key *PrivateKey, responseKeys []ed25519.PublicKey, r Route,
 	copy(d[:], digest)
 	return &Response{Status: meta.Status, Header: h, Body: b, IssuedAt: meta.IssuedAt}, d, nil
 }
+
+// SealToKey seals pt to the public key pubKey (its Bytes form) with the
+// package's suite, HPKE base mode single shot, info as given and no
+// additional data. The output is the encapsulated key followed by the
+// ciphertext, with no envelope header: the caller binds what it is for
+// through info. It is the sealing of an answer to a single-use reply key a
+// request carried (the task secrets of a job, contract secretref).
+func SealToKey(pubKey, info, pt []byte) ([]byte, error) {
+	pub, err := kem().NewPublicKey(pubKey)
+	if err != nil {
+		return nil, fmt.Errorf("sealedmsg: public key: %w", err)
+	}
+	kdf, aead := suite()
+	ct, err := hpke.Seal(pub, kdf, aead, info, pt)
+	if err != nil {
+		return nil, fmt.Errorf("sealedmsg: seal: %w", err)
+	}
+	return ct, nil
+}
+
+// OpenWithKey opens what SealToKey sealed to priv's public key under the
+// same info. Any other key, info or a changed byte is ErrOpen.
+func OpenWithKey(priv *PrivateKey, info, ct []byte) ([]byte, error) {
+	if priv == nil || len(ct) == 0 || len(ct) > MaxEnvelope {
+		return nil, ErrMalformed
+	}
+	kdf, aead := suite()
+	pt, err := hpke.Open(priv.k, kdf, aead, info, ct)
+	if err != nil {
+		return nil, ErrOpen
+	}
+	return pt, nil
+}

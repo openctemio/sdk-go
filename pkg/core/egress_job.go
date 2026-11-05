@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/contract/secretref"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress/upstream"
 )
 
@@ -16,7 +17,7 @@ import (
 // connections go through (upstream.Config; never credentials). The
 // executor checks the sensor-local veto (EgressPolicy), validates the
 // pool, fetches the credentials once per job when an endpoint has some
-// (EgressCredentials), and hands the pool to the scanner (ScanOptions.Egress,
+// (the job's egress_proxy secret ref, JobSecrets), and hands the pool to the scanner (ScanOptions.Egress,
 // and the job context: EgressDialerFrom). The tool host makes it the task
 // forwarder's Dial hook; a task that would not run behind a forwarder that
 // confines the network is refused, so a pooled job never goes direct. At
@@ -58,12 +59,6 @@ type EgressScanner interface {
 	RoutesEgress() bool
 }
 
-// EgressCredentials fetches the credentials of a command's proxy pool (the
-// platform client: client.EgressCredentials).
-type EgressCredentials interface {
-	EgressCredentials(ctx context.Context, cmdID, poolID string) ([]upstream.Credential, error)
-}
-
 // EgressReporter sends a job's proxy pool signals (the platform client:
 // client.EgressReport).
 type EgressReporter interface {
@@ -84,7 +79,6 @@ type EgressPolicy struct {
 
 type egressSetup struct {
 	policy EgressPolicy
-	creds  EgressCredentials
 }
 
 // SetEgressPolicy sets the sensor-local veto on proxy pools.
@@ -94,17 +88,10 @@ func (e *DefaultCommandExecutor) SetEgressPolicy(p EgressPolicy) {
 	e.egressMu.Unlock()
 }
 
-// SetEgressCredentials wires the credential fetch of pooled jobs; without
-// it a job whose pool has an endpoint with credentials is refused.
-func (e *DefaultCommandExecutor) SetEgressCredentials(c EgressCredentials) {
-	e.egressMu.Lock()
-	e.egress.creds = c
-	e.egressMu.Unlock()
-}
-
 // PrepareEgress turns a command's egress block into the job's pool: nil
 // without one. It applies the local veto, validates the pool, fetches the
-// credentials (once, only when an endpoint has some) and registers the
+// credentials (once, only when an endpoint has some: the job's signed
+// egress_proxy ref for exactly this pool, JobSecretsFrom(ctx)) and registers the
 // pool for the job's egress report. A refusal is a *LocalPolicyError with
 // rule RefusalEgressRefusedByHost or RefusalEgressUnavailable.
 func (e *DefaultCommandExecutor) PrepareEgress(ctx context.Context, cmdID string, cfg *upstream.Config) (*upstream.Pool, error) {
@@ -131,12 +118,9 @@ func (e *DefaultCommandExecutor) PrepareEgress(ctx context.Context, cmdID string
 		return nil, fmt.Errorf("invalid egress block: %w", err)
 	}
 	if cfg.NeedsCredentials() {
-		if setup.creds == nil {
-			return nil, egressRefusal(RefusalEgressUnavailable, "proxy pool %s needs credentials and this sensor cannot ask the platform for them", cfg.PoolID)
-		}
-		creds, err := setup.creds.EgressCredentials(ctx, cmdID, cfg.PoolID)
+		creds, err := poolCredentials(ctx, cfg.PoolID)
 		if err != nil {
-			return nil, egressRefusal(RefusalEgressUnavailable, "proxy pool %s: the platform gave no credentials: %v", cfg.PoolID, err)
+			return nil, egressRefusal(RefusalEgressUnavailable, "proxy pool %s: %v", cfg.PoolID, err)
 		}
 		if err := pool.SetCredentials(creds); err != nil {
 			return nil, egressRefusal(RefusalEgressUnavailable, "proxy pool %s: %v", cfg.PoolID, err)
@@ -146,6 +130,41 @@ func (e *DefaultCommandExecutor) PrepareEgress(ctx context.Context, cmdID string
 		h.set(pool)
 	}
 	return pool, nil
+}
+
+// egressFetchTask names the job's pool credentials fetch (audit only).
+const egressFetchTask = "egress"
+
+// poolCredentials fetches the credentials of pool poolID through the job's
+// egress_proxy ref (the forwarder's, required). No ref, a fetch that fails
+// or answers without the value: no credentials, and the job does not run
+// (never direct, never another source).
+func poolCredentials(ctx context.Context, poolID string) ([]upstream.Credential, error) {
+	js := JobSecretsFrom(ctx)
+	ref, ok := js.ForwarderRef(poolID)
+	if !ok {
+		return nil, errors.New("the pool needs credentials and the job's signed secret list names none for it")
+	}
+	ans, err := js.Fetch(ctx, egressFetchTask, []string{ref.ID})
+	if err != nil {
+		return nil, fmt.Errorf("the platform gave no credentials: %w", err)
+	}
+	defer ZeroAnswer(ans)
+	for _, sec := range ans.Secrets {
+		if sec.ID != ref.ID {
+			continue
+		}
+		v, err := secretref.DecodeEgressProxy(sec.Value)
+		if err != nil {
+			return nil, errors.New("the platform's credentials are not valid")
+		}
+		creds := make([]upstream.Credential, 0, len(v.Endpoints))
+		for _, ep := range v.Endpoints {
+			creds = append(creds, upstream.Credential{EndpointID: ep.ID, Username: ep.Username, Password: ep.Password})
+		}
+		return creds, nil
+	}
+	return nil, errors.New("the platform holds no credentials for the pool")
 }
 
 func egressRefusal(rule, format string, args ...any) error {

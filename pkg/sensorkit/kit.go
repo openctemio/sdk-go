@@ -141,9 +141,9 @@ type Options struct {
 	// contract tool, by credential name (nil: none). Only those the tool's
 	// manifest declares are delivered, inside the task's run message,
 	// never in the environment, argv or a file another task can read. In a
-	// platform job the organization's credentials for the tool win, and
-	// these fill the names it left unset only on the organization's own
-	// sensor (core.MergeToolCredentials).
+	// platform job the organization's values win; these fill a slot only
+	// when the job's signed secret list allows a local value for it, and
+	// never on a shared sensor.
 	ToolCredentials func(tool string) map[string]string
 	// Tools is an operator allowlist of tool names (SENSOR_TOOLS, deprecated):
 	// scanners whose name (or As name) is not in it are neither run nor
@@ -1350,17 +1350,9 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	if sc, ok := any(k.client).(core.SourceCredentials); ok {
 		executor.SetSourceCredentials(sc)
 	}
-	// Pooled jobs: the local veto, and the pool's credentials asked from
-	// the platform for the command.
+	// Pooled jobs: the local veto. The pool's credentials come from the
+	// job's signed secret list (the poller's secrets fetch).
 	executor.SetEgressPolicy(k.s.scanEgress.policy(k.s.shared))
-	if ec, ok := any(k.client).(core.EgressCredentials); ok {
-		executor.SetEgressCredentials(ec)
-	}
-	// Tools that declare credentials ask the platform, per task, for the
-	// keys the job's organization stored for them.
-	if tc, ok := any(k.client).(core.JobToolCredentials); ok {
-		executor.SetToolCredentials(tc)
-	}
 	k.executor.Store(executor)
 	if r := k.opts.CommandAssetResolver; r != nil {
 		executor.SetAssetResolver(r)
@@ -1432,6 +1424,11 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 		Ledger:        k.s.ledger,
 	})
 	poller.SetResourceManager(resources)
+	// A job's secret values (tool slots, the proxy pool's credentials) are
+	// fetched per task, sealed, from the refs its signed job lists.
+	if sf, ok := any(k.client).(core.SecretsFetcher); ok {
+		poller.SetSecretsFetcher(sf)
+	}
 	// A pooled job reports its proxy endpoints' signals before its result.
 	if er, ok := any(k.client).(core.EgressReporter); ok {
 		poller.SetEgressReporter(er)

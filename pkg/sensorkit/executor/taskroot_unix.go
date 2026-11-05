@@ -19,3 +19,32 @@ func checkOwner(dir string, fi os.FileInfo) error {
 	}
 	return nil
 }
+
+// lockOwnerFile creates path (0600) and holds an exclusive lock on it for
+// the life of the process (nil when it cannot).
+func lockOwnerFile(path string) *os.File {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // a file under the private task root
+	if err != nil {
+		return nil
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil { //nolint:gosec // an fd fits an int
+		_ = f.Close()
+		return nil
+	}
+	return f
+}
+
+// ownerFileGone reports whether the instance that owns path no longer
+// runs: the file is missing, or nobody holds its lock.
+func ownerFileGone(path string) bool {
+	f, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // a file under the private task root
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil { //nolint:gosec // an fd fits an int
+		return false
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) //nolint:gosec // an fd fits an int
+	return true
+}
