@@ -10,6 +10,7 @@ import (
 
 	"github.com/openctemio/contract/capability"
 	"github.com/openctemio/contract/outcome"
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // lookupPolicy allows example.com and its subdomains and one test range, and
@@ -315,6 +316,12 @@ func TestAdmitCommandTargets_RegistryOnlyTakesNamesThatDoNotResolve(t *testing.T
 // refuses, and an address literal is checked as ever (a blocked range stays
 // blocked).
 func TestAdmitCommandTargets_RegistryOnlyWithoutAllowList(t *testing.T) {
+	// CI sets OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK=1 for the httptest-based
+	// tests, which lets loopback through the normal check: pin it off so
+	// the loopback refusal is asserted the same everywhere.
+	prev := httpsec.AllowLoopback
+	httpsec.AllowLoopback = false
+	t.Cleanup(func() { httpsec.AllowLoopback = prev })
 	lp, err := ParseLocalPolicy([]byte("apiVersion: openctem.io/sensor-policy/v1\ntargets:\n  deny: [\"blocked.example.com\"]\nchecks:\n  allow: [scan]\n"),
 		LocalPolicyOptions{LookupEnv: env(nil), LookupIP: lookupDNS})
 	if err != nil {
