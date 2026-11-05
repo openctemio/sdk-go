@@ -297,3 +297,34 @@ func TestNoWebScopeTunnelIsRaw(t *testing.T) {
 		t.Fatal("no guard with a web scope")
 	}
 }
+
+// An exclusion stored escaped or with a "*" segment holds at the
+// forwarder: the server never sees a request under it.
+func TestWebScopeEscapedAndWildcardDeny(t *testing.T) {
+	var mu sync.Mutex
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits = append(hits, r.URL.EscapedPath())
+		mu.Unlock()
+		fmt.Fprint(w, "ok")
+	}))
+	defer srv.Close()
+	port := portOf(t, srv.URL)
+	_, pa := webForwarder(t, &webscope.Scope{DenyPaths: []string{"/files/My%20Docs", "/tenants/*/admin"}})
+	c := proxiedClient(t, pa, nil)
+	for _, p := range []string{"/files/My%20Docs/a.bak", "/files/my%20docs/", "/tenants/acme/admin", "/tenants/acme/admin/x", "/tenants/a./ADMIN",
+		"/x/%252e%252e/tenants/b/admin"} {
+		if code, _ := get(t, c, "http://app.test:"+strconv.Itoa(port)+p); code != http.StatusForbidden {
+			t.Errorf("%s: %d, want 403", p, code)
+		}
+	}
+	if code, _ := get(t, c, "http://app.test:"+strconv.Itoa(port)+"/tenants/acme/users"); code != http.StatusOK {
+		t.Errorf("/tenants/acme/users: %d, want 200", code)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 1 {
+		t.Errorf("the server saw %q", hits)
+	}
+}
