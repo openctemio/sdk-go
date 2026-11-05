@@ -217,11 +217,7 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 			return nil, err
 		}
 		in := &sensorv3.TransitionCommandRequest{CommandId: parts[1], Transition: tr, BodyJson: doc}
-		if v := strings.TrimSpace(req.Header.Get(protov2.HeaderLeaseEpoch)); v != "" {
-			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
-				in.LeaseEpoch = &n
-			}
-		}
+		in.LeaseEpoch = v3LeaseEpoch(req)
 		r, err := st.svc.TransitionCommand(ctx, connect.NewRequest(in))
 		return answer(r, err, func(m *sensorv3.TransitionCommandResponse) *http.Response {
 			return jsonResponse(http.StatusOK, m.GetCommandJson())
@@ -307,6 +303,7 @@ func (t *v3RoundTripper) results(req *http.Request, st *v3State, parts []string,
 			ContentType:     req.Header.Get("Content-Type"),
 			ContentEncoding: req.Header.Get("Content-Encoding"),
 			ContentDigest:   req.Header.Get(protov2.HeaderContentDigest),
+			LeaseEpoch:      v3LeaseEpoch(req),
 		}
 		if len(parts) == 4 {
 			n, err := strconv.ParseUint(parts[3], 10, 32)
@@ -325,7 +322,8 @@ func (t *v3RoundTripper) results(req *http.Request, st *v3State, parts []string,
 		if err != nil {
 			return nil, err
 		}
-		r, err := st.svc.CommitResult(ctx, connect.NewRequest(&sensorv3.CommitResultRequest{ReportId: reportID, CommandId: commandID, BodyJson: doc}))
+		r, err := st.svc.CommitResult(ctx, connect.NewRequest(&sensorv3.CommitResultRequest{ReportId: reportID, CommandId: commandID, BodyJson: doc,
+			LeaseEpoch: v3LeaseEpoch(req)}))
 		return answer(r, err, func(m *sensorv3.CommitResultResponse) *http.Response {
 			return statusResponse(m.GetCreated(), m.GetStatusJson(), m.GetRetryAfterSeconds(), reportID)
 		})
@@ -452,6 +450,20 @@ func finish(resp *http.Response) *http.Response {
 // plainBody is a JSON document body without its content coding (the v2
 // client compresses some bodies; v3 carries documents uncompressed and
 // compresses the whole message itself).
+// v3LeaseEpoch is the lease epoch a v2 request states (HeaderLeaseEpoch),
+// for the typed v3 field; nil when it states none.
+func v3LeaseEpoch(req *http.Request) *int64 {
+	v := strings.TrimSpace(req.Header.Get(protov2.HeaderLeaseEpoch))
+	if v == "" {
+		return nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 {
+		return nil
+	}
+	return &n
+}
+
 func plainBody(req *http.Request, body []byte) ([]byte, error) {
 	if body == nil {
 		body = []byte{}

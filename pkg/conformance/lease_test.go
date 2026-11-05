@@ -10,7 +10,9 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -132,6 +134,113 @@ func TestLease_NoEpochNoHeader(t *testing.T) {
 	for _, r := range f.Requests() {
 		if v := r.Header.Values(protov2.HeaderLeaseEpoch); len(v) > 0 {
 			t.Fatalf("%s %s sent %s %q", r.Method, r.Path, protov2.HeaderLeaseEpoch, v)
+		}
+	}
+}
+
+// resultEpochs lists the lease epoch each command-bound result request of
+// id stated, and whether it named results_lease_epoch ("<n>+" when it did).
+func resultEpochs(f *FakePlatform, id string) []string {
+	var out []string
+	for _, r := range f.RequestsTo("", protov2.PathPrefix+protov2.CommandsPath+"/"+id+protov2.ResultsPath+"/") {
+		v := r.Header.Get(protov2.HeaderLeaseEpoch)
+		if namesFeature(r.Header.Values(protov2.HeaderSensorFeatures), protov2.FeatureResultsLeaseEpoch) {
+			v += "+"
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// Every request of a bound report states the lease epoch and names the
+// results_lease_epoch feature.
+func TestLease_BoundResultsStateEpoch(t *testing.T) {
+	f := newControlFake(t)
+	id := "0192a3b4-0000-7000-8000-000000000106"
+	f.QueueCommand(id)
+	f.ReclaimCommand(id) // this claim is epoch 2
+	c := newClient(t, f, client.ProtocolAuto)
+	claimAndStart(t, c, id)
+	if _, err := c.PushResultsV2(context.Background(), report("semgrep", 3, 7),
+		&client.V2PushOptions{CommandID: id, MaxFindingsPerSegment: 5}); err != nil {
+		t.Fatal(err)
+	}
+	got := resultEpochs(f, id)
+	if len(got) < 2 {
+		t.Fatalf("want segments and a commit, got %q", got)
+	}
+	for _, v := range got {
+		if v != "2+" {
+			t.Fatalf("bound result requests stated %q, want 2+ on each", got)
+		}
+	}
+}
+
+// A report made under an earlier lease states that epoch (a stored
+// report's, V2PushOptions.LeaseEpoch): after the platform took the run back
+// and handed it out again, the late report is refused as bound results and
+// never binds to the new run.
+func TestLease_LateReportStatesItsOwnEpoch(t *testing.T) {
+	f := newControlFake(t)
+	id := "0192a3b4-0000-7000-8000-000000000107"
+	f.QueueCommand(id)
+	c := newClient(t, f, client.ProtocolAuto)
+	claimAndStart(t, c, id) // epoch 1
+	f.ReclaimCommand(id)    // handed out again: epoch 2
+	_, _ = c.PushResultsV2(context.Background(), report("semgrep", 1, 1),
+		&client.V2PushOptions{CommandID: id, LeaseEpoch: 1})
+	got := resultEpochs(f, id)
+	if len(got) == 0 {
+		t.Fatal("no bound request was sent")
+	}
+	for _, v := range got {
+		if v != "1+" {
+			t.Fatalf("late report stated %q, want only its own epoch 1", got)
+		}
+	}
+	for _, r := range f.RequestsTo("", protov2.PathPrefix+protov2.CommandsPath+"/"+id+protov2.ResultsPath+"/") {
+		if r.Status < 400 {
+			t.Fatalf("a bound request of the late report was accepted: %s %s %d", r.Method, r.Path, r.Status)
+		}
+	}
+}
+
+// A bound report stored in the outbox keeps the lease epoch it was made
+// under. Delivered after a restart (the new process holds no lease) and
+// after the platform handed the run out again, it states that epoch and is
+// refused as bound results, instead of binding to the new run.
+func TestLease_StoredReportKeepsItsEpochAcrossRestart(t *testing.T) {
+	f := newControlFake(t)
+	id := "0192a3b4-0000-7000-8000-000000000108"
+	f.QueueCommand(id)
+	var hold atomic.Bool
+	hold.Store(true)
+	f.SetFault(func(r *http.Request, _ int) *FaultAnswer {
+		if hold.Load() && r.Method == http.MethodPut {
+			return &FaultAnswer{Status: 503, Problem: protov2.ProblemUnavailable, RetryAfter: "0"}
+		}
+		return nil
+	})
+	dir := t.TempDir()
+	c := newClient(t, f, client.ProtocolV2)
+	enableOutbox(t, c, dir)
+	claimAndStart(t, c, id) // epoch 1
+	res, err := c.PushFindings(core.WithCommandID(context.Background(), id), report("semgrep", 1, 1))
+	if err != nil || !res.Queued {
+		t.Fatalf("%+v %v", res, err)
+	}
+	_ = c.Close()
+	f.ReclaimCommand(id) // handed out again: epoch 2
+
+	hold.Store(false)
+	c2 := newClient(t, f, client.ProtocolV2)
+	enableOutbox(t, c2, dir)
+	_ = c2.FlushOutbox(context.Background())
+	waitUntil(t, 5*time.Second, func() bool { st, _ := c2.OutboxStats(); return st.PendingCount == 0 })
+	for _, r := range f.RequestsTo("", protov2.PathPrefix+protov2.CommandsPath+"/"+id+protov2.ResultsPath+"/") {
+		if r.Header.Get(protov2.HeaderLeaseEpoch) != "1" || r.Status < 400 {
+			t.Fatalf("stored report sent %s %s with epoch %q, answered %d; want epoch 1, refused",
+				r.Method, r.Path, r.Header.Get(protov2.HeaderLeaseEpoch), r.Status)
 		}
 	}
 }

@@ -118,6 +118,17 @@ func leaseHeader(epoch int) http.Header {
 	return h
 }
 
+// resultsLeaseHeader is leaseHeader for a command-bound report, naming
+// protov2.FeatureResultsLeaseEpoch: every request of the report states the
+// epoch. nil when the epoch is unknown (a report stored by an older SDK).
+func resultsLeaseHeader(epoch int) http.Header {
+	h := leaseHeader(epoch)
+	if h != nil {
+		h.Set(protov2.HeaderSensorFeatures, protov2.FeatureResultsLeaseEpoch)
+	}
+	return h
+}
+
 // leaseLostError says that a complete or fail sent under a lease epoch was
 // refused because the command is no longer held under it. It unwraps to
 // the platform's answer, so IsCommandGone and the error classifiers see the

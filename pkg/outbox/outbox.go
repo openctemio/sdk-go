@@ -148,6 +148,10 @@ type Meta struct {
 	ReportID string `json:"report_id,omitempty"`
 	// CommandID binds the item to a platform command.
 	CommandID string `json:"command_id,omitempty"`
+	// LeaseEpoch is the lease epoch the sensor held CommandID under when the
+	// item was stored (0: unknown). A report delivered later, after a
+	// restart or a re-claim, states this epoch, never the one held then.
+	LeaseEpoch int `json:"lease_epoch,omitempty"`
 	// TenantID, on a shared sensor, is the organization of the command's
 	// verified signed job (core.JobLedger): every item of a job carries it.
 	TenantID string `json:"tenant_id,omitempty"`

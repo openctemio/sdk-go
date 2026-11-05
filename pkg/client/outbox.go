@@ -207,6 +207,9 @@ func (c *Client) enqueueReport(ctx context.Context, ob *outbox.Outbox, report *c
 		return nil, fmt.Errorf("marshal report: %w", err)
 	}
 	meta := outbox.Meta{Kind: outbox.KindReport, CommandID: core.CommandIDFromContext(ctx)}
+	if meta.CommandID != "" {
+		meta.LeaseEpoch = c.leases.epoch(meta.CommandID)
+	}
 	tenant, err := c.jobLedger().Report(meta.CommandID)
 	if err != nil {
 		return nil, err
@@ -372,9 +375,10 @@ func (c *Client) deliverReport(ctx context.Context, d *outbox.Delivery) (any, er
 		}
 	}
 	st, err := c.PushResultsV2(ctx, &r, &V2PushOptions{
-		ReportID:  d.Meta.ReportID,
-		CommandID: d.Meta.CommandID,
-		Progress:  prog,
+		ReportID:   d.Meta.ReportID,
+		CommandID:  d.Meta.CommandID,
+		LeaseEpoch: d.Meta.LeaseEpoch,
+		Progress:   prog,
 		OnProgress: func(p V2Progress) error {
 			b, err := json.Marshal(p)
 			if err != nil {
