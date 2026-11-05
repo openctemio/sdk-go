@@ -8,6 +8,48 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.47.3 — 2026-11-05
+
+### Security
+
+- `pkg/webdiff` never follows a redirect, reads at most 256 KiB of a body, decodes gzip itself with the expansion bounded at 100:1, bounds headers at 64 KiB, gives an exchange a 10 s deadline and the body a minimum rate; an answer that breaks a bound stops the origin. An edge challenge or block is never a signal; 429 and 503 back off and are never a hit. Baselines live for one task only.
+- `tool.Context.HTTP` of a task whose web scope carries a request cap (a discovery task) refuses response headers over 64 KiB.
+
+### Security: out-of-band callbacks use only the sensor's own interaction server, through the forwarder
+
+- New `egress.OOBServer` (`Scope.OOB`, `toolhost.RunOptions.OOB`): a confined task's forwarder carries the interaction API (`POST /register`, `GET /poll`, `POST /deregister`, body at most 64 KiB) of the one server the sensor's operator configured, adds its token itself (the tool's `Authorization` and `Cookie` are dropped), and dials it with verified TLS at public addresses only unless the operator allowed a private server. Any other request toward that host, and any public interaction server, is refused. The job's web scope and path limits do not apply to it, and it is not counted as a target.
+- Measured with the real nuclei v3.11.1 (built with interactsh v1.4.1) behind the forwarder in a web-scoped task: `-iserver http://<server> -pi` registers, polls and deregisters through the forwarder with the forwarder's token only, the callback payloads name the server's zone, and nothing else is proxied.
+- The extra-args guard now refuses nuclei's long names `-interactsh-server` and `-interactsh-token` (only `-iserver` and `-itoken` were refused, so an extra arg could point callbacks at any server) and the callback timing flags the sensor sets.
+
+### Security: tools that contact their targets no longer run unconfined without the operator saying so
+
+- With `SENSOR_SANDBOX=auto` (the default) on a host where the tool sandbox is not available (it is Linux only: every macOS or Windows sensor), tools ran as plain child processes with only a start-up warning. The tool host now refuses tools of tier T1 and above (they contact their targets) on such a host, with refusal `unconfined_sandbox` (`core.RefusalUnconfinedSandbox`); passive T0 lookups still run. `SENSOR_SANDBOX=off` is the explicit acknowledgement that every tool runs unconfined.
+- A Linux host where the sandbox could not start keeps today's behaviour (the start-up warning and `Status.Missing` say why).
+- New `executor.Status.NoSandboxOnHost`, `Unconfined()` / `RefusesActiveTools()`, manifest posture `sandbox.unconfined` (`refused`, `acknowledged`) and config report check `runtime.sandbox_unconfined` (`sandboxed`, `active_refused`, `acknowledged`).
+- Upgrade note: a sensor that relied on `auto` running tools unconfined must now set `SENSOR_SANDBOX=off` to keep running T1 tools there.
+
+### Security: a per-host request cap in the job's web scope, enforced by the forwarder
+
+- `webscope.Scope` gains `MaxRequestsPerHost` (`max_requests_per_host`, 0 to 1,000,000; 0 is no cap). A confined task's forwarder counts every request it lets through to a host name (any port, scheme or connection; a followed redirect included) and refuses the ones past the cap with the same 403 as a request outside the scope; nothing the task does resets the count. `tool.Context.HTTP` fails such a request before sending it. Path discovery jobs carry the cap with `methods: ["GET", "HEAD"]`, so the forwarder also refuses any other method.
+- `pkg/webscope` reads paths with contract `webpath` (`CleanPath`, `Denied`, `Under`), the reading the platform plans with; behaviour is unchanged.
+- The forwarder classifies a guarded connection's answers with contract `edgeprotect` from the start of the body that arrived with the headers too (never waiting for more), so a challenge page that shows only in its body is a block from the first answer. A vendor's rate-limit page under another status than 429 or 503 slows the host like a 429.
+- `wordlist.Normalize` drops entries that name a state-changing action (contract `webpath.Destructive`: logout, delete, reset, ...) for the `web-paths`, `web-files`, `api-routes` and `params` purposes, when a list is built and when a task's list is composed.
+
+### Behaviour change: a local policy without allow_interactsh follows the platform, and a refusal of callbacks narrows the job
+
+- `allow_interactsh` absent from a local policy now follows the platform's job; only `allow_interactsh: false` turns callbacks off. A job that asks for callbacks on a sensor whose policy turns them off (or that requires a policy and has none) is no longer refused: it runs without them (`ScanOptions.OOBOffReason`), and its result metadata `oob` says why.
+- New `core.OOBState`, `ScanResult.OOB` and result metadata key `oob` (`core.MetaOOB`): what a scan did with the callbacks its job asked for (`on`, or `unavailable` with a reason).
+
+### Added: `pkg/webdiff`, the calibrated differ of path discovery
+
+- `webdiff.Prober` probes candidate paths of one origin for one task: per (directory, shape: bare, slash, `ext:<e>`, dot) it takes baselines of three random names, derives noise bands (length and simhash over the normalised body), and reports a hit only when the answer differs from the baseline, the difference repeats, and, for a directory or a 403, a random child answers like a missing path. It recalibrates after 200 requests or when more than 2 % of differences fail to confirm. Hits carry status, media type, auth state (none, required, redirect_login), labels and evidence (decoded size, 64-bit hash of the normalised body); `webdiff.Endpoint` turns one into a CTIS endpoint with the evidence in `extensions["io.openctem"].response`.
+- Gap reasons: `catch_all`, `auth_wall`, `edge_protected`, `throttled`, `blocked`, `unstable_baseline`, `budget`, `hostile_response`, `protocol`, `scope_filtered`.
+- The conformance kit gains an `enumerate.web_paths` suite.
+
+### Changed
+
+- Requires `github.com/openctemio/contract` with package `webpath` (pinned to the commit that adds it until its release).
+
 ## v0.47.2 — 2026-11-05
 
 ### Security: the egress forwarder bounds every response head it reads
