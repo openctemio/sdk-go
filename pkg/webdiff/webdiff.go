@@ -119,14 +119,19 @@ const (
 
 // Defaults of Options.
 const (
-	DefaultMaxBody          = 256 << 10
-	DefaultMaxHeaderBytes   = 64 << 10
-	DefaultDeadline         = 10 * time.Second
-	DefaultMinRate          = 512
-	DefaultMinRateAfter     = 2 * time.Second
-	DefaultMaxRatio         = 100
-	DefaultRetries          = 2
-	DefaultRate             = 5
+	DefaultMaxBody        = 256 << 10
+	DefaultMaxHeaderBytes = 64 << 10
+	DefaultDeadline       = 10 * time.Second
+	DefaultMinRate        = 512
+	DefaultMinRateAfter   = 2 * time.Second
+	DefaultMaxRatio       = 100
+	DefaultRetries        = 2
+	DefaultRate           = 5
+	// MaxRate bounds Options.Rate: a config value above it is lowered to it.
+	MaxRate = 50
+	// FrontedRate is the rate of an origin an edge network fronts (the first
+	// answer that carries an edge marker lowers the limiter to it).
+	FrontedRate             = 2
 	DefaultRecalibrate      = 200
 	DefaultMinBackoff       = time.Second
 	DefaultMaxBackoff       = 30 * time.Second
@@ -142,7 +147,8 @@ type Options struct {
 	// calibration and confirmation included (0: no cap of its own; the
 	// job's web scope still caps the task).
 	MaxRequests int
-	// Rate is the most requests per second (default 5).
+	// Rate is the most requests per second (default 5, at most MaxRate; an
+	// origin an edge network fronts is held to FrontedRate).
 	Rate float64
 	// MaxBody is the most decoded body bytes read per answer (256 KiB).
 	MaxBody int
@@ -190,6 +196,7 @@ func (o Options) withDefaults() Options {
 	if o.Rate <= 0 {
 		o.Rate = DefaultRate
 	}
+	o.Rate = min(o.Rate, MaxRate)
 	if o.Deadline <= 0 {
 		o.Deadline = DefaultDeadline
 	}

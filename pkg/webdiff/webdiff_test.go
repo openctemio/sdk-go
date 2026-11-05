@@ -23,7 +23,7 @@ import (
 // fastOptions are the bounds of the fixture runs: the same checks, short
 // waits.
 func fastOptions() Options {
-	return Options{Rate: 2000, Deadline: 3 * time.Second, MinRateAfter: 300 * time.Millisecond,
+	return Options{Rate: MaxRate, Deadline: 3 * time.Second, MinRateAfter: 300 * time.Millisecond,
 		MinBackoff: 5 * time.Millisecond, MaxBackoff: 50 * time.Millisecond}
 }
 

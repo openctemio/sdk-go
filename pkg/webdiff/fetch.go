@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/openctemio/contract/edgeprotect"
+	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
 // errHostile marks an answer that tried to exhaust the prober: a body whose
@@ -104,6 +105,12 @@ func (p *Prober) fetch(ctx context.Context, path string, tokens []string) (*resp
 	p.sinceCalibration++
 	resp, err := p.client.Do(req)
 	if err != nil {
+		// The client's own scope or request cap refusing the request is a
+		// refusal, not a network error: it is never retried and never
+		// counts toward the origin being blocked.
+		if errors.Is(err, webscope.ErrOutOfScope) {
+			return &response{refused: err.Error(), sig: Sig{}}, nil
+		}
 		if strings.Contains(err.Error(), "response headers exceeded") {
 			return nil, fmt.Errorf("%w: headers over %d bytes", errHostile, p.o.MaxHeaderBytes)
 		}
@@ -154,6 +161,10 @@ func (p *Prober) fetch(ctx context.Context, path string, tokens []string) (*resp
 	}
 	out.sig = makeSig(resp, u, buf, truncated, tokens)
 	out.edge = edgeprotect.Classify(resp.StatusCode, resp.Header, "", buf)
+	if out.edge.State == edgeprotect.Fronted && p.limiter.Limit() > FrontedRate {
+		// An origin an edge network fronts is requested slowly.
+		p.limiter.SetLimit(FrontedRate)
+	}
 	return out, nil
 }
 
