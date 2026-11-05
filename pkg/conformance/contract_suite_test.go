@@ -128,6 +128,8 @@ func fakeTool(mode string, args []string) int {
 		if eps := fakeCrawl(arg(0), arg(1)); eps != nil {
 			report["endpoints"] = eps
 		}
+	case "webpaths":
+		report["endpoints"] = fakeWebPaths(arg(0), arg(1), arg(2))
 	case "templates":
 		// Requests /.git/config, /.env and /env (a redirect to /.env),
 		// skipping what the web scope (arg 1) denies unless

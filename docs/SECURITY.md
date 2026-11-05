@@ -1058,6 +1058,25 @@ SDK enforces it:
   A vendor's challenge or block page makes the host a blocked coverage gap
   from the first answer; a vendor's rate-limit page is push-back whatever
   its status.
+- The conformance kit's `enumerate.web_paths` suite gives the tool a
+  candidate list in its `web-paths` slot, a GET/HEAD web scope with a request
+  cap and a denied directory, on a site whose missing paths answer 200 with
+  dynamic content. It fails a tool that sends another method, requests the
+  denied directory, goes past the cap, reports a soft-404 answer or reports
+  a path that was not in its list.
+- Path discovery decides with `pkg/webdiff`, never with a status alone. A
+  candidate is compared with baselines of three random names of its class
+  (directory and shape), within noise bands; a difference is repeated, and a
+  directory or a 403 must have a random child that answers like a missing
+  path (a firewall rule that blocks a word anywhere gives nothing). Redirects
+  are never followed. A body is read up to 256 KiB, a gzip body is decoded by
+  the differ with the expansion bounded at 100:1, headers are bounded at
+  64 KiB (the task client of a capped web scope refuses larger ones), an
+  exchange has a 10 s deadline and the body a minimum rate; an answer that
+  breaks a bound stops the origin. An edge challenge or block is never a
+  signal and stops the origin; 429 and 503 back off and are retried at most
+  twice, never a hit. Baselines live for one task. Nothing of a body leaves
+  the differ but its size and a 64-bit hash of its normalised text.
 - Wordlists for web requests (`web-paths`, `web-files`, `api-routes`,
   `params`) never carry an entry that names a state-changing action
   (contract `webpath.Destructive`: `logout`, `delete`, `reset`, ...):

@@ -58,3 +58,25 @@ func TestHTTPRequestCap(t *testing.T) {
 		t.Errorf("the server saw %d requests, want 4", n)
 	}
 }
+
+// SECURITY: a discovery task's client refuses response headers over 64 KiB.
+func TestHTTPDiscoveryHeaderBound(t *testing.T) {
+	big := strings.Repeat("a", 100<<10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Big", big)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	targets := []tool.Target{{Ref: "a", Value: srv.URL}}
+	capped := NewHTTPClient(httpTool, tool.Task{Targets: targets, WebScope: &webscope.Scope{MaxRequestsPerHost: 10}})
+	if resp, err := capped.Get(srv.URL); err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("a 100 KiB header was read by a discovery task")
+	}
+	plain := NewHTTPClient(httpTool, tool.Task{Targets: targets})
+	resp, err := plain.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("a task without a cap: %v", err)
+	}
+	_ = resp.Body.Close()
+}

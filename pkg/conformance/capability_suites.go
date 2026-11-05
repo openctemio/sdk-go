@@ -42,6 +42,8 @@ func (r *contractRun) capabilitySuite(c capability.Capability) {
 		r.vulnTemplates(name, c)
 	case "crawl.web", "dast.web":
 		r.webScope(name, c)
+	case "enumerate.web_paths":
+		r.webPaths(name, c)
 	case "secrets.code":
 		r.secretsCode(name, c)
 	case "sast.code":
