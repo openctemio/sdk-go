@@ -89,6 +89,12 @@ func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
 		tr.DialContext = dialer.DialContext
 	}
 	var rt http.RoundTripper = tr
+	if task.WebScope != nil && task.WebScope.MaxRequestsPerHost > 0 {
+		// A discovery task (a web scope with a request cap) reads hostile
+		// answers by design: its response headers are bounded at 64 KiB
+		// (pkg/webdiff checks the same bound after reading them).
+		tr.MaxResponseHeaderBytes = 64 << 10
+	}
 	if task.WebScope != nil {
 		hosts := make([]string, 0, len(task.Targets))
 		for _, t := range task.Targets {
