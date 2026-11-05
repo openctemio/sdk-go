@@ -50,6 +50,13 @@ func fakeTool(mode string, args []string) int {
 		return 0
 	}
 	switch mode {
+	case "services", "services-cred":
+		b, _ := os.ReadFile(arg(0))
+		for _, v := range strings.Fields(string(b)) {
+			if a := detectFixture(v, mode == "services-cred"); a != nil {
+				assets = append(assets, a)
+			}
+		}
 	case "ports", "dial-b", "ports-bad", "fetch-out":
 		if mode == "fetch-out" {
 			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}, Timeout: 5 * time.Second}

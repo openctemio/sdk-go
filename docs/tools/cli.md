@@ -98,6 +98,7 @@ The `--capability` suites:
 | `scan.ports@1` | Two open ports and one closed: exactly the open ones are reported. |
 | `discover.hosts@1` | A loopback address answering on one port, probed on that port: exactly that address is reported live, with the time it answered (`last_seen_at`). |
 | `probe.http@1` | A page with a known title: a `web_origin` with `technical.http.status_code` 200. |
+| `detect.services@1` | SSH, Redis (password required), MySQL, SMTP (hostile greeting), HTTP, HTTPS (ALPN) and LDAP fixtures as service targets, `depth: thorough`. Every fixture is a credential sentinel: an SSH user authentication, a MySQL handshake response, a Redis `AUTH`, an SMTP `AUTH` or mail transaction, an LDAP bind, an HTTP `Authorization` header or a state-changing method fails. The six are identified (TLS on HTTPS), each service keeps its input value, Redis is not reported anonymous, banners are at most 512 bytes of clean UTF-8, details at most 16 of 256 bytes. |
 | `vuln.templates@1` | An app exposing `/.git/config` and `/.env`: at least one finding. |
 | `secrets.code@1` | A repository with fresh fake credentials: a masked value, and the raw value absent from the report and the logs. |
 | `sast.code@1` | A file with `shell=True` and `eval` of input: at least one finding. |
