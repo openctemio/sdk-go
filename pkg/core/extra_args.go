@@ -43,8 +43,13 @@ var DangerousToolFlags = map[string]bool{
 	"-c": true, "--config": true,
 	"-t": true, "--templates": true,
 
-	// Out-of-band interaction / callback server
-	"-iserver": true, "--interactsh-url": true,
+	// Out-of-band interaction / callback server, its token, and the
+	// timing the sensor sets for it (nuclei v3.11 -h, INTERACTSH: the long
+	// names too, "-interactsh-server attacker.example" would otherwise send
+	// every callback to an attacker's server).
+	"-iserver": true, "--interactsh-url": true, "-interactsh-server": true, "-interactsh-token": true,
+	"-interactions-cache-size": true, "-interactions-eviction": true,
+	"-interactions-poll-duration": true, "-interactions-cooldown-period": true,
 
 	// Headless browser (arbitrary JS execution / file system access)
 	"--headless": true,

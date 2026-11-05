@@ -259,7 +259,7 @@ Admission of a verified job, in order (`pkg/core/command_poller.go:executeComman
 flowchart TD
     J["Signed job verified (JobGuard.Check)"] --> ST{"POST start accepted?"}
     ST -- "no" --> NR["not run, nothing reported"]
-    ST -- "yes" --> AJ{"admitJob: kill switch, no_local_policy when required,<br/>checks.allow, tools.allow, custom templates,<br/>interactsh, ports, MaxScanTargets"}
+    ST -- "yes" --> AJ{"admitJob: kill switch, no_local_policy when required,<br/>checks.allow, tools.allow, custom templates,<br/>ports, MaxScanTargets"}
     AJ -- "refused" --> F1["fail with Refusal layer, rule, detail"]
     AJ -- "ok" --> PT["checkTarget per target"]
     PT --> R{"checkHost: LookupIP"}
@@ -354,7 +354,8 @@ without a file:
 |---|---|---|
 | Job with a network target (URL, host, IP, CIDR, image reference) | Admitted when the platform signed the scope and the target is outside the built-in deny list | Refused before any tool starts: `refused by local policy: no_local_policy: ...` |
 | Job without network targets (repository or filesystem scan, health check, collector, content refresh) | Runs | Runs |
-| Custom templates, out-of-band callbacks (interactsh) | Allowed (templates still need a signature) | Refused (`no_local_policy`) |
+| Custom templates | Allowed (templates still need a signature) | Refused (`no_local_policy`) |
+| Out-of-band callbacks (interactsh) | Follow the platform | Turned off: the job runs without them (`oob` state `unavailable`, reason `local_policy`) |
 | `LocalPolicy.CheckTarget` called directly (retests, tool tasks) | Built-in deny list: loopback, link-local and `169.254.169.254`, multicast, unspecified, CGNAT, reserved, private unless the private-range switch | Every network target refused |
 | Kill switch | Applies | Applies |
 | Report (`local_policy`) | `{"state": "absent", "required": false}` | `{"state": "absent", "required": true}` |
@@ -789,6 +790,15 @@ first thing in `main`), which confines itself and then becomes the tool:
 | `none` | Nothing: no forwarder, no way out |
 
 A tool that dials raw sockets without honouring the proxy variables gets "network unreachable" when confined; it must connect through the proxy (HTTP CONNECT or SOCKS5).
+
+**Out-of-band interaction server (`RunOptions.OOB`, `egress.OOBServer`).** A scanner that uses out-of-band callbacks (nuclei) gets them only from the interaction server its sensor's operator configured; a job never names one, and the extra-args guard refuses the server, token and timing flags. In a confined task the tool talks plain HTTP to `http://<server>` through its forwarder, which:
+
+- answers only absolute-form `POST /register`, `GET /poll` and `POST /deregister` to that exact name on port 80, with a body of at most 64 KiB; any other path, method, port, subdomain (the callback payload hosts), CONNECT or SOCKS request toward it is an ordinary destination and is refused;
+- drops the tool's `Authorization`, `Cookie` and every other header outside a short list, and adds the operator's token itself, so the token is never in the tool's arguments, environment or memory;
+- opens a verified TLS connection (system roots, or the operator's CA) to the server, resolved at connect time to public addresses only unless the operator allowed a private server; link-local and metadata addresses are always refused;
+- does not apply the job's web scope or path limits to it (it is not a target), records it as protocol `oob` and keeps it out of the target tally.
+
+A job asks for callbacks with `allow_interactsh: true`. A local policy without the key follows the platform; `allow_interactsh: false` (or a required policy that is absent) turns them off for the job, which then runs without them instead of being refused. The scanner reports what it did in the result metadata `oob` (`core.OOBState`: `on`, or `unavailable` with a reason such as `no_server`, `local_policy`, `requires_confined_sensor` or `registration_failed`).
 - A target the scope refused every connection toward is never reported done: the tool host settles it as failed with class `egress_refused` (CTIS `metadata.targets`, contract `outcome`), the task is at best partial, and the task log says how many targets the confinement kept the tool from reaching. When the scope refused every connection of the task and allowed none, every target the tool reported done is settled so. `Outcome.EgressTally` has the counts, in all and per target.
 - Where `/etc/resolv.conf` cannot be bind-mounted (a profile that denies `mount`), the relay answers on each address the file names instead.
 - Target names are looked up exactly as written, never with a search domain appended. The task's `/etc/resolv.conf` names only the relay and has no `search` or `domain` line, and the SDK's own lookups use absolute names (a trailing dot). Where the host's file cannot be replaced, a tool's resolver may still append the host's search domain (`app.example.com.lan`). The forwarder answers such a name NXDOMAIN, never resolves it, and does not record it as a refusal. The doctor notes search domains on the host (`network.dns_search`, information only).

@@ -79,6 +79,7 @@ func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared
 		return nil, nil
 	}
 	scope := h.taskScope(ctx, p.m, p.task)
+	scope.OOB = p.oob
 	if p.m.Permissions.Network == tool.NetVendor {
 		// The hosts the task's delivered provider keys may be sent to: a
 		// keyed host is reachable only when its key was delivered.

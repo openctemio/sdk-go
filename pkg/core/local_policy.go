@@ -523,7 +523,9 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 		lp.checks = names
 	}
 	lp.allowCustomTemplates = doc.AllowCustomTemplates != nil && *doc.AllowCustomTemplates
-	lp.allowInteractsh = doc.AllowInteractsh != nil && *doc.AllowInteractsh
+	// allow_interactsh absent follows the platform (its signed job asks
+	// for callbacks or not); only an explicit false turns them off.
+	lp.allowInteractsh = doc.AllowInteractsh == nil || *doc.AllowInteractsh
 	lp.allowInsecureTLS = true
 	if err := lp.readHTTP(doc.HTTP); err != nil {
 		return nil, err
@@ -627,12 +629,12 @@ func absentWarnings(required bool) []string {
 }
 
 // failsClosed reports whether lp has no policy and requires one: every
-// network target, custom template and callback is refused.
+// network target and custom template is refused, and callbacks are off.
 func (lp *LocalPolicy) failsClosed() bool { return lp != nil && !lp.present && lp.required }
 
 // Required reports whether the sensor requires a local policy: without
-// one it refuses every job with network targets (rule no_local_policy),
-// custom templates and out-of-band callbacks. False (the default) follows the
+// one it refuses every job with network targets (rule no_local_policy) and
+// custom templates, and turns out-of-band callbacks off. False (the default) follows the
 // platform's signed scope: without a policy any target outside the built-in
 // deny list that the platform signed is admitted.
 func (lp *LocalPolicy) Required() bool { return lp != nil && lp.required }
@@ -898,7 +900,9 @@ func (lp *LocalPolicy) AllowsCustomTemplates() bool {
 
 // AllowsInteractsh reports whether a job may turn on out-of-band callbacks.
 // Without a policy: true on a legacy install (Q4 (a)), false when a policy
-// is required; a policy allows them only with allow_interactsh.
+// is required. A policy follows the platform unless it sets
+// allow_interactsh: false. A job they are not allowed for runs without them
+// (ScanOptions.OOBOffReason); it is not refused.
 func (lp *LocalPolicy) AllowsInteractsh() bool {
 	return lp == nil || (lp.allowInteractsh && !lp.failsClosed())
 }
@@ -1109,7 +1113,9 @@ type LocalPolicySummary struct {
 	// Tools and Checks are tools.allow and checks.allow (absent = any).
 	Tools  []string `json:"tools,omitempty"`
 	Checks []string `json:"checks,omitempty"`
-	// AllowCustomTemplates and AllowInteractsh are the policy's switches.
+	// AllowCustomTemplates and AllowInteractsh are the policy's switches
+	// (AllowInteractsh is true unless the policy sets allow_interactsh:
+	// false).
 	AllowCustomTemplates bool `json:"allow_custom_templates"`
 	AllowInteractsh      bool `json:"allow_interactsh"`
 	// MaxRPS and MaxJobSeconds are rate.max_rps and rate.max_job_seconds

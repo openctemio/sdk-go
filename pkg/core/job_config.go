@@ -9,13 +9,15 @@ func applyJobConfig(opts *ScanOptions, config map[string]interface{}, local *Loc
 		return nil
 	}
 	// Out-of-band callbacks only when the command says so, as a boolean:
-	// anything else ("true", 1) leaves them off; and only when the local
-	// policy allows them.
+	// anything else ("true", 1) leaves them off. A local policy that turns
+	// them off narrows the job: it runs without them and its result says
+	// why, it is not refused.
 	if allow, ok := config["allow_interactsh"].(bool); ok && allow {
-		if !local.AllowsInteractsh() {
-			return refuse("allow_interactsh", "the job asks for out-of-band callbacks (interactsh); this sensor's policy does not allow them")
+		if local.AllowsInteractsh() {
+			opts.AllowInteractsh = true
+		} else {
+			opts.OOBOffReason = OOBReasonLocalPolicy
 		}
-		opts.AllowInteractsh = true
 	}
 	if err := applyScanLimits(opts, config); err != nil {
 		return err

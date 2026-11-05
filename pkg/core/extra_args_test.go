@@ -15,6 +15,9 @@ func TestValidateExtraArgs(t *testing.T) {
 		{"-", "--"},
 		{"-tags", "cve"},
 		{"-etags", "intrusive"},
+		// Turning callbacks off only narrows a scan.
+		{"-ni"},
+		{"-no-interactsh"},
 	}
 	for _, args := range allowed {
 		if err := ValidateExtraArgs(args); err != nil {
@@ -41,6 +44,15 @@ func TestValidateExtraArgs(t *testing.T) {
 		{"-config", "/tmp/evil.yaml"},
 		{"-headless"},
 		{"-interactsh-url=oast.attacker"},
+		// nuclei's real long names for the server and token, and the
+		// callback timing the sensor sets.
+		{"-interactsh-server", "oast.attacker"},
+		{"--interactsh-server=oast.attacker"},
+		{"-interactsh-token", "x"},
+		{"-interactions-eviction", "1"},
+		{"-interactions-cooldown-period=0"},
+		{"-interactions-cache-size", "1"},
+		{"-interactions-poll-duration", "60"},
 		{"--il", "/etc/targets"},
 		// naabu runs -nmap-cli as a command.
 		{"-nmap-cli", "sh -c id"},

@@ -144,12 +144,19 @@ func TestParseLocalPolicy_FailsClosed(t *testing.T) {
 	}
 }
 
-// Absent switches are off in a policy (owner decision Q4 (a): off for new
-// installs), absent sections restrict nothing.
+// Absent custom templates are off in a policy (owner decision Q4 (a): off
+// for new installs); absent allow_interactsh follows the platform, only an
+// explicit false turns callbacks off; absent sections restrict nothing.
 func TestParseLocalPolicy_Defaults(t *testing.T) {
 	lp := mustPolicy(t, "apiVersion: openctem.io/sensor-policy/v1\n")
-	if lp.AllowsCustomTemplates() || lp.AllowsInteractsh() {
-		t.Fatal("a policy must default custom templates and interactsh to off")
+	if lp.AllowsCustomTemplates() {
+		t.Fatal("a policy must default custom templates to off")
+	}
+	if !lp.AllowsInteractsh() || !lp.Report().Summary.AllowInteractsh {
+		t.Fatal("a policy without allow_interactsh must follow the platform")
+	}
+	if off := mustPolicy(t, "apiVersion: openctem.io/sensor-policy/v1\nallow_interactsh: false\n"); off.AllowsInteractsh() || off.Report().Summary.AllowInteractsh {
+		t.Fatal("allow_interactsh: false must turn callbacks off")
 	}
 	if !lp.AllowsTool("anything") || !lp.AllowsCheck("scan") {
 		t.Fatal("absent sections restrict nothing")
@@ -282,7 +289,7 @@ func TestLocalPolicy_AdmitCommand(t *testing.T) {
 		"target beside targets": {cmdWith("i", "scan", map[string]any{"scanner": "nuclei",
 			"target": "203.0.113.9", "targets": []string{"192.0.2.1"}}), "targets.allow"},
 		"interactsh": {cmdWith("j", "scan", map[string]any{"scanner": "nuclei", "target": "203.0.113.9",
-			"config": map[string]any{"allow_interactsh": true}}), "allow_interactsh"},
+			"config": map[string]any{"allow_interactsh": true}}), ""}, // narrowed by the executor, not refused
 		"interactsh off is fine": {cmdWith("k", "scan", map[string]any{"scanner": "nuclei", "target": "203.0.113.9",
 			"config": map[string]any{"allow_interactsh": false}}), ""},
 		"custom templates": {cmdWith("l", "scan", map[string]any{"scanner": "nuclei", "target": "203.0.113.9",
@@ -329,7 +336,9 @@ func TestLocalPolicy_Absent(t *testing.T) {
 	if err := lp.AdmitCommand(context.Background(), cmd); err != nil {
 		t.Fatalf("absent policy refused: %v", err)
 	}
-	if w := lp.CommandWarnings(cmd); len(w) != 2 {
+	// Callbacks follow the platform without a policy: only the custom
+	// templates warn.
+	if w := lp.CommandWarnings(cmd); len(w) != 1 {
 		t.Fatalf("warnings %v", w)
 	}
 	var nilPolicy *LocalPolicy
