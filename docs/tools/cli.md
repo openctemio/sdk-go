@@ -167,3 +167,15 @@ openctem import --mapping wafw00f.mapping.json --tool wafw00f waf.json
 What is uploaded is exactly what `--dry-run` prints (`format=ctis`). The platform validates it again, imports it as a partial upload with the API key's rights (an import never closes findings), judges every host against your scope (hosts outside it are recorded as candidates, never scanned) and answers with a receipt. Exit status: 0 imported, 1 refused or failed, 2 usage or input error, 3 still queued.
 
 The key is read from `OPENCTEM_API_KEY` only, sent only over HTTPS (plain HTTP only to localhost) and never to a redirect target.
+
+### Give the tool its input: `openctem targets export` and `openctem run`
+
+```text
+openctem targets export --type domain > names.txt                 # in-scope names, one per line
+openctem targets export --type ip --tag prod --export-format json  # {"type","value"} per line
+
+openctem run --type ip --format nmap -- nmap -sV -iL {targets_file} -oX {output_file}
+openctem run --type domain --format lines --as domain --tool puredns -- puredns resolve {targets_file} -w {output_file}
+```
+
+`targets export` reads the organization's assets through the API with the key's data scope; by default only those an active scope entry covers (`--scope in_scope`). `run` exports them to a private temporary file, runs your command (no shell) with `{targets_file}` and `{output_file}` replaced, imports what it wrote (`{output_file}`, else its standard output) with the `openctem import` flags you gave, and removes the file. Your command does not see `OPENCTEM_API_KEY`. Schedule either from cron or a CI job. The platform cannot check what your command actually scanned: results outside your scope are recorded as candidates that grant nothing, and authorisation to scan is yours.
