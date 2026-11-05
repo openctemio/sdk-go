@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -86,6 +87,14 @@ func hostileTool(mode string, args []string) int {
 	case "ptrace":
 		pid, _ := strconv.Atoi(args[0])
 		return report(unix.PtraceAttach(pid))
+	case "iouring":
+		var params [120]byte                                                                      // struct io_uring_params
+		fd, _, e := unix.Syscall(unix.SYS_IO_URING_SETUP, 1, uintptr(unsafe.Pointer(&params)), 0) //nolint:gosec // the io_uring ABI takes a pointer to its parameters
+		if e != 0 {
+			return report(e)
+		}
+		_ = unix.Close(int(fd))
+		return report(nil)
 	case "mount":
 		return report(unix.Mount("tmpfs", args[0], "tmpfs", 0, ""))
 	case "sleep":
@@ -97,6 +106,47 @@ func hostileTool(mode string, args []string) int {
 			return report(err)
 		}
 		fmt.Print(strings.ToUpper(string(b)))
+		return 0
+	case "signal":
+		pid, _ := strconv.Atoi(args[0])
+		return report(syscall.Kill(pid, 0))
+	case "escape":
+		// Leave a process behind in a session of its own (out of the
+		// task's process group): it writes args[0] after a while.
+		exe, err := os.Executable()
+		if err != nil {
+			return report(err)
+		}
+		c := exec.Command(exe, args[0])
+		c.Env = append(os.Environ(), "EXECUTOR_TEST_TOOL=late-write")
+		c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := c.Start(); err != nil {
+			return report(err)
+		}
+		return report(c.Process.Release())
+	case "late-write":
+		time.Sleep(2 * time.Second)
+		_ = os.WriteFile(args[0], []byte("survived"), 0o600)
+		return 0
+	case "orphans":
+		// Leave n children orphaned (their parent, a shell, exits at
+		// once): the launcher must reap them.
+		n, _ := strconv.Atoi(args[0])
+		for range n {
+			if err := exec.Command("/bin/sh", "-c", "/bin/sleep 0.2 &").Run(); err != nil {
+				return report(err)
+			}
+		}
+		time.Sleep(time.Second)
+		zombies := 0
+		entries, _ := os.ReadDir("/proc")
+		for _, e := range entries {
+			b, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
+			if err == nil && strings.Contains(string(b), ") Z ") {
+				zombies++
+			}
+		}
+		fmt.Println("ZOMBIES", zombies)
 		return 0
 	case "kill-parent":
 		return report(syscall.Kill(os.Getppid(), 0))
@@ -372,6 +422,9 @@ func TestDangerousSyscallsAreRefused(t *testing.T) {
 	}
 	if out, _ := runTool(t, b, TaskSpec{}, "mount", t.TempDir()); !strings.Contains(out, "operation not permitted") {
 		t.Errorf("mount: %q", out)
+	}
+	if out, _ := runTool(t, b, TaskSpec{}, "iouring"); !strings.Contains(out, "operation not permitted") {
+		t.Errorf("io_uring_setup: %q", out)
 	}
 }
 
