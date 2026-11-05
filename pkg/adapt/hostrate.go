@@ -561,10 +561,17 @@ func (c *HostRate) ReportHTTP(host string, status int, retryAfter string) {
 // ReportResponse is ReportHTTP with the edge verdict of the answer: a
 // challenge or block page of a vendor's edge (verdict.State.Stops) is a block
 // whatever its status (a challenge is sometimes a 503), and from the first
-// answer. Without such a verdict it behaves as ReportHTTP.
+// answer; a vendor's rate-limit page is push-back whatever its status.
+// Without such a verdict it behaves as ReportHTTP.
 func (c *HostRate) ReportResponse(host string, status int, retryAfter string, v edgeprotect.Verdict) {
 	if v.State.Stops() {
 		c.Report(host, Event{Signal: Forbidden, Reason: ReasonBlocked, Edge: v})
+		return
+	}
+	if v.State == edgeprotect.RateLimited && status != http.StatusTooManyRequests && status != http.StatusServiceUnavailable {
+		// A vendor's rate-limit page under another status (a 403 or a 200)
+		// is push-back all the same, never an ordinary answer.
+		c.Report(host, Event{Signal: Congested, Reason: ReasonHTTP429, RetryAfter: ParseRetryAfter(retryAfter, c.now()), Edge: v})
 		return
 	}
 	c.ReportHTTP(host, status, retryAfter)

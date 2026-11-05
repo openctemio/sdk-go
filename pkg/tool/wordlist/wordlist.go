@@ -24,6 +24,8 @@ import (
 	"io"
 	"regexp"
 	"strings"
+
+	"github.com/openctemio/contract/webpath"
 )
 
 // Purposes of a wordlist.
@@ -73,7 +75,31 @@ var (
 // Normalize returns the entry a raw line stands for under purpose, or false
 // when the line is dropped (empty, a comment, or invalid for the purpose).
 // An unknown or empty purpose keeps any printable entry up to MaxPathBytes.
+//
+// For the purposes a web request is built from (web-paths, web-files,
+// api-routes, params) an entry that names a state-changing action
+// (contract webpath.Destructive: "logout", "admin/delete", "resetPassword")
+// is dropped: discovery never requests one, whatever list it came from. The
+// same check runs when a list is built and when a task's list is composed.
 func Normalize(purpose, line string) (string, bool) {
+	e, ok := normalize(purpose, line)
+	if ok && destructiveChecked(purpose) && webpath.Destructive(e) {
+		return "", false
+	}
+	return e, ok
+}
+
+// destructiveChecked reports whether entries of purpose become request
+// paths or parameter names.
+func destructiveChecked(purpose string) bool {
+	switch purpose {
+	case WebPaths, WebFiles, APIRoutes, Params:
+		return true
+	}
+	return false
+}
+
+func normalize(purpose, line string) (string, bool) {
 	line = strings.TrimSpace(strings.TrimRight(line, "\r\n"))
 	if line == "" || strings.HasPrefix(line, "#") || len(line) > MaxLineBytes {
 		return "", false

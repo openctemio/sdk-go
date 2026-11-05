@@ -767,9 +767,10 @@ first thing in `main`), which confines itself and then becomes the tool:
 | RLIMIT_DATA, RLIMIT_NPROC (the user's current count plus the task's allowance), RLIMIT_FSIZE, RLIMIT_NOFILE, RLIMIT_CORE=0, RLIMIT_CPU when set | memory exhaustion, fork bombs, disk filling, core dumps of secrets |
 | no_new_privs | setuid and file-capability escalation |
 | Landlock (Linux 5.13+; works under Docker's default seccomp profile) | writes outside the task directory and the declared write paths; reads of the protected paths (credentials file, outbox and its key, local policy, configuration), including through symlinks that lead into them |
-| seccomp filter | ptrace, process_vm_*, mount/namespaces (also clone with namespace flags; clone3 answers ENOSYS), kernel modules, kexec, keyrings, bpf, perf, clock changes, file handles, userfaultfd; a syscall from another ABI kills the task |
+| seccomp filter | ptrace, process_vm_*, mount/namespaces (also clone with namespace flags; clone3 answers ENOSYS), kernel modules, kexec, keyrings, bpf, perf, clock changes, file handles, userfaultfd, io_uring; a syscall from another ABI kills the task |
 | Process group, killed whole on timeout or cancel | stray children |
 | The sensor is non-dumpable | reading its memory, environment or open files through /proc |
+| PID namespace per confined task, the inner launcher its init (reaps orphans; when it ends the kernel kills every process of the task) | signals to the sensor or another task (same user), a process that leaves its process group (`setsid`) outliving the task, zombies piling up |
 | Network confinement (`Config.ConfineNetwork`, api RFC-060): its own user, network and mount namespaces per task, only loopback, a relay on 127.0.0.1:1080 (proxy) and :53 (DNS) to the task's forwarder (`pkg/sensorkit/egress`); the tool runs as a child of the launcher with no capabilities (`SECBIT_NOROOT` locked, empty bounding set) | any connection or lookup that does not go through the forwarder: a tool that ignores the proxy, raw sockets, DNS exfiltration, the sensor's own loopback services |
 
 **Network confinement requires unprivileged user namespaces.**
@@ -817,11 +818,16 @@ acknowledgement that every tool runs unconfined. The state is in the
 manifest posture (`sandbox.unconfined`: `refused` or `acknowledged`) and in
 the config report (`runtime.sandbox_unconfined`: `sandboxed`, `active_refused`
 (a failure), `acknowledged` (a warning)). Each
-`ExecResult.Sandbox` records what the run was under. Residual risks: without a
-separate user per task, a task can still send signals to processes of the same
-user (Landlock signal scoping needs Linux 6.12), and a task that escapes its
-process group with `setsid` is bounded by its rlimits but not killed with the
-group. The sandbox never uses a Docker socket; future backends (a Kubernetes
+`ExecResult.Sandbox` records what the run was under. Residual risks: a confined task
+cannot signal processes outside its PID namespace, and nothing it starts
+outlives it. A task that runs unconfined (no user namespaces on the host) can
+still send signals to processes of the same user (Landlock signal scoping
+needs Linux 6.12), and one that escapes its process group with `setsid` is
+bounded by its rlimits (and killed with its cgroup envelope, where there is
+one) but not with the group. A confined task still sees the container's
+`/proc` (the process list and command lines of the sensor's other tasks, not
+their environment or memory): a sensor that runs jobs of many tenants passes
+no secret on a command line. The sandbox never uses a Docker socket; future backends (a Kubernetes
 Pod per task, a rootless container) plug in behind the same interface.
 
 #### Organization proxy pools (`SENSOR_SCAN_EGRESS`)
@@ -1038,6 +1044,17 @@ SDK enforces it:
   contract's `webpath.Denied`, the one the platform uses. `Validate` adds the
   decoded form of each escaped deny path to the list a tool reads. Without
   `methods`, only GET, HEAD and OPTIONS are allowed.
+  The path reading is contract `webpath`, the same functions the platform
+  plans path discovery with, so an exclusion is never read two ways.
+- A scope may carry a request cap (`max_requests_per_host`, 0 to 1,000,000;
+  0 is no cap): the most requests the task sends to one host name, whatever
+  the port, scheme or connection. Path discovery jobs carry one, with
+  `methods: ["GET", "HEAD"]`. `tool.Context.HTTP` fails a request past it
+  before it is sent; on a confined sandbox the forwarder counts every
+  request it lets through (redirects followed by the tool included) and
+  refuses the ones past the cap with the same 403 as a request outside the
+  scope. The count lives in the task's forwarder: a new connection, another
+  port or a redirect never resets it.
 - A networked tool that does not declare `features.web_scope` is refused a
   job with a web scope, because it would run unrestricted. An invalid scope
   is refused too, never ignored. A scanner that cannot take capability jobs
@@ -1068,6 +1085,36 @@ SDK enforces it:
   `vuln.templates` suite of a tool that declares `features.web_scope` runs it
   again with `/.env` denied: it fails a tool that requests it (directly or
   behind a redirect) and one that no longer finds the exposed `/.git/config`.
+- The forwarder classifies every answer on a guarded connection with
+  contract `edgeprotect`: from its headers and from the start of its body
+  that arrived with them (never waiting for more, never a compressed body).
+  A vendor's challenge or block page makes the host a blocked coverage gap
+  from the first answer; a vendor's rate-limit page is push-back whatever
+  its status.
+- The conformance kit's `enumerate.web_paths` suite gives the tool a
+  candidate list in its `web-paths` slot, a GET/HEAD web scope with a request
+  cap and a denied directory, on a site whose missing paths answer 200 with
+  dynamic content. It fails a tool that sends another method, requests the
+  denied directory, goes past the cap, reports a soft-404 answer or reports
+  a path that was not in its list.
+- Path discovery decides with `pkg/webdiff`, never with a status alone. A
+  candidate is compared with baselines of three random names of its class
+  (directory and shape), within noise bands; a difference is repeated, and a
+  directory or a 403 must have a random child that answers like a missing
+  path (a firewall rule that blocks a word anywhere gives nothing). Redirects
+  are never followed. A body is read up to 256 KiB, a gzip body is decoded by
+  the differ with the expansion bounded at 100:1, headers are bounded at
+  64 KiB (the task client of a capped web scope refuses larger ones), an
+  exchange has a 10 s deadline and the body a minimum rate; an answer that
+  breaks a bound stops the origin. An edge challenge or block is never a
+  signal and stops the origin; 429 and 503 back off and are retried at most
+  twice, never a hit. Baselines live for one task. Nothing of a body leaves
+  the differ but its size and a 64-bit hash of its normalised text.
+- Wordlists for web requests (`web-paths`, `web-files`, `api-routes`,
+  `params`) never carry an entry that names a state-changing action
+  (contract `webpath.Destructive`: `logout`, `delete`, `reset`, ...):
+  `wordlist.Normalize` drops it when a list is built and when a task's list
+  is composed.
 
 #### Job identification on every request
 

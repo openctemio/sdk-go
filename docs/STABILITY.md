@@ -39,7 +39,7 @@ without a tier fails the job.
 | `pkg/tool/toolcompat` | Transitional bridges: a `core.Scanner` or `core.Collector` run as a tool of the contract (`FromScanner`, `FromCollector`), out of process; a contract tool served to the command executor (`AsScanner`) | Beta; removed once every in-tree scanner is ported |
 | `pkg/blobsig` | Offline check of a cosign keyless signature bundle for a downloaded file: Fulcio chain, Rekor inclusion proof and an exact signer identity, against the embedded Sigstore public good trust root | Beta |
 | `pkg/feedrelay` | The feed relay (api RFC-142): a shared sensor downloads the signed feed files the platform asks for from allowed origins and streams them back (`feed.relay@1`) | Beta |
-| `pkg/webscope` | The web scope of a job: hosts, path prefixes, deny paths and methods a web tool may request; `Allows` checks a request as the server sees its path | Beta |
+| `pkg/webscope` | The web scope of a job: hosts, path prefixes, deny paths, methods and the per-host request cap of a web tool; `Allows` checks a request as the server sees its path (contract `webpath`) | Beta |
 | `pkg/testkit` | Run a tool in-process with the runtime's rules; golden CTIS | Stable |
 | `pkg/importtool` | The file importer as a parser-class tool: Nessus, Qualys with KnowledgeBase, DefectDojo Generic JSON, CycloneDX, SPDX, osv-scanner, CSAF and OpenVEX files, and a reconFTW results directory, to CTIS (the `ctis/importer` package), sandboxed with no network | Beta |
 | `pkg/sensorkit/toolhost` | The runtime side of the tool contract: runs one task out of process and checks, assembles and stamps its output | Beta |
@@ -68,6 +68,7 @@ without a tier fails the job.
 | `pkg/ctis` | CTIS 2.0 types: re-exports `github.com/openctemio/ctis/v2` (generated aliases; the `ctis-parity` CI job fails when they are stale) | Stable, follows CTIS |
 | `pkg/httpsec` | SSRF-safe HTTP clients and URL validation | Stable |
 | `pkg/reach` | Per-target reach outcomes (`Classify`, `ClassifyDNS`, `Recorder`, the job result's reach summary), the polite reach probe (`Probe`) and the network-path self-check (`Control`) | Beta |
+| `pkg/webdiff` | The calibrated differ of path discovery: per (directory, shape) baselines of random names, noise bands, confirmation (repeat, random child), hit classification, bounded fetches (`Prober`, `Hit`, `Endpoint`, the gap reasons) | Experimental |
 | `pkg/tlsprobe` | What a host shows in a TLS handshake whether or not it answers HTTP (`Probe`: the leaf as `core.TLSLeaf`, `CertProblem`, and whether one HTTP request was answered, reset or refused), and the dialer through a task's egress proxy (`Dialer`) | Beta |
 | `pkg/conformance` | Fake platform, the sensor conformance suite and the tool (adapter protocol) suite | Stable |
 | `pkg/useragent`, `pkg/sdk` | Build identity on the wire | Stable |

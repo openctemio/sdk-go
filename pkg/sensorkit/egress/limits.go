@@ -154,7 +154,10 @@ func (g *guard) check(req *http.Request) error {
 			return err
 		}
 	}
-	return g.checkWeb(req, name)
+	if err := g.checkWeb(req, name); err != nil {
+		return err
+	}
+	return g.f.spendWebRequest(name)
 }
 
 // checkLimits is the limit check of a request that names name on a
@@ -328,7 +331,7 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 			f.observeErr(host, err)
 			return
 		}
-		f.observeResponse(host, resp)
+		f.observeResponse(host, resp, bufferedBody(ubr, resp))
 		if resp.StatusCode == http.StatusSwitchingProtocols {
 			_ = resp.Body.Close()
 			return

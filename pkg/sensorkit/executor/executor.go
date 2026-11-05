@@ -19,7 +19,10 @@
 //     policy);
 //   - a seccomp filter refusing the syscalls a scanner has no business
 //     making (ptrace, mount, namespaces, kernel modules, keyrings, bpf, …);
-//   - its own process group, killed whole on timeout or cancel.
+//   - its own process group, killed whole on timeout or cancel; a confined
+//     task (Config.ConfineNetwork) also gets its own PID namespace, so it
+//     cannot signal the sensor or another task and nothing it starts
+//     outlives it.
 //
 // The sensor also makes itself non-dumpable, so a task running under the
 // same user cannot read the sensor's memory, environment or open files
