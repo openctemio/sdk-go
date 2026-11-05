@@ -793,6 +793,7 @@ A tool that dials raw sockets without honouring the proxy variables gets "networ
 - Where `/etc/resolv.conf` cannot be bind-mounted (a profile that denies `mount`), the relay answers on each address the file names instead.
 - Target names are looked up exactly as written, never with a search domain appended. The task's `/etc/resolv.conf` names only the relay and has no `search` or `domain` line, and the SDK's own lookups use absolute names (a trailing dot). Where the host's file cannot be replaced, a tool's resolver may still append the host's search domain (`app.example.com.lan`). The forwarder answers such a name NXDOMAIN, never resolves it, and does not record it as a refusal. The doctor notes search domains on the host (`network.dns_search`, information only).
 - No forwarded connection outlives its task. The forwarder stopping (the task ended, was canceled or timed out) closes every connection it serves, on both sides, at once; an upstream connection whose host sends nothing for `egress.Limits.UpstreamIdle` (default 2 minutes) is closed even while the task runs, and a tunnel whose host side broke closes its client side too. The tool host waits at most 10 seconds for the forwarder to stop and then finishes the task anyway, with a warning line in its command log. A host that accepts a connection and never answers therefore cannot hold a finished task, or its command, open.
+- What the forwarder reads from a host is bounded. A response head (and every informational response before it) is at most 64 KiB and must arrive within one `UpstreamIdle` window, as must the TLS handshake of a terminated connection. A host that sends an endless or a dripping header has its connection closed, so it cannot exhaust the sensor's memory or hold a connection beyond that window. Bodies are streamed, never buffered.
 
 Modes (`SENSOR_SANDBOX` for sensorkit): `auto` (default) enforces what the
 host supports and logs what it cannot; `required` refuses to start unless
@@ -1009,10 +1010,17 @@ SDK enforces it:
   the server sees it: percent-decoded, with dot segments resolved and
   backslashes as slashes. A path with an encoded slash, backslash or NUL is
   refused. Deny paths match by prefix, ignoring case, so over-blocking is the
-  failure mode. Without `methods`, only GET, HEAD and OPTIONS are allowed.
-  The path reading is contract `webpath` (`CleanPath`, `Denied`, `Under`),
-  the same functions the platform plans path discovery with, so an
-  exclusion is never read two ways.
+  failure mode. A deny path holds as written and percent-decoded
+  (`/files/My%20Docs` denies `/files/My Docs/a.bak`), and a `*` segment
+  matches any one segment (`/tenants/*/admin`). Paths are compared the way a
+  lenient server reads them: case folded to ASCII (U+017F is `s`), trailing
+  dots and spaces of a segment dropped (`/admin./x`), and once more after a
+  second percent-decoding (`/%252e%252e/admin`). The matching is the
+  contract's `webpath.Denied`, the one the platform uses. `Validate` adds the
+  decoded form of each escaped deny path to the list a tool reads. Without
+  `methods`, only GET, HEAD and OPTIONS are allowed.
+  The path reading is contract `webpath`, the same functions the platform
+  plans path discovery with, so an exclusion is never read two ways.
 - A scope may carry a request cap (`max_requests_per_host`, 0 to 1,000,000;
   0 is no cap): the most requests the task sends to one host name, whatever
   the port, scheme or connection. Path discovery jobs carry one, with
