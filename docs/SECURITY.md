@@ -1010,7 +1010,15 @@ SDK enforces it:
   the server sees it: percent-decoded, with dot segments resolved and
   backslashes as slashes. A path with an encoded slash, backslash or NUL is
   refused. Deny paths match by prefix, ignoring case, so over-blocking is the
-  failure mode. Without `methods`, only GET, HEAD and OPTIONS are allowed.
+  failure mode. A deny path holds as written and percent-decoded
+  (`/files/My%20Docs` denies `/files/My Docs/a.bak`), and a `*` segment
+  matches any one segment (`/tenants/*/admin`). Paths are compared the way a
+  lenient server reads them: case folded to ASCII (U+017F is `s`), trailing
+  dots and spaces of a segment dropped (`/admin./x`), and once more after a
+  second percent-decoding (`/%252e%252e/admin`). The matching is the
+  contract's `webpath.Denied`, the one the platform uses. `Validate` adds the
+  decoded form of each escaped deny path to the list a tool reads. Without
+  `methods`, only GET, HEAD and OPTIONS are allowed.
 - A networked tool that does not declare `features.web_scope` is refused a
   job with a web scope, because it would run unrestricted. An invalid scope
   is refused too, never ignored. A scanner that cannot take capability jobs
