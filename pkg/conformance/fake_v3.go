@@ -466,6 +466,7 @@ func (v *fakeV3) PutResult(ctx context.Context, r *connect.Request[sensorv3.PutR
 		h.Set("Content-Encoding", m.GetContentEncoding())
 	}
 	h.Set(protov2.HeaderContentDigest, m.GetContentDigest())
+	fakeV3ResultEpoch(h, m.LeaseEpoch)
 	rec, err := v.v2(ctx, http.MethodPut, p, h, m.GetContent())
 	if err != nil {
 		return nil, err
@@ -474,8 +475,20 @@ func (v *fakeV3) PutResult(ctx context.Context, r *connect.Request[sensorv3.PutR
 		StatusJson: rec.Body.Bytes(), RetryAfterSeconds: retryAfter(rec)}), nil
 }
 
+// fakeV3ResultEpoch carries a result call's lease epoch to the v2 handler
+// as the platform does: the header and the results_lease_epoch feature.
+func fakeV3ResultEpoch(h http.Header, epoch *int64) {
+	if epoch == nil {
+		return
+	}
+	h.Set(protov2.HeaderLeaseEpoch, strconv.FormatInt(*epoch, 10))
+	h.Set(protov2.HeaderSensorFeatures, protov2.FeatureResultsLeaseEpoch)
+}
+
 func (v *fakeV3) CommitResult(ctx context.Context, r *connect.Request[sensorv3.CommitResultRequest]) (*connect.Response[sensorv3.CommitResultResponse], error) {
-	rec, err := v.v2(ctx, http.MethodPost, resultsPath(r.Msg.GetReportId(), r.Msg.GetCommandId())+"/commit", jsonHdr(), r.Msg.GetBodyJson())
+	h := jsonHdr()
+	fakeV3ResultEpoch(h, r.Msg.LeaseEpoch)
+	rec, err := v.v2(ctx, http.MethodPost, resultsPath(r.Msg.GetReportId(), r.Msg.GetCommandId())+"/commit", h, r.Msg.GetBodyJson())
 	if err != nil {
 		return nil, err
 	}
