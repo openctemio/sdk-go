@@ -83,14 +83,13 @@ func exitStatus(err error) int {
 // cannot signal the sensor or another task, though they run as the same
 // user, and the inner launcher is its init, so when the launcher ends the
 // kernel kills every process of the task, one that left its process group
-// (setsid) included. The inner launcher also dies with this one.
+// (setsid) included.
 func confineAttrs(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	a := cmd.SysProcAttr
 	a.Cloneflags |= syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS | syscall.CLONE_NEWPID
-	a.Pdeathsig = syscall.SIGKILL
 	a.UidMappings = []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}}
 	a.GidMappings = []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}}
 	a.GidMappingsEnableSetgroups = false
