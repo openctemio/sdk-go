@@ -95,8 +95,15 @@ func (k *Kit) setupSandbox() error {
 	for _, m := range st.Missing {
 		_, _ = fmt.Fprintf(k.errw, "Warning: tool sandbox: %s\n", m)
 	}
+	switch st.Unconfined() {
+	case executor.UnconfinedRefused:
+		_, _ = fmt.Fprintf(k.errw, "Warning: the tool sandbox is not available on this host: tools that contact their targets (tier T1 and above) are refused; passive lookups still run. Run on Linux with the sandbox, or set %s=off to acknowledge running every tool unconfined\n", EnvSandbox)
+	case executor.UnconfinedAcknowledged:
+		_, _ = fmt.Fprintf(k.errw, "Warning: tools run unconfined (%s=off), the ones that contact their targets included\n", EnvSandbox)
+	}
 	k.setupEnvelopes()
 	k.sandboxNetworkCheck(mode, netMode, st)
+	k.sandboxUnconfinedCheck(st)
 	switch {
 	case st.NetworkEnforced:
 		_, _ = fmt.Fprintf(k.out, "  Tool network: confined (each task reaches only its targets, through its forwarder)\n")
@@ -165,6 +172,31 @@ func (k *Kit) protectedPaths() []string {
 // when they are not, the detected cause, so the platform's setup checklist
 // shows the exact fix: the seccomp profile when the runtime refuses user
 // namespaces, the default AppArmor profile when the host restricts them.
+func (k *Kit) sandboxUnconfinedCheck(st executor.Status) {
+	k.ReportCheck(unconfinedCheck(st))
+}
+
+// unconfinedCheck is the config report check of how tools run without the
+// sandbox: pass when they run sandboxed; a failure when the tools that
+// contact their targets are refused (the sandbox is not available and the
+// operator did not acknowledge running them unconfined); a warning when the
+// operator acknowledged it (SENSOR_SANDBOX=off).
+func unconfinedCheck(st executor.Status) core.ConfigCheck {
+	c := core.ConfigCheck{ID: CheckSandboxUnconfined, Keys: []string{EnvSandbox}}
+	switch st.Unconfined() {
+	case "":
+		c.Status, c.Code, c.Keys = core.CheckPass, "sandboxed", nil
+	case executor.UnconfinedRefused:
+		c.Status, c.Code = core.CheckFail, "active_refused"
+		c.Summary = "the tool sandbox is not available on this host: tools that contact their targets are refused, passive lookups still run"
+		c.Excerpt = truncateBytes(strings.Join(st.Missing, "; "), maxUnavailableExcerptSize)
+	default:
+		c.Status, c.Code = core.CheckWarn, "acknowledged"
+		c.Summary = "tools run unconfined (" + EnvSandbox + "=off), the ones that contact their targets included"
+	}
+	return c
+}
+
 func (k *Kit) sandboxNetworkCheck(mode, netMode executor.Mode, st executor.Status) {
 	c := core.ConfigCheck{ID: CheckSandboxNetwork, Status: core.CheckWarn, Keys: []string{EnvSandboxNetwork}}
 	missing := strings.ToLower(st.NetworkMissing)

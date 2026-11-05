@@ -796,7 +796,16 @@ A tool that dials raw sockets without honouring the proxy variables gets "networ
 
 Modes (`SENSOR_SANDBOX` for sensorkit): `auto` (default) enforces what the
 host supports and logs what it cannot; `required` refuses to start unless
-every control is enforced; `off` runs tools as plain child processes. Each
+every control is enforced; `off` runs tools as plain child processes.
+Where `auto` finds no sandbox at all (it is Linux only, so every macOS or
+Windows sensor; or a Linux host where the launcher does not work), tools of
+tier T1 and above, the ones that contact their targets, are refused before
+they run (`core.RefusalUnconfinedSandbox`, `executor.Status.RefusesActiveTools`);
+passive T0 lookups still run. `SENSOR_SANDBOX=off` is the operator's explicit
+acknowledgement that every tool runs unconfined. The state is in the
+manifest posture (`sandbox.unconfined`: `refused` or `acknowledged`) and in
+the config report (`runtime.sandbox_unconfined`: `sandboxed`, `active_refused`
+(a failure), `acknowledged` (a warning)). Each
 `ExecResult.Sandbox` records what the run was under. Residual risks: without a
 separate user per task, a task can still send signals to processes of the same
 user (Landlock signal scoping needs Linux 6.12), and a task that escapes its

@@ -40,3 +40,30 @@ func TestSandboxNetworkCheck(t *testing.T) {
 		})
 	}
 }
+
+// The setup checklist says whether tools run unconfined and whether the
+// ones that contact their targets are refused for it.
+func TestSandboxUnconfinedCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		st     executor.Status
+		code   string
+		status string
+	}{
+		{"sandboxed", executor.Status{Mode: executor.ModeAuto, Sandboxed: true}, "sandboxed", core.CheckPass},
+		{"not available", executor.Status{Mode: executor.ModeAuto, Missing: []string{"sandbox: available on Linux only"}}, "active_refused", core.CheckFail},
+		{"turned off", executor.Status{Mode: executor.ModeOff}, "acknowledged", core.CheckWarn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k := &Kit{doc: newDoctor(settingsreg.New(), nil)}
+			k.sandboxUnconfinedCheck(tc.st)
+			c, ok := findCheck(*k.ConfigReport(), CheckSandboxUnconfined)
+			if !ok || c.Code != tc.code || c.Status != tc.status {
+				t.Fatalf("check %+v (found %v), want %s/%s", c, ok, tc.code, tc.status)
+			}
+			if tc.code == "active_refused" && c.Excerpt != "sandbox: available on Linux only" {
+				t.Fatalf("excerpt %q", c.Excerpt)
+			}
+		})
+	}
+}

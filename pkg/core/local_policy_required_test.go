@@ -322,7 +322,8 @@ func TestPlatformTLSPin(t *testing.T) {
 	}
 	p := CurrentPosture()
 	st := executor.Current().Status()
-	if p.PlatformTLS.Pin != TLSPinFingerprint || p.Sandbox.Mode != string(st.Mode) || p.Sandbox.NetworkEnforced != st.NetworkEnforced {
+	if p.PlatformTLS.Pin != TLSPinFingerprint || p.Sandbox.Mode != string(st.Mode) || p.Sandbox.NetworkEnforced != st.NetworkEnforced ||
+		p.Sandbox.Unconfined != st.Unconfined() {
 		t.Fatalf("posture %+v %+v, sandbox %+v", p.PlatformTLS, p.Sandbox, st)
 	}
 }

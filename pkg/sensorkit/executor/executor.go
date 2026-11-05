@@ -283,6 +283,39 @@ type Status struct {
 	EnvelopeMissing string `json:"envelope_missing,omitempty"`
 }
 
+// Unconfined states (Status.Unconfined): how a backend that runs tools
+// without the sandbox treats the tools that contact their targets.
+const (
+	// UnconfinedRefused: the sandbox was asked for (SENSOR_SANDBOX=auto) and
+	// is not available on this host (it is Linux only), so tools of tier T1
+	// and above are refused; passive (T0) tools still run.
+	UnconfinedRefused = "refused"
+	// UnconfinedAcknowledged: the operator turned the sandbox off
+	// (SENSOR_SANDBOX=off), which is the acknowledgement that tools run
+	// unconfined, every tier included.
+	UnconfinedAcknowledged = "acknowledged"
+)
+
+// Unconfined is how tools run without the sandbox: "" when they run
+// sandboxed (or the backend does not say which sandbox mode it was asked
+// for), else UnconfinedRefused or UnconfinedAcknowledged.
+func (s Status) Unconfined() string {
+	switch {
+	case s.Sandboxed:
+		return ""
+	case s.Mode == ModeOff:
+		return UnconfinedAcknowledged
+	case s.Mode == ModeAuto || s.Mode == ModeRequired:
+		return UnconfinedRefused
+	}
+	return ""
+}
+
+// RefusesActiveTools reports whether tools of tier T1 and above (tools that
+// contact their targets) are refused: the sandbox is not available and the
+// operator did not turn it off (Unconfined).
+func (s Status) RefusesActiveTools() bool { return s.Unconfined() == UnconfinedRefused }
+
 // Complete reports whether every control is enforced.
 func (s Status) Complete() bool {
 	return s.Sandboxed && s.Landlock > 0 && s.Seccomp && s.NoNewPrivs && s.Rlimits && len(s.Missing) == 0

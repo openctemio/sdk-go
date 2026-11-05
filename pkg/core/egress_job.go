@@ -36,6 +36,12 @@ const (
 	RefusalEgressUnavailable = "egress_unavailable"
 )
 
+// RefusalUnconfinedSandbox: the tool contacts its targets (tier T1 and
+// above) and this sensor's tool sandbox is not available (it is Linux
+// only), so the tool would run unconfined; the operator acknowledges that
+// with SENSOR_SANDBOX=off (executor.Status.RefusesActiveTools).
+const RefusalUnconfinedSandbox = "unconfined_sandbox"
+
 // CapabilityEgressUpstream is the sensor-wide capability of a sensor whose
 // tool tasks run confined to the per-task forwarder and that accepts
 // platform proxy pools (SENSOR_SCAN_EGRESS is not direct-only). The
