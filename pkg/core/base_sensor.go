@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -362,6 +363,9 @@ func (a *BaseSensor) ManifestPolicy() *ManifestPolicy {
 // any command before the platform said a policy, pass.
 func (a *BaseSensor) CommandToolGate() func(*Command) error {
 	return func(cmd *Command) error {
+		if err := a.admitRuntime(cmd); err != nil {
+			return err
+		}
 		tool := commandTool(cmd)
 		if tool == "" {
 			return nil
@@ -380,6 +384,46 @@ func (a *BaseSensor) CommandToolGate() func(*Command) error {
 		}
 		return fmt.Errorf("%w: %s is not allowed on this sensor by the platform's policy", ErrToolNotAllowed, tool)
 	}
+}
+
+// Refusal rules of the runtime checks of CommandToolGate.
+const (
+	// RefusalRuleStrongIsolationMissing: the tool needs strong isolation
+	// and this sensor has no proven strong backend.
+	RefusalRuleStrongIsolationMissing = "strong_isolation_missing"
+	// RefusalRuleFeatureMissing: the job requires a feature the sensor does
+	// not advertise.
+	RefusalRuleFeatureMissing = "required_feature_missing"
+)
+
+// maxRequiredFeatures bounds the features one job may require.
+const maxRequiredFeatures = 32
+
+// admitRuntime refuses a command the sensor cannot run as required: a tool
+// whose isolation level is "strong" unless the sensor advertises a proven
+// strong backend (isolation.strong@1, which only a passed start-up probe
+// sets), and a job whose required_features name a capability the sensor does
+// not advertise. It needs no platform policy, and nothing in the payload
+// can satisfy it.
+func (a *BaseSensor) admitRuntime(cmd *Command) error {
+	if tool := commandTool(cmd); tool != "" && a.tools.ToolIsolation(tool) == "strong" && !a.tools.StrongIsolation() {
+		return &LocalPolicyError{Rule: RefusalRuleStrongIsolationMissing,
+			Detail: tool + " needs strong isolation and this sensor has no proven strong isolation backend"}
+	}
+	feats := parseCommandMeta(cmd).RequiredFeatures
+	if len(feats) == 0 {
+		return nil
+	}
+	if len(feats) > maxRequiredFeatures {
+		return &LocalPolicyError{Rule: RefusalRuleFeatureMissing, Detail: "the job requires too many features"}
+	}
+	have := a.tools.CapabilityReport(context.Background()).Capabilities
+	for _, f := range feats {
+		if !slices.Contains(have, f) {
+			return &LocalPolicyError{Rule: RefusalRuleFeatureMissing, Detail: "the job requires " + strconv.Quote(f) + ", which this sensor does not advertise"}
+		}
+	}
+	return nil
 }
 
 // policyRefreshTimeout bounds the policy read a refused command waits for.

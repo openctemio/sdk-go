@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync/atomic"
 	"testing"
 
 	"github.com/openctemio/sdk-go/pkg/conformance"
@@ -80,5 +81,30 @@ func TestIsolationCheck(t *testing.T) {
 				t.Fatalf("check %+v, want %s/%s", c, tc.code, tc.status)
 			}
 		})
+	}
+}
+
+// The capability follows the latest probe: a later failed probe withdraws
+// what an earlier one proved.
+func TestProbeIsolationWithdrawsStrongAfterFailedProbe(t *testing.T) {
+	k := isolationKit(t)
+	var fail atomic.Bool
+	cand := executor.Candidate{Name: "gvisor", Class: executor.ClassStrong, Probe: func(context.Context) error {
+		if fail.Load() {
+			return errors.New("runsc died")
+		}
+		return nil
+	}}
+	k.ProbeIsolation(context.Background(), cand)
+	if !advertisesStrong(k) {
+		t.Fatal("a proven strong backend is not advertised")
+	}
+	fail.Store(true)
+	k.ProbeIsolation(context.Background(), cand)
+	if advertisesStrong(k) {
+		t.Fatal("a failed probe left the capability advertised")
+	}
+	if executor.CapabilityIsolationStrong != core.CapabilityIsolationStrong {
+		t.Fatal("the executor and core constants differ")
 	}
 }

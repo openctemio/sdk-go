@@ -32,8 +32,12 @@ func (k *Kit) ProbeIsolation(ctx context.Context, extra ...executor.Candidate) e
 			_, _ = fmt.Fprintf(k.errw, "Warning: isolation backend %s (%s) is not available: %s\n", b.Name, b.Class, b.Reason)
 		}
 	}
+	// Rebuilt from this probe's result: a later failed probe withdraws a
+	// capability an earlier one proved.
 	if p.StrongProven() {
 		k.Tools().AddCapabilities(executor.CapabilityIsolationStrong)
+	} else {
+		k.Tools().RemoveCapabilities(executor.CapabilityIsolationStrong)
 	}
 	k.ReportCheck(isolationCheck(p))
 	return p

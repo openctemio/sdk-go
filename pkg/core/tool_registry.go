@@ -391,6 +391,44 @@ func (r *ToolRegistry) AddCapabilities(caps ...string) {
 	r.mu.Unlock()
 }
 
+// RemoveCapabilities withdraws capabilities AddCapabilities added.
+func (r *ToolRegistry) RemoveCapabilities(caps ...string) {
+	r.mu.Lock()
+	r.sensorCap = slices.DeleteFunc(r.sensorCap, func(c string) bool { return slices.Contains(caps, c) })
+	r.mu.Unlock()
+}
+
+// CapabilityIsolationStrong is the capability a sensor advertises when a
+// strong isolation backend passed its start-up probe (sensorkit
+// Kit.ProbeIsolation). Only the sensor-wide set can carry it: a tool that
+// lists it among its own capabilities does not advertise it.
+const CapabilityIsolationStrong = "isolation.strong@1"
+
+// ToolIsolation is the isolation the named tool's contract asks for ("" for
+// a tool with no contract or no isolation level: the process sandbox).
+func (r *ToolRegistry) ToolIsolation(name string) string {
+	n, ok := normalizeToolName(name)
+	if !ok {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, t := range r.tools {
+		if t.spec.Name == n && t.spec.Contract != nil {
+			return t.spec.Contract.Isolation
+		}
+	}
+	return ""
+}
+
+// StrongIsolation reports whether the sensor advertises
+// CapabilityIsolationStrong.
+func (r *ToolRegistry) StrongIsolation() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Contains(r.sensorCap, CapabilityIsolationStrong)
+}
+
 // SetMaxConcurrentJobs sets the operator ceiling the report carries (the
 // most jobs the sensor may run at once, SENSOR_MAX_JOBS); 0 or less reports
 // none. What the sensor can run now is its dynamic slot count, reported
@@ -562,7 +600,11 @@ func (r *ToolRegistry) CapabilityReport(ctx context.Context) CapabilityReport {
 		rep.Tools = append(rep.Tools, info)
 		if t.installed {
 			caps = appendUnique(caps, t.spec.Name)
-			caps = appendUnique(caps, t.spec.Capabilities...)
+			for _, c := range t.spec.Capabilities {
+				if c != CapabilityIsolationStrong {
+					caps = appendUnique(caps, c)
+				}
+			}
 		}
 	}
 	caps = appendUnique(caps, r.sensorCap...)

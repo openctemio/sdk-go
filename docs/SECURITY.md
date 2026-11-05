@@ -1023,13 +1023,20 @@ isolation it needs from the backend that runs it. The process sandbox above is
 the only backend that ships today. At start-up the sensor runs a confined task
 on each backend it has (`Kit.ProbeIsolation`, `executor.ProbeBackends`) and
 reports what really worked, as the config check `runtime.isolation`. It
-advertises `isolation.strong@1` only when a strong backend passed its probe, so
-no setting, environment variable or declaration can add it, and the platform
-counts only what the sensor itself reported. A job whose tool needs `strong`
-goes only to a sensor with the capability and waits (placement
-`strong_isolation_missing`) otherwise; it is never run on the process sandbox.
-No bundled tool needs `strong` yet, and no strong backend ships yet, so no
-sensor advertises the capability today.
+advertises `isolation.strong@1` only when a strong backend passed its latest
+probe (a later failed probe withdraws it), so no setting, environment variable
+or declaration can add it: a tool that lists the capability itself does not
+advertise it, and the platform counts only what the sensor itself reported.
+
+The sensor enforces it, not only the platform's placement. Before any tool
+runs, the command gate (`BaseSensor.CommandToolGate`) refuses a job whose tool
+needs `strong` unless the sensor advertises `isolation.strong@1`, with the
+refusal rule `strong_isolation_missing`; the job is reported failed and never
+executed, and it is never run on the process sandbox. The same gate refuses a
+job whose `required_features` name a capability the sensor does not advertise
+(rule `required_feature_missing`). Nothing in the payload can satisfy either
+check. No bundled tool needs `strong` yet, and no strong backend ships yet, so
+today every job of a `strong` tool is refused by a sensor.
 
 ### 7. Web scope of a job (`pkg/webscope`)
 
