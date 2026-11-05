@@ -333,6 +333,8 @@ type CommandExecutionResult struct {
 
 // CommandPoller polls the server for pending commands.
 type CommandPoller struct {
+	// secrets fetches the values of a job's secret refs (SetSecretsFetcher).
+	secrets atomic.Pointer[SecretsFetcher]
 	// egressReporter sends a pooled job's egress report (SetEgressReporter).
 	egressReporter atomic.Pointer[EgressReporter]
 	// ledger: a shared sensor's held jobs (CommandPollerConfig.Ledger).
@@ -1369,6 +1371,14 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	if jobErr == nil && p.ledger != nil && cmd.jobTenant == "" {
 		jobErr = jobRefusal("a shared sensor runs only jobs whose verified signature names the organization they belong to")
 	}
+	// The job's secret refs, from its verified signed job only: a list
+	// this sensor cannot honor refuses the job before it starts.
+	if jobErr == nil {
+		var js *JobSecrets
+		if js, jobErr = JobSecretsFor(cmd, p.sharedSensor(), p.secretsFetcher()); jobErr == nil {
+			ctx = WithJobSecrets(ctx, js)
+		}
+	}
 	if jobErr != nil {
 		p.clog(ctx, cmd.ID, "error", "Refused before running: "+jobErr.Error(), refusalFields(jobErr))
 		p.finishLog(ctx, cmd.ID)
@@ -1701,9 +1711,6 @@ type DefaultCommandExecutor struct {
 	// sourceCreds fetches the credential of a code-scan job's source
 	// (SetSourceCredentials); nil refuses jobs whose source names one.
 	sourceCreds atomic.Pointer[sourceCredentialsBox]
-	// toolCreds fetches the organization's credentials of a job's tool
-	// (SetToolCredentials); nil: tools get the operator's only.
-	toolCreds atomic.Pointer[toolCredentialsBox]
 }
 
 // SetLocalPolicy makes the executor enforce the sensor-local policy (api
@@ -2049,9 +2056,6 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		opts.Egress = pool
 		ctx = WithEgressDialer(ctx, pool)
 	}
-	// Tools that declare credentials ask the platform, per task, for the
-	// keys the command's organization stored for them.
-	ctx = e.withJobToolCredentials(ctx, cmd.ID)
 
 	local := e.local.Load()
 	if err := applyJobConfig(opts, payload.Config, local); err != nil {

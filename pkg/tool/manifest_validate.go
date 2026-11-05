@@ -268,8 +268,10 @@ func (m Manifest) validatePermissions(add func(p, format string, args ...any), s
 			add("/permissions/network", "%s is for target-scan tools only", p.Network)
 		}
 	case NetVendor:
-		if m.Class == TargetScan || m.Class == Parser {
-			add("/permissions/network", "vendor is for connectors and enrichers")
+		// A target-scan tool of network vendor is passive: it asks its
+		// vendor hosts about its targets and never contacts them.
+		if m.Class == Parser {
+			add("/permissions/network", "vendor is for connectors, enrichers and passive target-scan tools")
 		}
 		if len(p.VendorHosts) == 0 {
 			add("/permissions/vendor_hosts", "a vendor-network tool must name its hosts")

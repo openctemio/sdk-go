@@ -108,3 +108,24 @@ func operatorAllowed(name string, allow []string) bool {
 	}
 	return false
 }
+
+// VendorEnvName reports whether name is in a tool's vendor namespace
+// (TRIVY_*, PDCP_*, the container runtime variables, ...).
+func VendorEnvName(name string) bool {
+	_, owned := envOwners(name)
+	return owned
+}
+
+// WithoutVendorEnv is env without any variable of a vendor namespace
+// (a shared sensor's tasks: the operator's tool accounts and keys are
+// never passed to an organization's task).
+func WithoutVendorEnv(env []string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if !VendorEnvName(name) {
+			out = append(out, kv)
+		}
+	}
+	return out
+}

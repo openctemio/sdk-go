@@ -68,6 +68,13 @@ func (c *Client) v2JSON(ctx context.Context, method, path string, in, out any, e
 		}
 		body = raw
 	}
+	return c.v2JSONBody(ctx, method, path, body, out, extra, retries)
+}
+
+// v2JSONBody is v2JSON with the request body already encoded: every
+// attempt sends exactly these bytes (a caller that binds the answer to the
+// request's bytes, client.Secrets).
+func (c *Client) v2JSONBody(ctx context.Context, method, path string, body []byte, out any, extra http.Header, retries int) (http.Header, error) {
 	var lastErr error
 	for attempt := 0; attempt <= retries; attempt++ {
 		if attempt > 0 {

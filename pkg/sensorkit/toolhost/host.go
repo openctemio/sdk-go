@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,6 +91,9 @@ var (
 
 // Host runs tool tasks.
 type Host struct {
+	// lookupVendor resolves a vendor host in tests (nil: the system
+	// resolver).
+	lookupVendor func(ctx context.Context, host string) ([]netip.Addr, error)
 	// Backend runs the task processes (nil: executor.Current()).
 	Backend executor.Backend
 	// Self is the sensor binary re-executed for compiled-in tools (""
@@ -146,8 +150,9 @@ type RunOptions struct {
 	// Credentials the operator stored for this tool. Only those the
 	// manifest declares are delivered; a declared required one that is
 	// missing fails the task before it starts. In a platform job the
-	// organization's credentials (core.ToolCredentialsFrom) win over them
-	// (core.MergeToolCredentials).
+	// organization's values (the job's signed secret list, fetched per
+	// task) win over them, and they fill a slot only where the list's
+	// local policy allows it; never on a shared sensor (credentials.go).
 	Credentials map[string]string
 	// WritePaths the task may write besides its directory (a built-in
 	// tool's cache).
@@ -374,10 +379,14 @@ func (h *Host) backend() executor.Backend {
 
 // prepared is a task checked and ready to start.
 type prepared struct {
-	m       tool.Manifest
-	task    tool.Task
-	creds   []toolwire.Credential
-	secrets []string
+	m     tool.Manifest
+	task  tool.Task
+	creds []toolwire.Credential
+	// scrub removes the delivered values from every output (nil: none).
+	scrub *scrubber
+	// keyed are the hosts delivered provider keys may be sent to: a vendor
+	// task's forwarder admits them besides its manifest's vendor hosts.
+	keyed   []string
 	workdir string
 	asm     *toolrt.Assembler
 	// refused are the targets the policy refused (never sent to the tool).
@@ -390,9 +399,9 @@ type prepared struct {
 	refusedItems map[string]bool
 	// rateLine says the local policy changed the rate (nil: it did not).
 	rateLine *LogLine
-	// credLine says the organization's credentials could not be fetched
-	// (nil: they were, or the tool takes none).
-	credLine *LogLine
+	// credLines say how the task's credentials were resolved (never a
+	// value): sources, gates, a failed fetch.
+	credLines []LogLine
 	// targetRate is RunOptions.TargetRate.
 	targetRate float64
 	// mapping turns an exec tool's json or jsonl output into CTIS.
@@ -510,20 +519,12 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		}
 		p.task.Retest = kept
 	}
-	creds, credLine := taskCredentials(ctx, m, o.Credentials)
-	p.credLine = credLine
-	for _, req := range m.Permissions.Credentials {
-		v, ok := creds[req.Name]
-		if !ok || v == "" {
-			if req.Required {
-				return nil, tool.AsError(tool.Invalid("credential %q is required and not configured on this sensor", req.Name)), nil
-			}
-			continue
-		}
-		p.creds = append(p.creds, toolwire.Credential{Name: req.Name, Value: v})
-		p.secrets = append(p.secrets, redactionValues(v)...)
+	ts, ierr := h.secretsFor(ctx, m, p.task, o.Credentials)
+	if ierr != nil {
+		return nil, ierr, nil
 	}
-	slices.SortFunc(p.secrets, func(a, b string) int { return len(b) - len(a) })
+	p.creds, p.keyed, p.credLines = ts.creds, ts.keyed, ts.lines
+	p.scrub = newScrubber(ts.values)
 	// Under the task root, which the sandbox hides from every other task.
 	dir, err := executor.NewTaskDir("tool-")
 	if err != nil {
@@ -544,6 +545,33 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	p.contentPaths = withoutPaths(p.contentPaths, consumed)
 	p.asm = toolrt.NewAssembler(m, p.task, toolrt.NewChecker(m))
 	return p, nil, nil
+}
+
+// taskEnv is the environment a task starts with: the tool's own vendor
+// namespace (envOwner) on an organization's sensor; on a shared sensor no
+// vendor namespace at all (the operator's tool accounts are never spent on
+// an organization's task), whatever the operator allowed by name.
+func (h *Host) taskEnv(m tool.Manifest, set map[string]string) []string {
+	env := core.ScannerEnvironFor(envOwner(m), set)
+	if h.Shared {
+		env = core.WithoutVendorEnv(env)
+	}
+	return env
+}
+
+// taskSetEnv is the variables the caller sets for the task, without any
+// vendor namespace on a shared sensor.
+func (h *Host) taskSetEnv(set map[string]string) map[string]string {
+	if !h.Shared || len(set) == 0 {
+		return set
+	}
+	out := make(map[string]string, len(set))
+	for k, v := range set {
+		if !core.VendorEnvName(k) {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // envOwner is the tool whose vendor environment namespace the task gets
@@ -624,17 +652,22 @@ func effectiveConfig(m tool.Manifest, raw json.RawMessage) (json.RawMessage, *to
 	return b, nil
 }
 
-func (p *prepared) redact(s string) string {
-	for _, v := range p.secrets {
-		s = strings.ReplaceAll(s, v, tool.Redacted)
+func (p *prepared) redact(s string) string { return p.scrub.String(s) }
+
+// forget drops the task's credentials once it ended (best effort: the
+// values were strings, which Go does not let us overwrite).
+func (p *prepared) forget() {
+	for i := range p.creds {
+		p.creds[i] = toolwire.Credential{}
 	}
-	return s
+	p.creds = nil
+	p.scrub.wipe()
 }
 
 // redactRequests removes the task's secrets from an out-of-process tool's
 // request lines (URL and error class), as from its verdict detail.
 func (p *prepared) redactRequests(in []tool.RequestResult) []tool.RequestResult {
-	if len(in) == 0 || len(p.secrets) == 0 {
+	if len(in) == 0 || p.scrub == nil {
 		return in
 	}
 	out := make([]tool.RequestResult, len(in))
@@ -721,6 +754,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 		return h.failedOutcome(m, task, ierr), nil
 	}
 	defer func() { _ = os.RemoveAll(p.workdir) }()
+	defer p.forget()
 
 	inR, inW, err := os.Pipe()
 	if err != nil {
@@ -744,7 +778,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	defer eg.stop()
 	cpu := &core.ProcessCPU{}
 	t, err := be.Prepare(executor.TaskSpec{
-		ID: m.Name, Argv: argv, Env: core.ScannerEnvironFor(envOwner(m), o.Env), SetEnv: o.Env, Dir: p.workdir,
+		ID: m.Name, Argv: argv, Env: h.taskEnv(m, o.Env), SetEnv: h.taskSetEnv(o.Env), Dir: p.workdir,
 		WritePaths: append([]string{p.workdir}, o.WritePaths...), ReadPaths: p.contentPaths, Limits: o.Limits,
 		Network: networkClass(m.Permissions.Network), Stdin: inR, Stdout: outW, Stderr: stderr,
 		Hooks: executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: func(cmd *exec.Cmd) {
@@ -1034,6 +1068,9 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 		}
 		return nil, false, "", ""
 	}
+	// Every message the tool sends is scrubbed of the task's secrets before
+	// it is read: records, evidence, report info and logs alike.
+	line = s.p.scrub.JSONLine(line)
 	switch env.Type {
 	case toolwire.TypeRecord:
 		if s.p.task.IsRetest() {
@@ -1111,6 +1148,11 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 		art, err := readArtifact(s.p.workdir, a)
 		if err != nil {
 			return refuse("artifact: " + err.Error())
+		}
+		if s.p.scrub != nil {
+			if data := s.p.scrub.Bytes(art.Data); !bytes.Equal(data, art.Data) {
+				art.Data, art.SHA256 = data, sha256Hex(data)
+			}
 		}
 		s.out.Artifacts = append(s.out.Artifacts, art)
 	case toolwire.TypeVerdict:
@@ -1195,7 +1237,12 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 			}
 		}
 	}
-	out.Stderr = p.redact(toolrt.CleanString(stderr.String()))
+	raw, cut := stderr.Raw()
+	out.Stderr = p.redact(toolrt.CleanString(raw))
+	if cut {
+		// A value straddling the cap leaves a prefix of itself: drop it.
+		out.Stderr = p.scrub.trimPartial(out.Stderr) + "\n[output cut]"
+	}
 	var runErr *tool.Error
 	switch {
 	case stopReason != "":
@@ -1259,9 +1306,7 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 	if p.rateLine != nil {
 		out.Logs = append(out.Logs, *p.rateLine)
 	}
-	if p.credLine != nil {
-		out.Logs = append(out.Logs, *p.credLine)
-	}
+	out.Logs = append(out.Logs, p.credLines...)
 	out.Identity = p.applied
 	s.h.stamp(out, p.m, p.task, execution)
 }
@@ -1449,6 +1494,13 @@ func (c *cappedBuffer) String() string {
 		s += "\n[output cut]"
 	}
 	return s
+}
+
+// Raw is what was kept, without the cut marker, and whether output was cut.
+func (c *cappedBuffer) Raw() (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String(), c.cut
 }
 
 func (c *cappedBuffer) Len() int {

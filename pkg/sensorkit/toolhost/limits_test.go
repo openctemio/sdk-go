@@ -37,12 +37,21 @@ func TestCheckLimits(t *testing.T) {
 		!strings.Contains(e.Detail, "does not confine") {
 		t.Fatalf("unconfined sandbox: %+v", e)
 	}
-	for _, n := range []tool.Network{tool.NetEgressProxy, tool.NetVendor} {
-		mm := m
-		mm.Permissions.Network = n
-		if e := confined.checkLimits(mm, tool.Task{Targets: targets, Limits: limits}); e == nil || e.Class != tool.RefusedByPolicy {
-			t.Fatalf("network %s: %+v", n, e)
-		}
+	egressProxy := m
+	egressProxy.Permissions.Network = tool.NetEgressProxy
+	if e := confined.checkLimits(egressProxy, tool.Task{Targets: targets, Limits: limits}); e == nil || e.Class != tool.RefusedByPolicy {
+		t.Fatalf("network egress-proxy: %+v", e)
+	}
+	// A passive vendor tool never connects to its targets: the limits
+	// hold on a sandbox that confines the network, not on one that does
+	// not.
+	vendor := m
+	vendor.Permissions.Network = tool.NetVendor
+	if e := confined.checkLimits(vendor, tool.Task{Targets: targets, Limits: limits}); e != nil {
+		t.Fatalf("network vendor, confined: %+v", e)
+	}
+	if e := open.checkLimits(vendor, tool.Task{Targets: targets, Limits: limits}); e == nil || e.Class != tool.RefusedByPolicy {
+		t.Fatalf("network vendor, not confined: %+v", e)
 	}
 	if e := confined.checkLimits(m, tool.Task{Targets: targets, Limits: []scopelimit.Limit{{Host: "b.example", Ports: "443"}}}); e == nil {
 		t.Fatal("a limit for another host accepted")

@@ -70,7 +70,9 @@ const (
 	NetResolver Network = "resolver"
 	// NetEgressProxy: through the sensor's egress proxy only.
 	NetEgressProxy Network = "egress-proxy"
-	// NetVendor: the declared vendor hosts only.
+	// NetVendor: the declared vendor hosts only (and, for a task that
+	// received provider keys, those keys' provider hosts). A target-scan
+	// tool of this network is passive: it never contacts its targets.
 	NetVendor Network = "vendor"
 )
 

@@ -71,7 +71,7 @@ var echoTool = tool.New(tool.Manifest{
 
 func TestMain(m *testing.M) {
 	executor.RunLauncherIfRequested()
-	adapter.Dispatch(echoTool, dialTool, retestTool, contractTool, credTool)
+	adapter.Dispatch(echoTool, dialTool, retestTool, contractTool, secretTool)
 	if mode := os.Getenv("TOOLHOST_HOSTILE"); mode != "" {
 		if code, ok := pressureHostile(mode); ok {
 			os.Exit(code)

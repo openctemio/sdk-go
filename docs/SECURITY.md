@@ -13,28 +13,71 @@ runtime passes a tool only the settings the scanner environment allowlist
 names (`pkg/core/scanner_env*.go`) and never writes a secret into a task or a
 log. The SDK keeps no credential store of its own.
 
-Where a tool's credentials come from:
-- **The organization (platform jobs).** For each task of a tool whose
-  manifest declares credentials, the tool host asks the platform once
-  (`POST /api/v2/sensor/commands/{id}/tool-credentials`, v2 HTTPS only, under
-  the command's lease; `core.ToolCredentialsFrom`, `client.ToolCredentials`).
-  The platform reads the organization from the command, never from the
-  sensor, and answers only the leasing sensor for the command's own tool.
-  The values are not cached across tasks, never reach the job's payload,
-  outbox, result or logs, and are on the host's redaction list for the task.
-- **The operator** (`sensorkit.Options.ToolCredentials`). Per name the
-  organization's value wins; the operator's value fills a name the
-  organization left unset only when the platform says so (`local_fallback`:
-  true on the organization's own sensor, false on a shared sensor, whose
-  operator's keys are never spent on an organization's task). Outside a
-  platform job, or with a platform that does not deliver tool credentials,
-  the operator's values are used as before. When the platform cannot
-  answer, the task runs with neither, and its log says so.
+Where a tool's credentials come from (contract `secretref`):
+- **The organization (platform jobs).** When a sensor claims a job, the
+  platform lists in the job's payload (member `secrets`) the secret refs the
+  job may use: ids, kinds, the stored value each names, the tool slot it
+  fills, where its value may be sent (its audience) and the slot's local
+  policy. The list is part of the signed job; the sensor reads it only from
+  a job whose signature it verified (`core.JobSecretsFor`) and refuses a
+  job that requires a kind it does not know (`secret_kind_unsupported`).
+  For each task, the tool host fetches the refs of the slots the tool's
+  manifest declares (`client.Secrets`:
+  `POST /api/v2/sensor/commands/{id}/secrets`, v2 HTTPS only). The request
+  is signed by the sensor's key-bound identity (a bearer-key client never
+  fetches) and carries the lease epoch and a single-use HPKE public key in
+  its signed body; the answer is sealed to that key (ML-KEM-768+X25519,
+  HKDF-SHA256, ChaCha20-Poly1305) under an info that binds the sensor, the
+  command, the epoch and the exact request bytes, so a TLS terminator, a
+  request log or a replayed request never holds a value. The sensor checks
+  the opened answer against the job's list (command, epoch, only refs it
+  asked for, each value valid for its kind), drops the key, and keeps
+  nothing across tasks.
+- **The operator** (`sensorkit.Options.ToolCredentials`). Per slot the
+  organization's value wins; the operator's value fills a slot only when
+  the signed list's local policy allows it (`allow`, or `only`, which never
+  asks the platform). A shared sensor never uses an operator's value for
+  an organization's task, whatever the job says (its own identity forces
+  `never`), and passes no vendor environment namespace (`PDCP_*`,
+  `TRIVY_*`, ...) to such a task. Outside a platform job the operator's
+  values are used as before (an organization's sensor only).
 
-Either way only the names the manifest declares reach the tool, inside the
-task's run message (never the environment, argv or a shared file); an
-adapter that has to hand them to its program as a file writes it into the
-task's own directory with mode 0600.
+No fallback: a fetch that fails, any non-200 answer (a gateway 404
+included) or an answer that does not open or check gives no platform value,
+and the operator's value only where the signed policy allows it. A required
+slot without a value fails the task, naming the slot (`secret_missing`).
+
+Gates on platform values: a tool that may reach any public host (network
+`egress-proxy`) receives none; a provider key goes only to a tool of network
+`vendor` that its provider's registry entry lists; on a shared sensor a task
+receives none without Landlock (an organization's sensor delivers and logs a
+warning). The task's network scope is narrowed: a vendor tool reaches its
+manifest's `vendor_hosts` and the hosts of the provider keys it received
+(`Provider.Audience`), so a keyed host is reachable only when its key was
+delivered; a key its provider's rules refuse is dropped, naming the slot
+only. A target-scan tool may declare network `vendor` (a passive tool: it
+never contacts its targets).
+
+Only the slots the manifest declares reach the tool, inside the task's run
+message on stdin, never its environment or argv (a conformance test checks
+the started process's argv, environment, `/proc/self/environ` and
+`/proc/self/cmdline`). An adapter that has to hand a value to its program as
+a file writes it with `tool.WriteSecretFile` (0600, `O_EXCL`) into the
+task's own directory, which is removed when the task ends (success, failure
+or cancel); a sensor sweeps the task directories a stopped run left behind
+at start, and its configuration report warns when the task root
+(`$TMPDIR/openctem-tasks`) is not in memory (tmpfs). Every message a task
+sends (logs, records, verdicts and their evidence, report info), its
+artifacts, stderr and outcome are scrubbed of each delivered value and its
+common encodings (base64 std/url, padded or not and inside a longer
+encoded string such as a Basic authorization; URL encoding; JSON escaping;
+each colon-separated part of a pair), for forms of at least 8 characters.
+
+The job's proxy pool credentials come the same way: the job's
+`egress_proxy` ref for exactly the pool its egress block names, fetched
+once per job and given only to the sensor's egress forwarder, never to a
+tool. A pool that needs credentials and gets none refuses the job (never
+direct). The egress report carries the lease epoch in its body.
 
 ### 2. Transport
 
@@ -666,6 +709,11 @@ vendor namespace: its credentials are the ones its manifest declares,
 delivered in the run message. Names the operator allows explicitly
 (`OPENCTEM_SDK_SCANNER_ENV_ALLOW`) and variables the caller passes still
 reach any tool.
+
+On a shared sensor (`toolhost.Host.Shared`) no task gets any vendor
+namespace, whatever the operator allows or the caller passes
+(`core.WithoutVendorEnv`): an organization's task never spends the
+operator's tool accounts.
 
 ### 6. Per-task tool sandbox (`pkg/sensorkit/executor`)
 
