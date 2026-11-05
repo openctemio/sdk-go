@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -159,12 +160,20 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 	// the response itself goes to the client as it came.
 	// It is parsed from a copy: every byte read from the host is passed
 	// on unchanged, in order.
+	// The head is read within the head window: a host that drips it does
+	// not hold the connection for as long as each byte beats the idle
+	// bound. On that timeout the connection ends (the deadline stays).
 	ur := &errReader{r: up}
 	var head bytes.Buffer
+	_ = up.SetReadDeadline(time.Now().Add(f.responseHeadTimeout()))
 	if resp, err := http.ReadResponse(bufio.NewReader(io.TeeReader(io.LimitReader(ur, maxHeaderBytes), &head)), req); err == nil {
 		f.observeResponse(host, resp)
+		_ = up.SetReadDeadline(time.Time{})
 	} else {
 		f.observeErr(host, err)
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			_ = up.SetReadDeadline(time.Time{})
+		}
 	}
 	n, _ := c.Write(head.Bytes())
 	rest, _ := io.Copy(c, ur)
