@@ -13,6 +13,29 @@ runtime passes a tool only the settings the scanner environment allowlist
 names (`pkg/core/scanner_env*.go`) and never writes a secret into a task or a
 log. The SDK keeps no credential store of its own.
 
+Where a tool's credentials come from:
+- **The organization (platform jobs).** For each task of a tool whose
+  manifest declares credentials, the tool host asks the platform once
+  (`POST /api/v2/sensor/commands/{id}/tool-credentials`, v2 HTTPS only, under
+  the command's lease; `core.ToolCredentialsFrom`, `client.ToolCredentials`).
+  The platform reads the organization from the command, never from the
+  sensor, and answers only the leasing sensor for the command's own tool.
+  The values are not cached across tasks, never reach the job's payload,
+  outbox, result or logs, and are on the host's redaction list for the task.
+- **The operator** (`sensorkit.Options.ToolCredentials`). Per name the
+  organization's value wins; the operator's value fills a name the
+  organization left unset only when the platform says so (`local_fallback`:
+  true on the organization's own sensor, false on a shared sensor, whose
+  operator's keys are never spent on an organization's task). Outside a
+  platform job, or with a platform that does not deliver tool credentials,
+  the operator's values are used as before. When the platform cannot
+  answer, the task runs with neither, and its log says so.
+
+Either way only the names the manifest declares reach the tool, inside the
+task's run message (never the environment, argv or a shared file); an
+adapter that has to hand them to its program as a file writes it into the
+task's own directory with mode 0600.
+
 ### 2. Transport
 
 `pkg/client` speaks sensor protocol v2 over HTTPS and, for a key-bound
