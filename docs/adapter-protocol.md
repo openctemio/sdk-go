@@ -17,6 +17,58 @@ A complete example in Python, with no dependencies:
 - records, per-target status, logs and progress, and the result (`partial` when a target failed);
 - `ctx.connect(host, port)`: a TCP connection made through the task's forwarder when the sensor confines the network (where a confined task has no other way out), else directly.
 
+## Flow
+
+How the tool host (`pkg/sensorkit/toolhost`) turns a job into one task of
+your tool and your output into a report:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    box Sensor
+    participant H as toolhost.Host
+    end
+    box Task sandbox
+    participant T as Your tool
+    end
+    H->>H: load tool.yaml strictly (256 KiB, unknown keys refused), mapping digest pinned
+    H->>H: Admit - tools.allow, kill switch, CapTimeout, CheckTarget per target
+    H->>H: admitContract - ApplyParams maps capability params to config keys, tier ceiling, web scope, rate cap
+    H->>H: schema check, defaults, declared credentials only
+    H->>T: start run.argv (no shell) in the sandbox, handshake within 30 s
+    T-->>H: hello
+    H->>T: describe
+    T-->>H: manifest - must equal tool.yaml without run, else refused
+    H->>T: run (task id, targets with refs, config, workdir, credentials)
+    loop until result, timeout or output limit
+        T-->>H: record, target_status, log, progress, heartbeat
+        H->>H: target ref known, kind declared, size and depth limits, CleanString
+    end
+    T-->>H: result
+    H->>H: finish - partial when a target is not done, metadata.targets, provenance
+    H->>T: kill when it has not exited 10 s after its result
+```
+
+An exec profile (no adapter) replaces the conversation with files and a
+template:
+
+```mermaid
+flowchart TD
+    C["Admitted config and targets"] --> W["Write targets.txt, targets.json,<br/>config.json, web_scope.json (0600) in the task dir"]
+    W --> A["Expand run.argv placeholders"]
+    A --> V{"Each value: no leading dash, no control characters,<br/>not a dangerous or rate flag"}
+    V -- "no" --> R["Task refused"]
+    V -- "yes" --> X["Start the CLI in the sandbox"]
+    X --> O{"run.output from stdout or file"}
+    O --> P["Parse: ctis, jsonl-ctis, sarif,<br/>an importer format, or json/jsonl with mapping"]
+    P -- "parse error" --> FL["Task failed, never zero findings"]
+    P -- "ok" --> REP["Records checked as above, then the report"]
+```
+
+Code: `pkg/sensorkit/toolhost/host.go`, `admission.go`, `contract.go`,
+`exec.go`, `exec_formats.go`; `pkg/tool/manifest_load.go`, `params.go`,
+`argv.go`; `pkg/core/extra_args.go`; `internal/toolrt/check.go`.
+
 ## The manifest is the contract
 
 `tool.yaml` (`apiVersion: openctem.io/tool/v1`, schema

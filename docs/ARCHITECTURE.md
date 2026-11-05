@@ -417,29 +417,69 @@ the SDK.
 
 ## Data Flow
 
+From a verified signed job to the platform's acknowledgement. Claim, lease
+and job signatures come before the first step; the platform side of ingest is
+in the openctem repository.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    box Sensor (pkg/sensorkit runtime)
+    participant CP as core.CommandPoller
+    participant TH as sensorkit/toolhost Host
+    participant OB as pkg/outbox + client
+    end
+    box Task sandbox
+    participant T as Tool (adapter or exec)
+    end
+    box Platform
+    participant P as /api/v2/sensor
+    end
+    CP->>P: POST /commands/{id}/start (lease epoch), refused start means not run
+    CP->>CP: AdmitCommandTargets, CommandToolGate, journal the job
+    CP->>TH: run the tool task (admitted targets, pinned addresses)
+    TH->>TH: Admit again, ApplyParams, schema check, Prepare sandbox, start forwarder
+    TH->>T: hello, describe (digest must match tool.yaml), run
+    T-->>TH: records, target_status, result (each checked)
+    TH-->>CP: CTIS report with metadata.targets, refused targets, provenance
+    CP->>OB: Enqueue (sealed per organization) with Meta.CommandID
+    OB->>P: PUT /commands/{cmd}/results/{report_id} or segments + commit, X-OpenCTEM-Lease-Epoch
+    alt 2xx
+        P-->>OB: sealed and queued, item deleted
+    else AuthError (401 or 403)
+        OB->>OB: delivery paused until a heartbeat is accepted
+    else RetryError or transient
+        OB->>OB: backoff 2 s to 5 min with full jitter, Retry-After up to 1 h, circuit after 3 failures
+    else PermanentError
+        OB->>OB: dead letter with the reason, the command result becomes failed
+    end
+    OB->>P: POST /commands/{id}/complete or /fail (after its reports, lease epoch)
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Scanner    │────▶│    Parser    │────▶│  CTIS Report  │
-│  (Semgrep)   │     │  (SARIF)     │     │              │
-└──────────────┘     └──────────────┘     └──────┬───────┘
-                                                  │
-┌──────────────┐     ┌──────────────┐             │
-│  Collector   │────▶│  CTIS Report  │─────────────┤
-│  (GitHub)    │     │              │             │
-└──────────────┘     └──────────────┘             │
-                                                  ▼
-                                          ┌──────────────┐
-                                          │  SDK Client  │
-                                          │ (sensor_id) │
-                                          └──────┬───────┘
-                                                  │
-                                      PushFindings() / PushAssets()
-                                                  │
-                                                  ▼
-                                          ┌──────────────┐
-                                          │  OpenCTEM API │
-                                          └──────────────┘
+
+Code: `pkg/core/command_poller.go` (`executeCommand`), `pkg/core/local_policy_enforce.go`,
+`pkg/sensorkit/toolhost/host.go`, `pkg/sensorkit/toolhost/admission.go`,
+`pkg/client/outbox.go`, `pkg/client/v2.go`, `pkg/client/command.go`,
+`pkg/outbox/sender.go`.
+
+An outbox item:
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: Enqueue (AES-256-GCM, per-organization data key with the local store)
+    pending --> sending: drain (Wake on an accepted heartbeat, or the backoff timer)
+    sending --> [*]: 2xx, item and state files deleted
+    sending --> pending: transient failure, backoff
+    sending --> paused: 401 or 403
+    paused --> pending: heartbeat accepted or key replaced
+    sending --> dead: permanent refusal, reason kept
+    dead --> [*]: janitor after 7 days
 ```
+
+A command result waits until every older report of the same command is
+acknowledged or dead (`pkg/outbox/sender.go`). Reports and command results are
+never evicted for space: the outbox answers `ErrFull` and the poller stops
+claiming at 85 % of the cap (1 GiB, or half of used plus free space when
+smaller), with 2 % kept for command results (`pkg/outbox/outbox.go`).
 
 ## CTIS (CTEM Ingest Schema)
 

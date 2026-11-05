@@ -210,6 +210,33 @@ hits per tenant and template type.
 
 ### 4. Scan Target Validation (command path)
 
+Admission of a verified job, in order (`pkg/core/command_poller.go:executeCommand`):
+
+```mermaid
+flowchart TD
+    J["Signed job verified (JobGuard.Check)"] --> ST{"POST start accepted?"}
+    ST -- "no" --> NR["not run, nothing reported"]
+    ST -- "yes" --> AJ{"admitJob: kill switch, no_local_policy when required,<br/>checks.allow, tools.allow, custom templates,<br/>interactsh, ports, MaxScanTargets"}
+    AJ -- "refused" --> F1["fail with Refusal layer, rule, detail"]
+    AJ -- "ok" --> PT["checkTarget per target"]
+    PT --> R{"checkHost: LookupIP"}
+    R -- "no answer for a dotted name" --> U["refused: unresolvable"]
+    R -- "addresses" --> A{"every address: addrscope deny list,<br/>allow_private, targets.deny, targets.allow"}
+    A -- "no" --> D["refused: denied_by_policy"]
+    A -- "yes" --> P["admitted, AdmittedAddrs pinned"]
+    U & D & P --> L{"targets left?"}
+    L -- "none, all unresolvable" --> CU["completeUnresolved: completed, all skipped"]
+    L -- "none" --> F2["fail: every target refused"]
+    L -- "some" --> TG{"CommandToolGate (platform AllowedTools)"}
+    TG -- "no" --> F3["fail: platform_tool_gate tools.allowed"]
+    TG -- "yes" --> EX["executor: validateScanTargets again, then toolhost.Admit per task"]
+```
+
+Refused targets go into the report as `refused_targets` (at most 100, with
+`refused_targets_total`) and per-target outcomes; a refusal's detail is cut
+at 512 bytes and cleaned of control and bidi characters
+(`pkg/core/refused_targets.go`, `pkg/core/refusal.go`).
+
 `core.DefaultCommandExecutor` validates every server-supplied scan target
 with a `core.ScanTargetPolicy` before a scanner runs:
 
@@ -641,6 +668,43 @@ delivered in the run message. Names the operator allows explicitly
 reach any tool.
 
 ### 6. Per-task tool sandbox (`pkg/sensorkit/executor`)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    box Sensor process
+    participant H as toolhost.Host
+    participant F as egress forwarder (pkg/sensorkit/egress)
+    end
+    box Task namespaces (user, net, mount)
+    participant L as launcher (/proc/self/exe)
+    participant T as tool
+    end
+    box Outside
+    participant U as proxy pool (optional)
+    participant X as target
+    end
+    H->>H: Admit, Prepare - private task dir, protected paths refused as read or write paths
+    H->>F: start, scope = AdmittedAddrs, IP and CIDR targets, vendor hosts, rate ceiling
+    H->>L: start, spec on argv, Governor may hold the launch
+    L->>L: loopback up, own resolv.conf, relays 127.0.0.1 port 1080 and port 53 to proxy.sock and dns.sock
+    L->>L: rlimits, no_new_privs, Landlock, seccomp, empty capability bounding set, SECBIT_NOROOT
+    L->>T: exec as a supervised child
+    T->>F: DNS question
+    F-->>T: pinned A and AAAA for admitted names, NXDOMAIN otherwise
+    T->>F: HTTP CONNECT or SOCKS5 to address and port
+    F->>F: resolveHost - pinned or in an admitted prefix, port, never metadata or link-local, never re-resolved
+    alt refused
+        F-->>T: 403 or SOCKS not allowed, Record and Tally per target
+    else allowed
+        F->>F: HostRate AIMD wait, breaker
+        F->>U: tunnel to the checked address when the job has a pool
+        F->>X: or a direct dial to the checked address
+    end
+    H->>T: on timeout or cancel - protocol cancel, kill the process group after 10 s
+    H->>F: stop, every forwarded connection closed, wait at most 10 s
+    H->>H: targets with only refused connections settle failed egress_refused, remove the task dir
+```
 
 Every tool run goes through one executor. A backend takes a generic task
 (argv, environment, working directory, writable paths, limits, network class)
