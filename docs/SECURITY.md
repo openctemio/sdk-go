@@ -1016,6 +1016,21 @@ policy refuses to start (before pairing): its targets come from many
 tenants, and the operator's own target, range, port and tool rules must
 bound them.
 
+#### Isolation level and proven backends
+
+A tool manifest may say `isolation: strong` (default `process`): the least
+isolation it needs from the backend that runs it. The process sandbox above is
+the only backend that ships today. At start-up the sensor runs a confined task
+on each backend it has (`Kit.ProbeIsolation`, `executor.ProbeBackends`) and
+reports what really worked, as the config check `runtime.isolation`. It
+advertises `isolation.strong@1` only when a strong backend passed its probe, so
+no setting, environment variable or declaration can add it, and the platform
+counts only what the sensor itself reported. A job whose tool needs `strong`
+goes only to a sensor with the capability and waits (placement
+`strong_isolation_missing`) otherwise; it is never run on the process sandbox.
+No bundled tool needs `strong` yet, and no strong backend ships yet, so no
+sensor advertises the capability today.
+
 ### 7. Web scope of a job (`pkg/webscope`)
 
 A job can carry a web scope (`web_scope`): the hosts (`app.example.com`, or

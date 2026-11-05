@@ -1,0 +1,4 @@
+### Added: an isolation level in the tool manifest, and proven isolation backends
+
+- `tool.yaml` takes `isolation: process|strong` (default `process`, additive in `openctem.io/tool/v1`): the least isolation the tool needs from the backend that runs it. The sensor's tool contract carries it. No bundled tool asks for `strong` yet.
+- `executor.ProbeBackends` and `Kit.ProbeIsolation` run a confined task on each isolation backend at start-up and report what really worked (config check `runtime.isolation`). The capability `isolation.strong@1` is advertised only when a strong backend passed its probe; a setting, an environment variable or a declaration cannot add it. A job whose tool needs `strong` goes only to a sensor that reports it. No strong backend ships yet, so no sensor advertises it today.

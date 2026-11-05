@@ -81,14 +81,17 @@ type ToolSpec struct {
 // The runtime enforces exactly this manifest. Build it with
 // tool.Manifest.Contract.
 type ToolContract struct {
-	APIVersion string   `json:"api_version"`
-	Digest     string   `json:"digest"`
-	Version    string   `json:"version"`
-	Class      string   `json:"class"`
-	Tier       string   `json:"tier"`
-	Network    string   `json:"network,omitempty"`
-	Consumes   []string `json:"consumes,omitempty"`
-	Produces   []string `json:"produces"`
+	APIVersion string `json:"api_version"`
+	Digest     string `json:"digest"`
+	Version    string `json:"version"`
+	Class      string `json:"class"`
+	Tier       string `json:"tier"`
+	Network    string `json:"network,omitempty"`
+	// Isolation is the least isolation the tool needs ("process" or
+	// "strong"; "" is process).
+	Isolation string   `json:"isolation,omitempty"`
+	Consumes  []string `json:"consumes,omitempty"`
+	Produces  []string `json:"produces"`
 	// Implements are the capability references the tool implements
 	// ("scan.ports@1").
 	Implements []string `json:"implements,omitempty"`

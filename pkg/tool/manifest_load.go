@@ -221,7 +221,7 @@ func (m Manifest) Contract() *core.ToolContract {
 	}
 	c := &core.ToolContract{
 		APIVersion: m.APIVersion, Digest: m.Digest(), Version: m.Version, Class: string(m.Class), Tier: string(m.Tier),
-		Network: string(m.Permissions.Network), Consumes: slices.Clone(m.Consumes), Produces: slices.Clone(m.Produces),
+		Network: string(m.Permissions.Network), Isolation: string(m.Isolation), Consumes: slices.Clone(m.Consumes), Produces: slices.Clone(m.Produces),
 		Implements: implements, Batch: m.Batches(),
 	}
 	if b, err := m.Canonical(); err == nil && len(b) <= core.MaxToolDescriptorBytes {
