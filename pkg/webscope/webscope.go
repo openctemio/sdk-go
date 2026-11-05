@@ -24,6 +24,10 @@ import (
 const (
 	maxEntries   = 64
 	maxEntrySize = 512
+
+	// MaxRequestsPerHostLimit is the largest MaxRequestsPerHost a scope
+	// may carry.
+	MaxRequestsPerHostLimit = 1_000_000
 )
 
 // ErrOutOfScope is the error of a request outside the web scope.
@@ -55,6 +59,12 @@ type Scope struct {
 	// Methods are the HTTP methods a request may use. Empty: GET, HEAD
 	// and OPTIONS.
 	Methods []string `json:"methods,omitempty"`
+	// MaxRequestsPerHost is the most HTTP requests the task may send to
+	// one host name, whatever the port, connection or scheme (0: no cap).
+	// The task's forwarder counts every request it lets through and
+	// refuses the ones past the cap, as it refuses a request outside the
+	// scope; the task cannot reset the count.
+	MaxRequestsPerHost int `json:"max_requests_per_host,omitempty"`
 }
 
 // Validate checks the scope's bounds and syntax, and adds the clean form
@@ -65,6 +75,9 @@ type Scope struct {
 func (s *Scope) Validate() error {
 	if s == nil {
 		return nil
+	}
+	if s.MaxRequestsPerHost < 0 || s.MaxRequestsPerHost > MaxRequestsPerHostLimit {
+		return fmt.Errorf("web scope: max_requests_per_host %d is outside 0..%d", s.MaxRequestsPerHost, MaxRequestsPerHostLimit)
 	}
 	for name, list := range map[string][]string{"hosts": s.Hosts, "path_prefixes": s.PathPrefixes,
 		"deny_paths": s.DenyPaths, "methods": s.Methods} {

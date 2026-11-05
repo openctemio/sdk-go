@@ -1,10 +1,13 @@
 package webscope
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/openctemio/contract/webpath"
 )
 
 func mustURL(t *testing.T, s string) *url.URL {
@@ -131,4 +134,50 @@ func FuzzAllowsDenied(f *testing.F) {
 			t.Fatalf("allowed %q (server path %q)", p, c)
 		}
 	})
+}
+
+// The request cap travels in the job as max_requests_per_host and is bounded:
+// a negative or huge cap is an invalid scope, refused, never run uncapped.
+func TestMaxRequestsPerHost(t *testing.T) {
+	for _, n := range []int{0, 1, 300, MaxRequestsPerHostLimit} {
+		if err := (&Scope{MaxRequestsPerHost: n}).Validate(); err != nil {
+			t.Errorf("cap %d: %v", n, err)
+		}
+	}
+	for _, n := range []int{-1, MaxRequestsPerHostLimit + 1} {
+		if err := (&Scope{MaxRequestsPerHost: n}).Validate(); err == nil {
+			t.Errorf("cap %d accepted", n)
+		}
+	}
+	var s Scope
+	if err := json.Unmarshal([]byte(`{"methods":["GET","HEAD"],"max_requests_per_host":300}`), &s); err != nil || s.MaxRequestsPerHost != 300 {
+		t.Fatalf("decode: %+v %v", s, err)
+	}
+	b, _ := json.Marshal(Scope{Methods: []string{"GET"}})
+	if strings.Contains(string(b), "max_requests") {
+		t.Errorf("a scope without a cap carries one: %s", b)
+	}
+}
+
+// The scope reads a path exactly as contract webpath does, the reading the
+// platform plans path discovery with: whatever one refuses or denies, the
+// other does too.
+func TestAllowsMatchesContractReading(t *testing.T) {
+	s := &Scope{Hosts: []string{"example.com"}, DenyPaths: []string{"/admin", "/logout"}, PathPrefixes: []string{"/app"}}
+	for _, p := range []string{"/app/x", "/app;x/y", "/Admin", "/app/../admin", "/app/%2e%2e/admin", "/app/a%2fb", "/app/..;/x",
+		"/app/y;z", "/app", "/application", "/app/LOGOUT", "/app\\..\\admin"} {
+		u := &url.URL{Scheme: "https", Host: "example.com"}
+		u.Path, _ = url.PathUnescape(p)
+		u.RawPath = p
+		err := s.Allows("GET", u, nil)
+		c, cerr := webpath.CleanPath(u.EscapedPath())
+		want := cerr == nil
+		if want {
+			_, denied := webpath.Denied(c, s.DenyPaths)
+			want = !denied && webpath.Under(c, "/app")
+		}
+		if (err == nil) != want {
+			t.Errorf("%q: Allows = %v, contract reading allows = %v", p, err, want)
+		}
+	}
 }

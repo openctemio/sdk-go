@@ -172,8 +172,12 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 	ur := &errReader{r: up}
 	var head bytes.Buffer
 	_ = up.SetReadDeadline(time.Now().Add(f.responseHeadTimeout()))
-	if resp, err := http.ReadResponse(bufio.NewReader(io.TeeReader(io.LimitReader(ur, maxHeaderBytes), &head)), req); err == nil {
-		f.observeResponse(host, resp)
+	hr := bufio.NewReader(io.TeeReader(io.LimitReader(ur, maxHeaderBytes), &head))
+	if resp, err := http.ReadResponse(hr, req); err == nil {
+		// What the reader already buffered is in head too, so it reaches
+		// the client unchanged. The body start is read from that buffer
+		// only: the bounded head read above is the sole read of the host.
+		f.observeResponse(host, resp, bufferedBody(hr, resp))
 		_ = up.SetReadDeadline(time.Time{})
 	} else {
 		f.observeErr(host, err)
