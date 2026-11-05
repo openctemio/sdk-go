@@ -1,5 +1,0 @@
-### Security: the egress forwarder bounds every response head it reads
-
-- On a guarded connection (a CONNECT or SOCKS5 tunnel with a web scope or a path limit, TLS terminated or not), the forwarder parsed the target's response head without a size limit. A hostile target that sent an endless header line made the forwarder read without end: 256 MiB in under two seconds. The sensor then ran out of memory and every task on it failed, including other tenants' tasks on a shared sensor. The head (every informational response before the final one included) is now capped at 64 KiB, the cap the request side already had, and the connection closes when a head exceeds it.
-- A target that drips its response head or its TLS handshake, each byte inside the idle bound, now holds the connection only for one head window (`Limits.UpstreamIdle`, 2 minutes by default). Before, it held the connection for as long as it kept dripping. Plain proxied requests get the same window.
-- Operators: upgrade the sensor. No configuration changes.
