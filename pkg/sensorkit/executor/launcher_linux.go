@@ -42,7 +42,7 @@ func confine(ls launchSpec) (Status, error) {
 	default:
 		st.Landlock = abi
 	}
-	if err := applySeccomp(); err != nil {
+	if err := applySeccomp(ls.Browser); err != nil {
 		if err == errSeccompUnsupported {
 			st.Missing = append(st.Missing, "seccomp: not supported on this architecture or kernel")
 		} else {

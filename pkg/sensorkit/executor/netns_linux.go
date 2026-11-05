@@ -332,7 +332,7 @@ func dnsOverStream(path string, q []byte) ([]byte, error) {
 // child inherits no_new_privs, Landlock and seccomp. The child gets no
 // capabilities: root of the user namespace gains none at exec
 // (SECBIT_NOROOT, locked) and the bounding set is emptied first.
-func superviseTool(bin string, argv []string, env []string) int {
+func superviseTool(bin string, argv []string, env []string, browser bool) int {
 	if bin == "" || len(argv) == 0 {
 		fmt.Fprintln(os.Stderr, "openctem sandbox: no command")
 		return launcherExit
@@ -342,6 +342,9 @@ func superviseTool(bin string, argv []string, env []string) int {
 		return launcherExit
 	}
 	cmd := &exec.Cmd{Path: bin, Args: argv, Env: env, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
+	if browser {
+		browserAttrs(cmd)
+	}
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, unix.SIGTERM, unix.SIGINT, unix.SIGHUP)
 	if err := cmd.Start(); err != nil {
@@ -354,6 +357,24 @@ func superviseTool(bin string, argv []string, env []string) int {
 		}
 	}()
 	return exitStatus(cmd.Wait())
+}
+
+// browserUID is the user (and group) a browser task runs as in its own user
+// namespace: a browser refuses to run as root, and the task holds no
+// capability over the confined namespaces (they belong to the launcher's
+// user namespace, the parent of the task's).
+const browserUID = 1000
+
+// browserAttrs starts the tool of a browser task in a user namespace of its
+// own beneath the launcher's, as browserUID mapped to the launcher's user (no
+// other id is mapped). It stays in the task's network and mount namespaces.
+func browserAttrs(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags:                 syscall.CLONE_NEWUSER,
+		UidMappings:                []syscall.SysProcIDMap{{ContainerID: browserUID, HostID: 0, Size: 1}},
+		GidMappings:                []syscall.SysProcIDMap{{ContainerID: browserUID, HostID: 0, Size: 1}},
+		GidMappingsEnableSetgroups: false,
+	}
 }
 
 // Secure bits (linux/securebits.h).

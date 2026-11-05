@@ -62,6 +62,10 @@ type Config struct {
 	Shared bool
 }
 
+// ErrBrowserNeedsConfinement: a browser task (TaskSpec.Browser) runs only in
+// a sandbox that confines its network; it never runs unconfined.
+var ErrBrowserNeedsConfinement = errors.New("executor: a browser task runs only in a sandbox that confines its network")
+
 // ProcessBackend runs each task as a child process, through the launcher
 // when sandboxing is on.
 type ProcessBackend struct {
@@ -217,6 +221,9 @@ func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 	}
 	t := &processTask{b: b, spec: spec}
 	if b.launcher == "" {
+		if spec.Browser {
+			return nil, ErrBrowserNeedsConfinement
+		}
 		// ModeOff, or auto without a working launcher: a plain child
 		// process in the caller's directory, as before.
 		t.cmdPath, t.args = spec.Argv[0], spec.Argv[1:]
@@ -287,6 +294,14 @@ func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 	if b.confine {
 		ls.Confined, ls.EgressProxy, ls.EgressDNS = true, spec.EgressProxy, spec.EgressDNS
 		t.confine = true
+	}
+	if spec.Browser {
+		if !b.confine {
+			_ = os.RemoveAll(dir)
+			return nil, ErrBrowserNeedsConfinement
+		}
+		ls.Browser = true
+		ls.WritePaths = append(ls.WritePaths, "/proc")
 	}
 	enc, err := ls.encode()
 	if err != nil {

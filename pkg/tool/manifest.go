@@ -199,10 +199,24 @@ type Permissions struct {
 	// LinuxCaps the tool needs (NET_RAW for SYN scans); granted only when
 	// the local policy allows.
 	LinuxCaps []string `json:"linux_caps,omitempty"`
+	// Sandbox is "" (the default task sandbox) or SandboxBrowser.
+	Sandbox string `json:"sandbox,omitempty"`
 	// Proxy is ProxyHonours or ProxyIgnores; unset is unknown, which the
 	// platform treats as ignores where a zone requires a proxy.
 	Proxy string `json:"proxy,omitempty"`
 }
+
+// SandboxBrowser is the sandbox of a tool that runs a web browser with the
+// browser's own sandbox on (Chromium's renderer sandbox: user, PID and
+// network namespaces and its own seccomp policy). The task runs confined
+// (its network namespace's only way out is its forwarder, never
+// unconfined), as a non-root user of a user namespace of its own beneath
+// the confined one, and may create only user, PID and network namespaces
+// for the browser's sandbox: no mount, no setns, no other namespace. Its
+// Landlock rules also let it write /proc (the browser writes its sandboxed
+// children's uid and gid maps there). A sensor that cannot confine the
+// task refuses it.
+const SandboxBrowser = "browser"
 
 // CredentialReq is a credential a tool declares.
 type CredentialReq struct {

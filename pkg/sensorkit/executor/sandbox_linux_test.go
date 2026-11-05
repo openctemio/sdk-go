@@ -144,6 +144,22 @@ func hostileTool(mode string, args []string) int {
 		}
 		fmt.Println()
 		return 0
+	case "uid":
+		fmt.Println(os.Getuid(), os.Getgid())
+		return 0
+	case "clonens":
+		// Start this binary again in new namespaces: "browser" asks for the
+		// ones a browser sandbox makes, "mount" adds a mount namespace.
+		flags := uintptr(unix.CLONE_NEWUSER | unix.CLONE_NEWPID | unix.CLONE_NEWNET)
+		if args[0] == "mount" {
+			flags |= unix.CLONE_NEWNS
+		}
+		cmd := exec.Command("/proc/self/exe")
+		cmd.Env = []string{"EXECUTOR_TEST_TOOL=uid"}
+		cmd.SysProcAttr = &syscall.SysProcAttr{Cloneflags: flags}
+		return report(cmd.Run())
+	case "procwrite":
+		return report(os.WriteFile("/proc/self/oom_score_adj", []byte("100"), 0))
 	case "proxyenv":
 		fmt.Println(os.Getenv("HTTPS_PROXY"), os.Getenv("NO_PROXY") == "", os.Getenv("OPENCTEM_EGRESS_PROXY"))
 		return 0

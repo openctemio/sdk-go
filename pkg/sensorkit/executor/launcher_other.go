@@ -19,6 +19,6 @@ func confineAttrs(*exec.Cmd) {}
 
 func setupNetwork(launchSpec) error { return errNoSandbox }
 
-func superviseTool(string, []string, []string) int { return launcherExit }
+func superviseTool(string, []string, []string, bool) int { return launcherExit }
 
 func runConfined(launchSpec, []string) int { return launcherExit }

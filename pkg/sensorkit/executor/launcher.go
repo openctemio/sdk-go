@@ -46,6 +46,8 @@ type launchSpec struct {
 	// confined launcher (which is a fresh, dumpable process: the sensor
 	// itself is not, so it could not write the new namespace's id maps).
 	Inner bool `json:"inner,omitempty"`
+	// Browser: the tool runs in the browser sandbox (TaskSpec.Browser).
+	Browser bool `json:"browser,omitempty"`
 	// Probe makes the launcher apply everything, print its Status as JSON
 	// and exit instead of running a tool.
 	Probe bool `json:"probe,omitempty"`
@@ -145,7 +147,7 @@ func runLauncher(args []string) int {
 	}
 	if ls.Confined {
 		// The relay lives in this process: run the tool as a child.
-		return superviseTool(ls.Binary, rest[1:], os.Environ())
+		return superviseTool(ls.Binary, rest[1:], os.Environ(), ls.Browser)
 	}
 	if err := execTool(ls.Binary, rest[1:], os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "openctem sandbox: run %s: %v\n", ls.Binary, err)
