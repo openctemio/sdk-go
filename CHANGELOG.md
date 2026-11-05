@@ -8,6 +8,22 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.47.1 — 2026-11-05
+
+### Fixed: The local policy never raises a tool's default rate, and kit-based sensors apply http.headers
+- When a job sets no rate, the tool runs at the lower of its own default and the policy's `rate.max_rps` (it was set to the maximum, which can be faster than the tool's default).
+- `pkg/sensorkit` passes the local policy's `http.headers` to the tool host; they were ignored for kit-based sensors.
+
+### Fixed: A registry lookup (lookup.rdap) runs on names that do not resolve
+- A job for `lookup.rdap` asks the domain's registry and never the target, so the sensor no longer refuses its names as `unresolvable`: a plain domain name is checked by name only (the domain deny list, and the allowed domains when `targets.allow` is set) and handed to the tool whether or not it resolves. Capabilities that connect to their targets keep refusing a name whose addresses cannot be checked. Addresses, ranges and URLs are checked as before.
+- New `core.RegistryOnlyCapability`.
+
+### Fixed: A host that resets the requests it dislikes keeps its rate and is no longer cut off
+- `adapt.HostRate`: a reset on a connection the host accepted in this task is a refusal of that request, as a 403 is, also before the host answered: it no longer opens the host's breaker, and it no longer halves the host's rate. Halving on each refusal pinned web hosts behind an edge filter at 1 request per second; nuclei's requests then waited in the forwarder past nuclei's own request timeout, nuclei counted those timeouts toward its per-host error budget and dropped the live host for the rest of the scan.
+- A host that resets `BlockRun` (20) requests in a row with no answer between them is still a block (coverage gap `blocked`), and a host that never accepted a connection still counts resets as failures.
+- `egress`: a CONNECT tunnel the tool opened and never sent a byte on (its connection pool dialed it ahead) and that the forwarder cut on the idle bound is no longer read as a timeout of the host. Those cuts opened the breakers of live hosts about two minutes into a nuclei scan; the forwarder then refused the host's connections, and nuclei counted the refusals toward its error budget and dropped the host.
+- Measured with the real nuclei v3.11.1 behind the forwarder against a local site that resets the paths it dislikes: before, the host's rate fell to 3.4 req/s and its breaker opened; now it keeps its rate and no breaker opens.
+
 ## v0.47.0 — 2026-11-05
 
 ### Security: a job's secrets reach a tool sealed, per task, from the job's signed list

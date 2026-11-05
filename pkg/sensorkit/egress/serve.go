@@ -328,7 +328,13 @@ func (f *Forwarder) pipe(c net.Conn, br *bufio.Reader, up net.Conn, rec *Record)
 	// An opaque tunnel shows only how it ended: reset by the host, or
 	// closed after the host sent data. A tunnel cut on the idle bound after
 	// the host answered is not a host failure.
-	if ur.err != nil && (in == 0 || !idledConn(up)) {
+	// A tunnel the tool opened and never sent a byte on (a connection its
+	// pool dialed ahead and did not use) says nothing about the host when it
+	// is cut on the idle bound: the host had nothing to answer. Read as a
+	// timeout, such tunnels opened the breakers of live hosts two minutes
+	// into a scan, and the tool then dropped the host on the refusals.
+	unused := out == 0 && idledConn(up)
+	if ur.err != nil && (in == 0 || !idledConn(up)) && !unused {
 		f.observeErr(rec.Host, ur.err)
 	} else if in > 0 {
 		f.hostRate.Report(normName(rec.Host), adapt.Event{Signal: adapt.Answered})

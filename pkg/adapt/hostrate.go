@@ -27,9 +27,11 @@ import (
 // nothing a host taught one tenant's task reaches another tenant's.
 //
 // Signals: a connection or an answer is health; 429 and 503 (with their
-// Retry-After) are congestion; a reset, a timeout, a refused connection on
-// a port that answered before and a failed TLS handshake are failures; a run
-// of 403 answers after other answers is a block. The rate never goes above
+// Retry-After) are congestion; a timeout, a refused connection on a port
+// that answered before, a failed TLS handshake and a reset from a host that
+// never accepted a connection are failures; a reset on a connection the host
+// accepted refuses that request (resetRefusal); a run of 403 answers after
+// other answers, or of such resets, is a block. The rate never goes above
 // the ceiling the caller gives (Ceiling of every limit) and never below
 // TargetRate.Floor (or the ceiling, when that is lower).
 //
@@ -244,9 +246,13 @@ type hostState struct {
 	notBefore   time.Time
 	floorStrike int
 	answered    bool
-	run403      int
-	// runReset counts resets in a row from a host that answered before
-	// (resetRefusal).
+	// connected: the host accepted a connection in this task. A reset on
+	// a connection it accepted refuses that request (resetRefusal); it is
+	// not the host going away.
+	connected bool
+	run403    int
+	// runReset counts resets in a row from a host that accepted
+	// connections (resetRefusal).
 	runReset  int
 	openPorts []int
 
@@ -391,8 +397,10 @@ func (c *HostRate) Report(host string, e Event) {
 	case Connected:
 		// A connection after failures is evidence enough to close a
 		// half-open breaker; it does not clear the failure count (a host
-		// that accepts and then resets every connection still trips).
+		// that accepts and then resets every connection is a block after
+		// BlockRun resets, resetRefusal).
 		h.oks++
+		h.connected = true
 		c.close(h, &ch)
 	case Answered:
 		h.oks++
@@ -450,7 +458,7 @@ func (c *HostRate) Report(host string, e Event) {
 			}
 		}
 	case Failed:
-		if e.Reason == ReasonReset && h.answered {
+		if e.Reason == ReasonReset && (h.answered || h.connected) {
 			c.resetRefusal(h, now, &ch)
 			break
 		}
@@ -465,23 +473,30 @@ func (c *HostRate) Report(host string, e Event) {
 	c.emit(ch)
 }
 
-// resetRefusal handles a connection reset from a host that answered before
-// in this task. Measured on production nuclei runs (7 days): resets opened
-// 364 host breakers against 34 for timeouts, mostly on hosts behind a CDN
-// or an intrusion-prevention device that answers ordinary requests and
-// resets the ones whose path or payload it dislikes. Such a host is up: a
-// reset refuses one request, as a 403 does, and the breaker's five failures
-// in a row then cut the host off for the rest of the scan, every
-// remaining check unrun. So a reset after answers slows the host down (the
-// rate halves, as for any push-back) and counts toward a block only after
-// BlockRun resets in a row with no answer between them; it never opens the
-// breaker on its own. A host that resets before it ever answered stays a
-// failure (Failed), and a half-open probe that gets a reset trips again.
+// resetRefusal handles a connection reset from a host that accepted
+// connections (or answered) before in this task: an edge or an
+// intrusion-prevention device that serves ordinary requests and resets the
+// ones whose path or payload it dislikes. Such a host is up, and a reset
+// refuses one request, as a 403 does, so it is handled as a 403 is:
+//
+//   - it never opens the breaker on its own (nuclei's first requests to a
+//     host are mostly such paths, and a tunnel reports its answer only when
+//     it ends, so a live host commonly resets several requests before the
+//     task saw it answer);
+//   - it does not lower the rate: halving on every refusal pinned such
+//     hosts at the floor for the rest of the scan, where the tool's
+//     requests wait here and run into the tool's own request timeout,
+//     which nuclei counts toward the per-host error budget it then drops
+//     the host on;
+//   - BlockRun resets in a row with no answer between them make the host a
+//     block (a host that resets everything is still left alone).
+//
+// A host that never accepted a connection in this task stays a failure
+// (Failed), and a half-open probe that gets a reset trips again.
 // Called with c.mu held.
 func (c *HostRate) resetRefusal(h *hostState, now time.Time, ch *[]Change) {
-	h.bad++
-	c.decrease(h, now, ReasonReset, ch)
 	if h.brk == halfOpen {
+		h.bad++
 		c.trip(h, now, ReasonReset, ch)
 		return
 	}
@@ -490,8 +505,10 @@ func (c *HostRate) resetRefusal(h *hostState, now time.Time, ch *[]Change) {
 		return
 	}
 	h.runReset = 0
-	detail := fmt.Sprintf("%d consecutive connection resets after the host answered", c.b.BlockRun)
+	h.bad++
+	detail := fmt.Sprintf("%d consecutive connection resets on connections the host accepted", c.b.BlockRun)
 	c.setGap(h, GapBlocked, detail)
+	c.decrease(h, now, ReasonBlocked, ch)
 	c.trip(h, now, ReasonBlocked, ch)
 	if c.shared != nil {
 		c.shared.block(c.tenant, h.name, edgeprotect.Verdict{}, detail)

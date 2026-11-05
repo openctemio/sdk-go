@@ -205,12 +205,22 @@ func (lp *LocalPolicy) AdmitCommandTargets(ctx context.Context, cmd *Command) (*
 	}
 	refused := make(map[string]bool)
 	var first error
-	lookupOnly := cmd.Type == "scan" && LookupOnlyCapability(payloadCapability(cmd.Payload))
+	capability := ""
+	if cmd.Type == "scan" {
+		capability = payloadCapability(cmd.Payload)
+	}
+	lookupOnly := LookupOnlyCapability(capability)
+	registryOnly := RegistryOnlyCapability(capability)
 	for _, t := range targets {
 		if refused[t] {
 			continue
 		}
-		err := lp.CheckTarget(ctx, t)
+		var err error
+		if registryOnly {
+			err = lp.checkRegistryName(ctx, t)
+		} else {
+			err = lp.CheckTarget(ctx, t)
+		}
 		if lookupOnly {
 			err = lp.lookupOnlyRefusal(t, err)
 		}
