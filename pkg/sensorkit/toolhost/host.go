@@ -448,6 +448,9 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if ierr := h.checkLimits(m, task); ierr != nil {
 		return nil, ierr, nil
 	}
+	if ierr := h.checkUnconfined(m); ierr != nil {
+		return nil, ierr, nil
+	}
 	egressDialer := taskEgressDialer(ctx, task)
 	if ierr := h.checkEgress(m, egressDialer); ierr != nil {
 		return nil, ierr, nil

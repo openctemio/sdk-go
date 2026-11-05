@@ -394,6 +394,25 @@ func (h *Host) checkLimits(m tool.Manifest, task tool.Task) *tool.Error {
 	return nil
 }
 
+// checkUnconfined refuses a tool that contacts its targets (tier T1 and
+// above) on a backend whose sandbox is not available unless the operator
+// turned the sandbox off (executor.Status.RefusesActiveTools): such a tool
+// would run without any confinement, and that is never silent. Passive (T0)
+// tools still run.
+func (h *Host) checkUnconfined(m tool.Manifest) *tool.Error {
+	st := h.backend().Status()
+	if !st.RefusesActiveTools() || !m.Tier.Exceeds(tool.T0) {
+		return nil
+	}
+	why := "this host has no tool sandbox"
+	if len(st.Missing) > 0 {
+		why += " (" + strings.Join(st.Missing, "; ") + ")"
+	}
+	return tool.AsError(tool.Refused(fmt.Sprintf("tool %s (tier %s) contacts its targets and %s, so it would run unconfined; "+
+		"run the sensor on Linux with the sandbox, or set SENSOR_SANDBOX=off to acknowledge running tools unconfined (%s)",
+		m.Name, m.Tier, why, core.RefusalUnconfinedSandbox)))
+}
+
 // taskEgressDialer is the job's proxy pool for a task: the task's own, else
 // the one on the job's context (core.WithEgressDialer), so every tool task
 // of a pooled job uses it whatever path started it.

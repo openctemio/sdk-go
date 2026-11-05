@@ -136,6 +136,7 @@ func newProcessBackend(cfg Config) (*ProcessBackend, error) {
 			return nil, errors.New("executor: sandbox required but it is available on Linux only")
 		}
 		b.status.Missing = []string{"sandbox: available on Linux only"}
+		b.status.NoSandboxOnHost = true
 		return b, nil
 	}
 	launcher := cfg.Launcher
