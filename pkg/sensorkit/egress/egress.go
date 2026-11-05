@@ -98,6 +98,9 @@ type Scope struct {
 	// scope that names none.
 	Web        *webscope.Scope
 	WebTargets []string
+	// OOB is the task's out-of-band interaction server (nil: none), reached
+	// only through its own narrow path (OOBServer).
+	OOB *OOBServer
 }
 
 // Verdicts of a Record.

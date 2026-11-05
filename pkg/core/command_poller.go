@@ -2132,6 +2132,11 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		return failed, atStage(StageRun, fmt.Errorf("scan failed: %w", budgetClassed(err, ctx, deliverCtx, payload.Deadline, jobStart)))
 	}
 	ctx = deliveryContext(ctx, deliverCtx)
+	// A job whose callbacks the local policy turned off says so, whether or
+	// not its scanner reports an out-of-band state.
+	if opts.OOBOffReason != "" && scanResult.OOB == nil {
+		scanResult.OOB = OOBOffState(opts.OOBOffReason)
+	}
 
 	result := &CommandExecutionResult{
 		DurationMs: time.Since(startTime).Milliseconds(),
@@ -2159,6 +2164,8 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// Hosts the scan could not fully cover: the command completes, and the
 	// result says which hosts and why.
 	maps.Copy(result.Metadata, CoverageGapsMetadata(scanResult))
+	// What the scan did with the out-of-band callbacks the job asked for.
+	maps.Copy(result.Metadata, OOBMetadata(scanResult))
 
 	// Every target is done unless the report marks it (refused, failed,
 	// unfinished); the report's marks are added once it is parsed.

@@ -128,6 +128,12 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 		}
 	}
 	host := req.URL.Hostname()
+	if f.isOOB(host, port) {
+		// The task's interaction server: its own checks, never the web
+		// scope or the target limits (oob.go).
+		f.serveOOB(ctx, c, req, lift)
+		return
+	}
 	if g := f.guardFor(host, port); g != nil {
 		if err := g.check(req); err != nil {
 			g.refuse(req.Host, err)
