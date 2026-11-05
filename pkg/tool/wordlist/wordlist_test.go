@@ -93,3 +93,36 @@ func TestKnown(t *testing.T) {
 		t.Fatal("Known")
 	}
 }
+
+// SECURITY: a web list never carries a path or parameter that names a
+// state-changing action: Normalize drops it for every web purpose, so both
+// the build of a list and the composition of a task's list leave it out.
+// Other purposes (DNS labels) keep such words.
+func TestNormalizeDropsDestructiveEntries(t *testing.T) {
+	for _, p := range []string{WebPaths, WebFiles, APIRoutes} {
+		for _, in := range []string{"logout", "/admin/delete", "api/v1/users/deleteUser", "sign-out", "account/Log_Out",
+			"reset-password", "index.php?action=remove", "%6cogout", "unsubscribe.html", "admin/shutdown"} {
+			if e, ok := Normalize(p, in); ok {
+				t.Errorf("%s: %q kept as %q", p, in, e)
+			}
+		}
+		for _, in := range []string{"admin", "dropdown.js", "backup.zip", "api/v2/users", "killer-feature", "wiper.css"} {
+			if _, ok := Normalize(p, in); !ok {
+				t.Errorf("%s: %q dropped", p, in)
+			}
+		}
+	}
+	for _, in := range []string{"delete", "logout", "resetToken"} {
+		if _, ok := Normalize(Params, in); ok {
+			t.Errorf("params: %q kept", in)
+		}
+	}
+	if _, ok := Normalize(DNSLabels, "delete"); !ok {
+		t.Error("a dns label was dropped as destructive")
+	}
+	var out bytes.Buffer
+	res, err := Compose(&out, Options{Purpose: WebPaths}, strings.NewReader("admin\nlogout\nbackup.zip\nusers/delete\n"))
+	if err != nil || out.String() != "admin\nbackup.zip\n" || res.Invalid != 2 {
+		t.Fatalf("composed %q (%+v, %v)", out.String(), res, err)
+	}
+}

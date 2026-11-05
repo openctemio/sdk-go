@@ -508,3 +508,19 @@ func TestResetsBeforeAnyAnswerOpenTheBreaker(t *testing.T) {
 		t.Fatalf("breaker not open: %v", err)
 	}
 }
+
+// A vendor's rate-limit page under a status other than 429 or 503 (a 403 or
+// a 200 interstitial) is push-back: the rate halves as for a 429, and the
+// host is not a block.
+func TestAnEdgeRateLimitPageIsPushBackWhateverItsStatus(t *testing.T) {
+	c, clk := testCtl(t, 100)
+	clean(c, clk, "h")
+	clean(c, clk, "h") // at the ceiling
+	c.ReportResponse("h", 403, "", edgeprotect.Verdict{Vendor: edgeprotect.Akamai, State: edgeprotect.RateLimited, Signal: "custom"})
+	if r := c.Rate("h"); r != 50 {
+		t.Fatalf("rate %v after an edge rate limit, want 50", r)
+	}
+	if _, n := c.Gaps(); n != 0 {
+		t.Fatal("an edge rate limit became a block")
+	}
+}

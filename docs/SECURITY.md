@@ -1010,6 +1010,18 @@ SDK enforces it:
   backslashes as slashes. A path with an encoded slash, backslash or NUL is
   refused. Deny paths match by prefix, ignoring case, so over-blocking is the
   failure mode. Without `methods`, only GET, HEAD and OPTIONS are allowed.
+  The path reading is contract `webpath` (`CleanPath`, `Denied`, `Under`),
+  the same functions the platform plans path discovery with, so an
+  exclusion is never read two ways.
+- A scope may carry a request cap (`max_requests_per_host`, 0 to 1,000,000;
+  0 is no cap): the most requests the task sends to one host name, whatever
+  the port, scheme or connection. Path discovery jobs carry one, with
+  `methods: ["GET", "HEAD"]`. `tool.Context.HTTP` fails a request past it
+  before it is sent; on a confined sandbox the forwarder counts every
+  request it lets through (redirects followed by the tool included) and
+  refuses the ones past the cap with the same 403 as a request outside the
+  scope. The count lives in the task's forwarder: a new connection, another
+  port or a redirect never resets it.
 - A networked tool that does not declare `features.web_scope` is refused a
   job with a web scope, because it would run unrestricted. An invalid scope
   is refused too, never ignored. A scanner that cannot take capability jobs
@@ -1040,6 +1052,17 @@ SDK enforces it:
   `vuln.templates` suite of a tool that declares `features.web_scope` runs it
   again with `/.env` denied: it fails a tool that requests it (directly or
   behind a redirect) and one that no longer finds the exposed `/.git/config`.
+- The forwarder classifies every answer on a guarded connection with
+  contract `edgeprotect`: from its headers and from the start of its body
+  that arrived with them (never waiting for more, never a compressed body).
+  A vendor's challenge or block page makes the host a blocked coverage gap
+  from the first answer; a vendor's rate-limit page is push-back whatever
+  its status.
+- Wordlists for web requests (`web-paths`, `web-files`, `api-routes`,
+  `params`) never carry an entry that names a state-changing action
+  (contract `webpath.Destructive`: `logout`, `delete`, `reset`, ...):
+  `wordlist.Normalize` drops it when a list is built and when a task's list
+  is composed.
 
 #### Job identification on every request
 

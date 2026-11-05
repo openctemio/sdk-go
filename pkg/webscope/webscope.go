@@ -14,15 +14,19 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"path"
 	"slices"
 	"strings"
+
+	"github.com/openctemio/contract/webpath"
 )
 
 // Bounds of a web scope.
 const (
 	maxEntries   = 64
 	maxEntrySize = 512
+	// MaxRequestsPerHostLimit is the largest MaxRequestsPerHost a scope
+	// may carry.
+	MaxRequestsPerHostLimit = 1_000_000
 )
 
 // ErrOutOfScope is the error of a request outside the web scope.
@@ -52,6 +56,12 @@ type Scope struct {
 	// Methods are the HTTP methods a request may use. Empty: GET, HEAD
 	// and OPTIONS.
 	Methods []string `json:"methods,omitempty"`
+	// MaxRequestsPerHost is the most HTTP requests the task may send to
+	// one host name, whatever the port, connection or scheme (0: no cap).
+	// The task's forwarder counts every request it lets through and
+	// refuses the ones past the cap, as it refuses a request outside the
+	// scope; the task cannot reset the count.
+	MaxRequestsPerHost int `json:"max_requests_per_host,omitempty"`
 }
 
 // Validate checks the scope's bounds and syntax. A job whose scope is
@@ -59,6 +69,9 @@ type Scope struct {
 func (s *Scope) Validate() error {
 	if s == nil {
 		return nil
+	}
+	if s.MaxRequestsPerHost < 0 || s.MaxRequestsPerHost > MaxRequestsPerHostLimit {
+		return fmt.Errorf("web scope: max_requests_per_host %d is outside 0..%d", s.MaxRequestsPerHost, MaxRequestsPerHostLimit)
 	}
 	for name, list := range map[string][]string{"hosts": s.Hosts, "path_prefixes": s.PathPrefixes,
 		"deny_paths": s.DenyPaths, "methods": s.Methods} {
@@ -78,7 +91,7 @@ func (s *Scope) Validate() error {
 		}
 	}
 	for _, p := range slices.Concat(s.PathPrefixes, s.DenyPaths) {
-		if !strings.HasPrefix(p, "/") || strings.ContainsAny(p, "?#") || hasDotSegment(p) {
+		if !strings.HasPrefix(p, "/") || strings.ContainsAny(p, "?#") || webpath.HasDotSegment(p) {
 			return fmt.Errorf("web scope: invalid path %q", p)
 		}
 	}
@@ -124,38 +137,14 @@ func (s *Scope) Allows(method string, u *url.URL, targets []string) error {
 		return fmt.Errorf("%w: %v", ErrOutOfScope, err)
 	}
 	// A server that drops path parameters (";jsessionid=...") reads
-	// "/;/admin" as "/admin": both readings must pass.
-	for _, v := range []string{p, withoutParams(p)} {
-		lower := strings.ToLower(v)
-		for _, d := range s.DenyPaths {
-			if strings.HasPrefix(lower, strings.ToLower(d)) {
-				return fmt.Errorf("%w: path %s is denied", ErrOutOfScope, d)
-			}
-		}
-		if len(s.PathPrefixes) > 0 && !slices.ContainsFunc(s.PathPrefixes, func(pre string) bool { return underPrefix(v, pre) }) {
-			return fmt.Errorf("%w: path outside the allowed prefixes", ErrOutOfScope)
-		}
+	// "/;/admin" as "/admin": every reading must pass (webpath.Readings).
+	if d, denied := webpath.Denied(p, s.DenyPaths); denied {
+		return fmt.Errorf("%w: path %s is denied", ErrOutOfScope, d)
+	}
+	if len(s.PathPrefixes) > 0 && !slices.ContainsFunc(s.PathPrefixes, func(pre string) bool { return webpath.Under(p, pre) }) {
+		return fmt.Errorf("%w: path outside the allowed prefixes", ErrOutOfScope)
 	}
 	return nil
-}
-
-// withoutParams is a clean path with every segment's parameters (";...")
-// removed, cleaned again.
-func withoutParams(p string) string {
-	if !strings.Contains(p, ";") {
-		return p
-	}
-	segs := strings.Split(p, "/")
-	for i, seg := range segs {
-		segs[i], _, _ = strings.Cut(seg, ";")
-	}
-	q := strings.Join(segs, "/")
-	trailing := strings.HasSuffix(q, "/")
-	c := path.Clean("/" + q)
-	if trailing && c != "/" {
-		c += "/"
-	}
-	return c
 }
 
 // HostMatches reports whether host matches the pattern: equal ignoring case
@@ -176,46 +165,10 @@ func HostMatches(pattern, host string) bool {
 // CleanPath is the path a server sees for u: percent-decoded, dot segments
 // resolved, never empty. A path with an encoded slash, backslash or NUL, a
 // control character, or a dot segment with parameters ("..;") is refused:
-// servers disagree on it.
+// servers disagree on it. It is contract webpath.CleanPath, the reading the
+// platform plans with.
 func CleanPath(u *url.URL) (string, error) {
-	raw := u.EscapedPath()
-	if raw == "" {
-		return "/", nil
-	}
-	lower := strings.ToLower(raw)
-	if strings.Contains(lower, "%2f") || strings.Contains(lower, "%5c") || strings.Contains(lower, "%00") {
-		return "", errors.New("encoded separator in the path")
-	}
-	dec, err := url.PathUnescape(raw)
-	if err != nil {
-		return "", errors.New("invalid percent-encoding in the path")
-	}
-	if strings.ContainsFunc(dec, isControl) {
-		return "", errors.New("control character in the path")
-	}
-	dec = strings.ReplaceAll(dec, "\\", "/")
-	for _, seg := range strings.Split(dec, "/") {
-		if base, _, ok := strings.Cut(seg, ";"); ok && (base == "." || base == "..") {
-			return "", errors.New("dot segment with parameters in the path")
-		}
-	}
-	trailing := strings.HasSuffix(dec, "/")
-	c := path.Clean("/" + dec)
-	if trailing && c != "/" {
-		c += "/"
-	}
-	return c, nil
-}
-
-// underPrefix reports whether p is the prefix or under it, at a segment
-// boundary.
-func underPrefix(p, prefix string) bool {
-	prefix = strings.TrimSuffix(prefix, "/")
-	return prefix == "" || p == prefix || strings.HasPrefix(p, prefix+"/")
-}
-
-func hasDotSegment(p string) bool {
-	return slices.ContainsFunc(strings.Split(p, "/"), func(s string) bool { return s == "." || s == ".." })
+	return webpath.CleanPath(u.EscapedPath())
 }
 
 func isControl(r rune) bool { return r < 0x20 || r == 0x7f }

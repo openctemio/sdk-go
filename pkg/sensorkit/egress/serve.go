@@ -161,8 +161,11 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 	// on unchanged, in order.
 	ur := &errReader{r: up}
 	var head bytes.Buffer
-	if resp, err := http.ReadResponse(bufio.NewReader(io.TeeReader(io.LimitReader(ur, maxHeaderBytes), &head)), req); err == nil {
-		f.observeResponse(host, resp)
+	hr := bufio.NewReader(io.TeeReader(io.LimitReader(ur, maxHeaderBytes), &head))
+	if resp, err := http.ReadResponse(hr, req); err == nil {
+		// What the reader already buffered is in head too, so it reaches
+		// the client unchanged.
+		f.observeResponse(host, resp, bufferedBody(hr, resp))
 	} else {
 		f.observeErr(host, err)
 	}
