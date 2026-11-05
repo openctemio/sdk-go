@@ -10,6 +10,7 @@ import (
 
 	"github.com/openctemio/contract/capability"
 	"github.com/openctemio/contract/outcome"
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 )
 
 // lookupPolicy allows example.com and its subdomains and one test range, and
@@ -86,6 +87,14 @@ func TestAdmitCommandTargets_UnresolvableByCapability(t *testing.T) {
 			}
 			if adm.Settled {
 				t.Fatal("a job with a target left is not settled")
+			}
+			if RegistryOnlyCapability(ref) {
+				// A registry lookup takes the name that does not resolve
+				// under an allowed domain (TestAdmitCommandTargets_RegistryOnly...).
+				if got := payloadTargets(t, cmd); !slices.Equal(got, []string{"example.com", "gone.example.com"}) {
+					t.Fatalf("registry-only payload targets %v", got)
+				}
+				return
 			}
 			if got := payloadTargets(t, cmd); !slices.Equal(got, []string{"example.com"}) {
 				t.Fatalf("payload targets %v: a dead name reached the tool", got)
@@ -248,3 +257,113 @@ func TestDefaultCommandExecutor_LookupOnlyDeadNames(t *testing.T) {
 type capListRecorder struct{ *listRecorder }
 
 func (capListRecorder) TakesCapabilityJobs() bool { return true }
+
+func TestRegistryOnlyCapability(t *testing.T) {
+	for _, c := range capability.All() {
+		want := c.ID == "lookup.rdap"
+		if got := RegistryOnlyCapability(c.ID + "@" + strconv.Itoa(c.Major)); got != want {
+			t.Errorf("%s: registry-only %v, want %v", c.ID, got, want)
+		}
+		// Never a capability that connects to its targets.
+		if RegistryOnlyCapability(c.ID) && c.TierFloor > 0 {
+			t.Errorf("%s: a registry-only capability must be passive", c.ID)
+		}
+	}
+	for _, c := range []string{"", "lookup", "lookup.rdap.extra", "scan.ports", "resolve.dns"} {
+		if RegistryOnlyCapability(c) {
+			t.Errorf("%q must not be registry-only", c)
+		}
+	}
+}
+
+// A registry lookup (RDAP) asks the registry, never the target: a name that
+// does not resolve is handed to the tool, not refused as unresolvable. The
+// domain deny list and the allowed domains still apply by name.
+func TestAdmitCommandTargets_RegistryOnlyTakesNamesThatDoNotResolve(t *testing.T) {
+	lp := lookupLP(t)
+	cmd := cmdWith("c", "scan", map[string]any{"scanner": "nuclei", "capability": "lookup.rdap@1",
+		"targets": []string{"example.com", "gone.example.com", "blocked.example.com", "dead.other.test"}})
+	adm, err := lp.AdmitCommandTargets(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("refused: %v", err)
+	}
+	if got := payloadTargets(t, cmd); !slices.Equal(got, []string{"example.com", "gone.example.com"}) {
+		t.Fatalf("payload targets %v", got)
+	}
+	r := refusedBy(adm)
+	if len(r) != 2 {
+		t.Fatalf("refused %+v", adm.Refused)
+	}
+	if b := r["blocked.example.com"]; b.Reason != RefusedTargetDenied || b.Rule != "targets.deny" {
+		t.Fatalf("blocked.example.com %+v", b)
+	}
+	// Outside the allowed domains a name needs addresses in the allowed
+	// ranges, and has none.
+	if d := r["dead.other.test"]; d.Reason != RefusedTargetUnresolvable {
+		t.Fatalf("dead.other.test %+v", d)
+	}
+
+	// The same names for a capability that connects: the dead one is refused.
+	cmd = cmdWith("c", "scan", map[string]any{"scanner": "nuclei", "capability": "scan.ports@1",
+		"targets": []string{"example.com", "gone.example.com"}})
+	adm, err = lp.AdmitCommandTargets(context.Background(), cmd)
+	if err != nil || !slices.Equal(payloadTargets(t, cmd), []string{"example.com"}) || len(adm.Refused) != 1 {
+		t.Fatalf("connecting: %+v %v", adm, err)
+	}
+}
+
+// A policy with no allow list: every name passes by name, a deny still
+// refuses, and an address literal is checked as ever (a blocked range stays
+// blocked).
+func TestAdmitCommandTargets_RegistryOnlyWithoutAllowList(t *testing.T) {
+	// CI sets OPENCTEM_SDK_HTTPSEC_ALLOW_LOOPBACK=1 for the httptest-based
+	// tests, which lets loopback through the normal check: pin it off so
+	// the loopback refusal is asserted the same everywhere.
+	prev := httpsec.AllowLoopback
+	httpsec.AllowLoopback = false
+	t.Cleanup(func() { httpsec.AllowLoopback = prev })
+	lp, err := ParseLocalPolicy([]byte("apiVersion: openctem.io/sensor-policy/v1\ntargets:\n  deny: [\"blocked.example.com\"]\nchecks:\n  allow: [scan]\n"),
+		LocalPolicyOptions{LookupEnv: env(nil), LookupIP: lookupDNS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := cmdWith("c", "scan", map[string]any{"scanner": "nuclei", "capability": "lookup.rdap@1",
+		"targets": []string{"anything.test", "blocked.example.com", "127.0.0.1"}})
+	adm, err := lp.AdmitCommandTargets(context.Background(), cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := payloadTargets(t, cmd); !slices.Equal(got, []string{"anything.test"}) {
+		t.Fatalf("payload targets %v (refused %+v)", got, adm.Refused)
+	}
+}
+
+// The executor's own check right before the tool starts takes the same
+// view: a name that does not resolve reaches a registry-only tool, and a
+// connecting tool never gets it.
+func TestDefaultCommandExecutor_RegistryOnlyTakesDeadNames(t *testing.T) {
+	run := func(capability string) ([]string, []RefusedTarget) {
+		sc := &listRecorder{}
+		e := NewDefaultCommandExecutor(nil)
+		e.AddScanner(capListRecorder{sc})
+		e.SetLocalPolicy(lookupLP(t))
+		res, err := e.Execute(context.Background(), scanCommand(t, ScanCommandPayload{Scanner: "nuclei", Capability: capability,
+			Targets: []string{"203.0.113.5", "gone.example.com", "blocked.example.com"}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed, _ := res.Metadata[MetaRefusedTargets].([]RefusedTarget)
+		return sc.list, listed
+	}
+	got, refused := run("lookup.rdap@1")
+	if !slices.Equal(got, []string{"203.0.113.5", "gone.example.com"}) {
+		t.Fatalf("the tool got %v", got)
+	}
+	if len(refused) != 1 || refused[0].Target != "blocked.example.com" {
+		t.Fatalf("refused %+v", refused)
+	}
+	got, _ = run("scan.ports@1")
+	if !slices.Equal(got, []string{"203.0.113.5"}) {
+		t.Fatalf("connecting: the tool got %v", got)
+	}
+}
