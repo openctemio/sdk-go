@@ -237,7 +237,13 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 		}
 		upTLS := tls.Client(up, &tls.Config{ServerName: serverName, InsecureSkipVerify: insecureSkipTargetVerify, //nolint:gosec // see insecureSkipTargetVerify
 			NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS12})
-		if err := upTLS.Handshake(); err != nil {
+		// A host that drips its handshake keeps the connection only for
+		// the head window, not for as long as each byte beats the idle
+		// bound.
+		hctx, cancel := context.WithTimeout(ctx, f.responseHeadTimeout())
+		err := upTLS.HandshakeContext(hctx)
+		cancel()
+		if err != nil {
 			reason := adapt.FailureReason(err)
 			if reason == "" && ctx.Err() == nil {
 				reason = adapt.ReasonTLS
@@ -253,9 +259,33 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 	_ = c.SetReadDeadline(time.Time{})
 	lr := &io.LimitedReader{R: client, N: maxHeaderBytes}
 	cbr := bufio.NewReader(lr)
-	ubr := bufio.NewReader(upstream)
 	cw, uw := &countWriter{w: client}, &countWriter{w: upstream}
 	defer func() { out, in = uw.n.Load(), cw.n.Load() }()
+	// The response head is bounded as the request's is: at most
+	// maxHeaderBytes (every informational response before the final one
+	// included), read within the head window. http.ReadResponse reads a
+	// header line without limit, so a host that sent an endless header
+	// grew the forwarder's heap until the sensor ran out of memory, and
+	// every task on it with it.
+	ulr := &io.LimitedReader{R: upstream, N: maxHeaderBytes}
+	ubr := bufio.NewReader(ulr)
+	readHead := func(req *http.Request) (*http.Response, error) {
+		ulr.N = maxHeaderBytes
+		_ = upstream.SetReadDeadline(time.Now().Add(f.responseHeadTimeout()))
+		resp, err := http.ReadResponse(ubr, req)
+		for err == nil && resp.StatusCode >= 100 && resp.StatusCode < 200 && resp.StatusCode != http.StatusSwitchingProtocols {
+			if werr := resp.Write(cw); werr != nil {
+				return nil, werr
+			}
+			resp, err = http.ReadResponse(ubr, req)
+		}
+		if err != nil {
+			return nil, err
+		}
+		_ = upstream.SetReadDeadline(time.Time{})
+		ulr.N = math.MaxInt64
+		return resp, nil
+	}
 	host := normName(rec.Host)
 	for n := 0; ; n++ {
 		lr.N = maxHeaderBytes
@@ -293,13 +323,7 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 			f.observeErr(host, err)
 			return
 		}
-		resp, err := http.ReadResponse(ubr, req)
-		for err == nil && resp.StatusCode >= 100 && resp.StatusCode < 200 && resp.StatusCode != http.StatusSwitchingProtocols {
-			if werr := resp.Write(cw); werr != nil {
-				return
-			}
-			resp, err = http.ReadResponse(ubr, req)
-		}
+		resp, err := readHead(req)
 		if err != nil {
 			f.observeErr(host, err)
 			return
@@ -315,6 +339,15 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 			return
 		}
 	}
+}
+
+// responseHeadTimeout bounds reading a response head from a host: the
+// upstream idle bound, or DefaultUpstreamIdle when that is off.
+func (f *Forwarder) responseHeadTimeout() time.Duration {
+	if f.limits.UpstreamIdle > 0 {
+		return f.limits.UpstreamIdle
+	}
+	return DefaultUpstreamIdle
 }
 
 // closesConnError marks a refusal after which the connection closes: the
