@@ -219,11 +219,11 @@ type Forwarder struct {
 	// under its web scope's request cap (spendWebRequest).
 	webMu       sync.Mutex
 	webRequests map[string]int
-	mu       sync.Mutex
-	records  []Record
-	dropped  int
-	tally    Tally
-	conns    chan struct{}
+	mu          sync.Mutex
+	records     []Record
+	dropped     int
+	tally       Tally
+	conns       chan struct{}
 }
 
 // New returns the forwarder of one task. Names are normalized (lower case,
