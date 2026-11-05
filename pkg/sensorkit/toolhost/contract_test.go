@@ -156,3 +156,25 @@ func TestContractViolationsMakeTheTaskPartial(t *testing.T) {
 		t.Fatalf("status %s stats %+v", out.Status, out.Stats)
 	}
 }
+
+// With no rate set, a tool runs at its own default (100) unless the policy
+// maximum is lower: the maximum never raises it.
+func TestLocalPolicyNeverRaisesTheToolDefaultRate(t *testing.T) {
+	h := testHost(t)
+	h.Policy = &ratePolicy{max: 500}
+	out := runContract(t, h, tool.Task{})
+	if got := out.Report.Findings[0].Title; got != "sev= rate=100" {
+		t.Fatalf("unset rate under a high maximum: %q, want the tool default 100", got)
+	}
+	h.Policy = &ratePolicy{max: 40}
+	out = runContract(t, h, tool.Task{})
+	if got := out.Report.Findings[0].Title; got != "sev= rate=40" {
+		t.Fatalf("unset rate under a lower maximum: %q, want 40", got)
+	}
+	// An explicit request is still capped by the maximum, and kept below it.
+	h.Policy = &ratePolicy{max: 500}
+	out = runContract(t, h, tool.Task{Capability: "vuln.templates@1", Params: params("rate", `300`)})
+	if got := out.Report.Findings[0].Title; got != "sev= rate=300" {
+		t.Fatalf("explicit rate: %q", got)
+	}
+}
