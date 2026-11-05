@@ -463,10 +463,10 @@ func TestBreakerGapNamesTheCause(t *testing.T) {
 
 // A host that answered and then resets some requests (an edge or an
 // intrusion-prevention device refusing the paths it dislikes) is up: the
-// resets slow it down but never open its breaker, so the rest of the scan
-// still runs. Only BlockRun resets in a row, with no answer between them,
-// make it a block.
-func TestResetsAfterAnswersSlowTheHostButDoNotCutItOff(t *testing.T) {
+// resets neither open its breaker nor slow it down (a refusal, as a 403),
+// so the rest of the scan still runs at its pace. Only BlockRun resets in a
+// row, with no answer between them, make it a block.
+func TestResetsAfterAnswersDoNotSlowOrCutTheHostOff(t *testing.T) {
 	c, _ := testCtl(t, 100)
 	c.ReportHTTP("h", 200, "")
 	start := c.Rate("h")
@@ -482,8 +482,8 @@ func TestResetsAfterAnswersSlowTheHostButDoNotCutItOff(t *testing.T) {
 	if _, n := c.Gaps(); n != 0 {
 		t.Fatalf("resets after answers made a gap")
 	}
-	if r := c.Rate("h"); r >= start {
-		t.Fatalf("rate %v not lowered from %v by the resets", r, start)
+	if r := c.Rate("h"); r < start {
+		t.Fatalf("rate %v lowered from %v by refusals of a host that answers", r, start)
 	}
 	for range TargetRate.BlockRun {
 		c.Report("h", Event{Signal: Failed, Reason: ReasonReset})
@@ -522,5 +522,63 @@ func TestAnEdgeRateLimitPageIsPushBackWhateverItsStatus(t *testing.T) {
 	}
 	if _, n := c.Gaps(); n != 0 {
 		t.Fatal("an edge rate limit became a block")
+	}
+}
+
+// A web host behind an edge filter: it accepts every connection, resets
+// the first requests (nuclei's first checks are mostly paths such a filter
+// refuses) before this task saw it answer, then answers the rest. It is
+// up: the resets never open its breaker, and the requests that follow are
+// still let through.
+func TestResetsOnAcceptedConnectionsBeforeAnAnswerDoNotCutTheHostOff(t *testing.T) {
+	c, clk := testCtl(t, 100)
+	for range 3 * TargetRate.BreakerFailures {
+		c.ReportDial("h", 443, nil)
+		c.Report("h", Event{Signal: Failed, Reason: ReasonReset})
+	}
+	if err := c.Acquire(context.Background(), "h"); err != nil {
+		t.Fatalf("resets on accepted connections opened the breaker: %v", err)
+	}
+	if _, n := c.Gaps(); n != 0 {
+		t.Fatalf("resets on accepted connections made a gap")
+	}
+	// The host answers again: the rate recovers in clean windows.
+	low := c.Rate("h")
+	for range 4 {
+		window(clk)
+		c.ReportHTTP("h", 200, "")
+	}
+	window(clk)
+	c.ReportHTTP("h", 200, "")
+	if r := c.Rate("h"); r <= low {
+		t.Fatalf("rate %v did not recover from %v after clean windows", r, low)
+	}
+}
+
+// A host that accepts connections and resets every request is a block
+// after BlockRun resets in a row, as before; the gap says so.
+func TestAcceptedConnectionsResetEveryTimeAreABlock(t *testing.T) {
+	c, _ := testCtl(t, 100)
+	for range TargetRate.BlockRun {
+		c.ReportDial("h", 443, nil)
+		c.Report("h", Event{Signal: Failed, Reason: ReasonReset})
+	}
+	gaps, n := c.Gaps()
+	if n != 1 || gaps[0].Reason != GapBlocked {
+		t.Fatalf("gaps %+v, want one blocked gap after %d resets in a row", gaps, TargetRate.BlockRun)
+	}
+	if err := c.Acquire(context.Background(), "h"); !errors.Is(err, ErrHostUnavailable) {
+		t.Fatalf("a host resetting every request was not backed off: %v", err)
+	}
+}
+
+// A host that resets before it ever accepted a connection in this task is
+// still slowed down by each failure (once per window).
+func TestResetsBeforeAnyConnectionLowerTheRate(t *testing.T) {
+	c, _ := testCtl(t, 100)
+	start := c.Rate("h")
+	c.Report("h", Event{Signal: Failed, Reason: ReasonReset})
+	if r := c.Rate("h"); r >= start {
+		t.Fatalf("rate %v not lowered from %v", r, start)
 	}
 }

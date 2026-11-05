@@ -91,6 +91,10 @@ func (p kitPolicy) CapRate(requested int) int { return p.k.LocalPolicy().CapRate
 // User-Agent, and whether a tool may skip TLS verification.
 func (p kitPolicy) HTTPPolicy() (string, bool) { return p.k.LocalPolicy().HTTPPolicy() }
 
+// HTTPHeaders are the identification headers the sensor's owner set in the
+// policy (http.headers): sent on every request of every task that sends HTTP.
+func (p kitPolicy) HTTPHeaders() []core.LocalHTTPHeader { return p.k.LocalPolicy().HTTPHeaders() }
+
 // AdmittedAddrs are the addresses the policy admitted for a host: a
 // confined task's forwarder dials only those (no second lookup between
 // the check and the dial).
@@ -101,10 +105,11 @@ func (p kitPolicy) AdmittedAddrs(ctx context.Context, host string) ([]netip.Addr
 // The host reads these optional policies by type assertion: a missing
 // method would silently switch the feature off, so each is asserted here.
 var (
-	_ toolhost.Policy       = kitPolicy{}
-	_ toolhost.RatePolicy   = kitPolicy{}
-	_ toolhost.HTTPPolicy   = kitPolicy{}
-	_ toolhost.HostResolver = kitPolicy{}
+	_ toolhost.Policy           = kitPolicy{}
+	_ toolhost.RatePolicy       = kitPolicy{}
+	_ toolhost.HTTPPolicy       = kitPolicy{}
+	_ toolhost.HTTPHeaderPolicy = kitPolicy{}
+	_ toolhost.HostResolver     = kitPolicy{}
 )
 
 func (k *Kit) toolCredentials(name string) func() map[string]string {

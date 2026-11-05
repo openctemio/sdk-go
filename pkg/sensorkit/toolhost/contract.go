@@ -55,6 +55,11 @@ func capRate(m tool.Manifest, cfg json.RawMessage, pol Policy) (json.RawMessage,
 	if f, ok := values[key].(float64); ok && f > 0 {
 		requested = int(f)
 	}
+	// A task that left the rate unset runs at the tool's own default; the
+	// cap may only lower that, never raise it to the policy's maximum.
+	if requested == 0 {
+		requested = toolDefaultRate(m, key)
+	}
 	capped := rp.CapRate(requested)
 	if capped == requested || capped <= 0 {
 		return cfg, nil, nil
@@ -67,6 +72,31 @@ func capRate(m tool.Manifest, cfg json.RawMessage, pol Policy) (json.RawMessage,
 	line := &LogLine{Level: "info", Msg: fmt.Sprintf("the local policy set %s to %d (asked %d)", key, capped, requested),
 		Fields: map[string]any{"source": "runtime", "rate_param": key, "requested": requested, "capped": capped}}
 	return out, line, nil
+}
+
+// toolDefaultRate is the default of the tool's rate key in its config
+// schema, 0 when it declares none.
+func toolDefaultRate(m tool.Manifest, key string) int {
+	schema, err := m.ConfigSchema()
+	if err != nil || schema == nil {
+		return 0
+	}
+	prop := schema.Property(key)
+	if prop == nil || !prop.HasDefault {
+		return 0
+	}
+	switch v := prop.Default.(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return int(n)
+	}
+	return 0
 }
 
 // checkContract checks the accepted output against the task capability's

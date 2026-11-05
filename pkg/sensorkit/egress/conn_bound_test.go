@@ -201,3 +201,42 @@ func TestBoundedConnKeepsCallerDeadline(t *testing.T) {
 		t.Fatalf("close after the context closed it: %v", err)
 	}
 }
+
+// A tunnel the tool opened and never used (its connection pool dialed it
+// ahead), cut on the idle bound, says nothing about the host: it is not a
+// timeout of the host. A tunnel the tool sent bytes on and the host never
+// answered still is.
+func TestUnusedTunnelCutOnIdleIsNotAHostFailure(t *testing.T) {
+	for name, tc := range map[string]struct {
+		payload string
+		slowed  bool
+	}{
+		"unused":           {"", false},
+		"sent, unanswered": {"\x16\x03\x01", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			port := silentServer(t)
+			f := New(Scope{Prefixes: []netip.Prefix{pfx("127.0.0.1/32")}}, Limits{UpstreamIdle: 300 * time.Millisecond})
+			addr, _, _ := startServe(t, f)
+			start := f.TargetRate().Rate("127.0.0.1")
+			c, err := net.Dial("tcp", addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			_, _ = fmt.Fprintf(c, "CONNECT 127.0.0.1:%d HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n", port, port)
+			br := bufio.NewReader(c)
+			_, _ = br.ReadString('\n')
+			if tc.payload != "" {
+				_, _ = io.WriteString(c, tc.payload)
+			}
+			_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+			_, _ = io.Copy(io.Discard, br) // ends when the forwarder cut the tunnel
+			waitRecords(t, f, 1)
+			slowed := f.TargetRate().Rate("127.0.0.1") < start
+			if slowed != tc.slowed {
+				t.Fatalf("host slowed down = %v, want %v (rate %v, start %v)", slowed, tc.slowed, f.TargetRate().Rate("127.0.0.1"), start)
+			}
+		})
+	}
+}
