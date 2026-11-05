@@ -99,6 +99,14 @@ const FeatureResults = "results"
 // §3.5a).
 const FeatureResultsManifest = "results_manifest"
 
+// FeatureResultsLeaseEpoch binds a command's results to the lease epoch the
+// sensor held it under. The SDK names it in HeaderSensorFeatures on every
+// PUT and commit of a command-bound report that carries HeaderLeaseEpoch: a
+// platform then refuses such a request without the epoch, and refuses an
+// epoch that is not the command's current one, so the results of a run the
+// platform took back never bind to the run it handed out next.
+const FeatureResultsLeaseEpoch = "results_lease_epoch"
+
 // DigestSHA256 is the Content-Digest algorithm the SDK sends.
 const DigestSHA256 = "sha-256"
 

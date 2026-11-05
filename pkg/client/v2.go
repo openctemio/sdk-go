@@ -172,6 +172,9 @@ type V2PushOptions struct {
 	// CommandID binds the report to a command this sensor claimed ("" for
 	// unsolicited results).
 	CommandID string
+	// LeaseEpoch is the lease epoch CommandID was held under when the
+	// report was made (a stored report's); 0: the epoch held now.
+	LeaseEpoch int
 	// Progress resumes an earlier attempt (nil: start).
 	Progress *V2Progress
 	// OnProgress persists progress after every acknowledged segment and
@@ -477,6 +480,7 @@ func (c *Client) PushResultsV2(ctx context.Context, report *ctis.Report, opts *V
 	plan := v2Plan{
 		manifest: slices.Contains(hello.Features, protov2.FeatureResultsManifest),
 		resumed:  opts.Progress != nil,
+		epoch:    opts.LeaseEpoch,
 	}
 	for {
 		commandID := opts.CommandID
@@ -577,6 +581,8 @@ type v2Plan struct {
 	// resumed: the push continues an earlier attempt (a delivery after a
 	// restart): segments the server already holds are not sent again.
 	resumed bool
+	// epoch: the lease epoch a bound report states (0: the one held now).
+	epoch int
 }
 
 // pushV2Once plans and sends the report under p.ReportID.
@@ -586,7 +592,11 @@ func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits pro
 	// the platform refuses the results of a run it has handed out again.
 	var lease http.Header
 	if commandID != "" {
-		lease = leaseHeader(c.leases.epoch(commandID))
+		epoch := plan.epoch
+		if epoch <= 0 {
+			epoch = c.leases.epoch(commandID)
+		}
+		lease = resultsLeaseHeader(epoch)
 	}
 	r := *report
 	r.Version, r.Schema = ctis.SchemaVersion, ctis.SchemaURL

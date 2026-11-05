@@ -738,9 +738,14 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 		}
 		commandID, rest = parts[0], "/"+parts[1]
 		f.mu.Lock()
-		state := f.commands[commandID]
+		state, epoch := f.commands[commandID], f.cmdEpoch[commandID]
 		f.mu.Unlock()
-		if state != "running" {
+		// As the platform: a stated lease epoch must be the command's
+		// current one, and a request that names results_lease_epoch must
+		// state one.
+		stated := strings.TrimSpace(r.Header.Get(protov2.HeaderLeaseEpoch))
+		promised := namesFeature(r.Header.Values(protov2.HeaderSensorFeatures), protov2.FeatureResultsLeaseEpoch)
+		if state != "running" || (stated != "" && stated != strconv.Itoa(epoch)) || (promised && stated == "") {
 			f.problem(w, http.StatusNotFound, protov2.ProblemCommandNotFound)
 			return
 		}
@@ -1062,4 +1067,17 @@ func manifestMatches(req protov2.CommitRequest, st *StoredReport) bool {
 	}
 	return assets == req.Totals.Assets && findings == req.Totals.Findings &&
 		req.ReportSHA256 == hex.EncodeToString(protov2.ReportRoot(hashes))
+}
+
+// namesFeature reports whether a HeaderSensorFeatures value list names
+// feature (comma-separated, case-insensitive).
+func namesFeature(values []string, feature string) bool {
+	for _, v := range values {
+		for _, f := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(f), feature) {
+				return true
+			}
+		}
+	}
+	return false
 }
