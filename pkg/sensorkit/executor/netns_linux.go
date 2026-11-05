@@ -18,6 +18,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -74,15 +75,21 @@ func exitStatus(err error) int {
 	return launcherExit
 }
 
-// confineAttrs makes the launcher start in its own user, network and mount
-// namespaces, as root of the user namespace mapped to this process's user
-// (no other id is mapped, so it gains nothing outside).
+// confineAttrs makes the launcher start in its own user, network, mount and
+// PID namespaces, as root of the user namespace mapped to this process's
+// user (no other id is mapped, so it gains nothing outside).
+//
+// The PID namespace keeps the task's processes among themselves: a task
+// cannot signal the sensor or another task, though they run as the same
+// user, and the inner launcher is its init, so when the launcher ends the
+// kernel kills every process of the task, one that left its process group
+// (setsid) included.
 func confineAttrs(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	a := cmd.SysProcAttr
-	a.Cloneflags |= syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS
+	a.Cloneflags |= syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS | syscall.CLONE_NEWPID
 	a.UidMappings = []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}}
 	a.GidMappings = []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}}
 	a.GidMappingsEnableSetgroups = false
@@ -353,7 +360,36 @@ func superviseTool(bin string, argv []string, env []string) int {
 			_ = cmd.Process.Signal(s)
 		}
 	}()
+	reapUntil(cmd.Process.Pid)
 	return exitStatus(cmd.Wait())
+}
+
+// siginfoPid is the offset of si_pid in a siginfo_t on 64-bit Linux (after
+// si_signo, si_errno, si_code and padding).
+const siginfoPid = 16
+
+// reapUntil reaps, as the init of the task's PID namespace, every child of
+// this process that ends (the orphans of the tool's processes are
+// reparented to it) until the tool itself has ended; the tool's own status
+// is left for its Wait. Returning ends the launcher and, with it, every
+// process left in the namespace.
+func reapUntil(tool int) {
+	for {
+		var info unix.Siginfo
+		err := unix.Waitid(unix.P_ALL, 0, &info, unix.WEXITED|unix.WNOWAIT, nil)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
+			return
+		}
+		pid := int(*(*int32)(unsafe.Pointer(uintptr(unsafe.Pointer(&info)) + siginfoPid))) //nolint:gosec // the kernel's siginfo_t layout
+		if pid == tool || pid <= 0 {
+			return
+		}
+		var ws unix.WaitStatus
+		_, _ = unix.Wait4(pid, &ws, unix.WNOHANG, nil)
+	}
 }
 
 // Secure bits (linux/securebits.h).

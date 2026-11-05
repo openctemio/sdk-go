@@ -767,9 +767,10 @@ first thing in `main`), which confines itself and then becomes the tool:
 | RLIMIT_DATA, RLIMIT_NPROC (the user's current count plus the task's allowance), RLIMIT_FSIZE, RLIMIT_NOFILE, RLIMIT_CORE=0, RLIMIT_CPU when set | memory exhaustion, fork bombs, disk filling, core dumps of secrets |
 | no_new_privs | setuid and file-capability escalation |
 | Landlock (Linux 5.13+; works under Docker's default seccomp profile) | writes outside the task directory and the declared write paths; reads of the protected paths (credentials file, outbox and its key, local policy, configuration), including through symlinks that lead into them |
-| seccomp filter | ptrace, process_vm_*, mount/namespaces (also clone with namespace flags; clone3 answers ENOSYS), kernel modules, kexec, keyrings, bpf, perf, clock changes, file handles, userfaultfd; a syscall from another ABI kills the task |
+| seccomp filter | ptrace, process_vm_*, mount/namespaces (also clone with namespace flags; clone3 answers ENOSYS), kernel modules, kexec, keyrings, bpf, perf, clock changes, file handles, userfaultfd, io_uring; a syscall from another ABI kills the task |
 | Process group, killed whole on timeout or cancel | stray children |
 | The sensor is non-dumpable | reading its memory, environment or open files through /proc |
+| PID namespace per confined task, the inner launcher its init (reaps orphans; when it ends the kernel kills every process of the task) | signals to the sensor or another task (same user), a process that leaves its process group (`setsid`) outliving the task, zombies piling up |
 | Network confinement (`Config.ConfineNetwork`, api RFC-060): its own user, network and mount namespaces per task, only loopback, a relay on 127.0.0.1:1080 (proxy) and :53 (DNS) to the task's forwarder (`pkg/sensorkit/egress`); the tool runs as a child of the launcher with no capabilities (`SECBIT_NOROOT` locked, empty bounding set) | any connection or lookup that does not go through the forwarder: a tool that ignores the proxy, raw sockets, DNS exfiltration, the sensor's own loopback services |
 
 **Network confinement requires unprivileged user namespaces.**
@@ -817,11 +818,16 @@ acknowledgement that every tool runs unconfined. The state is in the
 manifest posture (`sandbox.unconfined`: `refused` or `acknowledged`) and in
 the config report (`runtime.sandbox_unconfined`: `sandboxed`, `active_refused`
 (a failure), `acknowledged` (a warning)). Each
-`ExecResult.Sandbox` records what the run was under. Residual risks: without a
-separate user per task, a task can still send signals to processes of the same
-user (Landlock signal scoping needs Linux 6.12), and a task that escapes its
-process group with `setsid` is bounded by its rlimits but not killed with the
-group. The sandbox never uses a Docker socket; future backends (a Kubernetes
+`ExecResult.Sandbox` records what the run was under. Residual risks: a confined task
+cannot signal processes outside its PID namespace, and nothing it starts
+outlives it. A task that runs unconfined (no user namespaces on the host) can
+still send signals to processes of the same user (Landlock signal scoping
+needs Linux 6.12), and one that escapes its process group with `setsid` is
+bounded by its rlimits (and killed with its cgroup envelope, where there is
+one) but not with the group. A confined task still sees the container's
+`/proc` (the process list and command lines of the sensor's other tasks, not
+their environment or memory): a sensor that runs jobs of many tenants passes
+no secret on a command line. The sandbox never uses a Docker socket; future backends (a Kubernetes
 Pod per task, a rootless container) plug in behind the same interface.
 
 #### Organization proxy pools (`SENSOR_SCAN_EGRESS`)
