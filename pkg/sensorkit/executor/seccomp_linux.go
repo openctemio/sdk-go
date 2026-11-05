@@ -81,7 +81,9 @@ func applySeccomp() error {
 // commonDenied are syscalls no scanner needs: debugging other processes,
 // mounting and namespaces, kernel modules and kexec, keyrings, bpf and perf,
 // clock and system changes, file handles that bypass path checks,
-// userfaultfd.
+// userfaultfd, io_uring (a large kernel attack surface whose requests are
+// not seen by this filter; no scanner needs it, and libraries that use it
+// fall back to plain system calls).
 var commonDenied = []uintptr{
 	unix.SYS_PTRACE, unix.SYS_PROCESS_VM_READV, unix.SYS_PROCESS_VM_WRITEV,
 	unix.SYS_MOUNT, unix.SYS_UMOUNT2, unix.SYS_PIVOT_ROOT, unix.SYS_UNSHARE, unix.SYS_SETNS,
@@ -95,4 +97,5 @@ var commonDenied = []uintptr{
 	unix.SYS_SETTIMEOFDAY, unix.SYS_CLOCK_SETTIME, unix.SYS_ADJTIMEX, unix.SYS_CLOCK_ADJTIME,
 	unix.SYS_OPEN_BY_HANDLE_AT, unix.SYS_NAME_TO_HANDLE_AT, unix.SYS_FANOTIFY_INIT,
 	unix.SYS_USERFAULTFD, unix.SYS_LOOKUP_DCOOKIE,
+	unix.SYS_IO_URING_SETUP, unix.SYS_IO_URING_ENTER, unix.SYS_IO_URING_REGISTER,
 }
