@@ -98,7 +98,6 @@ func TestLocalPolicy_RequiredAbsentAdmission(t *testing.T) {
 		"cidr":        {"scanner": "naabu", "target": "203.0.113.0/24"},
 		"image":       {"scanner": "trivy", "target": "registry.example.com/app:1"},
 		"validate":    {"executor_kind": "nuclei", "target": map[string]any{"address": "203.0.113.12:443"}},
-		"interactsh":  {"scanner": "nuclei", "target": dir, "config": map[string]any{"allow_interactsh": true}},
 	} {
 		raw, _ := json.Marshal(payload)
 		typ := "scan"
@@ -115,6 +114,8 @@ func TestLocalPolicy_RequiredAbsentAdmission(t *testing.T) {
 		"filesystem": {ID: "fs", Type: "scan", Payload: json.RawMessage(`{"scanner":"trivy","target":"` + dir + `"}`)},
 		"health":     {ID: "h", Type: "health_check"},
 		"no target":  {ID: "c", Type: "collect", Payload: json.RawMessage(`{"collector":"github"}`)},
+		// Callbacks are turned off by the executor, not refused.
+		"callbacks": {ID: "cb", Type: "scan", Payload: json.RawMessage(`{"scanner":"trivy","target":"` + dir + `","config":{"allow_interactsh":true}}`)},
 	} {
 		if err := lp.AdmitCommand(ctx, cmd); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -167,7 +168,7 @@ func TestLocalPolicy_LegacyAbsentUnchanged(t *testing.T) {
 	if !lp.AllowsCustomTemplates() || !lp.AllowsInteractsh() || lp.Required() {
 		t.Fatal("legacy switches changed")
 	}
-	if len(lp.CommandWarnings(cmd)) != 2 {
+	if len(lp.CommandWarnings(cmd)) != 1 {
 		t.Fatalf("warnings: %v", lp.CommandWarnings(cmd))
 	}
 	if err := lp.CheckTarget(ctx, "203.0.113.10"); err != nil {
@@ -322,7 +323,8 @@ func TestPlatformTLSPin(t *testing.T) {
 	}
 	p := CurrentPosture()
 	st := executor.Current().Status()
-	if p.PlatformTLS.Pin != TLSPinFingerprint || p.Sandbox.Mode != string(st.Mode) || p.Sandbox.NetworkEnforced != st.NetworkEnforced {
+	if p.PlatformTLS.Pin != TLSPinFingerprint || p.Sandbox.Mode != string(st.Mode) || p.Sandbox.NetworkEnforced != st.NetworkEnforced ||
+		p.Sandbox.Unconfined != st.Unconfined() {
 		t.Fatalf("posture %+v %+v, sandbox %+v", p.PlatformTLS, p.Sandbox, st)
 	}
 }

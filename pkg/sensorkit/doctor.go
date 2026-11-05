@@ -35,14 +35,17 @@ import (
 
 // Check ids the kit reports (stable API: the platform explains them).
 const (
-	CheckToolsAvailable       = "tools.available"
-	CheckStatePersistent      = "identity.state_persistent"
-	CheckOutboxPersistent     = "storage.outbox_persistent"
-	CheckKeyRenewal           = "identity.key_renewal"
-	CheckScanProxyInherit     = "network.scan_proxy_inherit"
-	CheckCAPinHost            = "platform.ca_pin_host"
-	CheckOOMProtect           = "runtime.oom_protect"
-	CheckSandboxNetwork       = "runtime.sandbox_network"
+	CheckToolsAvailable   = "tools.available"
+	CheckStatePersistent  = "identity.state_persistent"
+	CheckOutboxPersistent = "storage.outbox_persistent"
+	CheckKeyRenewal       = "identity.key_renewal"
+	CheckScanProxyInherit = "network.scan_proxy_inherit"
+	CheckCAPinHost        = "platform.ca_pin_host"
+	CheckOOMProtect       = "runtime.oom_protect"
+	CheckSandboxNetwork   = "runtime.sandbox_network"
+	// CheckSandboxUnconfined: whether tools run without the sandbox, and
+	// whether the ones that contact their targets are refused for it.
+	CheckSandboxUnconfined    = "runtime.sandbox_unconfined"
 	CheckAliasDeprecated      = "config.alias_deprecated"
 	CheckEnvUnknown           = "config.env_unknown"
 	CheckPlatformTLS          = "platform.tls"

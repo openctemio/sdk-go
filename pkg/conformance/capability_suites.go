@@ -38,6 +38,8 @@ func (r *contractRun) capabilitySuite(c capability.Capability) {
 		r.discoverHosts(name, c)
 	case "probe.http":
 		r.probeHTTP(name, c)
+	case "detect.services":
+		r.detectServices(name, c)
 	case "vuln.templates":
 		r.vulnTemplates(name, c)
 	case "crawl.web", "dast.web":
@@ -445,4 +447,34 @@ func scopeOf(targets []tool.Target, vendor []string) egress.Scope {
 		s.Names[h] = addrs
 	}
 	return s
+}
+
+// detectServices: the detect.services fixtures (services_suite.go) as
+// service targets, with the standard params the tool takes; the credential
+// sentinel, identification and output bounds are checked.
+func (r *contractRun) detectServices(name string, c capability.Capability) {
+	if len(r.m.Consumes) > 0 && !slices.Contains(r.m.Consumes, string(ctis.AssetTypeService)) {
+		r.t.Errorf("%s: the tool does not consume service targets", name)
+		return
+	}
+	f, err := StartServiceFixtures()
+	if err != nil {
+		r.t.Errorf("%s: %v", name, err)
+		return
+	}
+	defer f.Close()
+	params := map[string]json.RawMessage{}
+	for k, v := range DetectServicesParams() {
+		if r.takes(c, k) {
+			params[k] = v
+		}
+	}
+	out := r.runSuite(name, c, tool.Task{Targets: f.Targets(), Params: params})
+	var rep *ctis.Report
+	if out != nil {
+		rep = out.Report
+	}
+	for _, p := range f.Problems(rep) {
+		r.t.Errorf("%s: %s", name, p)
+	}
 }

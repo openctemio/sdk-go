@@ -8,6 +8,28 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.47.2 — 2026-11-05
+
+### Security: the egress forwarder bounds every response head it reads
+
+- On a guarded connection (a CONNECT or SOCKS5 tunnel with a web scope or a path limit, TLS terminated or not), the forwarder parsed the target's response head without a size limit. A hostile target that sent an endless header line made the forwarder read without end: 256 MiB in under two seconds. The sensor then ran out of memory and every task on it failed, including other tenants' tasks on a shared sensor. The head (every informational response before the final one included) is now capped at 64 KiB, the cap the request side already had, and the connection closes when a head exceeds it.
+- A target that drips its response head or its TLS handshake, each byte inside the idle bound, now holds the connection only for one head window (`Limits.UpstreamIdle`, 2 minutes by default). Before, it held the connection for as long as it kept dripping. Plain proxied requests get the same window.
+- Operators: upgrade the sensor. No configuration changes.
+
+### Security: web scope deny paths hold when escaped, with `*` segments and for lenient server spellings
+
+- A deny path stored with a percent-escape (`/files/My%20Docs`) never matched, because requests are compared decoded: `/files/My%20Docs/a.bak` was allowed. A deny path now holds as written and decoded.
+- A `*` segment of a deny path (`/tenants/*/admin`) was compared literally. It now matches any one segment, as the platform's path exclusions read it.
+- Requests are checked in every reading a lenient server may act on: case folded to ASCII (`%C5%BF` is `s`), trailing dots and spaces of a segment dropped (`/admin./x`), and decoded twice (`/%252e%252e/admin`).
+- `Scope.Validate` adds the decoded form of each escaped deny path, so a tool that maps the deny list onto its own flags gets both forms. `webscope` now uses `github.com/openctemio/contract/webpath` (v1.3.1), the reading the platform uses.
+- These hold on the egress forwarder (confined tasks) and in `tool.Context.HTTP`. Operators: upgrade the sensor.
+
+### Added: detect.services conformance suite with a credential sentinel
+
+- `pkg/conformance`: the capability suite of `detect.services@1`. Seven loopback fixtures (SSH, Redis that requires a password, a MySQL greeting, SMTP with a hostile multi-line greeting, plain HTTP, HTTPS with ALPN h2 and http/1.1, LDAP) run as service targets with `depth: thorough`. Each fixture is a credential sentinel: any SSH user authentication (none, password, public key, keyboard-interactive), a MySQL handshake response, a Redis `AUTH` or `HELLO ... AUTH`, an SMTP `AUTH`, `MAIL`, `RCPT` or `DATA`, an LDAP bind, an HTTP `Authorization` or `Proxy-Authorization` header or a state-changing HTTP method fails the suite.
+- The suite also checks the report: services keep the value of their input port, the six protocols are identified (TLS on the HTTPS fixture), the Redis fixture is never reported as anonymous, and strings are bounded and clean (banner at most 512 bytes of valid UTF-8 without control characters, at most 16 details of at most 256 bytes).
+- `RunContractSuite` runs it for an exec tool that implements `detect.services@1`; a tool compiled into a sensor calls `DetectServicesSuite` with a function that runs it (for example with `pkg/testkit`). `StartServiceFixtures` exposes the fixtures for a tool's own tests.
+
 ## v0.47.1 — 2026-11-05
 
 ### Fixed: The local policy never raises a tool's default rate, and kit-based sensors apply http.headers

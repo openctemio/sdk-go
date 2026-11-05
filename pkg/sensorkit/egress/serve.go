@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -128,6 +129,12 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 		}
 	}
 	host := req.URL.Hostname()
+	if f.isOOB(host, port) {
+		// The task's interaction server: its own checks, never the web
+		// scope or the target limits (oob.go).
+		f.serveOOB(ctx, c, req, lift)
+		return
+	}
 	if g := f.guardFor(host, port); g != nil {
 		if err := g.check(req); err != nil {
 			g.refuse(req.Host, err)
@@ -159,15 +166,24 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 	// the response itself goes to the client as it came.
 	// It is parsed from a copy: every byte read from the host is passed
 	// on unchanged, in order.
+	// The head is read within the head window: a host that drips it does
+	// not hold the connection for as long as each byte beats the idle
+	// bound. On that timeout the connection ends (the deadline stays).
 	ur := &errReader{r: up}
 	var head bytes.Buffer
+	_ = up.SetReadDeadline(time.Now().Add(f.responseHeadTimeout()))
 	hr := bufio.NewReader(io.TeeReader(io.LimitReader(ur, maxHeaderBytes), &head))
 	if resp, err := http.ReadResponse(hr, req); err == nil {
 		// What the reader already buffered is in head too, so it reaches
-		// the client unchanged.
+		// the client unchanged. The body start is read from that buffer
+		// only: the bounded head read above is the sole read of the host.
 		f.observeResponse(host, resp, bufferedBody(hr, resp))
+		_ = up.SetReadDeadline(time.Time{})
 	} else {
 		f.observeErr(host, err)
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			_ = up.SetReadDeadline(time.Time{})
+		}
 	}
 	n, _ := c.Write(head.Bytes())
 	rest, _ := io.Copy(c, ur)

@@ -19,7 +19,6 @@ func TestCommandPoller_LocalPolicyRefuses(t *testing.T) {
 	c := newQueueClient(
 		scanCmd("outside", "normal", map[string]any{"scanner": "nuclei", "target": "192.0.2.1"}),
 		scanCmd("rebind", "normal", map[string]any{"scanner": "nuclei", "target": "rebind.corp.example.com"}),
-		scanCmd("callbacks", "normal", map[string]any{"scanner": "nuclei", "target": "203.0.113.11", "config": map[string]any{"allow_interactsh": true}}),
 		// A host of its own: per-host politeness would hold it back otherwise.
 		scanCmd("ok", "normal", map[string]any{"scanner": "nuclei", "target": "203.0.113.10"}),
 	)
@@ -41,7 +40,7 @@ func TestCommandPoller_LocalPolicyRefuses(t *testing.T) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for id, rule := range map[string]string{"outside": "targets.allow", "rebind": "targets.deny", "callbacks": "allow_interactsh"} {
+	for id, rule := range map[string]string{"outside": "targets.allow", "rebind": "targets.deny"} {
 		if c.results[id] != "failed" || !strings.HasPrefix(c.errs[id], "refused by local policy: "+rule+": ") {
 			t.Errorf("%s: result %q, error %q", id, c.results[id], c.errs[id])
 		}
@@ -150,8 +149,9 @@ func (s *limitScanner) Scan(ctx context.Context, _ string, opts *ScanOptions) (*
 
 // Nothing a command carries loosens the local policy at the executor
 // either (a second line behind admission): rate and run time are capped,
-// callbacks, custom templates and out-of-policy targets are refused before
-// the scanner runs.
+// custom templates and out-of-policy targets are refused before the scanner
+// runs, and callbacks the policy turns off are off (the scan runs without
+// them and its result says why).
 func TestDefaultCommandExecutor_LocalPolicyCannotBeLoosened(t *testing.T) {
 	lp := mustPolicy(t, fullPolicy)
 	newExec := func() (*DefaultCommandExecutor, *limitScanner) {
@@ -179,7 +179,6 @@ func TestDefaultCommandExecutor_LocalPolicyCannotBeLoosened(t *testing.T) {
 	}
 
 	for name, payload := range map[string]ScanCommandPayload{
-		"callbacks": {Scanner: "nuclei", Target: "203.0.113.9", Config: map[string]any{"allow_interactsh": true}},
 		"templates": {Scanner: "nuclei", Target: "203.0.113.9", CustomTemplates: []EmbeddedTemplate{{ID: "t", Name: "t.yaml",
 			TemplateType: "nuclei", Content: base64.StdEncoding.EncodeToString([]byte("id: t"))}}},
 		"outside range":  {Scanner: "nuclei", Target: "192.0.2.1"},
@@ -197,6 +196,21 @@ func TestDefaultCommandExecutor_LocalPolicyCannotBeLoosened(t *testing.T) {
 		if sc.calls != 0 {
 			t.Errorf("%s: the scanner ran", name)
 		}
+	}
+
+	// allow_interactsh: false narrows the job: the scanner runs without
+	// callbacks and the result carries the reason.
+	e, sc = newExec()
+	res, err := e.Execute(ctx, scanCommand(t, ScanCommandPayload{Scanner: "nuclei", Target: "203.0.113.9",
+		Config: map[string]any{"allow_interactsh": true}}))
+	if err != nil {
+		t.Fatalf("callbacks refused the job: %v", err)
+	}
+	if sc.calls != 1 || sc.opts.AllowInteractsh || sc.opts.OOBOffReason != OOBReasonLocalPolicy {
+		t.Fatalf("callbacks: calls %d, allow %t, reason %q", sc.calls, sc.opts.AllowInteractsh, sc.opts.OOBOffReason)
+	}
+	if st, ok := res.Metadata[MetaOOB].(*OOBState); !ok || st.State != OOBUnavailable || st.Reason != OOBReasonLocalPolicy || st.Detail == "" {
+		t.Fatalf("callbacks: result oob %#v", res.Metadata[MetaOOB])
 	}
 
 	// Without a policy only MaxScanTimeout caps the run time.

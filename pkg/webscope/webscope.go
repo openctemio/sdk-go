@@ -24,6 +24,7 @@ import (
 const (
 	maxEntries   = 64
 	maxEntrySize = 512
+
 	// MaxRequestsPerHostLimit is the largest MaxRequestsPerHost a scope
 	// may carry.
 	MaxRequestsPerHostLimit = 1_000_000
@@ -51,7 +52,9 @@ type Scope struct {
 	PathPrefixes []string `json:"path_prefixes,omitempty"`
 	// DenyPaths are paths a request never goes to ("/logout", "/admin"),
 	// whatever PathPrefixes allows. A deny path matches every path that
-	// starts with it, ignoring case: over-blocking is the safe side.
+	// starts with it, ignoring case: over-blocking is the safe side. A
+	// segment "*" matches any one segment ("/tenants/*/admin"). A deny path
+	// holds as written and percent-decoded (webpath.Denied).
 	DenyPaths []string `json:"deny_paths,omitempty"`
 	// Methods are the HTTP methods a request may use. Empty: GET, HEAD
 	// and OPTIONS.
@@ -64,8 +67,11 @@ type Scope struct {
 	MaxRequestsPerHost int `json:"max_requests_per_host,omitempty"`
 }
 
-// Validate checks the scope's bounds and syntax. A job whose scope is
-// invalid is refused, never run unrestricted.
+// Validate checks the scope's bounds and syntax, and adds the clean form
+// of every deny path that is written another way ("/files/My%20Docs" also
+// denies as "/files/My Docs"), so a deny list from a platform that stored
+// escaped paths holds on a tool that reads the list itself. A job whose
+// scope is invalid is refused, never run unrestricted.
 func (s *Scope) Validate() error {
 	if s == nil {
 		return nil
@@ -91,7 +97,7 @@ func (s *Scope) Validate() error {
 		}
 	}
 	for _, p := range slices.Concat(s.PathPrefixes, s.DenyPaths) {
-		if !strings.HasPrefix(p, "/") || strings.ContainsAny(p, "?#") || webpath.HasDotSegment(p) {
+		if !strings.HasPrefix(p, "/") || strings.ContainsAny(p, "?#") || hasDotSegment(p) {
 			return fmt.Errorf("web scope: invalid path %q", p)
 		}
 	}
@@ -100,7 +106,24 @@ func (s *Scope) Validate() error {
 			return fmt.Errorf("web scope: method %q is not one of %v", m, methods)
 		}
 	}
+	s.DenyPaths = withCleanDenyPaths(s.DenyPaths)
 	return nil
+}
+
+// withCleanDenyPaths is deny with the clean form of each deny path added
+// after it when it differs, without duplicates (at most twice as many
+// entries).
+func withCleanDenyPaths(deny []string) []string {
+	out := make([]string, 0, len(deny))
+	for _, d := range deny {
+		if !slices.Contains(out, d) {
+			out = append(out, d)
+		}
+		if c, err := webpath.CleanDeny(d); err == nil && !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // Allows reports whether a request may go to u with method; the error
@@ -136,8 +159,9 @@ func (s *Scope) Allows(method string, u *url.URL, targets []string) error {
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrOutOfScope, err)
 	}
-	// A server that drops path parameters (";jsessionid=...") reads
-	// "/;/admin" as "/admin": every reading must pass (webpath.Readings).
+	// Every reading a server may act on must pass: a server that drops
+	// path parameters reads "/;/admin" as "/admin", one that decodes twice
+	// reads "/%2561dmin" as "/admin" (webpath.Readings).
 	if d, denied := webpath.Denied(p, s.DenyPaths); denied {
 		return fmt.Errorf("%w: path %s is denied", ErrOutOfScope, d)
 	}
@@ -165,10 +189,13 @@ func HostMatches(pattern, host string) bool {
 // CleanPath is the path a server sees for u: percent-decoded, dot segments
 // resolved, never empty. A path with an encoded slash, backslash or NUL, a
 // control character, or a dot segment with parameters ("..;") is refused:
-// servers disagree on it. It is contract webpath.CleanPath, the reading the
-// platform plans with.
+// servers disagree on it (webpath.CleanPath).
 func CleanPath(u *url.URL) (string, error) {
 	return webpath.CleanPath(u.EscapedPath())
+}
+
+func hasDotSegment(p string) bool {
+	return slices.ContainsFunc(strings.Split(p, "/"), func(s string) bool { return s == "." || s == ".." })
 }
 
 func isControl(r rune) bool { return r < 0x20 || r == 0x7f }

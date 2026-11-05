@@ -281,7 +281,45 @@ type Status struct {
 	// used.
 	Envelope        string `json:"envelope,omitempty"`
 	EnvelopeMissing string `json:"envelope_missing,omitempty"`
+	// NoSandboxOnHost is true when the host's operating system has no
+	// sandbox at all (it is Linux only: macOS, Windows).
+	NoSandboxOnHost bool `json:"no_sandbox_on_host,omitempty"`
 }
+
+// Unconfined states (Status.Unconfined): how a backend that runs tools
+// without the sandbox treats the tools that contact their targets.
+const (
+	// UnconfinedRefused: the sandbox was asked for (SENSOR_SANDBOX=auto) and
+	// the host's operating system has none (it is Linux only: macOS,
+	// Windows), so tools of tier T1 and above are refused; passive (T0)
+	// tools still run.
+	UnconfinedRefused = "refused"
+	// UnconfinedAcknowledged: the operator turned the sandbox off
+	// (SENSOR_SANDBOX=off), which is the acknowledgement that tools run
+	// unconfined, every tier included.
+	UnconfinedAcknowledged = "acknowledged"
+)
+
+// Unconfined is how tools run without the sandbox: "" when they run
+// sandboxed, or on a Linux host where the sandbox could not start (Missing
+// says why, as before); UnconfinedAcknowledged when the operator turned it
+// off; UnconfinedRefused when the host's operating system has none.
+func (s Status) Unconfined() string {
+	switch {
+	case s.Sandboxed:
+		return ""
+	case s.Mode == ModeOff:
+		return UnconfinedAcknowledged
+	case s.NoSandboxOnHost:
+		return UnconfinedRefused
+	}
+	return ""
+}
+
+// RefusesActiveTools reports whether tools of tier T1 and above (tools that
+// contact their targets) are refused: the sandbox is not available and the
+// operator did not turn it off (Unconfined).
+func (s Status) RefusesActiveTools() bool { return s.Unconfined() == UnconfinedRefused }
 
 // Complete reports whether every control is enforced.
 func (s Status) Complete() bool {

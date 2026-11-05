@@ -183,6 +183,12 @@ type RunOptions struct {
 	// (core.RunWatchFrom of the task's context), then the default; a
 	// negative one turns that check off.
 	Watch core.RunWatch
+	// OOB is the task's out-of-band interaction server, set by the sensor
+	// from its operator's configuration (never from a job). A confined
+	// task's forwarder carries the interaction API to it and adds its token
+	// (egress.OOBServer); the token never reaches the tool. Without a
+	// forwarder (a sandbox that does not confine the network) it is unused.
+	OOB *egress.OOBServer
 }
 
 // TargetOutcome is one target's outcome.
@@ -404,6 +410,8 @@ type prepared struct {
 	credLines []LogLine
 	// targetRate is RunOptions.TargetRate.
 	targetRate float64
+	// oob is RunOptions.OOB.
+	oob *egress.OOBServer
 	// mapping turns an exec tool's json or jsonl output into CTIS.
 	mapping *mapping.Mapping
 	// notes are the runtime's own log lines for the outcome (parser
@@ -438,6 +446,9 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, ierr, nil
 	}
 	if ierr := h.checkLimits(m, task); ierr != nil {
+		return nil, ierr, nil
+	}
+	if ierr := h.checkUnconfined(m); ierr != nil {
 		return nil, ierr, nil
 	}
 	egressDialer := taskEgressDialer(ctx, task)
@@ -500,7 +511,7 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	}
 	task.Egress = nil // kept in prepared only: it never travels with the task
 	p := &prepared{secretKey: h.SecretFingerprintKey, m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine, contentPaths: contentPaths,
-		targetRate: o.TargetRate, egress: egressDialer, applied: applied}
+		targetRate: o.TargetRate, egress: egressDialer, applied: applied, oob: o.OOB}
 	if task.IsRetest() && len(adm.Refused) > 0 {
 		// A retest never reaches a target the policy refused: its items
 		// are not sent and end unverifiable.

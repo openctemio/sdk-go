@@ -72,6 +72,13 @@ type SandboxPosture struct {
 	// its own forwarder (SENSOR_SANDBOX_NETWORK); false means the target
 	// checks are the only control on where a tool connects.
 	NetworkEnforced bool `json:"network_enforced"`
+	// Unconfined is how tools run without the sandbox: "" when they run
+	// sandboxed; "refused" when the sandbox is not available (it is Linux
+	// only) and tools that contact their targets (T1 and above) are refused;
+	// "acknowledged" when the operator turned the sandbox off
+	// (SENSOR_SANDBOX=off) and every tool runs unconfined
+	// (executor.Status.Unconfined).
+	Unconfined string `json:"unconfined,omitempty"`
 }
 
 // PlatformTLSPin is the platform TLS pin of API clients created now:
@@ -95,7 +102,7 @@ func CurrentPosture() *SensorPosture {
 	st := executor.Current().Status()
 	p := &SensorPosture{
 		PlatformTLS: &PlatformTLSPosture{Pin: PlatformTLSPin()},
-		Sandbox:     &SandboxPosture{Mode: string(st.Mode), Sandboxed: st.Sandboxed, NetworkEnforced: st.NetworkEnforced},
+		Sandbox:     &SandboxPosture{Mode: string(st.Mode), Sandboxed: st.Sandboxed, NetworkEnforced: st.NetworkEnforced, Unconfined: st.Unconfined()},
 	}
 	if s := jobsPosture.Load(); s != nil {
 		p.Jobs = &JobsPosture{Signed: *s}

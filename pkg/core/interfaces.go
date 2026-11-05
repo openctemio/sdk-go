@@ -64,9 +64,16 @@ type ScanOptions struct {
 
 	// AllowInteractsh lets this scan use out-of-band callbacks (nuclei's
 	// Interactsh), which are off by default. The command executor sets it
-	// only when the platform's scan command allows it
-	// (config "allow_interactsh": true, an approved intrusive run).
+	// only when the platform's scan command asks for them
+	// (config "allow_interactsh": true) and the local policy does not turn
+	// them off. A scanner uses them only with the interaction server its
+	// sensor is configured with (oob.go), never a public default.
 	AllowInteractsh bool `yaml:"allow_interactsh" json:"allow_interactsh"`
+	// OOBOffReason is why the job's request for out-of-band callbacks was
+	// turned off before the scanner ran (OOBReasonLocalPolicy); "" when the
+	// job did not ask or AllowInteractsh is set. The scan runs without them
+	// and its result says so (ScanResult.OOB).
+	OOBOffReason string `yaml:"-" json:"-"`
 
 	// RateLimit (requests per second), BulkSize (hosts in parallel) and
 	// Concurrency (templates or workers in parallel) ask the scanner to run
@@ -169,6 +176,10 @@ type ScanResult struct {
 	// (*tool.AppliedIdentity, held as any so core does not import tool); the
 	// result's metadata carries it under MetaHTTPIdentity.
 	HTTPIdentity any `json:"http_identity,omitempty"`
+	// OOB is what the scan did with the out-of-band callbacks its job asked
+	// for (nil: it did not ask); the result's metadata carries it under
+	// MetaOOB.
+	OOB *OOBState `json:"oob,omitempty"`
 }
 
 // =============================================================================

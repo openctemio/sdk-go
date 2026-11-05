@@ -108,14 +108,15 @@ const maxPolicyRefusals = 5
 
 // AdmitCommand decides whether cmd may run under the local policy, before
 // any tool sees it: the kill switch, checks.allow (the command type),
-// tools.allow, allow_custom_templates, allow_interactsh, and every target
+// tools.allow, allow_custom_templates, and every target
 // against targets.allow/deny, the private-range switch, the built-in deny
 // list (host names are resolved; every address must pass) and ports.allow.
 // A single violation refuses the whole job with a *LocalPolicyError naming
 // the rule; nothing in the payload can widen the policy. Without a policy
 // the kill switch applies, and a sensor that requires a policy refuses
-// every job with a network target, custom templates or callbacks (rule
-// no_local_policy); a legacy install admits the rest. AdmitCommandTargets
+// every job with a network target or custom templates (rule
+// no_local_policy); a legacy install admits the rest. Out-of-band callbacks
+// a policy turns off never refuse a job: the executor runs it without them. AdmitCommandTargets
 // is the same check that removes refused targets from a scan job instead
 // of refusing all of it.
 func (lp *LocalPolicy) AdmitCommand(ctx context.Context, cmd *Command) error {
@@ -341,10 +342,8 @@ func (lp *LocalPolicy) admitJob(cmd *Command) ([]string, error) {
 	if len(job.CustomTemplates) > 0 && !lp.AllowsCustomTemplates() {
 		return nil, refuse("allow_custom_templates", "the job carries %d custom template(s); this sensor's policy does not allow platform-supplied templates", len(job.CustomTemplates))
 	}
-	// The executor turns callbacks on only for a boolean true; so does this.
-	if v, ok := job.Config["allow_interactsh"].(bool); ok && v && !lp.AllowsInteractsh() {
-		return nil, refuse("allow_interactsh", "the job asks for out-of-band callbacks (interactsh); this sensor's policy does not allow them")
-	}
+	// Out-of-band callbacks the policy turns off are not a refusal: the
+	// executor runs the job without them (applyJobConfig).
 	// A port list the job hands its tool as a setting (api RFC-038, e.g.
 	// naabu's "ports") must lie inside ports.allow too.
 	if lp.ports != nil {
@@ -373,8 +372,9 @@ func (lp *LocalPolicy) admitJob(cmd *Command) ([]string, error) {
 }
 
 // admitWithoutPolicy is admission on a sensor that requires a local policy
-// and has none: a job with a network target, custom templates or
-// out-of-band callbacks is refused (rule no_local_policy). A job without
+// and has none: a job with a network target or custom templates is refused
+// (rule no_local_policy); out-of-band callbacks are turned off, not
+// refused. A job without
 // network targets (a repository or filesystem scan, a health check) is
 // admitted; the scan workspace confines its paths.
 func admitWithoutPolicy(cmd *Command) error {
@@ -387,9 +387,8 @@ func admitWithoutPolicy(cmd *Command) error {
 	if len(job.CustomTemplates) > 0 {
 		return refuse(LocalPolicyRuleNoPolicy, "the job carries %d custom template(s); %s", len(job.CustomTemplates), noLocalPolicyHelp)
 	}
-	if v, ok := job.Config["allow_interactsh"].(bool); ok && v {
-		return refuse(LocalPolicyRuleNoPolicy, "the job asks for out-of-band callbacks (interactsh); %s", noLocalPolicyHelp)
-	}
+	// Out-of-band callbacks are turned off by the executor instead
+	// (AllowsInteractsh is false here); the job is not refused for them.
 	targets, err := job.targets()
 	if err != nil {
 		return refuse("payload", "%v", err)
@@ -419,9 +418,9 @@ func noLocalPolicyTarget(t string) error {
 }
 
 // CommandWarnings are what the sensor logs about cmd when no policy
-// decides for it: a job that uses custom templates or out-of-band
-// callbacks only because no local policy forbids them (owner decision
-// Q4 (a)).
+// decides for it: a job that uses custom templates only because no local
+// policy forbids them (owner decision Q4 (a)). Out-of-band callbacks follow
+// the platform without a policy, which is no warning.
 func (lp *LocalPolicy) CommandWarnings(cmd *Command) []string {
 	if lp.Present() || lp.failsClosed() || cmd == nil || len(cmd.Payload) == 0 {
 		return nil
@@ -433,9 +432,6 @@ func (lp *LocalPolicy) CommandWarnings(cmd *Command) []string {
 	var out []string
 	if len(job.CustomTemplates) > 0 {
 		out = append(out, fmt.Sprintf("command %s carries %d custom template(s): allowed only because no local policy sets allow_custom_templates", cmd.ID, len(job.CustomTemplates)))
-	}
-	if v, ok := job.Config["allow_interactsh"].(bool); ok && v {
-		out = append(out, fmt.Sprintf("command %s turns on out-of-band callbacks: allowed only because no local policy sets allow_interactsh", cmd.ID))
 	}
 	return out
 }
