@@ -52,8 +52,9 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if ierr != nil {
 		return h.failedOutcome(m, task, ierr), nil
 	}
+	// An exec-profile tool receives no credentials (manifest validation),
+	// so there is nothing to forget beyond its directory.
 	defer func() { _ = os.RemoveAll(p.workdir) }()
-	defer p.forget()
 	if isMappedFormat(m.Run.Output.Format) {
 		// Loaded before the tool starts: a missing, invalid or changed
 		// mapping file refuses the task instead of wasting a scan.
