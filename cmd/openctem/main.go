@@ -15,9 +15,16 @@
 //	openctem playbook init --kind triage.v1 ./my-triage
 //	openctem playbook test ./my-triage
 //
-// Every task runs through the sensor runtime's host and sandbox
-// (pkg/sensorkit/toolhost); nothing talks to a platform. Exit status: 0 ok,
-// 1 a check failed, 2 a usage error.
+// Its import command converts the output of a tool a person ran into CTIS
+// and imports it into an organization with an API key (internal/importcli):
+//
+//	nmap -sV -oX - 192.0.2.0/24 | openctem import --format nmap --dry-run
+//	gau example.com | openctem import --format lines --as url --tool gau
+//
+// Every tool and playbook task runs through the sensor runtime's host and
+// sandbox (pkg/sensorkit/toolhost); only import talks to a platform. Exit
+// status: 0 ok, 1 a check failed, 2 a usage error (import adds 3: the upload
+// is still queued).
 package main
 
 import (
@@ -25,6 +32,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/openctemio/sdk-go/internal/importcli"
 	"github.com/openctemio/sdk-go/internal/playbookcli"
 	"github.com/openctemio/sdk-go/internal/toolcli"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
@@ -46,8 +54,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "playbook" {
 		return playbookcli.Main(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "import" {
+		return importcli.Main(args[1:], os.Stdin, stdout, stderr, os.Getenv)
+	}
 	if len(args) == 0 || args[0] != "tool" {
-		_, _ = fmt.Fprintln(stderr, "usage: openctem <version | tool <init|validate|run|test|diff|describe|version> ... | playbook <init|test> ...> (openctem tool help, openctem playbook help)")
+		_, _ = fmt.Fprintln(stderr, "usage: openctem <version | tool <init|validate|run|test|diff|describe|version> ... | playbook <init|test> ... | import [flags] [file ...]> (openctem tool help, openctem playbook help, openctem import -h)")
 		return toolcli.ExitUsage
 	}
 	return toolcli.Main(args[1:], stdout, stderr)
