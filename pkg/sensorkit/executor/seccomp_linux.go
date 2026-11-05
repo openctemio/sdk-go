@@ -28,7 +28,9 @@ const cloneNamespaceFlags = unix.CLONE_NEWNS | unix.CLONE_NEWUTS | unix.CLONE_NE
 
 // browserNamespaceFlags are the namespaces a browser task may create: what
 // Chromium's renderer sandbox makes (TaskSpec.Browser). Mount, UTS, IPC,
-// cgroup and time namespaces stay refused, and so does setns.
+// cgroup and time namespaces stay refused, and so does setns. A browser task
+// also may not open AF_PACKET, AF_KEY, NETLINK_NETFILTER or NETLINK_XFRM
+// sockets.
 const browserNamespaceFlags = unix.CLONE_NEWUSER | unix.CLONE_NEWPID | unix.CLONE_NEWNET
 
 // applySeccomp installs the filter: a syscall from another ABI kills the
@@ -77,6 +79,30 @@ func applySeccomp(browser bool) error {
 	}
 	jump(jeq, uint32(unix.SYS_CLONE3), 0, 1)
 	stmt(ret, enosys)
+	if browser {
+		// socket(domain, type, protocol): a browser has no use for raw
+		// link-layer sockets, key management sockets or the netfilter and
+		// xfrm netlink families, which are kernel attack surface a user
+		// namespace would otherwise open (it holds CAP_NET_RAW and
+		// CAP_NET_ADMIN over its own network namespace). NETLINK_ROUTE
+		// stays allowed: Chromium reads its interface and address state
+		// through it.
+		const (
+			afKey, afNetlink, afPacket    = 15, unix.AF_NETLINK, unix.AF_PACKET
+			netlinkXfrm, netlinkNetfilter = 6, 12
+			secDataArg2                   = 32
+		)
+		jump(jeq, uint32(unix.SYS_SOCKET), 0, 9)
+		stmt(ld, secDataArg0)
+		jump(jeq, afPacket, 6, 0)
+		jump(jeq, afKey, 5, 0)
+		jump(jeq, afNetlink, 0, 3)
+		stmt(ld, secDataArg2)
+		jump(jeq, netlinkNetfilter, 2, 0)
+		jump(jeq, netlinkXfrm, 1, 0)
+		stmt(ret, secRetAllow)
+		stmt(ret, eperm)
+	}
 	if browser {
 		// unshare: the flags are argument 0.
 		jump(jeq, uint32(unix.SYS_UNSHARE), 0, 4)

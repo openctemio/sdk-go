@@ -158,6 +158,71 @@ func hostileTool(mode string, args []string) int {
 		cmd.Env = []string{"EXECUTOR_TEST_TOOL=uid"}
 		cmd.SysProcAttr = &syscall.SysProcAttr{Cloneflags: flags}
 		return report(cmd.Run())
+	case "clonenswith":
+		// Start this binary again in the named namespace (uts, ipc,
+		// cgroup) next to the user namespace.
+		flags := map[string]uintptr{"uts": unix.CLONE_NEWUTS, "ipc": unix.CLONE_NEWIPC, "cgroup": unix.CLONE_NEWCGROUP}[args[0]]
+		cmd := exec.Command("/proc/self/exe")
+		cmd.Env = []string{"EXECUTOR_TEST_TOOL=uid"}
+		cmd.SysProcAttr = &syscall.SysProcAttr{Cloneflags: unix.CLONE_NEWUSER | flags}
+		return report(cmd.Run())
+	case "unshareflag":
+		flags := map[string]int{"uts": unix.CLONE_NEWUTS, "ipc": unix.CLONE_NEWIPC, "cgroup": unix.CLONE_NEWCGROUP, "time": unix.CLONE_NEWTIME}[args[0]]
+		return report(unix.Unshare(flags))
+	case "setns":
+		f, err := os.Open("/proc/self/ns/net")
+		if err != nil {
+			return report(err)
+		}
+		defer f.Close()
+		return report(unix.Setns(int(f.Fd()), unix.CLONE_NEWNET))
+	case "socket":
+		domain, _ := strconv.Atoi(args[0])
+		typ, _ := strconv.Atoi(args[1])
+		proto, _ := strconv.Atoi(args[2])
+		fd, err := unix.Socket(domain, typ, proto)
+		if err == nil {
+			_ = unix.Close(fd)
+		}
+		return report(err)
+	case "seccompsocket":
+		// The browser filter alone, with no sandbox around it: each socket
+		// family it refuses answers EPERM, the ones a browser needs open.
+		if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+			return report(err)
+		}
+		if err := applySeccomp(true); err != nil {
+			return report(err)
+		}
+		try := func(domain, typ, proto int) string {
+			fd, err := unix.Socket(domain, typ, proto)
+			if err != nil {
+				return err.Error()
+			}
+			_ = unix.Close(fd)
+			return "ok"
+		}
+		fmt.Println("packet", try(unix.AF_PACKET, unix.SOCK_RAW, 0))
+		fmt.Println("key", try(15, unix.SOCK_RAW, 2))
+		fmt.Println("netfilter", try(unix.AF_NETLINK, unix.SOCK_RAW, 12))
+		fmt.Println("xfrm", try(unix.AF_NETLINK, unix.SOCK_RAW, 6))
+		fmt.Println("route", try(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_ROUTE))
+		fmt.Println("udp", try(unix.AF_INET, unix.SOCK_DGRAM, 0))
+		return 0
+	case "clonesocket":
+		// Open a socket from a process in new user and network namespaces,
+		// where it holds CAP_NET_RAW and CAP_NET_ADMIN of its own.
+		cmd := exec.Command("/proc/self/exe", args...)
+		cmd.Env = []string{"EXECUTOR_TEST_TOOL=socket"}
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.SysProcAttr = &syscall.SysProcAttr{Cloneflags: unix.CLONE_NEWUSER | unix.CLONE_NEWNET}
+		if err := cmd.Run(); err != nil {
+			fmt.Println("ERR", strings.TrimSpace(out.String()), err)
+			return 3
+		}
+		fmt.Print(out.String())
+		return 0
 	case "procwrite":
 		return report(os.WriteFile("/proc/self/oom_score_adj", []byte("100"), 0))
 	case "proxyenv":
