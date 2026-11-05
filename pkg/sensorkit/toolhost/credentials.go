@@ -90,7 +90,20 @@ func (h *Host) secretsFor(ctx context.Context, m tool.Manifest, task tool.Task, 
 	case h.backend().Status().Landlock == 0 && (h.Shared || js.Shared()):
 		platform, why = false, "a shared sensor delivers platform secrets only to tasks confined by Landlock, and Landlock is not available"
 	}
+	// A provider key is held back whenever the backend does not confine
+	// the network: without the forwarder the keyed-host narrowing is not
+	// enforced, so the tool could send the key anywhere. Platform and
+	// local keys carry the same exfiltration risk.
+	netOpen := !h.backend().Status().NetworkEnforced
+	if netOpen && hasSet {
+		platform = false
+	}
+	heldBack := false
 	platformLine := func(slot string) {
+		if netOpen {
+			heldBack = true
+			return
+		}
 		if why != "" {
 			out.lines = append(out.lines, LogLine{Level: "warn", Msg: "platform secret not delivered: " + why,
 				Fields: map[string]any{"tool": m.Name, "slot": slot}})
@@ -171,7 +184,10 @@ func (h *Host) secretsFor(ctx context.Context, m tool.Manifest, task tool.Task, 
 		if v != "" {
 			if p, ok := providerFor(m, slot, sp.ref); ok {
 				aud, err := p.Audience(v)
-				if err != nil {
+				if netOpen {
+					heldBack = true
+					v = ""
+				} else if err != nil {
 					out.lines = append(out.lines, LogLine{Level: "warn", Msg: "a key its provider's rules refuse was not delivered",
 						Fields: map[string]any{"tool": m.Name, "slot": slot}})
 					v = ""
@@ -189,6 +205,10 @@ func (h *Host) secretsFor(ctx context.Context, m tool.Manifest, task tool.Task, 
 		provenance[slot] = from
 		out.creds = append(out.creds, toolwire.Credential{Name: slot, Value: v})
 		out.values = append(out.values, v)
+	}
+	if heldBack {
+		out.lines = append(out.lines, LogLine{Level: "warn", Msg: "provider keys not delivered: the sandbox does not confine the network, so the keyed-host narrowing cannot be enforced",
+			Fields: map[string]any{"tool": m.Name}})
 	}
 	if len(provenance) > 0 {
 		out.lines = append(out.lines, LogLine{Level: "info", Msg: "credentials delivered (source by slot)",

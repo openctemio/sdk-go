@@ -3,6 +3,7 @@ package toolhost
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -73,5 +74,59 @@ func TestScrubberMinLength(t *testing.T) {
 	var nilScrub *scrubber
 	if nilScrub.String("x") != "x" || string(nilScrub.Bytes([]byte("x"))) != "x" {
 		t.Fatal("a nil scrubber changed its input")
+	}
+}
+
+// SECURITY: a value spelled with \uXXXX escapes in a JSON message is removed
+// from the decoded strings, and the line stays valid JSON.
+func TestScrubberJSONLineRemovesUnicodeEscapedValues(t *testing.T) {
+	v := "tok-0123456789abcdef"
+	var esc strings.Builder
+	for _, r := range v {
+		esc.WriteString(`\u` + strings.Repeat("0", 4-len(hexOf(r))) + hexOf(r))
+	}
+	line := []byte(`{"type":"record","kind":"finding","n":12345678901234567890,"data":{"title":"` + esc.String() + `","` + esc.String() + `":1}}`)
+	sc := newScrubber([]string{v})
+	if strings.Contains(string(sc.Bytes(line)), v) {
+		t.Fatal("test setup: Bytes already removes the escaped form")
+	}
+	out := sc.JSONLine(line)
+	if !json.Valid(out) {
+		t.Fatalf("not JSON: %s", out)
+	}
+	var back map[string]any
+	if err := json.Unmarshal(out, &back); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), v) || strings.Contains(fmt.Sprint(back), v) {
+		t.Fatalf("value kept after decoding: %s", out)
+	}
+	if !strings.Contains(string(out), "12345678901234567890") {
+		t.Fatalf("number changed: %s", out)
+	}
+	// A clean line is returned as it came.
+	clean := []byte(`{"type":"log","msg":"ok"}`)
+	if got := sc.JSONLine(clean); string(got) != string(clean) {
+		t.Fatalf("clean line changed: %s", got)
+	}
+}
+
+func hexOf(r rune) string { return fmt.Sprintf("%x", r) }
+
+// SECURITY: output cut inside a value leaves no prefix of it.
+func TestScrubberTrimPartialDropsCutPrefix(t *testing.T) {
+	v := "tok-0123456789abcdef"
+	sc := newScrubber([]string{v})
+	for cut := 1; cut < len(v); cut++ {
+		cb := &cappedBuffer{max: 10 + cut}
+		_, _ = cb.Write([]byte("0123456789" + v + " more"))
+		raw, was := cb.Raw()
+		if !was {
+			t.Fatal("not cut")
+		}
+		got := sc.trimPartial(sc.String(raw))
+		if strings.HasSuffix(got, v[:1]) {
+			t.Fatalf("cut %d: tail %q", cut, got)
+		}
 	}
 }

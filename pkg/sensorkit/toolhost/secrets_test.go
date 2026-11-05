@@ -168,7 +168,7 @@ func secretCtx(set *secretref.Set, shared bool, f core.SecretsFetcher) context.C
 
 // landlocked is a host whose sandbox has Landlock (or not).
 func landlocked(shared, ll bool) *Host {
-	st := executor.Status{}
+	st := executor.Status{NetworkEnforced: true}
 	if ll {
 		st.Landlock = 4
 	}
@@ -380,7 +380,11 @@ func TestTaskSecretsEndToEnd(t *testing.T) {
 	set := jobSet("allow", providerRef("shodan", "1", "allow"), providerRef("virustotal", "2", "allow"))
 	local := map[string]string{"shodan": locShodan, "virustotal": locVT, "alpha": locAlpha}
 	for i := 0; i < 2; i++ {
-		out, err := testHost(t).RunBuiltin(secretCtx(set, false, f), secretTool, tool.Task{Targets: oneTarget}, RunOptions{Credentials: local})
+		h := testHost(t)
+		st := h.backend().Status()
+		st.NetworkEnforced = true
+		h.Backend = statusBackend{Backend: h.backend(), st: st}
+		out, err := h.RunBuiltin(secretCtx(set, false, f), secretTool, tool.Task{Targets: oneTarget}, RunOptions{Credentials: local})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -477,5 +481,37 @@ func TestSharedSensorPassesNoVendorEnv(t *testing.T) {
 	org := &Host{}
 	if env := strings.Join(org.taskEnv(m, set), "\n"); !strings.Contains(env, "PDCP_API_KEY") {
 		t.Fatalf("organization's sensor lost the tool's own namespace: %s", env)
+	}
+}
+
+// SECURITY: a provider key (platform or local) is delivered only when the
+// backend confines the network; otherwise the keyed-host narrowing is not
+// enforced and the tool could send the key anywhere.
+func TestProviderKeysNeedNetworkEnforced(t *testing.T) {
+	m := secretTool.Manifest()
+	local := map[string]string{"shodan": locShodan}
+	for _, policy := range []string{"never", "allow", "only"} {
+		set := jobSet("allow", providerRef("shodan", "1", policy))
+		h := &Host{Backend: statusBackend{st: executor.Status{Landlock: 4}}}
+		f := &fakeFetch{values: map[string]string{"k1": platShodan}}
+		ts, ierr := h.secretsFor(secretCtx(set, false, f), m, tool.Task{}, local)
+		if ierr != nil {
+			t.Fatal(ierr)
+		}
+		if len(ts.creds) != 0 || f.count() != 0 {
+			t.Fatalf("policy %s: delivered %v, fetched %d", policy, credMap(ts), f.count())
+		}
+		warns := 0
+		for _, l := range ts.lines {
+			if l.Level == "warn" && strings.Contains(l.Msg, "does not confine the network") {
+				warns++
+			}
+			if strings.Contains(fmt.Sprint(l), platShodan) || strings.Contains(fmt.Sprint(l), locShodan) {
+				t.Fatalf("a log line carries a value: %v", l)
+			}
+		}
+		if warns != 1 {
+			t.Fatalf("policy %s: want one warn line, got %d: %v", policy, warns, ts.lines)
+		}
 	}
 }

@@ -140,6 +140,81 @@ func (sc *scrubber) Bytes(b []byte) []byte {
 	return b
 }
 
+// trimPartial drops from the end of s any fragment that is a prefix of one
+// of the forms: output cut mid-value would otherwise leave the start of a
+// secret.
+func (sc *scrubber) trimPartial(s string) string {
+	if sc == nil {
+		return s
+	}
+	for k := min(len(s), len(sc.forms[0])-1); k > 0; k-- {
+		tail := s[len(s)-k:]
+		for _, f := range sc.forms {
+			if strings.HasPrefix(f, tail) {
+				return s[:len(s)-k]
+			}
+		}
+	}
+	return s
+}
+
+// JSONLine removes the values from one JSON message: from its raw bytes
+// and, because JSON can spell a character as \uXXXX, from every decoded
+// string (keys too). A line that decodes with no change is returned as
+// scrubbed bytes; a changed one is re-encoded.
+func (sc *scrubber) JSONLine(line []byte) []byte {
+	if sc == nil {
+		return line
+	}
+	line = sc.Bytes(line)
+	var v any
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.UseNumber()
+	if dec.Decode(&v) != nil {
+		return line
+	}
+	nv, changed := sc.walk(v)
+	if !changed {
+		return line
+	}
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(nv) != nil {
+		return []byte(`{}`)
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n"))
+}
+
+func (sc *scrubber) walk(v any) (any, bool) {
+	switch x := v.(type) {
+	case string:
+		if r := sc.String(x); r != x {
+			return r, true
+		}
+	case []any:
+		ch := false
+		for i := range x {
+			n, c := sc.walk(x[i])
+			x[i], ch = n, ch || c
+		}
+		return x, ch
+	case map[string]any:
+		ch := false
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			n, c := sc.walk(e)
+			nk := sc.String(k)
+			ch = ch || c || nk != k
+			out[nk] = n
+		}
+		if ch {
+			return out, true
+		}
+	}
+	return v, false
+}
+
 // wipe drops the forms (the values are gone with the task).
 func (sc *scrubber) wipe() {
 	if sc != nil {

@@ -1070,7 +1070,7 @@ func (s *session) handle(env toolwire.Envelope, line []byte) (res *toolwire.Resu
 	}
 	// Every message the tool sends is scrubbed of the task's secrets before
 	// it is read: records, evidence, report info and logs alike.
-	line = s.p.scrub.Bytes(line)
+	line = s.p.scrub.JSONLine(line)
 	switch env.Type {
 	case toolwire.TypeRecord:
 		if s.p.task.IsRetest() {
@@ -1237,7 +1237,12 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 			}
 		}
 	}
-	out.Stderr = p.redact(toolrt.CleanString(stderr.String()))
+	raw, cut := stderr.Raw()
+	out.Stderr = p.redact(toolrt.CleanString(raw))
+	if cut {
+		// A value straddling the cap leaves a prefix of itself: drop it.
+		out.Stderr = p.scrub.trimPartial(out.Stderr) + "\n[output cut]"
+	}
 	var runErr *tool.Error
 	switch {
 	case stopReason != "":
@@ -1489,6 +1494,13 @@ func (c *cappedBuffer) String() string {
 		s += "\n[output cut]"
 	}
 	return s
+}
+
+// Raw is what was kept, without the cut marker, and whether output was cut.
+func (c *cappedBuffer) Raw() (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String(), c.cut
 }
 
 func (c *cappedBuffer) Len() int {
