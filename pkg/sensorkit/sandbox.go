@@ -3,6 +3,8 @@ package sensorkit
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -199,7 +201,7 @@ func unconfinedCheck(st executor.Status) core.ConfigCheck {
 
 func (k *Kit) sandboxNetworkCheck(mode, netMode executor.Mode, st executor.Status) {
 	c := core.ConfigCheck{ID: CheckSandboxNetwork, Status: core.CheckWarn, Keys: []string{EnvSandboxNetwork}}
-	missing := strings.ToLower(st.NetworkMissing)
+	var host usernsHost
 	switch {
 	case st.NetworkEnforced:
 		c.Status, c.Code, c.Keys = core.CheckPass, "confined", nil
@@ -207,16 +209,125 @@ func (k *Kit) sandboxNetworkCheck(mode, netMode executor.Mode, st executor.Statu
 		c.Code, c.Keys = "sandbox_off", []string{EnvSandbox}
 	case netMode == executor.ModeOff:
 		c.Code = "off"
-	case strings.Contains(missing, "operation not permitted"):
-		c.Code = "userns_blocked"
-	case strings.Contains(missing, "permission denied"):
-		c.Code = "userns_restricted"
 	default:
-		c.Code = "unavailable"
+		host = readUsernsHost(procRoot)
+		c.Code = classifyUserns(host, strings.ToLower(st.NetworkMissing))
 	}
 	if !st.NetworkEnforced {
 		c.Summary = "tool runs are not network-confined"
-		c.Excerpt = truncateBytes(st.NetworkMissing, maxUnavailableExcerptSize)
+		if s := usernsSummary(c.Code); s != "" {
+			c.Summary += ": " + s
+		}
+		c.Excerpt = st.NetworkMissing
+		if e := host.excerpt(); e != "" {
+			c.Excerpt = e + "; " + st.NetworkMissing
+		}
+		c.Excerpt = truncateBytes(c.Excerpt, maxUnavailableExcerptSize)
 	}
 	k.ReportCheck(c)
+}
+
+// procRoot is where the host knobs are read from; tests point it at a fake
+// tree.
+var procRoot = "/proc"
+
+// usernsHost holds the host knobs that decide whether a process may create
+// a user namespace, as visible from inside the container. A knob that could
+// not be read is nil or empty: unknown, never a guess.
+type usernsHost struct {
+	clone    *int   // kernel.unprivileged_userns_clone (Debian, Ubuntu): 0 = off
+	maxNS    *int   // user.max_user_namespaces: 0 = off
+	restrict *int   // kernel.apparmor_restrict_unprivileged_userns: 1 = on
+	label    string // the task's AppArmor label
+	seccomp  *int   // Seccomp: of /proc/self/status: 0 off, 1 strict, 2 filter
+}
+
+func readUsernsHost(root string) usernsHost {
+	num := func(rel string) *int {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			return nil
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+		if err != nil {
+			return nil
+		}
+		return &n
+	}
+	h := usernsHost{
+		clone:    num("sys/kernel/unprivileged_userns_clone"),
+		maxNS:    num("sys/user/max_user_namespaces"),
+		restrict: num("sys/kernel/apparmor_restrict_unprivileged_userns"),
+	}
+	for _, rel := range []string{"self/attr/apparmor/current", "self/attr/current"} {
+		if b, err := os.ReadFile(filepath.Join(root, rel)); err == nil {
+			if l := strings.TrimSpace(strings.TrimRight(string(b), "\x00")); l != "" {
+				h.label = l
+				break
+			}
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(root, "self/status")); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(line, "Seccomp:"); ok {
+				if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+					h.seccomp = &n
+				}
+			}
+		}
+	}
+	return h
+}
+
+func (h usernsHost) unconfined() bool {
+	return strings.HasPrefix(strings.ToLower(h.label), "unconfined")
+}
+
+// classifyUserns names the cause of an unavailable network confinement. The
+// host knobs come first: a sysctl that disables user namespaces is the cause
+// whatever the runtime's profile says, and the error text alone cannot tell
+// it from a seccomp refusal (both are EPERM).
+func classifyUserns(h usernsHost, missing string) string {
+	switch {
+	case (h.clone != nil && *h.clone == 0) || (h.maxNS != nil && *h.maxNS == 0):
+		return "userns_disabled_host"
+	case h.restrict != nil && *h.restrict == 1 && h.unconfined():
+		return "userns_restricted"
+	case strings.Contains(missing, "operation not permitted"):
+		return "userns_blocked"
+	case strings.Contains(missing, "permission denied"):
+		return "userns_restricted"
+	}
+	return "unavailable"
+}
+
+func usernsSummary(code string) string {
+	switch code {
+	case "userns_disabled_host":
+		return "the host disables unprivileged user namespaces (kernel.unprivileged_userns_clone or user.max_user_namespaces is 0): the host admin sets kernel.unprivileged_userns_clone=1 (or a positive user.max_user_namespaces) and keeps kernel.apparmor_restrict_unprivileged_userns=1"
+	case "userns_restricted":
+		return "the host's AppArmor restricts unprivileged user namespaces for this process: keep the restriction on and run with the default container profile or an AppArmor profile that grants userns"
+	case "userns_blocked":
+		return "the host allows user namespaces but the container runtime's seccomp profile refuses them: run with the sensor's seccomp profile"
+	}
+	return ""
+}
+
+// excerpt lists the knob names and values that were read (evidence for the
+// platform), and says nothing about the ones that were not.
+func (h usernsHost) excerpt() string {
+	var parts []string
+	add := func(name string, v *int) {
+		if v != nil {
+			parts = append(parts, name+"="+strconv.Itoa(*v))
+		}
+	}
+	add("kernel.unprivileged_userns_clone", h.clone)
+	add("user.max_user_namespaces", h.maxNS)
+	add("kernel.apparmor_restrict_unprivileged_userns", h.restrict)
+	if h.label != "" {
+		parts = append(parts, "apparmor_label="+h.label)
+	}
+	add("seccomp_mode", h.seccomp)
+	return strings.Join(parts, " ")
 }
