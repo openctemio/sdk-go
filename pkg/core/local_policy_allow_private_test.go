@@ -86,3 +86,18 @@ func TestLocalPolicy_AllowsPrivateNil(t *testing.T) {
 		t.Fatal("nil policy with the switch off admits private targets")
 	}
 }
+
+// The slim heartbeat keeps allow_private: the field is always on the wire,
+// so dropping it would tell the platform "refused".
+func TestSlimHeartbeat_KeepsAllowPrivate(t *testing.T) {
+	t.Setenv(EnvSensorAllowPrivateTargets, "1")
+	lp, err := LoadLocalPolicy(LocalPolicyOptions{DefaultPath: filepath.Join(t.TempDir(), "none.yaml"), LookupEnv: env(nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := &SensorStatus{LocalPolicy: lp.Report()}
+	slimHeartbeat(status)
+	if !status.LocalPolicy.AllowPrivate {
+		t.Fatal("the slim heartbeat drops allow_private")
+	}
+}
