@@ -98,9 +98,7 @@ type JobKey struct {
 
 // GrantTranscript is what the platform signs: domain ‖ 0 ‖ payload.
 func GrantTranscript(payload []byte) []byte {
-	out := make([]byte, 0, len(domainGrant)+1+len(payload))
-	out = append(out, domainGrant...)
-	out = append(out, 0)
+	out := append([]byte(domainGrant), 0)
 	return append(out, payload...)
 }
 
