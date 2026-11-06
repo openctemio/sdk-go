@@ -471,6 +471,14 @@ func TestModes(t *testing.T) {
 	if err != nil || b.Status().Sandboxed || len(b.Status().Missing) == 0 {
 		t.Errorf("auto with a broken launcher: %v %+v", err, b.Status())
 	}
+	// The fallback is never silent: the status refuses active tools and
+	// names the failed control; off is the explicit acknowledgement.
+	if st := b.Status(); !st.RefusesActiveTools() || strings.Join(st.FailedControls(), ",") != "launcher" || !strings.Contains(st.UnconfinedDetail(), "launcher") {
+		t.Errorf("auto with a broken launcher does not refuse active tools: %+v", st)
+	}
+	if offB, _ := NewProcessBackend(Config{Mode: ModeOff}); offB.Status().RefusesActiveTools() || offB.Status().Unconfined() != UnconfinedAcknowledged {
+		t.Errorf("off refuses active tools: %+v", offB.Status())
+	}
 	if _, err := NewProcessBackend(Config{Mode: "loose"}); err == nil {
 		t.Error("unknown mode accepted")
 	}

@@ -99,7 +99,7 @@ func (k *Kit) setupSandbox() error {
 	}
 	switch st.Unconfined() {
 	case executor.UnconfinedRefused:
-		_, _ = fmt.Fprintf(k.errw, "Warning: the tool sandbox is not available on this host: tools that contact their targets (tier T1 and above) are refused; passive lookups still run. Run on Linux with the sandbox, or set %s=off to acknowledge running every tool unconfined\n", EnvSandbox)
+		_, _ = fmt.Fprintf(k.errw, "Warning: a tool sandbox control is not enforced on this host: tools that contact their targets (tier T1 and above) are refused (%s); passive lookups still run. Fix it, or run on Linux with the sandbox, or set %s=off to acknowledge running every tool unconfined\n", strings.Join(st.FailedControls(), ", "), EnvSandbox)
 	case executor.UnconfinedAcknowledged:
 		_, _ = fmt.Fprintf(k.errw, "Warning: tools run unconfined (%s=off), the ones that contact their targets included\n", EnvSandbox)
 	}
@@ -190,8 +190,8 @@ func unconfinedCheck(st executor.Status) core.ConfigCheck {
 		c.Status, c.Code, c.Keys = core.CheckPass, "sandboxed", nil
 	case executor.UnconfinedRefused:
 		c.Status, c.Code = core.CheckFail, "active_refused"
-		c.Summary = "the tool sandbox is not available on this host: tools that contact their targets are refused, passive lookups still run"
-		c.Excerpt = truncateBytes(strings.Join(st.Missing, "; "), maxUnavailableExcerptSize)
+		c.Summary = "a tool sandbox control is not enforced on this host: tools that contact their targets are refused, passive lookups still run"
+		c.Excerpt = truncateBytes(strings.Join(st.FailedControls(), ", ")+": "+st.UnconfinedDetail(), maxUnavailableExcerptSize)
 	default:
 		c.Status, c.Code = core.CheckWarn, "acknowledged"
 		c.Summary = "tools run unconfined (" + EnvSandbox + "=off), the ones that contact their targets included"

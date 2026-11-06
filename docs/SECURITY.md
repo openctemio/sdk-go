@@ -811,15 +811,21 @@ A job asks for callbacks with `allow_interactsh: true`. A local policy without t
 Modes (`SENSOR_SANDBOX` for sensorkit): `auto` (default) enforces what the
 host supports and logs what it cannot; `required` refuses to start unless
 every control is enforced; `off` runs tools as plain child processes.
-Where `auto` runs on a host with no sandbox at all (it is Linux only, so
-every macOS or Windows sensor), tools of
+Where `auto` cannot enforce the sandbox (macOS or Windows, which have none;
+or on Linux a launcher that fails, blocked user namespaces, or no Landlock,
+which leaves the sensor's signing key readable to a tool running as the same
+user), tools of
 tier T1 and above, the ones that contact their targets, are refused before
 they run (`core.RefusalUnconfinedSandbox`, `executor.Status.RefusesActiveTools`);
 passive T0 lookups still run. `SENSOR_SANDBOX=off` is the operator's explicit
 acknowledgement that every tool runs unconfined. The state is in the
 manifest posture (`sandbox.unconfined`: `refused` or `acknowledged`) and in
 the config report (`runtime.sandbox_unconfined`: `sandboxed`, `active_refused`
-(a failure), `acknowledged` (a warning)). Each
+(a failure; the excerpt lists the failed controls `launcher`, `os`, `landlock`
+and the reason), `acknowledged` (a warning)). Missing network confinement
+alone does not refuse tools (the key paths stay denied); it is reported by
+`runtime.sandbox_network`, and `SENSOR_SANDBOX_NETWORK=required` refuses to
+start without it. Each
 `ExecResult.Sandbox` records what the run was under. Residual risks: a confined task
 cannot signal processes outside its PID namespace, and nothing it starts
 outlives it. A task that runs unconfined (no user namespaces on the host) can
