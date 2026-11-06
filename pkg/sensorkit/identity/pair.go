@@ -445,7 +445,7 @@ func pairOnce(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o *
 	sas := pairing.ComputeSAS(signer.PublicKey(), platformPub, nonce, platformNonce)
 	p := &Pending{PairingID: start.PairingID, ExpiresAt: start.ExpiresAt, SAS: sas.String(), KeyID: signer.KeyID(),
 		CodeUsed: o.Code != "", CodePrefix: codePrefix(o.Code), Repair: o.RepairSensorID != "", UserCode: start.UserCode, Link: safeLink(start.VerificationURIComplete),
-		PlatformURL: o.BaseURL, PlatformKey: pairing.Encode(platformPub), PollSeconds: start.PollSeconds,
+		PlatformURL: o.BaseURL, PlatformKey: pairing.Encode(platformPub), SensorNonce: pairing.Encode(nonce), PollSeconds: start.PollSeconds,
 		SpentCodePrefix: o.spentPrefix}
 	if err := o.Store.SavePending(p); err != nil {
 		_, _ = fmt.Fprintf(o.Out, "WARNING: the pairing request could not be saved, so a restart cannot resume it: %v\n", err)
@@ -484,7 +484,10 @@ func resumePending(ctx context.Context, pc *pairClient, signer *sensorsig.Signer
 	// A new code the operator configured since is not on this request: it
 	// is superseded by a request that carries the new code.
 	carriesCode := o.Code == "" || (p.CodeUsed && p.CodePrefix == codePrefix(o.Code))
-	if kerr != nil || !pinned || !validID(p.PairingID) || p.KeyID != signer.KeyID() || p.PlatformURL != o.BaseURL ||
+	// A request saved without its nonce (an older SDK) cannot check the
+	// platform's signed grant: it is not resumed.
+	_, nerr := pairing.DecodeFixed(p.SensorNonce, pairing.NonceSize)
+	if kerr != nil || nerr != nil || !pinned || !validID(p.PairingID) || p.KeyID != signer.KeyID() || p.PlatformURL != o.BaseURL ||
 		p.Repair != (o.RepairSensorID != "") || !carriesCode || time.Now().After(p.ExpiresAt.Add(pairConfirmWindow)) {
 		spent := p.CodeUsed && o.Code != "" && p.CodePrefix == codePrefix(o.Code)
 		o.Store.ClearPending()
@@ -544,7 +547,13 @@ func waitAndConfirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signe
 			if st.Identity == nil {
 				return nil, errors.New("pairing: approved without an identity")
 			}
-			return confirm(ctx, pc, signer, *o, p.PairingID, path, st.Identity, platformPub)
+			id, err := confirm(ctx, pc, signer, *o, p, path, &st, platformPub)
+			if err != nil && errors.Is(err, errGrant) {
+				// A refused grant ends this request: nothing was saved, and
+				// resuming it would meet the same answer.
+				o.Store.ClearPending()
+			}
+			return id, err
 		}
 		wait := time.Duration(max(st.PollSeconds, p.PollSeconds, 2)) * time.Second
 		if err := o.sleep(ctx, min(wait, 30*time.Second)); err != nil {
@@ -557,7 +566,35 @@ func retryableStatus(code int) bool {
 	return code == http.StatusRequestTimeout || code == http.StatusTooEarly || code == http.StatusTooManyRequests
 }
 
-func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o PairOptions, pairingID, path string, granted *pairing.Identity, platformPub ed25519.PublicKey) (*Identity, error) {
+// errGrant marks a pairing refused because the platform's signed grant was
+// missing, did not verify or did not match: nothing is saved.
+var errGrant = errors.New("signed grant refused")
+
+// grantError names the pairing step whose answer was refused.
+func grantError(step string, err error) error {
+	return fmt.Errorf("pairing: %s: %w; nothing was saved (%w)", step, err, errGrant)
+}
+
+// ErrTLSAnchorMismatch: the platform's signed grant names the root CAs of
+// its TLS certificate, and the pairing connections verified another one.
+var ErrTLSAnchorMismatch = errors.New("pairing: the platform's TLS certificate leads to a root CA the platform did not name in its signed answer " +
+	"(" + pairing.ProblemAnswerUnsigned + "): something between this sensor and the platform presents its own certificate")
+
+// confirm verifies the platform's signed grant on the approval answer,
+// confirms the identity it states, verifies the grant on the confirm answer
+// again and saves only what that grant states (identity, content keys,
+// job signer, TLS anchor). An answer without a valid grant, or one made for
+// another request, sensor key or nonce, saves nothing.
+func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o PairOptions, p *Pending, path string, st *pairing.StatusResponse, platformPub ed25519.PublicKey) (*Identity, error) {
+	nonce, err := pairing.DecodeFixed(p.SensorNonce, pairing.NonceSize)
+	if err != nil {
+		return nil, grantError("approval answer", pairing.ErrGrantBinding)
+	}
+	approved, err := pairing.VerifyGrant(st.Grant, platformPub, signer.PublicKey(), p.PairingID, nonce)
+	if err != nil {
+		return nil, grantError("approval answer", err)
+	}
+	granted := &approved.Identity
 	if granted.KeyID != signer.KeyID() || !validID(granted.SensorID) {
 		return nil, errors.New("pairing: the platform granted an identity for another key")
 	}
@@ -573,7 +610,7 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 	if o.RepairSensorID != "" && granted.SensorID != o.RepairSensorID {
 		return nil, errors.New("pairing: the platform re-paired another sensor than the one asked for")
 	}
-	sig := signer.SignBytes(pairing.ConfirmTranscript(pairingID, granted.SensorID, granted.TenantID, granted.KeyID))
+	sig := signer.SignBytes(pairing.ConfirmTranscript(p.PairingID, granted.SensorID, granted.TenantID, granted.KeyID))
 	var done pairing.StatusResponse
 	creq := pairing.ConfirmRequest{SensorID: granted.SensorID, KeyID: granted.KeyID, Signature: pairing.Encode(sig)}
 	if err := pc.do(ctx, o, http.MethodPost, path+"/complete", creq, http.StatusOK, &done); err != nil {
@@ -582,6 +619,14 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 	if done.Status != pairing.StatusCompleted {
 		return nil, fmt.Errorf("pairing: confirm answered %q", done.Status)
 	}
+	g, err := pairing.VerifyGrant(done.Grant, platformPub, signer.PublicKey(), p.PairingID, nonce)
+	if err != nil {
+		return nil, grantError("confirm answer", err)
+	}
+	if c := g.Identity; c.SensorID != granted.SensorID || c.TenantID != granted.TenantID || c.KeyID != granted.KeyID || c.Scope != granted.Scope {
+		return nil, grantError("confirm answer", errors.New("the signed identity differs from the one this sensor confirmed"))
+	}
+	granted = &g.Identity
 	id := &Identity{PlatformURL: o.BaseURL, SensorID: granted.SensorID, TenantID: granted.TenantID,
 		TenantName: granted.TenantName, Name: granted.Name, KeyID: granted.KeyID, Scope: granted.Scope,
 		PlatformKey: pairing.Encode(platformPub), PairedAt: time.Now().UTC(),
@@ -590,8 +635,10 @@ func confirm(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o Pa
 		// signed scope (RequireLocalPolicy is no longer written).
 		RequireSignedJobs: !o.AllowUnsignedJobs}
 	id.PlatformTLSPinElement, id.PlatformTLSPin = pc.tlsPin()
-	var err error
-	if id.JobSigningKeys, id.JobSigningRoot, err = pc.jobSigning(ctx, o); err != nil {
+	if err := checkTLSAnchors(id.PlatformTLSPinElement, id.PlatformTLSPin, g.TLSAnchors); err != nil {
+		return nil, grantError("confirm answer", err)
+	}
+	if id.JobSigningKeys, id.JobSigningRoot, err = jobSigning(o, g.SignedJobs); err != nil {
 		return nil, err
 	}
 	id.ContentPlatformKeys, id.ContentTenantKeys = contentKeys(o, granted)
@@ -672,28 +719,22 @@ func contentKeys(o PairOptions, granted *pairing.Identity) (platform, tenant []j
 // by the root given out of band (SENSOR_JOB_SIGNING_ROOT).
 var ErrJobSigningRootMismatch = errors.New("pairing: the platform's job-signing key set is not signed by SENSOR_JOB_SIGNING_ROOT")
 
-// jobSigning returns the job signer's keys the platform's hello lists now,
-// and the root of the key set it serves, over the pairing connection (the
-// platform TLS pin and the sensor's new signature). Each key's id is
-// recomputed; one that does not match is left out.
+// jobSigning returns the job signer's keys and the root of the key set the
+// platform's signed grant states (the hello's signed_jobs block as it was
+// when the platform signed the grant). Each key's id is recomputed; one that
+// does not match is left out.
 //
-// With o.JobSigningRoot (out of band) the served key set must be signed by
-// that root and current; otherwise pairing fails (ErrJobSigningRootMismatch)
-// and nothing is saved: the platform may be lying about its signer. Without
-// it the root the key set names is pinned on first use. A hello that cannot
-// be read, or a platform that serves no signer, pins nothing (with a
-// warning); a new identity still requires signed jobs (RequireSignedJobs).
-func (c *pairClient) jobSigning(ctx context.Context, o PairOptions) ([]jobsig.PublicKey, string, error) {
+// With o.JobSigningRoot (out of band) the key set must be signed by that
+// root and current; otherwise pairing fails (ErrJobSigningRootMismatch) and
+// nothing is saved: the platform may be lying about its signer. Without it
+// the root the key set names is pinned: the grant is signed by the pairing
+// key the administrator's fingerprint check covered, so nothing between the
+// sensor and the platform can swap it. A platform that does not sign jobs
+// pins nothing; a new identity still requires signed jobs
+// (RequireSignedJobs).
+func jobSigning(o PairOptions, sj *pairing.JobSigning) ([]jobsig.PublicKey, string, error) {
 	pinnedRoot, _ := jobsig.ParseRoot(o.JobSigningRoot) // validated by Pair
-	var h protov2.Hello
-	if err := c.do(ctx, o, http.MethodGet, protov2.HelloPath, nil, http.StatusOK, &h); err != nil {
-		if pinnedRoot != "" {
-			return nil, "", fmt.Errorf("%w: the platform's hello could not be read: %w", ErrJobSigningRootMismatch, err)
-		}
-		_, _ = fmt.Fprintf(o.Out, "WARNING: could not read the platform's job-signing keys (%v); nothing is pinned.\n", err)
-		return nil, "", nil
-	}
-	if h.SignedJobs == nil || h.SignedJobs.PayloadType != jobsig.PayloadType {
+	if sj == nil || sj.PayloadType != jobsig.PayloadType {
 		if pinnedRoot != "" {
 			return nil, "", fmt.Errorf("%w: the platform does not sign jobs", ErrJobSigningRootMismatch)
 		}
@@ -702,15 +743,15 @@ func (c *pairClient) jobSigning(ctx context.Context, o PairOptions) ([]jobsig.Pu
 	root := ""
 	switch {
 	case pinnedRoot != "":
-		if len(h.SignedJobs.KeySet) == 0 {
+		if len(sj.KeySet) == 0 {
 			return nil, "", fmt.Errorf("%w: the platform serves no key set", ErrJobSigningRootMismatch)
 		}
-		if _, err := jobsig.VerifyKeySet(h.SignedJobs.KeySet, pinnedRoot, time.Now()); err != nil {
+		if _, err := jobsig.VerifyKeySet(sj.KeySet, pinnedRoot, time.Now()); err != nil {
 			return nil, "", fmt.Errorf("%w (%s): %w", ErrJobSigningRootMismatch, pinnedRoot, err)
 		}
 		root = pinnedRoot
-	case len(h.SignedJobs.KeySet) > 0:
-		ks, err := jobsig.TrustOnFirstUse(h.SignedJobs.KeySet, time.Now())
+	case len(sj.KeySet) > 0:
+		ks, err := jobsig.TrustOnFirstUse(sj.KeySet, time.Now())
 		if err != nil {
 			_, _ = fmt.Fprintf(o.Out, "WARNING: the platform serves a job-signing key set that is not valid; its root is not pinned: %v\n", err)
 		} else {
@@ -718,7 +759,7 @@ func (c *pairClient) jobSigning(ctx context.Context, o PairOptions) ([]jobsig.Pu
 		}
 	}
 	var keys []jobsig.PublicKey
-	for _, k := range h.SignedJobs.Keys {
+	for _, k := range sj.Keys {
 		pk := jobsig.PublicKey{KeyID: k.KeyID, Algorithm: k.Algorithm, PublicKey: k.PublicKey}
 		if _, err := pk.Decode(); err != nil {
 			_, _ = fmt.Fprintf(o.Out, "WARNING: the platform lists a job-signing key that is not valid; not pinned: %v\n", err)
@@ -726,10 +767,26 @@ func (c *pairClient) jobSigning(ctx context.Context, o PairOptions) ([]jobsig.Pu
 		}
 		keys = append(keys, pk)
 	}
-	if len(keys) == 0 && root == "" && h.Supports(protov2.FeatureSignedJobs) {
-		_, _ = fmt.Fprintf(o.Out, "WARNING: the platform announces signed jobs but serves no valid signer key or key set; nothing is pinned.\n")
+	if len(keys) == 0 && root == "" {
+		_, _ = fmt.Fprintf(o.Out, "WARNING: the platform signs jobs but serves no valid signer key or key set; nothing is pinned.\n")
 	}
 	return keys, root, nil
+}
+
+// checkTLSAnchors holds the anchor the pairing connections verified against
+// the root CAs the platform's signed grant names. A pin given out of band
+// (SENSOR_CA_FINGERPRINT, element ca-cert) wins; no anchor (plain http, an
+// injected client) and no claim check nothing.
+func checkTLSAnchors(element, pin string, anchors []string) error {
+	if len(anchors) == 0 || pin == "" || element != httpsec.PinElementAnchorSPKI {
+		return nil
+	}
+	for _, a := range anchors {
+		if strings.EqualFold(strings.TrimSpace(a), pin) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w (verified %s, named %s)", ErrTLSAnchorMismatch, pin, strings.Join(anchors, ", "))
 }
 
 // tlsPin is the platform TLS pin the identity stores: SENSOR_CA_FINGERPRINT

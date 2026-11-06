@@ -15,7 +15,7 @@ import (
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
-func TestPairPinsTheJobSignerKeysTheHelloLists(t *testing.T) {
+func TestPairPinsTheJobSignerKeysTheSignedGrantStates(t *testing.T) {
 	f, srv := newFakePlatform(t)
 	signer := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{3}, 32)).Public().(ed25519.PublicKey)
 	other := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{4}, 32)).Public().(ed25519.PublicKey)
@@ -33,7 +33,8 @@ func TestPairPinsTheJobSignerKeysTheHelloLists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pair: %v\n%s", err, out.String())
 	}
-	if f.helloAsked != 1 || f.unsigned != 0 {
+	// The keys come from the signed grant, never from the unsigned hello.
+	if f.helloAsked != 0 || f.unsigned != 0 {
 		t.Fatalf("hello asked %d times, unsigned requests %d", f.helloAsked, f.unsigned)
 	}
 	if len(id.JobSigningKeys) != 1 || id.JobSigningKeys[0] != good {
@@ -49,16 +50,16 @@ func TestPairPinsTheJobSignerKeysTheHelloLists(t *testing.T) {
 }
 
 func TestPairWithAPlatformThatDoesNotSignJobsPinsNone(t *testing.T) {
-	_, srv := newFakePlatform(t) // no hello route: an older platform
+	_, srv := newFakePlatform(t) // the grant states no job signer
 	var out bytes.Buffer
 	id, err := Pair(context.Background(), opts(t, srv, &out))
 	if err != nil {
 		t.Fatalf("pair: %v\n%s", err, out.String())
 	}
-	if len(id.JobSigningKeys) != 0 {
-		t.Fatalf("pinned %+v", id.JobSigningKeys)
+	if len(id.JobSigningKeys) != 0 || id.JobSigningRoot != "" || !id.RequireSignedJobs {
+		t.Fatalf("pinned %+v %q require=%v", id.JobSigningKeys, id.JobSigningRoot, id.RequireSignedJobs)
 	}
-	if !strings.Contains(out.String(), "could not read the platform's job-signing keys") {
+	if !strings.Contains(out.String(), "the platform served no job signer") {
 		t.Fatalf("no warning:\n%s", out.String())
 	}
 }
@@ -79,7 +80,7 @@ func testKeySet(t *testing.T, root ed25519.PrivateKey, issued time.Time, keys ..
 	return env
 }
 
-// Pairing pins the root of the key set the hello serves, only when that
+// Pairing pins the root of the key set the signed grant states, only when that
 // key set is signed by it and current.
 func TestPairPinsTheKeySetRoot(t *testing.T) {
 	signer := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{3}, 32)).Public().(ed25519.PublicKey)
@@ -122,7 +123,7 @@ func TestPairPinsTheKeySetRoot(t *testing.T) {
 // signer (it then warns that the sensor will not start until a root is set
 // out of band); only the development flag leaves the requirement off.
 func TestPairRequiresSignedJobsByDefault(t *testing.T) {
-	_, srv := newFakePlatform(t) // no hello route: no signer served
+	_, srv := newFakePlatform(t) // the grant states no signer
 	var out bytes.Buffer
 	id, err := Pair(context.Background(), opts(t, srv, &out))
 	if err != nil {
