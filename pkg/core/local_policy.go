@@ -1079,6 +1079,14 @@ type LocalPolicyReport struct {
 	Digest string `json:"digest,omitempty"`
 	// KillSwitch is true while the sensor owner has stopped every job.
 	KillSwitch bool `json:"kill_switch,omitempty"`
+	// AllowPrivate is true when this sensor admits private targets
+	// (RFC1918, IPv6 ULA) now: the host's private-range switch
+	// (SENSOR_ALLOW_PRIVATE_TARGETS=1) and, with a policy, its
+	// targets.allow_private. Sent on every report, absent policy
+	// included, so the platform does not route private targets to a
+	// sensor that would refuse them. An SDK that predates it sends none,
+	// which the platform reads as unknown.
+	AllowPrivate bool `json:"allow_private"`
 	// Summary is set when a policy is enforced.
 	Summary *LocalPolicySummary `json:"summary,omitempty"`
 	// Warnings are the operator warnings (see LocalPolicy.Warnings).
@@ -1137,7 +1145,7 @@ type LocalPolicySummary struct {
 // Report is the policy's state now (the kill switch is read live).
 func (lp *LocalPolicy) Report() *LocalPolicyReport {
 	r := &LocalPolicyReport{State: LocalPolicyStateAbsent, Required: lp.Required(), KillSwitch: lp.KillSwitchEngaged(),
-		Warnings: lp.Warnings(), Schemas: slices.Clone(LocalPolicySchemas)}
+		AllowPrivate: lp.AllowsPrivate(), Warnings: lp.Warnings(), Schemas: slices.Clone(LocalPolicySchemas)}
 	if !lp.Present() {
 		return r
 	}
@@ -1170,6 +1178,21 @@ func (lp *LocalPolicy) Report() *LocalPolicyReport {
 	}
 	r.Summary = s
 	return r
+}
+
+// AllowsPrivate reports whether private targets are admitted now: never
+// when a required policy is absent (every network target is refused),
+// the host's private-range switch when no policy is set, and the policy's
+// targets.allow_private (which needs the switch too) when one is.
+func (lp *LocalPolicy) AllowsPrivate() bool {
+	switch {
+	case lp.failsClosed():
+		return false
+	case !lp.Present():
+		return DefaultScanTargetPolicy().AllowPrivate
+	default:
+		return lp.allowPrivate
+	}
 }
 
 // Describe is a one-line description of the policy for the startup log.
