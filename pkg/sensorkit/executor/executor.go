@@ -199,6 +199,14 @@ type TaskSpec struct {
 	// Envelope bounds the task's CPU, memory and processes (nil: the
 	// default limits only). See Envelope.
 	Envelope *Envelope
+	// Browser is the sandbox of a tool that runs a web browser with the
+	// browser's own sandbox on (tool.SandboxBrowser). The task must run
+	// confined (Prepare refuses it otherwise). The tool runs as a non-root
+	// user of its own user namespace beneath the confined one (it holds no
+	// capability over the task's network namespace), may create user, PID
+	// and network namespaces (the browser's renderer sandbox) and no other,
+	// and may write /proc (the browser writes its children's id maps).
+	Browser bool
 }
 
 // ProcessHooks are the caller's process-level adjustments, called by the

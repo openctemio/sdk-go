@@ -205,6 +205,7 @@ policy and the job.
 | `network: vendor` and `vendor_hosts` | the named vendor API hosts only, with the credentials the operator stored |
 | `filesystem: workdir` (default) | the task's private directory only |
 | `linux_caps: [NET_RAW]` | granted only when the sensor's local policy allows it |
+| `sandbox: browser` (with `network: targets`) | for a tool that runs a web browser with the browser's own sandbox on. The task runs only confined, on a sandbox that enforces every control in required mode (else it is refused, never run unconfined); the tool is a non-root user of its own user namespace, may create user, PID and network namespaces (the browser's renderer sandbox) and no other, and may write `/proc` (the browser writes its children's id maps). The container's seccomp profile must allow `chroot` (the sensor's profile does) |
 | `isolation: strong` | the sensor runs the job only when it advertises `isolation.strong@1`, which a passed start-up probe of a strong backend sets; otherwise it refuses the job (`strong_isolation_missing`) and never runs it on the process sandbox. Default `process`. No sensor offers `strong` yet, so a `strong` tool's jobs are refused today. |
 
 Targets are never your concern to authorize: the platform signs the job, the sensor verifies the signature and

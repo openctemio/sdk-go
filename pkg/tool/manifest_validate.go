@@ -321,6 +321,16 @@ func (m Manifest) validatePermissions(add func(p, format string, args ...any), s
 			add(fmt.Sprintf("/permissions/linux_caps/%d", i), "must be one of %s", strings.Join(allowedCaps, ", "))
 		}
 	}
+	switch p.Sandbox {
+	case "":
+	case SandboxBrowser:
+		// A browser reaches the network only as the targets' tool.
+		if p.Network != NetTargets {
+			add("/permissions/sandbox", "%s needs network %s", SandboxBrowser, NetTargets)
+		}
+	default:
+		add("/permissions/sandbox", "must be empty or %s", SandboxBrowser)
+	}
 }
 
 func checkVendorHost(h string, schema *core.SettingsSchema) string {
