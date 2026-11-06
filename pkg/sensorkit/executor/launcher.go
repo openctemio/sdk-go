@@ -19,6 +19,10 @@ import (
 // launcher. It is not a user-facing command.
 const LauncherArg = "__openctem-task"
 
+// browserStageArg makes the sensor binary the first step of a browser task's
+// tool (see browserStage). It is not a user-facing command.
+const browserStageArg = "__openctem-task-stage"
+
 // launchSpec is what the parent tells the launcher. It is passed as one
 // base64 argument (visible in the process list: it holds paths and limits,
 // never a secret).
@@ -88,6 +92,9 @@ func RunLauncherIfRequested() {
 		// The envelope probe (EnableEnvelopes): started inside a task
 		// cgroup to prove that works, nothing to do.
 		os.Exit(0)
+	}
+	if len(os.Args) >= 3 && os.Args[1] == browserStageArg {
+		os.Exit(runBrowserStage(os.Args[2:]))
 	}
 	if len(os.Args) < 3 || os.Args[1] != LauncherArg {
 		launcherWired.Store(true)

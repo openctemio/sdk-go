@@ -22,3 +22,5 @@ func setupNetwork(launchSpec) error { return errNoSandbox }
 func superviseTool(string, []string, []string, bool) int { return launcherExit }
 
 func runConfined(launchSpec, []string) int { return launcherExit }
+
+func runBrowserStage([]string) int { return launcherExit }

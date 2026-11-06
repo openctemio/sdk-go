@@ -34,15 +34,16 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func hostileTool(mode string, args []string) int {
-	report := func(err error) int {
-		if err != nil {
-			fmt.Println("ERR", err)
-			return 3
-		}
-		fmt.Println("OK")
-		return 0
+func report(err error) int {
+	if err != nil {
+		fmt.Println("ERR", err)
+		return 3
 	}
+	fmt.Println("OK")
+	return 0
+}
+
+func hostileTool(mode string, args []string) int {
 	switch mode {
 	case "read":
 		_, err := os.ReadFile(args[0])
@@ -194,6 +195,19 @@ func hostileTool(mode string, args []string) int {
 		}
 		fmt.Println()
 		return 0
+	case "procwrite":
+		return report(os.WriteFile("/proc/self/oom_score_adj", []byte("100"), 0))
+	case "proxyenv":
+		fmt.Println(os.Getenv("HTTPS_PROXY"), os.Getenv("NO_PROXY") == "", os.Getenv("OPENCTEM_EGRESS_PROXY"))
+		return 0
+	}
+	return namespaceTool(mode, args)
+}
+
+// namespaceTool holds the hostile modes of the browser sandbox tests: ids,
+// namespaces and sockets.
+func namespaceTool(mode string, args []string) int {
+	switch mode {
 	case "uid":
 		fmt.Println(os.Getuid(), os.Getgid())
 		return 0
@@ -272,11 +286,6 @@ func hostileTool(mode string, args []string) int {
 			return 3
 		}
 		fmt.Print(out.String())
-		return 0
-	case "procwrite":
-		return report(os.WriteFile("/proc/self/oom_score_adj", []byte("100"), 0))
-	case "proxyenv":
-		fmt.Println(os.Getenv("HTTPS_PROXY"), os.Getenv("NO_PROXY") == "", os.Getenv("OPENCTEM_EGRESS_PROXY"))
 		return 0
 	}
 	return 99
