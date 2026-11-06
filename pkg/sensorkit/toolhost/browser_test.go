@@ -26,7 +26,11 @@ func TestBrowserToolNeedsAFullSandbox(t *testing.T) {
 	} {
 		h := &Host{Backend: statusBackend{st: st}}
 		_, ierr, err := h.prepare(context.Background(), m, task, RunOptions{})
-		if err != nil || ierr == nil || ierr.Class != tool.RefusedByPolicy || !strings.Contains(ierr.Detail, "web browser") {
+		// The browser's own check, or the general refusal of a tool that
+		// contacts its targets on a host whose sandbox is not fully
+		// enforced (it runs first): either way the tool does not run.
+		if err != nil || ierr == nil || ierr.Class != tool.RefusedByPolicy ||
+			(!strings.Contains(ierr.Detail, "web browser") && !strings.Contains(ierr.Detail, "not fully enforced")) {
 			t.Errorf("status %+v: ierr %+v err %v", st, ierr, err)
 		}
 	}
