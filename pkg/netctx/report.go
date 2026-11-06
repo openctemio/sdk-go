@@ -125,6 +125,13 @@ type Scope struct {
 	NoPrivate bool
 }
 
+// Names reports whether the report may name address a under this scope
+// (the rule the network report applies to resolvers).
+func (s Scope) Names(a netip.Addr) bool {
+	kept, n := s.trim([]netip.Prefix{netip.PrefixFrom(a, a.BitLen())})
+	return n == 0 && len(kept) > 0
+}
+
 // trim narrows ps to the scope: a prefix inside an allowed one stays, an
 // allowed prefix inside it replaces it, anything else is dropped. It
 // returns the kept prefixes (sorted, unique) and how many inputs were

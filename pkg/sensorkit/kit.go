@@ -502,6 +502,9 @@ func New(opts Options) (*Kit, error) {
 	}
 
 	s.stateDir = ResolveStateDir(opts.StateDir)
+	if err := k.applyControlDNS(); err != nil {
+		return nil, err
+	}
 	k.preflightNew(proxies, proxyOpts)
 	k.checkStorage()
 

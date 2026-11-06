@@ -250,6 +250,18 @@ func guardedTransport(blocked func(net.IP) bool) *http.Transport {
 // the API-destination policy; every other address is a target, checked with
 // blocked.
 func guardedTransportVia(blocked func(net.IP) bool, proxies *sync.Map) *http.Transport {
+	return guardedTransportResolve(blocked, proxies, nil)
+}
+
+// guardedTransportResolve is guardedTransportVia with the lookup the dialer
+// uses (nil: the default resolver); the API client passes its LastGood.
+func guardedTransportResolve(blocked func(net.IP) bool, proxies *sync.Map,
+	resolve func(ctx context.Context, host, port string) ([]net.IPAddr, error)) *http.Transport {
+	if resolve == nil {
+		resolve = func(ctx context.Context, host, _ string) ([]net.IPAddr, error) {
+			return net.DefaultResolver.LookupIPAddr(ctx, host)
+		}
+	}
 	baseDialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	safeDialer := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
@@ -262,7 +274,7 @@ func guardedTransportVia(blocked func(net.IP) bool, proxies *sync.Map) *http.Tra
 				check = isAPIDestinationBlocked
 			}
 		}
-		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		ips, err := resolve(ctx, host, port)
 		if err != nil {
 			return nil, err
 		}
@@ -362,7 +374,10 @@ func RefuseRedirects(req *http.Request, _ []*http.Request) error {
 // cannot point the key there), and uses the API path's proxy setting
 // (SetAPIProxy; by default the environment's HTTP(S)_PROXY / NO_PROXY).
 func NewAPIClient(timeout time.Duration) *http.Client {
-	tr := guardedTransport(isAPIDestinationBlocked)
+	// The platform host's last-known-good addresses are dialed when its
+	// lookup fails (APILastGood, tracked hosts only; TLS still verifies the
+	// host name).
+	tr := guardedTransportResolve(isAPIDestinationBlocked, nil, APILastGood().Resolve)
 	tr.Proxy = APIProxy().Func()
 	// A private platform CA set with SetAPIRootCAs; nil keeps Go's defaults.
 	tr.TLSClientConfig = apiTLSConfig()
