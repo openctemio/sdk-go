@@ -1,0 +1,3 @@
+### Fixed: the network confinement check names the real cause of a missing user namespace
+
+- `runtime.sandbox_network` no longer tells the operator to apply the sensor's seccomp profile when the cause is the host. It reads the knobs visible inside the container (`kernel.unprivileged_userns_clone`, `user.max_user_namespaces`, `kernel.apparmor_restrict_unprivileged_userns`, the AppArmor label, the seccomp mode) and reports `userns_disabled_host` (set `kernel.unprivileged_userns_clone=1`, keep the AppArmor restriction on), `userns_restricted`, `userns_blocked` (only when the host allows user namespaces) or `unavailable`. The excerpt lists the knob values read.
