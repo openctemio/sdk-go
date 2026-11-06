@@ -17,9 +17,9 @@ func (lp *LocalPolicy) NetworkScope() netctx.Scope {
 		return netctx.Scope{Set: true, NoPrivate: true}
 	}
 	if lp == nil || !lp.present {
-		return netctx.Scope{NoPrivate: !DefaultScanTargetPolicy().AllowPrivate}
+		return netctx.Scope{NoPrivate: !lp.AllowsPrivate()}
 	}
-	s := netctx.Scope{Set: lp.targetsAllowSet, NoPrivate: !lp.allowPrivate}
+	s := netctx.Scope{Set: lp.targetsAllowSet, NoPrivate: !lp.AllowsPrivate()}
 	s.Allow = ipNetPrefixes(lp.allowNets)
 	s.Deny = ipNetPrefixes(lp.denyNets)
 	return s
