@@ -1,6 +1,7 @@
 package sensorkit
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/openctemio/sdk-go/pkg/core"
@@ -50,7 +51,7 @@ func TestSandboxUnconfinedCheck(t *testing.T) {
 		code   string
 		status string
 	}{
-		{"sandboxed", executor.Status{Mode: executor.ModeAuto, Sandboxed: true}, "sandboxed", core.CheckPass},
+		{"sandboxed", executor.Status{Mode: executor.ModeAuto, Sandboxed: true, Landlock: 4}, "sandboxed", core.CheckPass},
 		{"not available", executor.Status{Mode: executor.ModeAuto, NoSandboxOnHost: true, Missing: []string{"sandbox: available on Linux only"}}, "active_refused", core.CheckFail},
 		{"turned off", executor.Status{Mode: executor.ModeOff}, "acknowledged", core.CheckWarn},
 	} {
@@ -61,7 +62,7 @@ func TestSandboxUnconfinedCheck(t *testing.T) {
 			if !ok || c.Code != tc.code || c.Status != tc.status {
 				t.Fatalf("check %+v (found %v), want %s/%s", c, ok, tc.code, tc.status)
 			}
-			if tc.code == "active_refused" && c.Excerpt != "sandbox: available on Linux only" {
+			if tc.code == "active_refused" && !strings.Contains(c.Excerpt, "sandbox: available on Linux only") {
 				t.Fatalf("excerpt %q", c.Excerpt)
 			}
 		})

@@ -43,6 +43,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -293,8 +294,9 @@ type Status struct {
 // without the sandbox treats the tools that contact their targets.
 const (
 	// UnconfinedRefused: the sandbox was asked for (SENSOR_SANDBOX=auto) and
-	// the host's operating system has none (it is Linux only: macOS,
-	// Windows), so tools of tier T1 and above are refused; passive (T0)
+	// a control could not be enforced (the host has none, the launcher
+	// failed, user namespaces or Landlock are blocked, or the network is not
+	// confined), so tools of tier T1 and above are refused; passive (T0)
 	// tools still run.
 	UnconfinedRefused = "refused"
 	// UnconfinedAcknowledged: the operator turned the sandbox off
@@ -303,20 +305,58 @@ const (
 	UnconfinedAcknowledged = "acknowledged"
 )
 
-// Unconfined is how tools run without the sandbox: "" when they run
-// sandboxed, or on a Linux host where the sandbox could not start (Missing
-// says why, as before); UnconfinedAcknowledged when the operator turned it
-// off; UnconfinedRefused when the host's operating system has none.
+// Unconfined is how tools run without full confinement: "" when the sandbox
+// protects the sensor's identity and the network is confined as asked;
+// UnconfinedAcknowledged when the operator turned the sandbox off;
+// UnconfinedRefused when the sandbox was asked for (auto) and a control that
+// keeps tools from the sensor's key or from the network could not be
+// enforced: the launcher failed or is not wired, user namespaces are
+// blocked or Landlock is missing (FailedControls says which). Network
+// confinement missing alone does not refuse: the key paths are still denied,
+// the sensor reports the gap (NetworkMissing, the sandbox_network check) and
+// SENSOR_SANDBOX_NETWORK=required makes it a start failure. Required mode never gets here:
+// the sensor does not start.
 func (s Status) Unconfined() string {
 	switch {
-	case s.Sandboxed:
-		return ""
 	case s.Mode == ModeOff:
 		return UnconfinedAcknowledged
-	case s.NoSandboxOnHost:
-		return UnconfinedRefused
+	case s.Mode == "":
+		// No sandbox was asked for (tests, one-shot runs).
+		return ""
+	case s.Sandboxed && s.Landlock > 0:
+		return ""
 	}
-	return ""
+	return UnconfinedRefused
+}
+
+// FailedControls names the controls that are not enforced and make
+// Unconfined refuse: "launcher" (the sandbox did not start), "os" (the host
+// has no sandbox), and "landlock" (the sensor's key paths are not denied). Empty when Unconfined is
+// not UnconfinedRefused.
+func (s Status) FailedControls() []string {
+	if s.Unconfined() != UnconfinedRefused {
+		return nil
+	}
+	var out []string
+	if !s.Sandboxed {
+		out = append(out, "launcher")
+		if s.NoSandboxOnHost {
+			out = append(out, "os")
+		}
+	} else if s.Landlock == 0 {
+		out = append(out, "landlock")
+	}
+	return out
+}
+
+// UnconfinedDetail is the reasons behind FailedControls, as the status
+// recorded them.
+func (s Status) UnconfinedDetail() string {
+	d := append([]string(nil), s.Missing...)
+	if s.NetworkMissing != "" {
+		d = append(d, "network: "+s.NetworkMissing)
+	}
+	return strings.Join(d, "; ")
 }
 
 // RefusesActiveTools reports whether tools of tier T1 and above (tools that
