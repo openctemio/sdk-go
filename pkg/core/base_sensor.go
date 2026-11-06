@@ -317,7 +317,7 @@ func slimHeartbeat(status *SensorStatus) {
 	// changes or identifies it.
 	if lp := status.LocalPolicy; lp != nil {
 		status.LocalPolicy = &LocalPolicyReport{State: lp.State, Required: lp.Required, Source: lp.Source, Digest: lp.Digest,
-			KillSwitch: lp.KillSwitch}
+			KillSwitch: lp.KillSwitch, AllowPrivate: lp.AllowPrivate}
 	}
 }
 
