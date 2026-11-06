@@ -36,6 +36,9 @@ type Pending struct {
 	// made it, so it is never resumed against another one.
 	PlatformURL string `json:"platform_url"`
 	PlatformKey string `json:"platform_key"`
+	// SensorNonce is the nonce this sensor revealed (base64url; public once
+	// revealed): the platform's signed grant must name it.
+	SensorNonce string `json:"sensor_nonce,omitempty"`
 	PollSeconds int    `json:"poll_seconds,omitempty"`
 	// SpentCodePrefix: a code (first 4 characters) whose request ended
 	// before this one; it is not sent again.

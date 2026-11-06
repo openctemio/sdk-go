@@ -1208,10 +1208,19 @@ certificate from any other CA, such as a TLS-inspecting proxy whose CA is in
 the trust store or a publicly trusted certificate from another CA, leads to
 another anchor and is refused. The trust store still checks the chain, name
 and validity first: the pin narrows it and never widens it. It does not
-stop a mis-issued certificate from the same CA; for that, and for the
-first contact itself (the pin is learned on first use, inside the pairing
-whose fingerprint an administrator compares), pin with
+stop a mis-issued certificate from the same CA; for that, pin with
 `SENSOR_CA_FINGERPRINT` from the install snippet.
+
+When the platform names the root CAs of its TLS certificate in its signed
+pairing grant (`tls_anchors`: a platform configured with a private CA,
+`PLATFORM_CA_CERT_FILE`), the anchor the pairing connections verified must
+be one of them, or pairing fails and saves nothing
+(`identity.ErrTLSAnchorMismatch`). A platform with a publicly trusted
+certificate names none, and the sensor pins the anchor it verified: a
+publicly trusted certificate from another CA during the first pairing is
+then pinned instead, but the job signer, the content keys and the identity
+still come only from the signed grant (see Signed pairing answers), so such
+a certificate cannot make the sensor run anyone else's jobs.
 
 - Within one pairing, every request must lead to the anchor of the first;
   a change is refused (`httpsec.ErrPlatformChangedDuringPairing`).
@@ -1225,6 +1234,46 @@ whose fingerprint an administrator compares), pin with
   http) keeps trusting the trust store, reports `pin: none`, and logs a
   start-up warning.
 - A malformed pin stops the sensor rather than run unpinned.
+
+#### Signed pairing answers
+
+The fingerprint an administrator compares covers the start of pairing only.
+Someone in the middle of the first pairing (a DNS hijack plus a publicly
+trusted certificate, a TLS-inspecting proxy) could relay the start untouched,
+so the fingerprints match, and then swap what the sensor learns afterwards.
+So the platform signs everything the sensor pins in one statement, the
+grant (`pairing.Grant`, member `grant` of the approval and confirm answers):
+the identity, the content-signing keys, the job signer's keys and key set
+(the hello's `signed_jobs` block), and the root CAs of its TLS certificate
+when it knows them. It signs with the same pairing key as the start answer
+(`domain ‖ 0 ‖ payload`, domain `openctem/sensor-pairing/grant/v1`), and the
+statement names the pairing id, the sensor's public key and the nonce the
+sensor revealed, so a grant is valid for one request of one sensor only.
+
+`identity.Pair` verifies the grant with the platform key of the verified
+start answer:
+
+- on the approval answer, before it confirms (a bad one is never confirmed);
+- on the confirm answer, which must state the same sensor, organization,
+  key and scope it confirmed;
+- and it saves only what the confirm answer's grant states. The hello is
+  not read during pairing.
+
+Any failure (no grant, a signature that does not verify, a grant for
+another request, key or nonce, a TLS anchor the grant does not name) stops
+pairing with an error that names the step (`approval answer`, `confirm
+answer`) and `pairing_answer_unsigned`; nothing is saved, and the request
+in `pairing.json` is dropped. A platform from before signed answers is
+refused the same way, with "upgrade the platform": the sensor never falls
+back to the unsigned identity. Platforms add the member, so sensors from
+before it pair as before. `conformance.RunPairingGrantSuite` checks another
+implementation's verifier against the same cases.
+
+After pairing, the job signer changes only through the pinned root: a new
+signer key arrives in a key set signed by that root (a lower version is a
+rollback and refused), keys pinned without a root are never replaced, and
+the content keys are never taken from a content route. Replacing the root
+or the content keys takes a new pairing.
 
 **Protocol v3 gRPC CA bundle.** The gRPC binding trusts only the CA bundle
 of the platform's certificate service, fetched with the client certificate

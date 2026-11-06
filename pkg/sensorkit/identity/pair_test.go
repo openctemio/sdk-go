@@ -52,9 +52,20 @@ type fakePlatform struct {
 	lastToken   string
 	lastScope   string
 	finalStatus string // what the poll answers after the first poll
-	// signedJobs is what the hello lists after pairing; nil: an older
-	// platform (no hello route here).
+	// signedJobs is what the signed grant states (and the hello lists);
+	// nil: a platform that does not sign jobs.
 	signedJobs *protov2.SignedJobs
+	// tlsAnchors is what the signed grant names as the TLS root CAs.
+	tlsAnchors []string
+	// noGrant: a platform from before signed pairing answers. mitmGrant
+	// rewrites the grant statement after the platform signed it (re-signed
+	// with mitmKey when set, else sent with the platform's signature).
+	// grantFor replaces the grant with one the platform signed for another
+	// sensor (a replay).
+	noGrant   bool
+	mitmGrant func(step string, g *pairing.Grant)
+	mitmKey   ed25519.PrivateKey
+	grantFor  *pairing.SignedGrant
 	// contentSigning is what the granted identity lists (nil: none).
 	contentSigning *pairing.ContentSigning
 	helloAsked     int
@@ -170,16 +181,8 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		st := pairing.StatusResponse{Status: f.status}
 		if f.status == pairing.StatusApproved {
-			kid := sensorsig.Thumbprint(f.sensorPub)
-			if f.grantKeyID != "" {
-				kid = f.grantKeyID
-			}
-			st.Identity = &pairing.Identity{SensorID: "11111111-2222-3333-4444-555555555555", TenantID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-				TenantName: "Acme", Name: "dmz-01", KeyID: kid}
-			st.Identity.ContentSigning = f.contentSigning
-			if f.instance {
-				st.Identity.TenantID, st.Identity.TenantName, st.Identity.Scope = "", "", pairing.ScopeInstance
-			}
+			st.Identity = f.identity()
+			st.Grant = f.signedGrant("approval", st.Identity)
 		}
 		_ = json.NewEncoder(w).Encode(st)
 	case r.Method == http.MethodPost && r.URL.Path == base+"/"+pid+"/complete":
@@ -198,7 +201,9 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.confirmed = true
 		f.status = pairing.StatusCompleted
-		_ = json.NewEncoder(w).Encode(pairing.StatusResponse{Status: pairing.StatusCompleted})
+		ident := f.identity()
+		_ = json.NewEncoder(w).Encode(pairing.StatusResponse{Status: pairing.StatusCompleted, Identity: ident,
+			Grant: f.signedGrant("confirm", ident)})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v2/sensor/hello" && f.signedJobs != nil:
 		f.verify(r, f.sensorPub)
 		f.helloAsked++
@@ -206,6 +211,54 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// identity is what the approval granted.
+func (f *fakePlatform) identity() *pairing.Identity {
+	kid := sensorsig.Thumbprint(f.sensorPub)
+	if f.grantKeyID != "" {
+		kid = f.grantKeyID
+	}
+	id := &pairing.Identity{SensorID: "11111111-2222-3333-4444-555555555555", TenantID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		TenantName: "Acme", Name: "dmz-01", KeyID: kid}
+	id.ContentSigning = f.contentSigning
+	if f.instance {
+		id.TenantID, id.TenantName, id.Scope = "", "", pairing.ScopeInstance
+	}
+	return id
+}
+
+// signedGrant is the platform's signed statement of the identity, the job
+// signer and the TLS anchors, as a man in the middle may have changed it.
+func (f *fakePlatform) signedGrant(step string, ident *pairing.Identity) *pairing.SignedGrant {
+	if f.noGrant {
+		return nil
+	}
+	if f.grantFor != nil {
+		return f.grantFor
+	}
+	g := &pairing.Grant{PairingID: pid, SensorKey: pairing.Encode(f.sensorPub), SensorNonce: pairing.Encode(f.revealed),
+		Identity: *ident, TLSAnchors: f.tlsAnchors}
+	if sj := f.signedJobs; sj != nil {
+		g.SignedJobs = &pairing.JobSigning{PayloadType: sj.PayloadType, KeySet: sj.KeySet, Keys: []pairing.JobKey{}}
+		for _, k := range sj.Keys {
+			g.SignedJobs.Keys = append(g.SignedJobs.Keys, pairing.JobKey{KeyID: k.KeyID, Algorithm: k.Algorithm, PublicKey: k.PublicKey})
+		}
+	}
+	sg, err := pairing.SignGrant(f.platformKey, g)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if f.mitmGrant != nil {
+		f.mitmGrant(step, g)
+		if f.mitmKey != nil {
+			sg, _ = pairing.SignGrant(f.mitmKey, g)
+		} else {
+			b, _ := json.Marshal(g)
+			sg.Payload = pairing.Encode(b)
+		}
+	}
+	return sg
 }
 
 func opts(t *testing.T, srv *httptest.Server, out io.Writer) PairOptions {
