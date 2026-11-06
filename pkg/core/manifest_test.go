@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -416,5 +417,93 @@ func TestDoorbell_SendManifestIsKnown(t *testing.T) {
 	d.Handle(&HeartbeatHints{Present: true, Actions: []HeartbeatAction{HeartbeatActionSendManifest}})
 	if strings.Contains(logs.String(), "unknown heartbeat action") {
 		t.Fatalf("logged as unknown: %s", logs.String())
+	}
+}
+
+func strongToolSensor(t *testing.T) *BaseSensor {
+	t.Helper()
+	s := newManifestSensor(t, &manifestPusher{})
+	if err := s.Tools().Register(ToolSpec{Name: "sandboxed", Version: "1", Contract: &ToolContract{Isolation: "strong"},
+		// A tool listing the capability itself does not advertise it.
+		Capabilities: []string{CapabilityIsolationStrong}}); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// A tool whose isolation is "strong" is refused on a sensor without a
+// proven strong backend, whatever the payload or the tool says.
+func TestCommandToolGate_StrongIsolationRefused(t *testing.T) {
+	s := strongToolSensor(t)
+	gate := s.CommandToolGate()
+	cmd := func(payload string) *Command { return &Command{ID: "c", Type: "scan", Payload: []byte(payload)} }
+	err := gate(cmd(`{"scanner":"sandboxed"}`))
+	if !errors.Is(err, ErrRefusedByLocalPolicy) {
+		t.Fatalf("strong tool admitted without a strong backend: %v", err)
+	}
+	if r := RefusalOf(err); r == nil || r.Rule != RefusalRuleStrongIsolationMissing {
+		t.Fatalf("refusal %+v", r)
+	}
+	if slices.Contains(s.Tools().CapabilityReport(context.Background()).Capabilities, CapabilityIsolationStrong) {
+		t.Fatal("a tool's own capability list advertised strong isolation")
+	}
+	// A payload cannot say otherwise.
+	if gate(cmd(`{"scanner":"sandboxed","isolation":"process","required_features":[]}`)) == nil {
+		t.Fatal("payload downgraded the isolation")
+	}
+	// A process tool is unaffected.
+	if err := gate(cmd(`{"scanner":"nuclei"}`)); err != nil {
+		t.Fatalf("process tool refused: %v", err)
+	}
+	// With the proven capability the strong tool is admitted.
+	s.Tools().AddCapabilities(CapabilityIsolationStrong)
+	if err := gate(cmd(`{"scanner":"sandboxed"}`)); err != nil {
+		t.Fatalf("refused with a proven strong backend: %v", err)
+	}
+	s.Tools().RemoveCapabilities(CapabilityIsolationStrong)
+	if gate(cmd(`{"scanner":"sandboxed"}`)) == nil {
+		t.Fatal("admitted after the capability was withdrawn")
+	}
+}
+
+// A job whose required_features name a capability the sensor does not
+// advertise is refused.
+func TestCommandToolGate_RequiredFeatures(t *testing.T) {
+	s := newManifestSensor(t, &manifestPusher{})
+	gate := s.CommandToolGate()
+	cmd := func(payload string) *Command { return &Command{ID: "c", Type: "scan", Payload: []byte(payload)} }
+	if err := gate(cmd(`{"scanner":"nuclei","required_features":["dast"]}`)); err != nil {
+		t.Fatalf("advertised feature refused: %v", err)
+	}
+	err := gate(cmd(`{"scanner":"nuclei","required_features":["dast","scan.quantum@1"]}`))
+	if r := RefusalOf(err); r == nil || r.Rule != RefusalRuleFeatureMissing {
+		t.Fatalf("unadvertised feature admitted: %v", err)
+	}
+	s.Tools().AddCapabilities("scan.quantum@1")
+	if err := gate(cmd(`{"scanner":"nuclei","required_features":["scan.quantum@1"]}`)); err != nil {
+		t.Fatalf("sensor capability refused: %v", err)
+	}
+}
+
+// The poller never runs a strong tool's job on a process-only sensor and
+// reports it failed with the rule.
+func TestCommandPoller_StrongToolNeverRunsOnProcessOnlySensor(t *testing.T) {
+	s := strongToolSensor(t)
+	c := newQueueClient(scanCmd("strong", "normal", map[string]any{"scanner": "sandboxed"}))
+	e := newCtxExecutor()
+	p := NewCommandPoller(c, e, &CommandPollerConfig{MaxConcurrent: 4})
+	p.SetCommandGate(s.CommandToolGate())
+	p.pollAndExecute(context.Background())
+	close(e.release)
+	p.activeCmds.Wait()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.results["strong"] != "failed" {
+		t.Fatalf("result %q", c.results["strong"])
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.runs["strong"] != 0 {
+		t.Fatal("the strong tool's job ran")
 	}
 }
