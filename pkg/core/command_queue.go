@@ -344,6 +344,9 @@ type commandMeta struct {
 	PreferredTool string   `json:"preferred_tool"`
 	Target        string   `json:"target"`
 	Targets       []string `json:"targets"`
+	// RequiredFeatures are the capabilities the job needs from the sensor
+	// that runs it (CommandToolGate refuses one that lacks any).
+	RequiredFeatures []string `json:"required_features"`
 	// HostKeys are the politeness keys the platform admitted the command
 	// under and holds while it runs (ctis/politeness); absent from an older
 	// platform. An empty list is a command that touches no target host

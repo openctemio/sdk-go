@@ -93,16 +93,16 @@ type Identity struct {
 	// older SDK, which keeps trusting the trust store (posture pin none).
 	PlatformTLSPin        string `json:"platform_tls_pin,omitempty"`
 	PlatformTLSPinElement string `json:"platform_tls_pin_element,omitempty"`
-	// JobSigningKeys are the platform job signer's keys the hello listed
-	// right after pairing (trust on first use, over the pinned and signed
-	// pairing connection; api RFC-040 §5.6). A sensor whose identity pins
+	// JobSigningKeys are the platform job signer's keys the platform's
+	// signed pairing grant stated (signed with the pairing key the
+	// administrator's fingerprint check covered; api RFC-040 §5.6). A sensor whose identity pins
 	// them requires signed jobs (SENSOR_REQUIRE_SIGNED_JOBS overrides it).
 	// Empty: paired by an older SDK or with a platform that does not sign
 	// jobs; such a sensor runs unsigned jobs as before.
 	JobSigningKeys []jobsig.PublicKey `json:"job_signing_keys,omitempty"`
 	// JobSigningRoot is the key id of the installation's offline
-	// job-signing root, taken at pairing from the key set the hello served
-	// (trust on first use, like JobSigningKeys). With a root, job
+	// job-signing root, taken at pairing from the key set the signed
+	// pairing grant stated (like JobSigningKeys). With a root, job
 	// signatures are accepted from the keys of its current key set, and
 	// JobSigningKeys are not used: rotating or revoking a signer key is a
 	// new key set, not a new pairing. SENSOR_JOB_SIGNING_ROOT overrides it.

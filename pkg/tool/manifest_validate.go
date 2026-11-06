@@ -105,6 +105,9 @@ func (m Manifest) Validate() error {
 	default:
 		add("/tier", "must be T0, T1 or T2")
 	}
+	if m.Isolation != "" && m.Isolation != IsolationProcess && m.Isolation != IsolationStrong {
+		add("/isolation", "must be process or strong")
+	}
 	checkList(add, "/capabilities", m.Capabilities, func(s string) string {
 		if !capabilityRE.MatchString(s) {
 			return "must match ^[a-z0-9][a-z0-9._:-]{0,63}$"

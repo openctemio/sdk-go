@@ -87,6 +87,30 @@ const (
 	FSScanRootsReadOnly Filesystem = "scan-roots-read-only"
 )
 
+// Isolation is the least isolation a tool needs from the backend that runs
+// it (api research 444). It is the tool's requirement, not a risk score.
+type Isolation string
+
+// Isolation classes.
+const (
+	// IsolationProcess is the default: the sensor's process sandbox
+	// (private directory, Landlock, seccomp, a network namespace).
+	IsolationProcess Isolation = "process"
+	// IsolationStrong needs a stronger boundary than a process of the
+	// sensor's own kernel: a backend that proved itself with a probe at
+	// start-up. A job of such a tool goes only to a sensor that reports
+	// isolation.strong@1; it waits, it is never run on a weaker backend.
+	IsolationStrong Isolation = "strong"
+)
+
+// Effective is the isolation the tool needs: the default when unset.
+func (i Isolation) Effective() Isolation {
+	if i == "" {
+		return IsolationProcess
+	}
+	return i
+}
+
 // Run profiles.
 const (
 	// ProfileAdapter: the program speaks adapter protocol v1.
@@ -132,6 +156,10 @@ type Manifest struct {
 	// floor of a capability it implements; the platform assigns the
 	// effective tier and may raise it (MinimumTier).
 	Tier Tier `json:"tier"`
+	// Isolation is the least isolation the tool needs: process (the
+	// default) or strong. Additive in tool/v1: a manifest without it reads
+	// as process.
+	Isolation Isolation `json:"isolation,omitempty"`
 	// Implements are the capabilities of the OpenCTEM capability taxonomy
 	// the tool implements ("scan.ports@1"), with its param mapping.
 	Implements []Implementation `json:"implements,omitempty"`
