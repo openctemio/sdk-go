@@ -92,11 +92,12 @@ func (k *Kit) rescopeNetwork() {
 	}
 }
 
-// reportNetworkChecks records the three network checks of a detection.
+// reportNetworkChecks records the network checks of a detection.
 func (k *Kit) reportNetworkChecks(st netctx.State) {
 	k.ReportCheck(networkEgressCheck(st))
 	k.ReportCheck(networkDNSCheck(st, runtime.GOOS))
 	k.ReportCheck(networkDeclaredCheck(st))
+	k.reportCoreAddressesFrom(&st)
 }
 
 func networkEgressCheck(st netctx.State) core.ConfigCheck {

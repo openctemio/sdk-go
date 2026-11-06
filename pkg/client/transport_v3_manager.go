@@ -514,8 +514,11 @@ func (m *v3Manager) tryGRPC(ctx context.Context, https sensorv3connect.SensorSer
 // only the pinned sensor CA for the platform's certificate.
 func (m *v3Manager) grpcClient(endpoint string) sensorv3connect.SensorServiceClient {
 	host := endpoint
-	if h, _, err := net.SplitHostPort(endpoint); err == nil {
+	if h, port, err := net.SplitHostPort(endpoint); err == nil {
 		host = h
+		// TLS 1.3 against the pinned CA with ServerName host: the
+		// last-known-good fallback is safe here too.
+		httpsec.APILastGood().Track(host, port)
 	}
 	m.mu.Lock()
 	pin := m.pin

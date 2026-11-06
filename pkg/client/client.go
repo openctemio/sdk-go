@@ -250,7 +250,15 @@ func New(cfg *Config) *Client {
 			fmt.Fprintf(os.Stderr, "[openctem] WARNING: outbox not enabled: %v\n", err)
 		}
 	}
+	trackPlatformHost(c.baseURL)
 	return c
+}
+
+// trackPlatformHost lets the API clients dial the platform's last-known-good
+// addresses when its name stops resolving (httpsec.LastGood): https URLs
+// only, where TLS verifies the host name whatever address was dialed.
+func trackPlatformHost(baseURL string) {
+	httpsec.APILastGood().TrackURL(baseURL)
 }
 
 // legacyOutboxDir is where the deprecated EnableRetryQueue puts the outbox:
@@ -293,6 +301,7 @@ func NewWithOptions(opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
+	trackPlatformHost(c.baseURL)
 	return c
 }
 

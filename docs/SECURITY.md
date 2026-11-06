@@ -1177,6 +1177,20 @@ or the task does not start:
   unspecified addresses are still refused, and `HTTP(S)_PROXY` / `NO_PROXY`
   are honored. `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE` is no longer needed to
   reach the platform; it only widens what scanners and collectors may reach.
+- DNS outage fallback (`httpsec.LastGood`): when the platform host name
+  stops resolving (a `net.DNSError`, not a canceled request, a TLS or an
+  HTTP error), the API clients dial the addresses the last successful lookup
+  returned, for at most `SENSOR_CONTROL_DNS_MAX_STALE` (default 24 h; 0 turns
+  it off). Only the dialed IP changes: SNI and the certificate check against
+  the platform host name, and the trust (system store, `SetAPIRootCAs`, the
+  pinned sensor CA for gRPC), are the same, so a stale address taken over by
+  someone else, or a planted address, fails the handshake exactly as a
+  spoofed DNS answer would. Only https base URLs and the gRPC endpoint are
+  tracked (never plain http, where nothing would verify the peer); with a
+  proxy the proxy resolves the platform and the proxy host is never tracked.
+  Cached addresses pass the API dial guard when stored, when loaded from the
+  state file (`platform-addrs.json`, mode 0600, at most 8 hosts x 16
+  addresses, 64 KiB, future timestamps refused) and when dialed.
 - Other `httpsec.SafeHTTPClient` users follow redirects but never downgrade
   https to http, and strip credential headers on any origin change.
 - The base URL must be `http`/`https` with a host and no embedded
