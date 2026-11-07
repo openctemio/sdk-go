@@ -61,6 +61,9 @@ const (
 const (
 	EnvURL    = "OPENCTEM_URL"
 	EnvAPIKey = "OPENCTEM_API_KEY"
+	// EnvCAFile names a PEM file of CA certificates trusted in addition to
+	// the system's (a private CA of the console).
+	EnvCAFile = "OPENCTEM_CA_FILE"
 )
 
 // Limits of one command.
@@ -87,16 +90,21 @@ OpenCTEM organization. No file, or "-", reads the standard input.
   openctem import --format testssl --out scan.ctis.json scan.json
   openctem import scan.ctis.json
 
-Environment: OPENCTEM_URL (https://console.example.com) and OPENCTEM_API_KEY
-(an API key with Update Findings, Manage Assets and Import Assets).
+Files may be patterns (C:\scans\*.nessus, scans/*.xml): the CLI expands
+them itself, so they work in cmd.exe and PowerShell too. More than 10 files
+are sent 10 at a time.
+
+Environment: OPENCTEM_URL (https://console.example.com), OPENCTEM_API_KEY
+(an API key with Update Findings, Manage Assets and Import Assets) and
+OPENCTEM_CA_FILE (optional, a private CA in addition to the system's).
 
 flags:
 `
 
 type options struct {
-	format, as, tool, mapping, target, minSeverity, out, url string
-	dryRun, jsonOut                                          bool
-	wait                                                     time.Duration
+	format, as, tool, mapping, target, minSeverity, out, url, caFile string
+	dryRun, jsonOut                                                  bool
+	wait                                                             time.Duration
 }
 
 // env is what the command reads from its surroundings.
@@ -140,6 +148,7 @@ func run(args []string, e env) int {
 	fs.DurationVar(&o.wait, "wait", 60*time.Second, "how long to follow the receipt until the platform applied the upload (0: do not wait)")
 	fs.BoolVar(&o.jsonOut, "json", false, "print the platform's answer as JSON")
 	fs.StringVar(&o.url, "url", "", "the console URL (default $"+EnvURL+")")
+	fs.StringVar(&o.caFile, "ca-file", "", "a PEM file of CA certificates to trust in addition to the system's (default $"+EnvCAFile+")")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return ExitOK
@@ -150,21 +159,113 @@ func run(args []string, e env) int {
 		_, _ = fmt.Fprintf(e.stderr, "openctem import: "+format+"\n", a...)
 		return ExitUsage
 	}
-	inputs := fs.Args()
+	inputs, err := expandInputs(fs.Args())
+	if err != nil {
+		return usageErr("%v", err)
+	}
 	if len(inputs) == 0 {
 		inputs = []string{"-"}
 	}
+	if err := checkOptions(o, inputs); err != nil {
+		return usageErr("%v", err)
+	}
+	conv, err := newConverter(o, e.now)
+	if err != nil {
+		return usageErr("%v", err)
+	}
+
+	// Without --dry-run or --out the settings are checked before any input
+	// is read, so a long conversion does not end in a usage error.
+	var c *client
+	if !o.dryRun && o.out == "" {
+		base := strings.TrimSpace(o.url)
+		if base == "" {
+			base = strings.TrimSpace(e.getenv(EnvURL))
+		}
+		c, err = newClient(base, e.getenv(EnvAPIKey), firstNonEmpty(o.caFile, e.getenv(EnvCAFile)))
+		if err != nil {
+			return usageErr("%v", err)
+		}
+		c.minSeverity = o.minSeverity
+	}
+
+	// Files are converted one by one and sent MaxInputs (and at most
+	// MaxUploadBytes) at a time, so a folder of exports needs neither one
+	// upload nor all reports in memory.
+	ctx := context.Background()
+	var batch []upload
+	size, sent, code := 0, 0, ExitOK
+	flush := func() bool {
+		if len(batch) == 0 {
+			return true
+		}
+		bc := sendBatch(ctx, c, batch, o, e)
+		sent += len(batch)
+		batch, size = nil, 0
+		code = worse(code, bc)
+		return bc != ExitFail
+	}
+	for _, in := range inputs {
+		cv, err := convertInput(ctx, conv, in, e)
+		if err != nil {
+			_, _ = fmt.Fprintf(e.stderr, "openctem import: %s: %s\n", clean(displayName(in), 200), clean(err.Error(), 400))
+			stopped(e.stderr, sent, len(inputs))
+			return ExitUsage
+		}
+		printSummary(e.stderr, cv)
+		if cv.empty {
+			_, _ = fmt.Fprintf(e.stderr, "openctem import: %s: nothing to import\n", clean(displayName(in), 200))
+			if len(inputs) == 1 {
+				return ExitFail
+			}
+			code = worse(code, ExitFail)
+			continue
+		}
+		switch {
+		case o.dryRun:
+			if _, err := e.stdout.Write(cv.body); err != nil {
+				return ExitFail
+			}
+			continue
+		case o.out != "":
+			if err := writeFile(o.out, cv.body); err != nil {
+				_, _ = fmt.Fprintf(e.stderr, "openctem import: %v\n", err)
+				return ExitFail
+			}
+			_, _ = fmt.Fprintf(e.stderr, "wrote %s (upload it with: openctem import %s)\n", o.out, o.out)
+			return ExitOK
+		}
+		if len(cv.body) > MaxUploadBytes {
+			_, _ = fmt.Fprintf(e.stderr, "openctem import: %s: the report is larger than %d MiB: split the input\n", clean(displayName(in), 200), MaxUploadBytes>>20)
+			stopped(e.stderr, sent, len(inputs))
+			return ExitUsage
+		}
+		if len(batch) == MaxInputs || size+len(cv.body) > MaxUploadBytes {
+			if !flush() {
+				stopped(e.stderr, sent, len(inputs))
+				return ExitFail
+			}
+		}
+		batch = append(batch, upload{name: cv.name, body: cv.body})
+		size += len(cv.body)
+	}
+	if !o.dryRun && !flush() {
+		return ExitFail
+	}
+	return code
+}
+
+// checkOptions refuses flag combinations that cannot work.
+func checkOptions(o options, inputs []string) error {
 	switch {
-	case len(inputs) > MaxInputs:
-		return usageErr("%d inputs; at most %d per upload", len(inputs), MaxInputs)
 	case o.out != "" && o.dryRun:
-		return usageErr("--out and --dry-run: choose one")
+		return errors.New("--out and --dry-run: choose one")
 	case o.out != "" && len(inputs) != 1:
-		return usageErr("--out writes one report: give one input")
+		return errors.New("--out writes one report: give one input")
 	case o.mapping != "" && o.format != "auto":
-		return usageErr("--mapping reads the input itself: leave out --format")
+		return errors.New("--mapping reads the input itself: leave out --format")
 	case o.as != "" && o.format != string(importer.FormatLines):
-		return usageErr("--as applies to --format lines only")
+		return errors.New("--as applies to --format lines only")
 	}
 	stdinUsed := 0
 	for _, in := range inputs {
@@ -173,60 +274,13 @@ func run(args []string, e env) int {
 		}
 	}
 	if stdinUsed > 1 {
-		return usageErr("the standard input can be read once")
+		return errors.New("the standard input can be read once")
 	}
-	conv, err := newConverter(o, e.now)
-	if err != nil {
-		return usageErr("%v", err)
-	}
+	return nil
+}
 
-	ctx := context.Background()
-	var files []upload
-	total := 0
-	for _, in := range inputs {
-		c, err := convertInput(ctx, conv, in, e)
-		if err != nil {
-			_, _ = fmt.Fprintf(e.stderr, "openctem import: %s: %s\n", displayName(in), clean(err.Error(), 400))
-			return ExitUsage
-		}
-		printSummary(e.stderr, c)
-		if c.empty {
-			_, _ = fmt.Fprintf(e.stderr, "openctem import: %s: nothing to import\n", displayName(in))
-			return ExitFail
-		}
-		total += len(c.body)
-		if total > MaxUploadBytes {
-			return usageErr("the reports are larger than %d MiB together: split the input", MaxUploadBytes>>20)
-		}
-		files = append(files, upload{name: c.name, body: c.body})
-	}
-
-	switch {
-	case o.dryRun:
-		for _, f := range files {
-			if _, err := e.stdout.Write(f.body); err != nil {
-				return ExitFail
-			}
-		}
-		return ExitOK
-	case o.out != "":
-		if err := writeFile(o.out, files[0].body); err != nil {
-			_, _ = fmt.Fprintf(e.stderr, "openctem import: %v\n", err)
-			return ExitFail
-		}
-		_, _ = fmt.Fprintf(e.stderr, "wrote %s (upload it with: openctem import %s)\n", o.out, o.out)
-		return ExitOK
-	}
-
-	base := strings.TrimSpace(o.url)
-	if base == "" {
-		base = strings.TrimSpace(e.getenv(EnvURL))
-	}
-	c, err := newClient(base, e.getenv(EnvAPIKey))
-	if err != nil {
-		return usageErr("%v", err)
-	}
-	c.minSeverity = o.minSeverity
+// sendBatch uploads one batch, follows its receipt and prints it.
+func sendBatch(ctx context.Context, c *client, files []upload, o options, e env) int {
 	resp, err := e.send(ctx, c, files)
 	if err != nil {
 		_, _ = fmt.Fprintf(e.stderr, "openctem import: %s\n", clean(err.Error(), 400))
@@ -242,6 +296,31 @@ func run(args []string, e env) int {
 	}
 	printReceipt(e.stderr, resp)
 	return resp.exitCode()
+}
+
+// worse is the exit status of a command with several uploads: a failure
+// outweighs a pending receipt, which outweighs success.
+func worse(a, b int) int {
+	rank := func(c int) int {
+		switch c {
+		case ExitOK:
+			return 0
+		case ExitPending:
+			return 1
+		}
+		return 2
+	}
+	if rank(b) > rank(a) {
+		return b
+	}
+	return a
+}
+
+// stopped says how far a command with several uploads got.
+func stopped(w io.Writer, sent, total int) {
+	if sent > 0 {
+		_, _ = fmt.Fprintf(w, "openctem import: stopped after %d of %d files were sent; the receipts above list them\n", sent, total)
+	}
 }
 
 // formatNames lists the formats --format takes.
@@ -344,7 +423,10 @@ func convertInput(ctx context.Context, conv *converter, in string, e env) (*conv
 		defer func() { _ = f.Close() }()
 		r, name = f, baseName(in)
 	}
-	r = &limitedReader{r: r, left: MaxInputBytes}
+	r, err := decodeText(&limitedReader{r: r, left: MaxInputBytes})
+	if err != nil {
+		return nil, err
+	}
 	return conv.convert(ctx, name, r)
 }
 
@@ -427,9 +509,10 @@ func printSummary(w io.Writer, c *converted) {
 	}
 }
 
-// writeFile writes a report readable by its owner only.
+// writeFile writes a report readable by its owner only (mode 0600; on
+// Windows a DACL for the current user and SYSTEM).
 func writeFile(path string, body []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // #nosec G304 -- the user names the file
+	f, err := createPrivate(path)
 	if err != nil {
 		return err
 	}

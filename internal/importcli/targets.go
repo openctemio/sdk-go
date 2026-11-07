@@ -62,9 +62,10 @@ func TargetsMain(args []string, stdout, stderr io.Writer, getenv func(string) st
 	fs.SetOutput(stderr)
 	fs.Usage = func() { _, _ = fmt.Fprint(stderr, targetsUsage); fs.PrintDefaults() }
 	var o exportOptions
-	var base string
+	var base, caFile string
 	bindExportFlags(fs, &o)
 	fs.StringVar(&base, "url", "", "the console URL (default $"+EnvURL+")")
+	fs.StringVar(&caFile, "ca-file", "", "a PEM file of CA certificates to trust in addition to the system's (default $"+EnvCAFile+")")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return ExitOK
@@ -75,7 +76,7 @@ func TargetsMain(args []string, stdout, stderr io.Writer, getenv func(string) st
 		_, _ = fmt.Fprintln(stderr, "openctem targets export: unexpected arguments")
 		return ExitUsage
 	}
-	c, err := clientFromEnv(base, getenv)
+	c, err := clientFromEnv(base, caFile, getenv)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "openctem targets export: %v\n", err)
 		return ExitUsage
@@ -104,11 +105,11 @@ func bindExportFlags(fs *flag.FlagSet, o *exportOptions) {
 	fs.Var((*tagList)(&o.tags), "tag", "only assets with this tag (repeatable)")
 }
 
-func clientFromEnv(base string, getenv func(string) string) (*client, error) {
+func clientFromEnv(base, caFile string, getenv func(string) string) (*client, error) {
 	if strings.TrimSpace(base) == "" {
 		base = getenv(EnvURL)
 	}
-	return newClient(strings.TrimSpace(base), getenv(EnvAPIKey))
+	return newClient(strings.TrimSpace(base), getenv(EnvAPIKey), firstNonEmpty(caFile, getenv(EnvCAFile)))
 }
 
 // exportTargets writes the assets page by page and returns how many.
@@ -235,7 +236,7 @@ func RunMain(args []string, stdout, stderr io.Writer, getenv func(string) string
 	var timeout time.Duration
 	fs.DurationVar(&timeout, "timeout", 4*time.Hour, "stop the command after this long")
 	// The import flags pass through to openctem import.
-	importFlags := []string{"format", "as", "tool", "mapping", "min-severity", "url"}
+	importFlags := []string{"format", "as", "tool", "mapping", "min-severity", "url", "ca-file"}
 	vals := map[string]*string{}
 	for _, f := range importFlags {
 		vals[f] = fs.String(f, "", "as for openctem import")
@@ -250,7 +251,7 @@ func RunMain(args []string, stdout, stderr io.Writer, getenv func(string) string
 		}
 		return ExitUsage
 	}
-	c, err := clientFromEnv(*vals["url"], getenv)
+	c, err := clientFromEnv(*vals["url"], *vals["ca-file"], getenv)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "openctem run: %v\n", err)
 		return ExitUsage
@@ -324,7 +325,8 @@ func RunMain(args []string, stdout, stderr io.Writer, getenv func(string) string
 func childEnv(env []string) []string {
 	out := env[:0:0]
 	for _, kv := range env {
-		if strings.HasPrefix(kv, EnvAPIKey+"=") {
+		// Windows names are case-blind: Openctem_Api_Key is the same variable.
+		if name, _, ok := strings.Cut(kv, "="); ok && strings.EqualFold(name, EnvAPIKey) {
 			continue
 		}
 		out = append(out, kv)

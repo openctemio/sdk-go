@@ -203,7 +203,137 @@ jobs:
           cache: true
 
       - name: Build
-        run: go build -v ./...
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: go build ./...
+
+  # The openctem CLI on a real Windows runner: the import, targets and run
+  # commands (file patterns, UTF-16 exports, CRLF, owner-only files, the
+  # private CA) and the binary's entry point, then "go install" of this
+  # commit from the module proxy into an empty GOPATH, as the install docs
+  # tell people to do.
+  windows-cli:
+    name: windows (openctem CLI)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: true
+
+      - name: Unit tests
+        shell: pwsh
+        run: go test ./cmd/openctem/... ./internal/importcli/... ./pkg/importtool/...
+
+      - name: Exit status and a pattern in cmd.exe
+        shell: cmd
+        run: |
+          go build -o %RUNNER_TEMP%\openctem.exe .\cmd\openctem || exit /b 1
+          mkdir %RUNNER_TEMP%\scans
+          echo www.example.com> %RUNNER_TEMP%\scans\a.txt
+          echo api.example.com> %RUNNER_TEMP%\scans\b.txt
+          %RUNNER_TEMP%\openctem.exe import --format lines --as domain --dry-run %RUNNER_TEMP%\scans\*.txt > NUL
+          if errorlevel 1 exit /b 1
+          %RUNNER_TEMP%\openctem.exe import --no-such-flag 2> NUL
+          if not errorlevel 2 exit /b 1
+          exit /b 0
+
+      - name: The documented PowerShell install, against a local release
+        # Runs the install block of docs/tools/cli.md in Windows PowerShell
+        # 5.1 with the release URL pointed at a local server holding a zip
+        # and SHA256SUMS built the way release.yml builds them, then once
+        # more with a wrong checksum, which must stop it.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $md = Get-Content -Raw docs/tools/cli.md
+          $m = [regex]::Match($md, '(?s)<!-- install-openctem-windows[^\n]*\n```powershell\r?\n(.*?)```')
+          if (-not $m.Success) { throw 'install block not found in docs/tools/cli.md' }
+          $script = $m.Groups[1].Value
+          $v = [regex]::Match($script, "\`$v = '([0-9.]+)'").Groups[1].Value
+          if (-not $v) { throw 'no version in the install block' }
+          $rel = Join-Path $env:RUNNER_TEMP 'rel'; $stage = Join-Path $env:RUNNER_TEMP 'stage'
+          New-Item -ItemType Directory $rel, $stage | Out-Null
+          $env:CGO_ENABLED = '0'
+          go build -trimpath -o "$stage\openctem.exe" ./cmd/openctem
+          Copy-Item LICENSE, NOTICE $stage
+          $zip = "openctem_${v}_windows_amd64.zip"
+          Compress-Archive -Path "$stage\*" -DestinationPath "$rel\$zip"
+          $h = (Get-FileHash -Algorithm SHA256 "$rel\$zip").Hash.ToLower()
+          Set-Content -NoNewline -Path "$rel\SHA256SUMS" -Value "$h  $zip`n"
+          if ($script -notmatch [regex]::Escape('https://github.com/openctemio/sdk-go/releases/download/v$v')) { throw 'release URL changed' }
+          $server = Start-Process python -ArgumentList '-m', 'http.server', '18089', '--bind', '127.0.0.1', '--directory', $rel -PassThru -WindowStyle Hidden
+          try {
+            Start-Sleep -Seconds 2
+            $script = $script.Replace('https://github.com/openctemio/sdk-go/releases/download/v$v', 'http://127.0.0.1:18089')
+            $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'lad'
+            Set-Content -Path (Join-Path $env:RUNNER_TEMP 'install.ps1') -Value $script
+            powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:RUNNER_TEMP 'install.ps1')
+            if ($LASTEXITCODE -ne 0) { throw "install failed: $LASTEXITCODE" }
+            $exe = Join-Path $env:LOCALAPPDATA 'Programs\openctem\openctem.exe'
+            & $exe version
+            if ($LASTEXITCODE -ne 0) { throw 'openctem.exe does not run' }
+            Set-Content -NoNewline -Path "$rel\SHA256SUMS" -Value ("0" * 64 + "  $zip`n")
+            Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA 'Programs')
+            powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:RUNNER_TEMP 'install.ps1')
+            if ($LASTEXITCODE -eq 0 -or (Test-Path $exe)) { throw 'a wrong checksum was installed' }
+            'a wrong checksum stopped the install'
+          } finally {
+            Stop-Process -Id $server.Id -Force
+          }
+
+      - name: TEMP probe Mark-of-the-Web on downloads
+        continue-on-error: true
+        shell: powershell
+        run: |
+          $u = 'https://github.com/openctemio/sdk-go/releases/download/v0.48.0/openctem_0.48.0_linux_amd64.tar.gz'
+          $d = Join-Path $env:RUNNER_TEMP 'motw'; New-Item -ItemType Directory $d | Out-Null
+          $PSVersionTable.PSVersion.ToString()
+          [Environment]::OSVersion.VersionString
+          Invoke-WebRequest -UseBasicParsing $u -OutFile "$d\iwr.bin"
+          curl.exe -sSL -o "$d\curl.bin" $u
+          (New-Object Net.WebClient).DownloadFile($u, "$d\webclient.bin")
+          Start-BitsTransfer -Source $u -Destination "$d\bits.bin" -ErrorAction SilentlyContinue
+          foreach ($f in 'iwr','curl','webclient','bits') { $s = Get-Item "$d\$f.bin" -Stream Zone.Identifier -ErrorAction SilentlyContinue; "MOTW $f (powershell 5.1): " + [bool]$s }
+          Set-Content -Path "$d\marked.zip:Zone.Identifier" -Value "[ZoneTransfer]`r`nZoneId=3"
+          Compress-Archive -Path "$d\iwr.bin" -DestinationPath "$d\z.zip"
+          Set-Content -Path "$d\z.zip:Zone.Identifier" -Value "[ZoneTransfer]`r`nZoneId=3"
+          Expand-Archive "$d\z.zip" -DestinationPath "$d\x"
+          "MOTW propagated by Expand-Archive: " + [bool](Get-Item "$d\x\iwr.bin" -Stream Zone.Identifier -ErrorAction SilentlyContinue)
+          Unblock-File "$d\z.zip"
+          "MOTW after Unblock-File: " + [bool](Get-Item "$d\z.zip" -Stream Zone.Identifier -ErrorAction SilentlyContinue)
+
+      - name: TEMP probe Mark-of-the-Web (pwsh 7)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $u = 'https://github.com/openctemio/sdk-go/releases/download/v0.48.0/openctem_0.48.0_linux_amd64.tar.gz'
+          $d = Join-Path $env:RUNNER_TEMP 'motw7'; New-Item -ItemType Directory $d | Out-Null
+          $PSVersionTable.PSVersion.ToString()
+          Invoke-WebRequest $u -OutFile "$d\iwr.bin"
+          "MOTW iwr (pwsh 7): " + [bool](Get-Item "$d\iwr.bin" -Stream Zone.Identifier -ErrorAction SilentlyContinue)
+
+      - name: go install from the module proxy (no replace directives)
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        shell: pwsh
+        env:
+          REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $env:GOPATH = Join-Path $env:RUNNER_TEMP 'gopath'
+          $env:GOMODCACHE = Join-Path $env:GOPATH 'pkg\mod'
+          $env:GOFLAGS = '-modcacherw'
+          Push-Location $env:RUNNER_TEMP
+          go install "github.com/openctemio/sdk-go/cmd/openctem@$env:REF"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & (Join-Path $env:GOPATH 'bin\openctem.exe') version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Pop-Location
 
 
 

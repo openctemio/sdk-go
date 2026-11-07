@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -47,7 +49,7 @@ type client struct {
 
 // newClient checks the URL and the key. The key is sent only over HTTPS, or
 // plain HTTP to a loopback address (a console on this machine).
-func newClient(base, key string) (*client, error) {
+func newClient(base, key, caFile string) (*client, error) {
 	key = strings.TrimSpace(key)
 	if base == "" {
 		return nil, errors.New("set " + EnvURL + " (or --url) to the console URL, or use --dry-run or --out")
@@ -71,15 +73,48 @@ func newClient(base, key string) (*client, error) {
 	default:
 		return nil, fmt.Errorf("%q is not an http(s) URL", clean(base, 120))
 	}
+	tr, err := transport(caFile)
+	if err != nil {
+		return nil, err
+	}
 	return &client{
 		base: u, key: key, poll: 2 * time.Second,
 		http: &http.Client{
-			Timeout: 5 * time.Minute,
+			Transport: tr,
+			Timeout:   5 * time.Minute,
 			// A redirect would carry the upload, and possibly the key,
 			// somewhere else: it is an error.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}, nil
+}
+
+// transport is the default one (HTTPS_PROXY, HTTP_PROXY and NO_PROXY are
+// honored) with TLS 1.2 at least. A CA file adds its certificates to the
+// system roots; it never replaces them, and verification is never skipped.
+// On Windows and macOS the system roots are the platform's own verifier
+// (the Windows certificate store): Go tries it first and falls back to the
+// added certificates only when it refuses the chain.
+func transport(caFile string) (*http.Transport, error) {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	caFile = strings.TrimSpace(caFile)
+	if caFile == "" {
+		return tr, nil
+	}
+	pem, err := readFileLimited(caFile, 1<<20)
+	if err != nil {
+		return nil, fmt.Errorf("CA file %s: %v", clean(caFile, 200), err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("CA file %s holds no PEM certificate", clean(caFile, 200))
+	}
+	tr.TLSClientConfig.RootCAs = pool
+	return tr, nil
 }
 
 func loopback(host string) bool {
