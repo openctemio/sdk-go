@@ -85,7 +85,7 @@ type Client struct {
 	obSyncWait time.Duration
 	// obStatusPoll is OutboxConfig.ReportStatusPoll.
 	obStatusPoll time.Duration
-	obLogf     func(format string, args ...any)
+	obLogf       func(format string, args ...any)
 
 	// keyMu guards apiKey so it can be rotated at runtime (sensor key
 	// auto-renewal) while push/heartbeat requests read it concurrently.
