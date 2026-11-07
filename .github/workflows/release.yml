@@ -76,17 +76,26 @@ jobs:
           set -euo pipefail
           version="${TAG#v}"
           mkdir dist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             goos="${target%/*}"
             goarch="${target#*/}"
             stage="$(mktemp -d)"
+            exe=openctem
+            [ "$goos" = windows ] && exe=openctem.exe
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-              go build -trimpath -ldflags="-s -w" -o "$stage/openctem" ./cmd/openctem
+              go build -trimpath -ldflags="-s -w" -o "$stage/$exe" ./cmd/openctem
             cp LICENSE NOTICE "$stage/"
-            tar -C "$stage" -czf "dist/openctem_${version}_${goos}_${goarch}.tar.gz" openctem LICENSE NOTICE
+            if [ "$goos" = windows ]; then
+              # A zip with openctem.exe at its root: Explorer and
+              # Expand-Archive open it (-X: no extra file attributes).
+              (cd "$stage" && zip -q -X "$GITHUB_WORKSPACE/dist/openctem_${version}_${goos}_${goarch}.zip" "$exe" LICENSE NOTICE)
+            else
+              tar -C "$stage" -czf "dist/openctem_${version}_${goos}_${goarch}.tar.gz" "$exe" LICENSE NOTICE
+            fi
           done
           cd dist
-          sha256sum ./*.tar.gz | sed 's# \./# #' > SHA256SUMS
+          # One checksums file, signed once, covers every archive.
+          sha256sum ./*.tar.gz ./*.zip | sed 's# \./# #' > SHA256SUMS
           cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
 
       - name: Upload to the release
@@ -94,5 +103,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release upload "$TAG" dist/*.tar.gz dist/SHA256SUMS dist/SHA256SUMS.sigstore.json \
+          gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/SHA256SUMS.sigstore.json \
             --repo "$GITHUB_REPOSITORY" --clobber

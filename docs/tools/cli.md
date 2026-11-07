@@ -2,10 +2,10 @@
 
 ## Install
 
-Without the Go toolchain (Python or shell tools), download the binary from the [GitHub release](https://github.com/openctemio/sdk-go/releases) and verify it. Each release carries `openctem_<version>_<os>_<arch>.tar.gz` for linux and darwin on amd64 and arm64, a `SHA256SUMS` file and its keyless cosign bundle `SHA256SUMS.sigstore.json`:
+Without the Go toolchain (Python or shell tools), download the binary from the [GitHub release](https://github.com/openctemio/sdk-go/releases) and verify it. Each release carries `openctem_<version>_<os>_<arch>.tar.gz` for linux and darwin and `openctem_<version>_windows_<arch>.zip` (with `openctem.exe`) for Windows, all on amd64 and arm64, a `SHA256SUMS` file that lists every archive, and its keyless cosign bundle `SHA256SUMS.sigstore.json`:
 
 ```bash
-v=0.37.0   # a release version, without the leading "v"
+v=0.49.0   # a release version, without the leading "v"
 base=https://github.com/openctemio/sdk-go/releases/download/v$v
 curl -sSLO $base/openctem_${v}_linux_amd64.tar.gz
 curl -sSLO $base/SHA256SUMS
@@ -22,8 +22,54 @@ tar -xzf openctem_${v}_linux_amd64.tar.gz openctem
 With Go, install a released version:
 
 ```bash
-go install github.com/openctemio/sdk-go/cmd/openctem@v0.37.0
+go install github.com/openctemio/sdk-go/cmd/openctem@v0.49.0
 ```
+
+### Windows
+
+In PowerShell (Windows PowerShell 5.1 or PowerShell 7), as the user who runs the CLI (no administrator rights needed). This downloads the zip, checks it against `SHA256SUMS`, unpacks `openctem.exe` to `%LOCALAPPDATA%\Programs\openctem` and adds that folder to the user's `Path`:
+
+<!-- install-openctem-windows: CI runs this block (ci.yml, windows-cli) -->
+```powershell
+$v = '0.49.0'   # a release version, without the leading "v"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+$base = "https://github.com/openctemio/sdk-go/releases/download/v$v"
+$zip = "openctem_${v}_windows_$arch.zip"
+$tmp = Join-Path $env:TEMP "openctem-$v"; New-Item -ItemType Directory -Force $tmp | Out-Null
+Invoke-WebRequest -UseBasicParsing "$base/$zip" -OutFile "$tmp\$zip"
+Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS" -OutFile "$tmp\SHA256SUMS"
+$want = ((Get-Content "$tmp\SHA256SUMS") | Where-Object { $_ -match "^[0-9a-f]{64}  $([regex]::Escape($zip))$" }) -replace ' .*', ''
+$got = (Get-FileHash -Algorithm SHA256 "$tmp\$zip").Hash.ToLower()
+if (-not $want -or $want -ne $got) { throw "SHA256 of $zip does not match SHA256SUMS: do not use it" }
+Unblock-File "$tmp\$zip"
+$dir = Join-Path $env:LOCALAPPDATA 'Programs\openctem'
+Expand-Archive -Force "$tmp\$zip" -DestinationPath $dir
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (($userPath -split ';') -notcontains $dir) { [Environment]::SetEnvironmentVariable('Path', "$userPath;$dir", 'User') }
+$env:Path += ";$dir"
+openctem version
+```
+
+To also check who built `SHA256SUMS` (recommended on a jump host), install [cosign](https://github.com/sigstore/cosign/releases) and run, before the checksum line above:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS.sigstore.json" -OutFile "$tmp\SHA256SUMS.sigstore.json"
+cosign verify-blob --bundle "$tmp\SHA256SUMS.sigstore.json" `
+  --certificate-identity "https://github.com/openctemio/sdk-go/.github/workflows/release.yml@refs/tags/v$v" `
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com "$tmp\SHA256SUMS"
+if ($LASTEXITCODE -ne 0) { throw 'SHA256SUMS is not signed by the sdk-go release workflow' }
+```
+
+The signature proves that `SHA256SUMS` was written by the sdk-go release workflow for that tag (a keyless certificate from GitHub's OIDC identity, logged in the public Rekor transparency log); the checksum then proves the zip is the one that workflow built.
+
+**Unsigned binary and SmartScreen.** `openctem.exe` is not Authenticode-signed yet. Windows marks a file downloaded by a browser (or saved from e-mail) with the Mark-of-the-Web (an NTFS `Zone.Identifier` stream), and Explorer's Extract All copies that mark onto the files it unpacks; Microsoft Defender SmartScreen then warns "Windows protected your PC" when a marked, unsigned program runs. The script removes the mark with `Unblock-File` only **after** the checksum matched, so the trust decision rests on the checksum (and, with cosign, the signature) instead of a publisher certificate. On the GitHub `windows-latest` runner (Windows Server 2025), `Invoke-WebRequest` (Windows PowerShell 5.1 and PowerShell 7), `curl.exe`, `WebClient` and BITS did not add the mark, and Expand-Archive did not copy a mark from a marked zip. `Unblock-File` is there for a zip that arrived through a browser, an e-mail client or a file share, or a host whose policy marks downloads, and does nothing when there is no mark. Do not unblock a file whose checksum did not match.
+
+**Go install avoids the prompt.** On a host with Go, `go install github.com/openctemio/sdk-go/cmd/openctem@vX.Y.Z` builds the binary locally, so it carries no Mark-of-the-Web and SmartScreen does not prompt. Its integrity comes from the Go module proxy and the checksum database (`sum.golang.org`), which every `go install` checks. CI runs this `go install` on `windows-latest` for every change.
+
+**Hardened hosts.** A jump host with AppLocker or Windows Defender Application Control (WDAC) policies may refuse any unsigned program, whatever its checksum or mark. There the fix is a signed binary or an administrator rule that allows `openctem.exe` by path or by file hash (the SHA-256 from `SHA256SUMS`; update the rule with each release).
+
+Package managers (winget, Scoop) are not offered yet.
 
 `openctem version` (also `openctem --version` and `openctem tool version`) prints `openctem <version>`: the release the binary was built from, or `<sdk version>-devel` for a build from a checkout.
 
@@ -52,8 +98,6 @@ Exit status:
 | `diff <old> <new>` | Compares two versions of a descriptor and fails when the change needs a larger version bump than the one made. |
 | `describe [--json] [dir]` | Prints the canonical descriptor and its digest, which is what the platform sees. |
 | `build [dir] (--output oci-dir \| --push repo[:tag]) [--platform p,...] [--base name@sha256:...]` | Builds the pack image of a pack directory, reproducibly and without a container daemon, and prints its digest ([tool-packs.md](../tool-packs.md#the-pack-image)). Registry credentials come from the Docker config (`docker login`). |
-
-A directory with a `pack.yaml` is a [tool pack](../tool-packs.md): `validate`, `test` and `describe` then work on the pack and every tool it lists (`describe` prints the pack's tier, capabilities, credentials, network and engines). Name the `tool.yaml` file to work on one tool of it.
 
 A directory with a `pack.yaml` is a [tool pack](../tool-packs.md): `validate`, `test` and `describe` then work on the pack and every tool it lists (`describe` prints the pack's tier, capabilities, credentials, network and engines). Name the `tool.yaml` file to work on one tool of it.
 
@@ -160,13 +204,25 @@ openctem import --mapping wafw00f.mapping.json --tool wafw00f waf.json
 | `--target-hint` | `type:value` of the asset for records that name none |
 | `--min-severity` | leave out findings below it |
 | `--dry-run` | print the CTIS report to stdout and a summary to stderr; send nothing |
-| `--out` | write the report to a file (mode 0600) and send nothing; upload it later with `openctem import <file>` |
+| `--out` | write the report to a file readable by you only (mode 0600; on Windows a DACL for your account and SYSTEM, nothing inherited) and send nothing; upload it later with `openctem import <file>` |
 | `--wait` | follow the receipt until applied (default 60s; 0: do not wait) |
 | `--json` | print the platform's answer as JSON |
+| `--ca-file` | a PEM file of CA certificates trusted in addition to the system's (default `$OPENCTEM_CA_FILE`) |
+
+Files may be patterns: `openctem import scans/*.xml`, or `openctem import C:\scans\*.nessus` in cmd.exe and PowerShell, which pass the pattern on unexpanded. The CLI expands it itself (an existing file whose name holds `*`, `?` or `[` is taken as it is); a pattern that matches nothing is an error. More than 10 files are sent 10 at a time (and at most 100 MiB of reports per upload), each upload with its own receipt; the exit status is the worst of them.
 
 What is uploaded is exactly what `--dry-run` prints (`format=ctis`). The platform validates it again, imports it as a partial upload with the API key's rights (an import never closes findings), judges every host against your scope (hosts outside it are recorded as candidates, never scanned) and answers with a receipt. Exit status: 0 imported, 1 refused or failed, 2 usage or input error, 3 still queued.
 
 The key is read from `OPENCTEM_API_KEY` only, sent only over HTTPS (plain HTTP only to localhost) and never to a redirect target.
+
+TLS and proxies: the console's certificate is checked against the system trust store (on Windows the certificate store, so a corporate root CA deployed by Group Policy works) plus `--ca-file`, which adds to it and never replaces it; there is no switch to skip verification. `HTTPS_PROXY` and `NO_PROXY` are honoured. The Windows system proxy (WinHTTP or Internet Options) is not read: on a host that reaches the console only through it, set `HTTPS_PROXY` to the same address (`netsh winhttp show proxy` shows it).
+
+### On Windows
+
+- Exports written by Windows tools read as they are: UTF-16 (little or big endian, with or without a byte order mark; Windows PowerShell 5.1 writes UTF-16 for `>` and `Out-File`), a UTF-8 byte order mark, and CRLF line ends. An XML file whose declaration says `encoding="UTF-16"` is decoded first.
+- Each file is read as a stream; its size limit is 100 MiB (the console's upload limit). Split a larger export, for example one Nessus export per scan.
+- Output is plain text without colour or terminal escape codes, so cmd.exe, Windows PowerShell and PowerShell 7 show it cleanly and redirect it to a file. The exit status is in `%ERRORLEVEL%` (cmd.exe) or `$LASTEXITCODE` (PowerShell).
+- Environment variables are set with `$env:OPENCTEM_URL = 'https://console.example.com'` (PowerShell) or `set OPENCTEM_URL=https://console.example.com` (cmd.exe). `openctem run` drops `OPENCTEM_API_KEY` from your command's environment whatever case its name is written in.
 
 ### Give the tool its input: `openctem targets export` and `openctem run`
 

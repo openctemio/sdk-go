@@ -78,9 +78,7 @@ func TestOut_WritesAPrivateFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v, want 0600", st.Mode().Perm())
-	}
+	assertPrivate(t, p, st)
 	b, _ := os.ReadFile(p)
 	if !strings.Contains(string(b), `"name": "gau"`) || strings.Contains(string(b), "x=1") {
 		t.Fatalf("report = %s", b)
@@ -131,12 +129,12 @@ func TestClient_RefusesKeyOverPlainHTTPAndMissingSettings(t *testing.T) {
 		"ftp":          {"ftp://console.example.com", testKey},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := newClient(c.url, c.key); err == nil {
+			if _, err := newClient(c.url, c.key, ""); err == nil {
 				t.Fatal("accepted")
 			}
 		})
 	}
-	if _, err := newClient("http://127.0.0.1:8080", testKey); err != nil {
+	if _, err := newClient("http://127.0.0.1:8080", testKey, ""); err != nil {
 		t.Fatalf("loopback: %v", err)
 	}
 }
