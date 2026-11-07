@@ -30,12 +30,16 @@ const domainGrant = "openctem/sensor-pairing/grant/v1"
 // approval or confirm answer carries no valid platform signature.
 const ProblemAnswerUnsigned = "pairing_answer_unsigned"
 
+// MinPlatformSignedGrant is the first OpenCTEM platform release whose
+// approval and confirm answers carry a signed grant.
+const MinPlatformSignedGrant = "v0.21.0"
+
 var (
 	// ErrGrantMissing is an approval or confirm answer without a signed
 	// grant: a platform from before signed pairing answers, or someone in
 	// the middle who removed it. The sensor never pairs without it.
 	ErrGrantMissing = errors.New("pairing: the platform's answer is not signed (" + ProblemAnswerUnsigned + "): " +
-		"upgrade the platform to a release that signs pairing answers, then pair again")
+		"upgrade the platform to " + MinPlatformSignedGrant + " or later (it signs pairing answers), then pair again")
 	// ErrGrantSignature is a signed grant that does not verify with the
 	// platform key of the start answer, or that is malformed.
 	ErrGrantSignature = errors.New("pairing: the platform's signature over its answer does not verify (" + ProblemAnswerUnsigned + "): " +

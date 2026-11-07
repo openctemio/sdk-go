@@ -86,3 +86,39 @@ func TestBrokenLauncherInAutoRefusesActiveTools(t *testing.T) {
 		t.Error("required mode started with a broken launcher")
 	}
 }
+
+// SECURITY (research/468 D3): SENSOR_SANDBOX=required or
+// SENSOR_SANDBOX_NETWORK=required on a host that cannot give it keeps the
+// sensor online with a backend that refuses every tool of tier T1 and above
+// (even when the rest of the sandbox works, the network alone missing);
+// passive T0 tools still run.
+func TestRequiredUnmetRefusesActiveTools(t *testing.T) {
+	broken, err := executor.NewProcessBackend(executor.Config{Mode: executor.ModeRequired, Launcher: "/bin/true", RefuseActiveWhenUnmet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	netOnly := executor.Status{Backend: "process", Mode: executor.ModeAuto, Sandboxed: true, Landlock: 4,
+		NetworkMissing: "operation not permitted", RequiredUnmet: "network confinement required but not available"}
+	for _, tc := range []struct {
+		name    string
+		b       executor.Backend
+		tier    tool.Tier
+		refused bool
+	}{
+		{"required unmet T0", broken, tool.T0, false},
+		{"required unmet T1", broken, tool.T1, true},
+		{"required unmet T2", broken, tool.T2, true},
+		{"required unmet unknown tier", broken, tool.Tier(""), true},
+		{"network required unmet, sandbox works, T0", statusBackend{st: netOnly}, tool.T0, false},
+		{"network required unmet, sandbox works, T1", statusBackend{st: netOnly}, tool.T1, true},
+	} {
+		h := &Host{Backend: tc.b}
+		e := h.checkUnconfined(tool.Manifest{Name: "scanner", Tier: tc.tier})
+		if (e != nil) != tc.refused {
+			t.Errorf("%s: refusal %+v, want refused %t", tc.name, e, tc.refused)
+		}
+		if e != nil && (!strings.Contains(e.Detail, core.RefusalUnconfinedSandbox) || !strings.Contains(e.Detail, "required")) {
+			t.Errorf("%s: refusal %+v does not name the required control", tc.name, e)
+		}
+	}
+}

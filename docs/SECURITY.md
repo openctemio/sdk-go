@@ -383,6 +383,8 @@ The manifest reports what the platform needs to flag an unhardened sensor
 |---|---|---|
 | `local_policy.state` (`local_policy`) | `enforced`, `absent` | A policy is loaded or not |
 | `local_policy.required` (`local_policy`) | `true`, `false` | Without a policy, network jobs are refused (`true`) or follow the platform's signed scope (`false`, the default). Also on every heartbeat |
+| `local_policy.allows_public` (`local_policy`) | `true`, `false` | The policy can admit a public target at all: `false` when the allow list (`targets.allow` or `SENSOR_ALLOWED_RANGES`) holds only private ranges, or a required policy is absent. Also on every heartbeat |
+| `local_policy.allows_private` (`local_policy`) | `true`, `false` | The policy can admit a private target at all: the host's private-range switch (`SENSOR_ALLOW_PRIVATE_TARGETS=1`, plus `targets.allow_private` in a file) and an allow list that overlaps a private range or holds a domain (any allow list counts as none set). Also on every heartbeat |
 | `posture.platform_tls.pin` (`posture`) | `fingerprint`, `ca_file`, `none` | Platform requests over HTTPS trust only a pinned TLS identity (the pin stored at pairing, or `SENSOR_CA_FINGERPRINT`); a private CA file (`SENSOR_CA_CERT_FILE`) besides the system trust store; or the system trust store only |
 | `posture.sandbox.mode` (`posture`) | `off`, `auto`, `required` | `SENSOR_SANDBOX` |
 | `posture.sandbox.sandboxed` (`posture`) | `true`, `false` | Tool runs go through the sandbox launcher |
@@ -392,6 +394,15 @@ The gRPC transport always pins its own CA bundle; `platform_tls.pin` is
 about the HTTPS requests (pairing, protocol v2, the HTTPS binding, the
 certificate requests that fetch that bundle). See
 [Platform TLS pin](#platform-tls-pin-stored-at-pairing).
+
+The two `allows_*` booleans (research/468 D7) let the platform refuse at plan
+time a scan this sensor would refuse at run time, also while the sensor is
+offline (from its last report). They are routing hints, never the ranges:
+the ranges, names and counts per kind stay on the host, and enforcement stays
+on the sensor. A domain entry counts as both kinds (its addresses are known
+only at run time); deny lists, ports, tools and the kill switch are not
+considered. A false `true` only defers a refusal to run time; a sensor whose
+SDK predates them sends neither, which the platform reads as unknown.
 
 #### Allow everything the platform signs: `targets.allow: ["*"]`
 
@@ -778,7 +789,14 @@ first thing in `main`), which confines itself and then becomes the tool:
 - On a host with `kernel.apparmor_restrict_unprivileged_userns=1`, an AppArmor profile must grant the sensor binary `userns`.
 - On the host, `kernel.unprivileged_userns_clone` must not be 0 (Debian, Ubuntu) and `user.max_user_namespaces` must be positive. Where the sensor reports `userns_disabled_host`, the host admin sets `kernel.unprivileged_userns_clone=1` (or a positive `user.max_user_namespaces`) in `/etc/sysctl.d/` and runs `sysctl --system`. Keep `kernel.apparmor_restrict_unprivileged_userns=1` and the container's `docker-default` AppArmor profile, so unconfined local processes stay restricted; never set the restriction to 0. If confinement still fails with the restriction on and `docker-default` applied, give the sensor container an AppArmor profile that grants `userns`. On a shared machine, a dedicated host or VM for the sensor is the cleanest option.
 - The sensor's `runtime.sandbox_network` check tells the causes apart from the host knobs it can read from inside the container (`userns_disabled_host`, `userns_restricted`, `userns_blocked` for the seccomp profile only when the host allows user namespaces) and lists the knob values it read as evidence; a knob it cannot read is reported as unknown.
-- Where none of this is in place, `Status.NetworkEnforced` is false and `Status.NetworkMissing` says why. With `SENSOR_SANDBOX_NETWORK=auto` (the default) tasks then run unconfined with a warning; with `required` (shared sensors) the sensor refuses to start.
+- Where none of this is in place, `Status.NetworkEnforced` is false and `Status.NetworkMissing` says why. With `SENSOR_SANDBOX_NETWORK=auto` (the default) tasks then run unconfined with a warning. With `required`, the sensor stays online, the check is a failure with the classified cause, and every tool that contacts its targets is refused (see "Required controls a host cannot give" below). A shared sensor, or `SENSOR_SANDBOX_REQUIRED_EXIT=1`, refuses to start instead.
+
+**Required controls a host cannot give (research/468 D3).** `SENSOR_SANDBOX=required` and `SENSOR_SANDBOX_NETWORK=required` keep their guarantee: no tool that contacts its targets ever runs without the required control. On a host that cannot give it, the sensor no longer exits:
+- The cause is classified first (`runtime.sandbox_network`: `userns_disabled_host`, `userns_restricted`, `userns_blocked`, with the host knob values as evidence).
+- The executor installs a backend with `Status.RequiredUnmet` set (`executor.Config.RefuseActiveWhenUnmet`). The tool host refuses every tool of tier T1 and above, and a tool with an unknown tier, with `core.RefusalUnconfinedSandbox` (`FailedControls` names `required`). The backend refuses such tasks too: `Prepare` returns `executor.ErrActiveRefused` for any task that has network and is not marked passive (`TaskSpec.Passive`, which only the tool host sets, from the tool's tier). A scanner run through `core.ExecuteScanner`, which carries no tier, is refused.
+- The sensor stays online, reports `runtime.sandbox_unconfined` as `active_refused` (a failure) and keeps running passive T0 lookups.
+- `SENSOR_SANDBOX_REQUIRED_EXIT=1` restores the exit at start, before pairing, for operators who want it. A shared sensor (`SENSOR_SHARED_MODE=1`) always refuses to start. `SENSOR_SANDBOX_NETWORK=required` with `SENSOR_SANDBOX=off` is a settings error and refuses to start.
+- Threat: a host change (a sysctl, a runtime profile) that silently removes confinement. It cannot widen what runs: the refusal sits in the backend every task goes through, not only in the tool host's check.
 
 **Content packs (api RFC-061).** A tool's templates, rules and wordlists are packs in the sensor's content cache. That cache is a private root hidden from every task (`executor.Config.Private`). A task gets read-only grants for exactly its own packs (`TaskSpec.ReadPaths`, checked by `tool.CheckTaskContent` against the manifest's slots and against `toolhost.Host.ContentRoot`). One tenant's task cannot read another tenant's packs, and a job cannot point a task at any other path.
 
@@ -809,8 +827,9 @@ A job asks for callbacks with `allow_interactsh: true`. A local policy without t
 - What the forwarder reads from a host is bounded. A response head (and every informational response before it) is at most 64 KiB and must arrive within one `UpstreamIdle` window, as must the TLS handshake of a terminated connection. A host that sends an endless or a dripping header has its connection closed, so it cannot exhaust the sensor's memory or hold a connection beyond that window. Bodies are streamed, never buffered.
 
 Modes (`SENSOR_SANDBOX` for sensorkit): `auto` (default) enforces what the
-host supports and logs what it cannot; `required` refuses to start unless
-every control is enforced; `off` runs tools as plain child processes.
+host supports and logs what it cannot; `required` never runs a tool that
+contacts its targets unless every control is enforced; `off` runs tools as
+plain child processes.
 Where `auto` cannot enforce the sandbox (macOS or Windows, which have none;
 or on Linux a launcher that fails, blocked user namespaces, or no Landlock,
 which leaves the sensor's signing key readable to a tool running as the same
@@ -824,8 +843,8 @@ the config report (`runtime.sandbox_unconfined`: `sandboxed`, `active_refused`
 (a failure; the excerpt lists the failed controls `launcher`, `os`, `landlock`
 and the reason), `acknowledged` (a warning)). Missing network confinement
 alone does not refuse tools (the key paths stay denied); it is reported by
-`runtime.sandbox_network`, and `SENSOR_SANDBOX_NETWORK=required` refuses to
-start without it. Each
+`runtime.sandbox_network`, and `SENSOR_SANDBOX_NETWORK=required` refuses
+every tool that contacts its targets without it. Each
 `ExecResult.Sandbox` records what the run was under. Residual risks: a confined task
 cannot signal processes outside its PID namespace, and nothing it starts
 outlives it. A task that runs unconfined (no user namespaces on the host) can
@@ -1300,18 +1319,45 @@ start answer:
 - on the approval answer, before it confirms (a bad one is never confirmed);
 - on the confirm answer, which must state the same sensor, organization,
   key and scope it confirmed;
-- and it saves only what the confirm answer's grant states. The hello is
-  not read during pairing.
+- and it saves only what the confirm answer's grant states. Nothing the
+  hello says is pinned or trusted during pairing (see the capability check
+  below).
 
 Any failure (no grant, a signature that does not verify, a grant for
 another request, key or nonce, a TLS anchor the grant does not name) stops
 pairing with an error that names the step (`approval answer`, `confirm
 answer`) and `pairing_answer_unsigned`; nothing is saved, and the request
 in `pairing.json` is dropped. A platform from before signed answers is
-refused the same way, with "upgrade the platform": the sensor never falls
-back to the unsigned identity. Platforms add the member, so sensors from
-before it pair as before. `conformance.RunPairingGrantSuite` checks another
+refused the same way, with "upgrade the platform to v0.21.0 or later"
+(`pairing.MinPlatformSignedGrant`): the sensor never falls back to the
+unsigned identity. Platforms add the member, so sensors from before it pair
+as before. `conformance.RunPairingGrantSuite` checks another
 implementation's verifier against the same cases.
+
+**Capability check before pairing (research/468 D9).** Before a new pairing
+request starts, the sensor asks `GET /api/v2/sensor/hello` once. A platform
+that answers with its features and does not list `pairing_answer_signed`
+(`protov2.FeaturePairingAnswerSigned`) cannot pair this sensor: it stops with
+`identity.ErrPlatformUnsignedPairing`, which names the platform version to
+upgrade to and the older sensor release to pair with instead, before an
+administrator approves a request that could never complete. Any other answer
+(a platform that serves hello only to paired sensors answers 401) proves
+nothing, and pairing goes on with the grant still verified. The features are
+public facts and a hint only: a forged list can delay pairing (as anyone in
+the middle can) but never make the sensor accept an unsigned answer.
+
+**Stops are held, not retried in a loop (research/468 D8).** The daemon
+(`PairOptions.HoldOnStop`, on in sensorkit) treats a refused enrollment
+token, a refused grant (`pairing_answer_unsigned`), a TLS anchor mismatch and
+a platform without signed answers as a hold, not an exit: it writes
+`identity/pairing-hold.json` (0600; the time, the reason, the number of stops
+in a row and a SHA-256 digest of the platform URL, token and code, never
+their values), stays up, and tries again after 15 minutes, doubling with each
+stop in a row up to 6 hours. A restart within the hold waits the rest of it
+without any platform request, so a supervisor's restart loop cannot exhaust
+the platform's pairing budget (HTTP 429). New settings (another token or
+code) end the hold at once, and a successful pairing removes it. The CLI
+`pair` still exits with the error.
 
 After pairing, the job signer changes only through the pinned root: a new
 signer key arrives in a key set signed by that root (a lower version is a
@@ -1334,6 +1380,15 @@ resets, unimplemented) fall back to the HTTPS binding. With
 even when the platform's hello lists no protocol v3.
 
 ---
+
+### Host check: `doctor` (`sensorkit.DoctorCommand`)
+
+The doctor (research/468 D2) is read-only and local:
+
+- It changes no setting, file or sysctl. The sandbox probe runs the launcher once, as the sensor's start does; the cgroup check only reads (`executor.CheckEnvelopes`), it never moves a process or enables a controller.
+- It contacts only the configured platform URL (`SENSOR_API_URL`, checked by `httpsec.CheckAPIBaseURL`), with one `GET /api/v2/sensor/hello` that carries no API key, signature, token or cookie. TLS is verified as for the sensor; the evidence is the CA's SHA-256 fingerprint, never a key.
+- Its output goes through the config report's scrubber (`core.ConfigReport.Finalize`): no secret setting's value (API key, enrollment token, pairing code, proxy URLs) or URL credential appears in the table or the JSON. It never reads the signing key, the outbox key or the store's master key.
+- The kill switch check reports where the file must be (`/etc/openctem/STOP`, mounted read-only from the host) and whether it is engaged; it never creates or removes it.
 
 ## Security Best Practices
 

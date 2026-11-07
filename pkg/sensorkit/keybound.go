@@ -232,8 +232,13 @@ func (k *Kit) resolveIdentity() error {
 		// by exiting into a restart loop. A spent pairing code is never
 		// resent: the request falls back to one without a code.
 		RetryTransient: true,
-		Out:            k.errw,
-		UserAgent:      productToken(k.opts.ProductName, k.opts.Version),
+		// A refused token, an unsigned answer or a platform that does
+		// not sign pairing answers keeps the sensor up with a hold kept in
+		// the state directory, so a supervisor's restarts do not hammer
+		// the platform (research/468 D8).
+		HoldOnStop: true,
+		Out:        k.errw,
+		UserAgent:  productToken(k.opts.ProductName, k.opts.Version),
 	})
 	// The token is single-use and spent (or refused) by now: take it out of
 	// the environment so scanner processes the sensor starts do not inherit

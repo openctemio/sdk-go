@@ -86,7 +86,7 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		WritePaths: append([]string{p.workdir}, o.WritePaths...), ReadPaths: p.contentPaths, Limits: o.Limits,
 		Network: networkClass(m.Permissions.Network), Stdout: stdout, Stderr: stderr,
 		Hooks:       executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: core.ApplyScannerPriority, Finished: core.ReapScannerProcess},
-		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(), Envelope: envelopeFor(m),
+		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(), Envelope: envelopeFor(m), Passive: !m.Tier.Exceeds(tool.T0),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("toolhost: %w", err)

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openctem.io/schemas/sensor-doctor.v1.schema.json",
+  "title": "Sensor doctor report",
+  "description": "The document `<sensor> doctor --json` prints (sensorkit.DoctorReport). Read-only host checks; no secret values.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "sdk_version", "runtime", "checks", "summary", "exit_code"],
+  "properties": {
+    "schema": {"const": "openctem.io/sensor-doctor/v1"},
+    "product": {"type": "string"},
+    "version": {"type": "string"},
+    "sdk_version": {"type": "string"},
+    "runtime": {"type": "string"},
+    "exit_code": {"enum": [0, 3, 4]},
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pass", "warn", "fail", "skip"],
+      "properties": {
+        "pass": {"type": "integer", "minimum": 0},
+        "warn": {"type": "integer", "minimum": 0},
+        "fail": {"type": "integer", "minimum": 0},
+        "skip": {"type": "integer", "minimum": 0}
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "severity", "code"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]*$"},
+          "status": {"enum": ["pass", "warn", "fail", "skip", "error"]},
+          "severity": {"enum": ["info", "warning", "critical"]},
+          "code": {"type": "string"},
+          "params": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 1,
+              "properties": {
+                "int": {"type": "integer"},
+                "bool": {"type": "boolean"},
+                "enum": {"type": "string"},
+                "path": {"type": "string"},
+                "host": {"type": "string"},
+                "version": {"type": "string"},
+                "name": {"type": "string"},
+                "names": {"type": "array", "items": {"type": "string"}}
+              },
+              "additionalProperties": false
+            }
+          },
+          "keys": {"type": "array", "items": {"type": "string"}},
+          "summary": {"type": "string"},
+          "excerpt": {"type": "string"},
+          "blocks": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}
