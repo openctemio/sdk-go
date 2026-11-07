@@ -69,20 +69,25 @@ func (f *fetchedSource) remove() {
 // annotate marks a report as the full scan of the source's branch and commit.
 // The platform overwrites the branch facts from its own branch record; the
 // report only says what was scanned.
-func (f *fetchedSource) annotate(r *ctis.Report) {
+func (f *fetchedSource) annotate(r *ctis.Report, complete bool) {
 	if f == nil || r == nil {
 		return
 	}
+	// Only a run that ended by itself scanned the whole checkout; a stopped
+	// or failed one is partial, so the branch sweep closes nothing from it.
 	r.Metadata.CoverageType = ctis.CoverageFull
+	if !complete {
+		r.Metadata.CoverageType = ctis.CoveragePartial
+	}
 	r.Metadata.Branch = &ctis.BranchInfo{Name: f.branch, CommitSHA: f.commit}
 }
 
 // emptyReport is the report of a full scan that found nothing.
-func (f *fetchedSource) emptyReport(tool string) *ctis.Report {
+func (f *fetchedSource) emptyReport(tool string, complete bool) *ctis.Report {
 	r := ctis.NewReport()
 	r.Tool = &ctis.Tool{Name: tool}
 	r.Assets = []ctis.Asset{{ID: "repository", Type: ctis.AssetTypeRepository, Value: ctis.NormalizeAssetName(ctis.AssetTypeRepository, f.repository)}}
-	f.annotate(r)
+	f.annotate(r, complete)
 	return r
 }
 

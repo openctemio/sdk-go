@@ -165,7 +165,31 @@ func runScanner(ctx context.Context, cfg *ExecConfig, stdoutLine, stderrLine fun
 		result.ExitCode = res.ExitCode
 	}
 
+	// A run its context (cfg.Timeout, the job's time budget, the platform's
+	// stop, a cancel) or the executor ended did not finish by itself, even
+	// when the process managed to exit 0 as the kill landed: what it wrote is
+	// kept (the caller delivers it as partial), but it is never a clean exit
+	// (research 467 F6).
+	if cause := stopCause(ctx, res); cause != nil {
+		result.Error = fmt.Errorf("%w: %w", ErrScannerStopped, cause)
+		if result.ExitCode == 0 {
+			result.ExitCode = -1
+		}
+	}
+
 	return result, nil
+}
+
+// stopCause is why a scanner run was stopped before it ended by itself (nil
+// when it was not): its context ended, or the executor killed the task.
+func stopCause(ctx context.Context, res *executor.Result) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	if res != nil && res.Killed != "" {
+		return fmt.Errorf("killed: %s", res.Killed)
+	}
+	return nil
 }
 
 // =============================================================================

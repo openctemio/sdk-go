@@ -122,3 +122,9 @@ func (c *outputCapture) stderrBytes() []byte {
 	}
 	return b
 }
+
+// ErrScannerStopped reports a scanner run that did not end by itself: its
+// context (the job's time budget, the platform's stop, a cancel) or the
+// executor stopped it. What it wrote before is kept, but the run is partial:
+// never a clean exit, never full coverage (research 467 F6).
+var ErrScannerStopped = errors.New("scanner stopped before it finished")
