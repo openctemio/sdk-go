@@ -211,13 +211,19 @@ func (u requestDefaults) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 		}
 		if u.identity.UserAgent != "" {
-			force("User-Agent", u.identity.UserAgent)
+			// The job's User-Agent, or the rotation list's value for this
+			// request's host (the same for every request of the run to it).
+			force("User-Agent", u.identity.UserAgentFor(req.URL.Hostname()))
 		}
 		for k, v := range u.identity.Headers {
 			force(k, v)
 		}
 	}
-	set("User-Agent", u.ua)
+	ua := u.ua
+	if u.identity != nil && len(u.identity.UserAgents) > 0 {
+		ua = u.identity.UserAgentFor(req.URL.Hostname())
+	}
+	set("User-Agent", ua)
 	for k, v := range u.headers {
 		set(k, v)
 	}

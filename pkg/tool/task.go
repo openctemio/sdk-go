@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openctemio/contract/identity"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/webscope"
@@ -258,11 +259,33 @@ type Identity struct {
 	// Query is the query parameter every request carries (nil none); a tool
 	// without features.http_query is not given it (AppliedIdentity says so).
 	Query *core.HTTPQuery `json:"query,omitempty"`
+	// UserAgents is the rotation list in force (nil none): a request to a
+	// host carries UserAgentFor(host), the same value for every request of
+	// the run to that host. UserAgent is then the value of the task's
+	// first target host, for a tool that takes one User-Agent per process.
+	UserAgents   []string `json:"user_agents,omitempty"`
+	UserAgentKey string   `json:"user_agent_key,omitempty"`
+	// Required: every request to a target must carry Headers and Query;
+	// the tool host refused the task where they could not be carried.
+	Required bool `json:"required,omitempty"`
 }
 
 // Empty reports whether the identification sets nothing.
 func (i *Identity) Empty() bool {
-	return i == nil || (i.UserAgent == "" && len(i.Headers) == 0 && i.Query == nil)
+	return i == nil || (i.UserAgent == "" && len(i.Headers) == 0 && i.Query == nil && len(i.UserAgents) == 0)
+}
+
+// UserAgentFor is the User-Agent of a request to host: the rotation list's
+// value for (UserAgentKey, host) (contract identity.SelectUserAgent), else
+// UserAgent.
+func (i *Identity) UserAgentFor(host string) string {
+	if i == nil {
+		return ""
+	}
+	if len(i.UserAgents) > 0 {
+		return identity.SelectUserAgent(i.UserAgentKey, host, i.UserAgents)
+	}
+	return i.UserAgent
 }
 
 // NeedsHeaders reports whether the identification sets a User-Agent or a
@@ -325,5 +348,6 @@ func (i *Identity) Validate() error {
 	if i == nil {
 		return nil
 	}
-	return (&core.OrgHTTPPolicy{UserAgent: i.UserAgent, Headers: i.Headers, Query: i.Query}).ValidateMerged()
+	return (&core.OrgHTTPPolicy{UserAgent: i.UserAgent, Headers: i.Headers, Query: i.Query, UserAgents: i.UserAgents,
+		UserAgentKey: i.UserAgentKey}).ValidateMerged()
 }

@@ -101,6 +101,12 @@ type Scope struct {
 	// OOB is the task's out-of-band interaction server (nil: none), reached
 	// only through its own narrow path (OOBServer).
 	OOB *OOBServer
+	// Identity, when set, is put on every HTTP request of the task here:
+	// every connection is guarded as with Web (TLS terminated with the
+	// forwarder's authority, anything that is not HTTP/1.x refused), so no
+	// request reaches a target without it. For a tool that cannot carry
+	// the job's identification itself (identity.go).
+	Identity *Identity
 }
 
 // Verdicts of a Record.

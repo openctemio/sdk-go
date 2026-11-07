@@ -1212,6 +1212,39 @@ or the task does not start:
   over the cap is refused, not trimmed. The result reports the applied
   identification (`http_identity` metadata) with secret-looking values
   masked, so a value is never shown that was not sent, nor sent unreported.
+- **Forwarder as carrier.** A networked tool that cannot carry the
+  identification itself still runs when its sandbox confines the network:
+  the task's forwarder is its only way out, so the tool host tells it to
+  guard every connection of the task (TLS terminated with the forwarder's
+  authority, as for path limits) and to set the headers, the query
+  parameter and each host's User-Agent on every HTTP/1.x request, over any
+  value the tool sent. Anything that is not an HTTP/1.x request (raw bytes,
+  HTTP/2, a protocol upgrade) is refused there. On a sandbox that does not
+  confine the network the tool is refused as before. The report says which
+  side carried it (`carrier`: `tool` or `forwarder`).
+- **Required identification** (`http_policy.identification_required`, from
+  the platform, the organization or a program; no lower layer clears it)
+  fails closed: a job that requires it but carries no identification header
+  and no query parameter is refused; a task whose tool cannot carry the
+  headers or the query parameter, where the forwarder cannot add them, is
+  refused with `refused_by_policy` before any task directory, credential or
+  process exists, so no request is sent. Without the requirement a query
+  parameter the tool cannot carry is reported not applied and the task runs.
+  The requirement covers HTTP requests to the targets; tasks that reach
+  their targets without HTTP (port scans, DNS) are not affected. Sensors
+  that enforce it advertise `http.identity.required@1`; the platform gives
+  a job that requires identification only to such a sensor.
+- **User-Agent rotation** (`http_policy.user_agents`, at most 200, with
+  `user_agent_key`, the run's id; or the owner's `http.user_agents`) picks
+  one value per (run, target host) with the contract's
+  `identity.SelectUserAgent`: the same value for every request of the run to
+  that host. A list is replaced whole by the layer that wins (the owner's
+  over the job's unless `user_agent_locked`), never merged. Rotation changes
+  only the User-Agent: the identification headers and the query parameter
+  travel with every value, and a required identification is enforced as
+  above. `Context.HTTP` and the forwarder set each host's value per request;
+  a tool that takes one User-Agent per process gets the value of the task's
+  first host, and the report says so when the task's hosts differ.
 
 ### 8. API Client Transport
 

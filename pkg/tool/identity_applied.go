@@ -28,7 +28,30 @@ type AppliedIdentity struct {
 	UserAgentSource string          `json:"user_agent_source,omitempty"`
 	Headers         []AppliedHeader `json:"headers,omitempty"`
 	Query           *AppliedQuery   `json:"query,omitempty"`
+	// UserAgentPool is the length of the rotation list in force (0: one
+	// User-Agent, no rotation). UserAgent is then the value of the task's
+	// first target host; each host gets its own (contract
+	// identity.SelectUserAgent with the job's key).
+	UserAgentPool int `json:"user_agent_pool,omitempty"`
+	// UserAgentReason says why requests may not carry UserAgent as
+	// reported: the tool cannot set one, or takes one per process while
+	// the task's hosts get different values.
+	UserAgentReason string `json:"user_agent_reason,omitempty"`
+	// Required: the job requires identification; every request to a
+	// target carried the headers and the query parameter (the task would
+	// have been refused otherwise).
+	Required bool `json:"required,omitempty"`
+	// Carrier is who put the identification on the requests: CarrierTool
+	// (the tool's own flags or the SDK HTTP client) or CarrierForwarder
+	// (the task's forwarder, on every request, for a tool that cannot).
+	Carrier string `json:"carrier,omitempty"`
 }
+
+// Carriers of the identification.
+const (
+	CarrierTool      = "tool"
+	CarrierForwarder = "forwarder"
+)
 
 // AppliedHeader is one header of the applied identification.
 type AppliedHeader struct {
