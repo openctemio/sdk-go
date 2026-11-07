@@ -481,7 +481,7 @@ func TestFullOutboxRefusesNewItemsAndKeepsQueued(t *testing.T) {
 func TestDeadLettersAreEvictedBeforePending(t *testing.T) {
 	o := openTest(t, t.TempDir(), func(c *Config) { c.MaxBytes = 2500; c.MaxDiskFraction = -1 })
 	r := &recorder{errs: func(d *Delivery) error { return Permanent(400, "bad", nil, nil) }}
-	dead, _ := o.Enqueue(Meta{Kind: KindReport}, []byte("dead"))
+	dead, _ := o.Enqueue(Meta{Kind: KindCommandResult}, []byte("dead"))
 	stop := runFor(t, o, r)
 	waitResult(t, dead)
 	stop()
@@ -504,7 +504,7 @@ func TestAgeCapDeletesDeadLettersOnly(t *testing.T) {
 	dir := t.TempDir()
 	mod := func(c *Config) { c.now = clock; c.MaxAge = time.Hour }
 	o := openTest(t, dir, mod)
-	dead, _ := o.Enqueue(Meta{Kind: KindReport}, []byte("dead"))
+	dead, _ := o.Enqueue(Meta{Kind: KindCommandResult}, []byte("dead"))
 	stop := runFor(t, o, &recorder{errs: func(*Delivery) error { return Permanent(400, "bad", nil, nil) }})
 	waitResult(t, dead)
 	stop()

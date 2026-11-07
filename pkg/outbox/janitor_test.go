@@ -77,7 +77,7 @@ func TestDeadLettersPurgedAfterTheirAge(t *testing.T) {
 	o := openTest(t, dir, func(c *Config) { c.now = func() time.Time { return now } })
 	jan, _ := janitorOver(t, o)
 	r := &recorder{errs: func(*Delivery) error { return Permanent(422, "bad", nil, errors.New("422")) }}
-	tp, _ := o.Enqueue(Meta{Kind: KindReport}, []byte("poison"))
+	tp, _ := o.Enqueue(Meta{Kind: KindCommandResult}, []byte("poison"))
 	stop := runFor(t, o, r)
 	if waitResult(t, tp).Dead == nil {
 		t.Fatal("not dead-lettered")

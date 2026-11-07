@@ -283,6 +283,20 @@ does it by default in daemon mode) makes delivery durable (`pkg/outbox`):
   send and removed only when the platform acknowledged it; a crash, `kill -9`
   or restart loses nothing. Replays are idempotent on v2 (same `report_id`,
   same bytes: the server answers 200 and stores nothing).
+- A report's acknowledgement is its **final status**, not the 202. A 202
+  marks the item accepted (`outbox.Accepted`): it stays on disk, no longer
+  holds back its command's result (the command must not outlive its lease
+  waiting for ingest), and the client reads `GET /results/{report_id}` after
+  5 s, 15 s, 1 min, then every 5 min (`OutboxConfig.ReportStatusPoll`).
+  `completed` deletes it and logs the receipt; `failed`, or a status the
+  platform no longer has, sends the same report id with the same bytes again
+  (the platform re-queues a failed report on an identical replay), at most 5
+  times; `expired`, or failed past that cap, keeps it as a dead letter. A
+  platform without the status resource is trusted on its 202, as before.
+- A dead letter of a **report** is never deleted by the byte cap, the age cap
+  or the janitor: its findings exist nowhere else. It counts towards
+  `AcceptsWork` (a disk full of them stops claiming) and only a person removes
+  it (`Outbox.DiscardDead`) or requeues it (`sensor -outbox-requeue-dead`).
 - One file per item (`pending/<id>.item` + `.state`), each written to a
   temporary file, fsynced, renamed and the directory fsynced; mode 0600 in a
   0700 directory; an exclusive `flock` so two processes never share it;

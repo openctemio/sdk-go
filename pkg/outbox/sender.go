@@ -112,6 +112,27 @@ func RetryAfter(err error, after time.Duration) error {
 	return &RetryError{After: after, Err: err}
 }
 
+// AcceptedError says the platform accepted the item (for example a report
+// answered 202) but has not processed it yet: an acceptance is not a
+// durable acknowledgement. The item is kept, marked accepted (it no longer
+// holds back its command's result, and its ticket is answered with Value),
+// and offered again after After so the deliverer can read its final
+// status. It never counts as a failure. Note is shown as the item's last
+// state.
+type AcceptedError struct {
+	After time.Duration
+	Note  string
+	Value any
+}
+
+func (e *AcceptedError) Error() string { return "accepted, awaiting the final status: " + e.Note }
+
+// Accepted classifies a delivery the platform accepted but has not yet
+// confirmed as durable: check again after after.
+func Accepted(after time.Duration, note string, value any) error {
+	return &AcceptedError{After: after, Note: note, Value: value}
+}
+
 // Wake says the platform is reachable again (a heartbeat was accepted): the
 // circuit closes, an authentication pause lifts and every item backing off
 // after a network or server error becomes ready. The drain starts after one
@@ -131,7 +152,9 @@ func (o *Outbox) Wake() {
 	o.consecutiveFail = 0
 	waiting := 0
 	for _, e := range o.entries {
-		if e.dead == nil && !e.state.RateLimited && e.state.NextAttempt.After(now) {
+		// An accepted item waits on the platform's processing, not on its
+		// reachability: it keeps its status-read schedule.
+		if e.dead == nil && !e.state.RateLimited && !e.state.Accepted && e.state.NextAttempt.After(now) {
 			e.state.NextAttempt = time.Time{}
 			waiting++
 		}
@@ -176,9 +199,10 @@ func (o *Outbox) readyLocked(e *entry, now time.Time) bool {
 	}
 	if e.meta.Kind == KindCommandResult && e.meta.CommandID != "" {
 		// A command is reported only after every older result of it was
-		// acknowledged (or dead-lettered).
+		// accepted by the platform (or dead-lettered). Accepted is enough:
+		// the command must not outlive its lease waiting for ingest.
 		for _, other := range o.entries {
-			if other != e && other.dead == nil && other.meta.Kind != KindCommandResult &&
+			if other != e && other.dead == nil && !other.state.Accepted && other.meta.Kind != KindCommandResult &&
 				other.meta.CommandID == e.meta.CommandID {
 				return false
 			}
@@ -320,6 +344,7 @@ func (o *Outbox) attempt(ctx context.Context, d Deliverer, e *entry) {
 	var perm *PermanentError
 	var auth *AuthError
 	var retry *RetryError
+	var accepted *AcceptedError
 	switch {
 	case derr == nil:
 		_ = removeFiles(filepath.Join(o.pendingDir, e.meta.ID+itemExt), filepath.Join(o.pendingDir, e.meta.ID+stateExt))
@@ -329,6 +354,21 @@ func (o *Outbox) attempt(ctx context.Context, d Deliverer, e *entry) {
 		o.consecutiveFail = 0
 		o.circuitUntil = time.Time{}
 		o.finishLocked(e.meta.ID, Result{Delivered: true, Value: value})
+	case errors.As(derr, &accepted):
+		// Taken by the platform, not yet durable: keep it and look again.
+		// The platform answered, so the circuit closes as on a delivery.
+		o.consecutiveFail = 0
+		o.circuitUntil = time.Time{}
+		first := !e.state.Accepted
+		e.state.Accepted = true
+		e.state.LastError = truncate(accepted.Note, 512)
+		e.state.NextAttempt = now.Add(min(max(accepted.After, 10*time.Millisecond), maxRetryAfter))
+		if err := o.writeState(o.pendingDir, e); err != nil {
+			o.cfg.Logf("item %s: state not written: %v", e.meta.ID, err)
+		}
+		if first {
+			o.finishLocked(e.meta.ID, Result{Delivered: true, Accepted: true, Value: accepted.Value})
+		}
 	case ctx.Err() != nil:
 		// Shutting down mid-attempt: nothing is known; try again next run.
 	case errors.As(derr, &perm):
