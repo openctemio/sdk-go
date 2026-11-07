@@ -383,6 +383,8 @@ The manifest reports what the platform needs to flag an unhardened sensor
 |---|---|---|
 | `local_policy.state` (`local_policy`) | `enforced`, `absent` | A policy is loaded or not |
 | `local_policy.required` (`local_policy`) | `true`, `false` | Without a policy, network jobs are refused (`true`) or follow the platform's signed scope (`false`, the default). Also on every heartbeat |
+| `local_policy.allows_public` (`local_policy`) | `true`, `false` | The policy can admit a public target at all: `false` when the allow list (`targets.allow` or `SENSOR_ALLOWED_RANGES`) holds only private ranges, or a required policy is absent. Also on every heartbeat |
+| `local_policy.allows_private` (`local_policy`) | `true`, `false` | The policy can admit a private target at all: the host's private-range switch (`SENSOR_ALLOW_PRIVATE_TARGETS=1`, plus `targets.allow_private` in a file) and an allow list that overlaps a private range or holds a domain (any allow list counts as none set). Also on every heartbeat |
 | `posture.platform_tls.pin` (`posture`) | `fingerprint`, `ca_file`, `none` | Platform requests over HTTPS trust only a pinned TLS identity (the pin stored at pairing, or `SENSOR_CA_FINGERPRINT`); a private CA file (`SENSOR_CA_CERT_FILE`) besides the system trust store; or the system trust store only |
 | `posture.sandbox.mode` (`posture`) | `off`, `auto`, `required` | `SENSOR_SANDBOX` |
 | `posture.sandbox.sandboxed` (`posture`) | `true`, `false` | Tool runs go through the sandbox launcher |
@@ -392,6 +394,15 @@ The gRPC transport always pins its own CA bundle; `platform_tls.pin` is
 about the HTTPS requests (pairing, protocol v2, the HTTPS binding, the
 certificate requests that fetch that bundle). See
 [Platform TLS pin](#platform-tls-pin-stored-at-pairing).
+
+The two `allows_*` booleans (research/468 D7) let the platform refuse at plan
+time a scan this sensor would refuse at run time, also while the sensor is
+offline (from its last report). They are routing hints, never the ranges:
+the ranges, names and counts per kind stay on the host, and enforcement stays
+on the sensor. A domain entry counts as both kinds (its addresses are known
+only at run time); deny lists, ports, tools and the kill switch are not
+considered. A false `true` only defers a refusal to run time; a sensor whose
+SDK predates them sends neither, which the platform reads as unknown.
 
 #### Allow everything the platform signs: `targets.allow: ["*"]`
 

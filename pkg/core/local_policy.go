@@ -32,6 +32,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1087,6 +1088,21 @@ type LocalPolicyReport struct {
 	// sensor that would refuse them. An SDK that predates it sends none,
 	// which the platform reads as unknown.
 	AllowPrivate bool `json:"allow_private"`
+	// AllowsPublic and AllowsPrivate say whether the policy can admit a
+	// public, and a private, target at all (research/468 D7), so the
+	// platform refuses at plan time a scan this sensor would refuse at run
+	// time. Never the ranges: two booleans only. Without a policy:
+	// AllowsPublic true and AllowsPrivate the host's private-range switch
+	// (SENSOR_ALLOW_PRIVATE_TARGETS), or both false when a required policy
+	// is absent. With an allow list (targets.allow or SENSOR_ALLOWED_RANGES)
+	// they are true when an entry can hold such a target: a range that is
+	// not wholly private for AllowsPublic, a range that overlaps a private
+	// range for AllowsPrivate (which also needs the switch), and a domain
+	// for both. Deny lists, ports, tools and the kill switch are not
+	// considered. Always sent; an SDK that predates them sends none, which
+	// the platform reads as unknown.
+	AllowsPublic  bool `json:"allows_public"`
+	AllowsPrivate bool `json:"allows_private"`
 	// Summary is set when a policy is enforced.
 	Summary *LocalPolicySummary `json:"summary,omitempty"`
 	// Warnings are the operator warnings (see LocalPolicy.Warnings).
@@ -1146,6 +1162,7 @@ type LocalPolicySummary struct {
 func (lp *LocalPolicy) Report() *LocalPolicyReport {
 	r := &LocalPolicyReport{State: LocalPolicyStateAbsent, Required: lp.Required(), KillSwitch: lp.KillSwitchEngaged(),
 		AllowPrivate: lp.AllowsPrivate(), Warnings: lp.Warnings(), Schemas: slices.Clone(LocalPolicySchemas)}
+	r.AllowsPublic, r.AllowsPrivate = lp.admitsTargetKinds()
 	if !lp.Present() {
 		return r
 	}
@@ -1193,6 +1210,44 @@ func (lp *LocalPolicy) AllowsPrivate() bool {
 	default:
 		return lp.allowPrivate
 	}
+}
+
+// admitsTargetKinds reports whether the policy can admit a public and a
+// private target at all (LocalPolicyReport.AllowsPublic, AllowsPrivate).
+func (lp *LocalPolicy) admitsTargetKinds() (public, private bool) {
+	if lp.failsClosed() {
+		return false, false
+	}
+	private = lp.AllowsPrivate()
+	if !lp.Present() || !lp.targetsAllowSet || len(lp.allowDomains) > 0 {
+		return true, private
+	}
+	var anyPrivate bool
+	for _, n := range lp.allowNets {
+		p, ok := parsePrefix(n.String())
+		if !ok {
+			// Unreadable: assume it may hold either kind (a hint only).
+			public, anyPrivate = true, true
+			continue
+		}
+		if !privatePrefix(p) {
+			public = true
+		}
+		if overlapsPrivate(p) {
+			anyPrivate = true
+		}
+	}
+	return public, private && anyPrivate
+}
+
+// overlapsPrivate reports whether p and a private range share an address.
+func overlapsPrivate(p netip.Prefix) bool {
+	for _, r := range privateRanges {
+		if r.Overlaps(p) {
+			return true
+		}
+	}
+	return false
 }
 
 // Describe is a one-line description of the policy for the startup log.

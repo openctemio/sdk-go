@@ -100,4 +100,7 @@ func TestSlimHeartbeat_KeepsAllowPrivate(t *testing.T) {
 	if !status.LocalPolicy.AllowPrivate {
 		t.Fatal("the slim heartbeat drops allow_private")
 	}
+	if !status.LocalPolicy.AllowsPublic || !status.LocalPolicy.AllowsPrivate {
+		t.Fatalf("the slim heartbeat drops allows_public or allows_private: %+v", status.LocalPolicy)
+	}
 }
