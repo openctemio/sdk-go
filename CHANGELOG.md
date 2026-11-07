@@ -8,6 +8,144 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.49.0 — 2026-11-07
+
+### Security: a scanner run that was stopped is never reported as a clean scan
+
+- A legacy in-process scanner that the job's time budget, the platform's stop or a signal ended
+  part-way was delivered with coverage `full` and every target `done`, because the runtime read
+  only the scanner's own error text. A scanner that accepts any exit code up to 1 (code scanners,
+  several recon tools) then reported a killed run as "scanned, nothing found". A code scan stopped
+  this way also declared full coverage of its branch, so the platform's branch sweep could close
+  occurrences the run never looked at.
+- Now `core.ExecuteScanner` / `core.StreamScanner` mark a run their context or the executor ended
+  with `ErrScannerStopped` and a non-zero exit, and the command poller treats a run that returned
+  after its job budget ended, or whose tool died by a signal, as stopped: the report is `partial`,
+  the command result's exit code is not 0, and every target its report does not settle is
+  `unfinished` (the platform re-queues it). A code scan declares full coverage of its branch only
+  when the run ended by itself. What the tool wrote before it stopped is still delivered.
+
+### Behaviour change: a pairing stop keeps the sensor up and a restart honours it
+
+- A refused enrollment token, an approval or confirm answer without a valid
+  platform signature (`pairing_answer_unsigned`; nothing is saved, as
+  before), a TLS anchor mismatch and a platform that does not sign pairing
+  answers no longer stop the daemon. It stays up, records a hold in
+  `identity/pairing-hold.json` (15 minutes, doubling with each stop in a row
+  up to 6 hours) and tries again when it ends. A restart within the hold
+  waits the rest of it without calling the platform, so a restart loop no
+  longer runs into the platform's rate limit (HTTP 429). A new token or
+  pairing code ends the hold at once. The `pair` command still exits with
+  the error.
+- New: `identity.PairOptions.HoldOnStop` (on in sensorkit), `identity.Hold`,
+  `identity.HoldFile`, `Store.LoadHold`, `SaveHold`, `ClearHold`.
+
+### Behaviour change: a required sandbox the host cannot give refuses active work, not the process
+
+- `SENSOR_SANDBOX=required` and `SENSOR_SANDBOX_NETWORK=required` on a host
+  that cannot give the control (user namespaces off, a runtime profile that
+  blocks them, no Landlock) no longer stop the sensor. It stays online,
+  reports the classified cause (`runtime.sandbox_network`, for example
+  `userns_disabled_host`; `runtime.sandbox_unconfined` = `active_refused`)
+  and refuses every tool that contacts its targets (tier T1 and above).
+  Passive T0 lookups still run.
+- The guarantee is unchanged: no target-contacting tool runs unconfined. The
+  executor backend itself refuses such tasks (`executor.ErrActiveRefused`,
+  `Status.RequiredUnmet`); only tasks the tool host marks passive
+  (`TaskSpec.Passive`) or that have no network run.
+- New setting `SENSOR_SANDBOX_REQUIRED_EXIT=1` keeps the old exit at start
+  (before pairing). A shared sensor always refuses to start.
+- `SENSOR_SANDBOX_NETWORK=required` with `SENSOR_SANDBOX=off` is now refused
+  as a settings contradiction.
+- New API: `executor.Config.RefuseActiveWhenUnmet`, `executor.ErrActiveRefused`,
+  `executor.Status.RequiredUnmet`, `executor.TaskSpec.Passive`,
+  `sensorkit.EnvSandboxRequiredExit`.
+
+### Added: the local policy report says whether public and private targets can pass
+
+- The local policy report (manifest and every heartbeat) gains two booleans,
+  `allows_public` and `allows_private` (`core.LocalPolicyReport.AllowsPublic`,
+  `AllowsPrivate`). The platform can refuse at plan time a scan this sensor
+  would refuse at run time, for example a public target on a sensor whose
+  `SENSOR_ALLOWED_RANGES` holds only `10.0.0.0/8`, even while the sensor is
+  offline.
+- Without a policy: `allows_public` is true and `allows_private` follows the
+  host's consent (`SENSOR_ALLOW_PRIVATE_TARGETS`); both are false when a
+  required policy is absent.
+- The ranges themselves are still never sent: only the two booleans.
+
+### Added: the `openctem` CLI on Windows
+
+- Releases ship `openctem_<version>_windows_amd64.zip` and `openctem_<version>_windows_arm64.zip` (each with `openctem.exe`), listed in `SHA256SUMS` and covered by its keyless cosign signature like the Linux and macOS archives.
+- `openctem import` expands file patterns itself (`openctem import C:\scans\*.nessus` works in cmd.exe and PowerShell, which do not expand them) and sends more than 10 files 10 at a time, each upload with its own receipt; the exit status is the worst of them.
+- `openctem import` reads exports written by Windows tools: UTF-16 with or without a byte order mark (XML declarations saying UTF-16 included), a UTF-8 byte order mark and CRLF line ends.
+- `--ca-file` / `OPENCTEM_CA_FILE` (import, targets export, run) add a private CA to the system trust store (on Windows the certificate store); verification is never skipped. `HTTPS_PROXY` is honoured as before.
+- `--out` and the private temporary files of `openctem run` get, on Windows, a DACL for the current user and SYSTEM only (the equivalent of mode 0600).
+- `openctem run` drops `OPENCTEM_API_KEY` from the command's environment whatever case the name is written in (Windows names are case-blind).
+- CI builds every target for real (the build matrix set no GOOS before) and runs the CLI's tests, a cmd.exe exit-status check and `go install github.com/openctemio/sdk-go/cmd/openctem@<commit>` on `windows-latest`.
+- Docs: a PowerShell install that checks the zip against `SHA256SUMS` (optionally the cosign signature), unblocks it and adds it to the user's Path; why an unsigned `openctem.exe` triggers SmartScreen and how `go install` avoids it; AppLocker/WDAC hosts.
+
+### Added: `openctem import` converts and imports the output of tools you run yourself
+
+- New subcommand of the `openctem` CLI: `tool ... | openctem import --format <f>` (or files) converts nmap XML, testssl.sh JSON, line lists of names, addresses or URLs (`--format lines --as host|domain|ip|url|auto`), any other ctis importer format, a CTIS report, or any JSON/CSV/XML through a local declarative mapping file (`--mapping`), into a CTIS report on your machine.
+- `--dry-run` prints the report (exactly what would be sent) and a summary; `--out <file>` writes it (mode 0600) for a later `openctem import <file>`; otherwise it is uploaded as `format=ctis` to `POST /api/v1/findings/imports` with the API key in `OPENCTEM_API_KEY` (never a flag) to `OPENCTEM_URL`, and the receipt is followed (`--wait`) and summarised: findings created/updated/skipped, assets created/updated, hosts held outside the organization's scope, refusals by reason.
+- Exit status for CI: 0 imported, 1 refused or failed, 2 usage or input error, 3 still queued at the end of `--wait`.
+- Security: the key is sent only over HTTPS (plain HTTP only to a loopback address) and never to a redirect target; server and input text is printed without control characters; inputs are bounded (100 MiB each, 10 per upload). Needs a console that accepts CTIS uploads (`format=ctis`).
+- `file-import` (sensor importtool) 1.2.0 lists `nmap`, `testssl` and `ctis` among its formats (auto detection already reads them).
+
+### Added: `openctem targets export` and `openctem run` give your own tools their input
+
+- `openctem targets export --type domain|ip|url|service [--scope in_scope|not_covered|internal|all] [--tag t] [--export-format lines|json]` prints the organization's assets of one kind through `GET /api/v1/assets` with the API key's data scope; by default only assets an active scope entry covers. Values are de-duplicated and printed without control characters.
+- `openctem run --type <kind> --format <f> [import flags] -- <command> ...` exports the targets to a private temporary file, runs your command without a shell with `{targets_file}` and `{output_file}` replaced, and imports what it wrote (`{output_file}`, else its standard output). The command does not inherit `OPENCTEM_API_KEY`; the temporary directory is removed afterwards.
+
+### Added: the sensor checks before pairing that the platform signs pairing answers
+
+- Before a new pairing request starts, the sensor reads the platform's
+  hello once. A platform that lists its features without
+  `pairing_answer_signed` is refused before any request exists, with
+  `identity.ErrPlatformUnsignedPairing`, which names the platform version to
+  upgrade to (`pairing.MinPlatformSignedGrant`, v0.21.0) and the older
+  sensor release to pair with instead. A platform that serves hello only to
+  paired sensors pairs as before; the signed grant is still verified.
+- New: `protov2.FeaturePairingAnswerSigned`, `pairing.MinPlatformSignedGrant`.
+  A missing grant now names that version too.
+
+### Added: a `doctor` subcommand that checks the sensor's host
+
+- `sensorkit.DoctorCommand` (and `RunDoctor`) is the `doctor` subcommand a
+  sensor's `main` dispatches to. It changes nothing and checks: the tool
+  sandbox and user namespaces (with the classified cause), cgroup v2
+  delegation, free disk on the data directories, the state directory, the
+  platform's DNS, TLS (the CA fingerprint) and clock skew from one request
+  without any credential, the local policy as the sensor parses it, and the
+  kill switch path.
+- `--json` prints `openctem.io/sensor-doctor/v1`
+  (`docs/schemas/sensor-doctor.v1.schema.json`). Exit codes: 0 all passed,
+  3 a warning, 4 a failure, 2 a usage error.
+- The output never carries a secret setting's value, URL credentials or key
+  bytes (the config report's scrubber).
+- New: `executor.CheckEnvelopes` (read-only cgroup delegation check),
+  `resource.DiskFree`, `core.LocalPolicy.KillSwitchFiles`.
+
+### Changed: CTIS v2.0.2
+
+- `pkg/ctis` now pins the released CTIS v2.0.2 instead of an unreleased CTIS commit. `openctem import` of a `.nessus` file now also carries the host's CPE names (OS and applications), its installed packages and local listeners, the compliance sub-checks and framework mappings, and the per-host scan coverage that tells the platform which absent findings a file may close.
+
+### Fixed: a report leaves the outbox only once the platform processed it
+
+- The outbox deleted a report as soon as the platform answered 202, before the platform processed it. If
+  processing then failed, or the platform dropped the report, the findings existed nowhere and could not be
+  sent again. Now the 202 marks the report accepted. The outbox keeps it and reads its status
+  (`GET /results/{report_id}`) until it is final:
+  - `completed`: deleted;
+  - `failed`, or unknown to the platform: sent again under the same id with the same bytes, at most 5 times;
+  - `expired`, or failed past the cap: kept as a dead letter.
+- A report that is only accepted no longer holds back its command's result.
+- Dead letters of reports are no longer deleted by the byte cap, the age cap or the janitor; only an
+  operator removes them. They count towards the claim gate, so a disk full of them stops claiming instead
+  of losing results.
+- New `OutboxConfig.ReportStatusPoll` (default 5 s) and `outbox.Accepted`, `Outbox.DiscardDead`.
+
 ## v0.48.0 — 2026-11-06
 
 ### Security: pairing saves only what the platform signed
