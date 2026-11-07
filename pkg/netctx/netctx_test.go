@@ -530,3 +530,36 @@ func TestParseRouteV4Masks(t *testing.T) {
 		t.Fatalf("routes %v err %v", rs, err)
 	}
 }
+
+// Docker's embedded DNS hides the real resolvers behind 127.0.0.11 and
+// names them in a comment: they are the upstream resolvers (loopback ones,
+// a resolver on the Docker host itself, left out).
+func TestDetectDockerUpstreamResolvers(t *testing.T) {
+	raw := []byte("nameserver 127.0.0.11\nsearch corp.example.com\noptions ndots:0\n\n" +
+		"# Based on host file: '/etc/resolv.conf' (internal resolver)\n" +
+		"# ExtServers: [host(127.0.0.53) 10.0.0.53 [2001:db8::53]:53 10.0.0.53 bogus]\n# Overrides: []\n")
+	src := Sources{ResolvConf: func() ([]byte, error) { return raw, nil }}
+	d := Detect(src)
+	want := []netip.Addr{netip.MustParseAddr("10.0.0.53"), netip.MustParseAddr("2001:db8::53")}
+	if len(d.UpstreamResolvers) != len(want) || d.UpstreamResolvers[0] != want[0] || d.UpstreamResolvers[1] != want[1] {
+		t.Fatalf("upstream resolvers %v, want %v", d.UpstreamResolvers, want)
+	}
+	if len(d.SystemResolvers) != 1 || d.SystemResolvers[0].String() != "127.0.0.11" {
+		t.Fatalf("system resolvers %v", d.SystemResolvers)
+	}
+	if got := parseExtServers([]byte("nameserver 10.0.0.1\n")); len(got) != 0 {
+		t.Fatalf("no comment: %v", got)
+	}
+}
+
+func TestScopeNames(t *testing.T) {
+	s := Scope{Set: true, Allow: []netip.Prefix{pfx("10.0.0.0/16")}, Deny: []netip.Prefix{pfx("10.0.9.0/24")}}
+	for a, want := range map[string]bool{"10.0.0.53": true, "10.0.9.1": false, "192.0.2.1": false} {
+		if got := s.Names(netip.MustParseAddr(a)); got != want {
+			t.Errorf("Names(%s) = %v, want %v", a, got, want)
+		}
+	}
+	if !(Scope{}).Names(netip.MustParseAddr("192.0.2.1")) {
+		t.Error("no scope names everything")
+	}
+}

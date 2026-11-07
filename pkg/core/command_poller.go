@@ -2131,6 +2131,10 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 		failed.TargetOutcomes = payload.outcomes(FailureTargetOutcomes(ctx, targets, payload.evidence(ctx, nil, scanResult), nil), refusedTargets)
 		return failed, atStage(StageRun, fmt.Errorf("scan failed: %w", budgetClassed(err, ctx, deliverCtx, payload.Deadline, jobStart)))
 	}
+	// A run the job's budget, the platform's stop or a signal ended is
+	// partial whatever the scanner said: its targets are unfinished unless
+	// its report proves them, and its exit is not 0 (research 467 F6).
+	stopped := markStopped(ctx, scanResult)
 	ctx = deliveryContext(ctx, deliverCtx)
 	// A job whose callbacks the local policy turned off says so, whether or
 	// not its scanner reports an out-of-band state.
@@ -2169,13 +2173,13 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 
 	// Every target is done unless the report marks it (refused, failed,
 	// unfinished); the report's marks are added once it is parsed.
-	result.TargetOutcomes = payload.outcomes(TargetOutcomesFor(ctx, targets, payload.evidence(ctx, nil, scanResult)), refusedTargets)
+	result.TargetOutcomes = payload.outcomes(runTargetOutcomes(ctx, targets, payload.evidence(ctx, nil, scanResult), stopped), refusedTargets)
 
 	// Parse and push results if pusher is configured. Empty (or whitespace-
 	// only) output is a scan that found nothing; anything else must be read by
 	// a parser, or the command fails: reporting it as 0 findings would hide
 	// real results behind a "completed" scan.
-	if err := e.pushScanResult(ctx, scanner, scanResult, target, targets, refusedTargets, &payload, src, result); err != nil {
+	if err := e.pushScanResult(ctx, scanner, scanResult, stopped, target, targets, refusedTargets, &payload, src, result); err != nil {
 		return result, err
 	}
 
@@ -2187,7 +2191,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 // target's outcome (targets, with the refused ones) on result. A code-scan job
 // (src) reports on its repository as a full scan of the source's branch, an
 // empty report included.
-func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Scanner, scanResult *ScanResult, target string,
+func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Scanner, scanResult *ScanResult, stopped bool, target string,
 	targets []string, refusedTargets []RefusedTarget, payload *ScanCommandPayload, src *fetchedSource, result *CommandExecutionResult) error {
 	if e.pusher != nil && len(bytes.TrimSpace(scanResult.RawOutput)) > 0 {
 		parser, err := e.parsers.ForScanner(scanner.Name(), scanResult.RawOutput)
@@ -2218,9 +2222,9 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 		}
 
 		result.FindingsCount = len(report.Findings)
-		result.TargetOutcomes = payload.outcomes(TargetOutcomesFor(ctx, targets, payload.evidence(ctx, report, scanResult)), refusedTargets)
+		result.TargetOutcomes = payload.outcomes(runTargetOutcomes(ctx, targets, payload.evidence(ctx, report, scanResult), stopped), refusedTargets)
 		report.Metadata.CoverageType = reachCoverageType(ctx, scanCoverageType(report, scanResult))
-		src.annotate(report)
+		src.annotate(report, scanResult.Error == "")
 
 		// Push findings
 		_, err = e.pusher.PushFindings(ctx, report)
@@ -2230,7 +2234,7 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 	} else if e.pusher != nil && src != nil {
 		// A full scan of a branch that found nothing still reports, so the
 		// platform marks what this tool no longer sees there as fixed.
-		if _, err := e.pusher.PushFindings(ctx, src.emptyReport(scanner.Name())); err != nil {
+		if _, err := e.pusher.PushFindings(ctx, src.emptyReport(scanner.Name(), scanResult.Error == "")); err != nil {
 			return atStage(StageUpload, fmt.Errorf("push failed: %w", err))
 		}
 	} else if e.pusher != nil {
@@ -2246,6 +2250,38 @@ func (e *DefaultCommandExecutor) pushScanResult(ctx context.Context, scanner Sca
 	}
 
 	return nil
+}
+
+// markStopped marks a scan result whose run did not end by itself: the
+// job's context ended (its time budget, the platform's stop) or the tool died
+// by a signal (exit status -1). Such a run is partial (Error set, so its
+// report never declares full coverage) and never exits 0 (the platform
+// proves no coverage from it). It reports whether the run was stopped.
+func markStopped(job context.Context, r *ScanResult) bool {
+	if r == nil || (job.Err() == nil && r.ExitCode >= 0) {
+		return false
+	}
+	if r.Error == "" {
+		why := "the tool was killed"
+		if cause := context.Cause(job); cause != nil {
+			why = cause.Error()
+		}
+		r.Error = "stopped before it finished (" + why + "): results are partial"
+	}
+	if r.ExitCode == 0 {
+		r.ExitCode = -1
+	}
+	return true
+}
+
+// runTargetOutcomes is each target's outcome after a run that returned: done
+// unless marked, or, for a stopped run (markStopped), unfinished unless its
+// report or evidence settled it.
+func runTargetOutcomes(ctx context.Context, targets []string, ev OutcomeEvidence, stopped bool) []outcome.Target {
+	if stopped {
+		return FailureTargetOutcomes(ctx, targets, ev, nil)
+	}
+	return TargetOutcomesFor(ctx, targets, ev)
 }
 
 // withJobTimeout bounds a job's context by timeout (none when 0) and also

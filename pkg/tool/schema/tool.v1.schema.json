@@ -39,6 +39,7 @@
     "class": {"enum": ["target-scan", "connector", "parser", "enricher"]},
     "modes": {"type": "array", "maxItems": 2, "uniqueItems": true, "items": {"enum": ["daemon", "runner"]}},
     "tier": {"enum": ["T0", "T1", "T2"]},
+    "isolation": {"enum": ["process", "strong"], "description": "The least isolation the tool needs from its backend: process (default) or strong (a sensor that proved a strong backend; the job waits for one)."},
     "implements": {
       "type": "array", "maxItems": 64,
       "description": "Capabilities of the OpenCTEM capability taxonomy the tool implements, with the mapping of their standard params to config keys.",
@@ -102,6 +103,7 @@
           }
         },
         "linux_caps": {"type": "array", "uniqueItems": true, "items": {"enum": ["NET_RAW", "NET_BIND_SERVICE"]}},
+        "sandbox": {"enum": ["browser"]},
         "proxy": {"enum": ["honors", "ignores"]}
       }
     },

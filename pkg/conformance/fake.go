@@ -71,6 +71,8 @@ type StoredReport struct {
 	Segments  map[int]segment
 	Committed bool
 	Status    protov2.Status
+	// Replays counts identical re-sends of a committed report.
+	Replays int
 }
 
 type segment struct {
@@ -111,6 +113,11 @@ type FakePlatform struct {
 	// fake answers with, as a newer platform would: a sensor must ignore
 	// it (forward compatibility, docs/STABILITY.md).
 	FutureFields bool
+	// AsyncIngest answers a committed report as "queued", as the platform
+	// does (its worker processes it later), instead of "completed": the
+	// test moves it on with SetReportState. An identical re-send of a
+	// "failed" report queues it again, as the platform does.
+	AsyncIngest bool
 
 	mu    sync.Mutex
 	fault Fault
@@ -738,9 +745,14 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 		}
 		commandID, rest = parts[0], "/"+parts[1]
 		f.mu.Lock()
-		state := f.commands[commandID]
+		state, epoch := f.commands[commandID], f.cmdEpoch[commandID]
 		f.mu.Unlock()
-		if state != "running" {
+		// As the platform: a stated lease epoch must be the command's
+		// current one, and a request that names results_lease_epoch must
+		// state one.
+		stated := strings.TrimSpace(r.Header.Get(protov2.HeaderLeaseEpoch))
+		promised := namesFeature(r.Header.Values(protov2.HeaderSensorFeatures), protov2.FeatureResultsLeaseEpoch)
+		if state != "running" || (stated != "" && stated != strconv.Itoa(epoch)) || (promised && stated == "") {
 			f.problem(w, http.StatusNotFound, protov2.ProblemCommandNotFound)
 			return
 		}
@@ -930,6 +942,10 @@ func (f *FakePlatform) putSegment(w http.ResponseWriter, r *http.Request, body [
 	if old, ok := st.Segments[seq]; ok {
 		if old.digest == digest {
 			st.Status.UpdatedAt = now
+			st.Replays++
+			if st.Status.State == protov2.StateFailed {
+				st.Status.State = protov2.StateQueued
+			}
 			writeJSON(w, http.StatusOK, st.Status)
 			return
 		}
@@ -965,6 +981,41 @@ func contains(xs []string, s string) bool {
 	return false
 }
 
+// SetReportState moves a stored report to state (AsyncIngest tests). It
+// reports whether the report exists.
+func (f *FakePlatform) SetReportState(reportID string, state protov2.ReportState) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.reports[reportID]
+	if st == nil {
+		return false
+	}
+	st.Status.State = state
+	return true
+}
+
+// ForgetReport deletes a stored report, as a platform that lost it would.
+func (f *FakePlatform) ForgetReport(reportID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.reports, reportID)
+	for doc, id := range f.docs {
+		if id == reportID {
+			delete(f.docs, doc)
+		}
+	}
+}
+
+// ReportReplays is how many identical re-sends a stored report got.
+func (f *FakePlatform) ReportReplays(reportID string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if st := f.reports[reportID]; st != nil {
+		return st.Replays
+	}
+	return 0
+}
+
 // finishLocked marks a report committed and computes its outcome, rejecting
 // findings whose asset does not resolve in their segment (RFC-026 §10.1).
 func (f *FakePlatform) finishLocked(st *StoredReport, count int) {
@@ -972,6 +1023,9 @@ func (f *FakePlatform) finishLocked(st *StoredReport, count int) {
 	exp := count
 	st.Status.Segments.Expected = &exp
 	st.Status.State = protov2.StateCompleted
+	if f.AsyncIngest {
+		st.Status.State = protov2.StateQueued
+	}
 	for seq, s := range st.Segments {
 		ids := map[string]bool{}
 		for _, a := range s.report.Assets {
@@ -1062,4 +1116,17 @@ func manifestMatches(req protov2.CommitRequest, st *StoredReport) bool {
 	}
 	return assets == req.Totals.Assets && findings == req.Totals.Findings &&
 		req.ReportSHA256 == hex.EncodeToString(protov2.ReportRoot(hashes))
+}
+
+// namesFeature reports whether a HeaderSensorFeatures value list names
+// feature (comma-separated, case-insensitive).
+func namesFeature(values []string, feature string) bool {
+	for _, v := range values {
+		for _, f := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(f), feature) {
+				return true
+			}
+		}
+	}
+	return false
 }

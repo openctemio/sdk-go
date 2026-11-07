@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -88,6 +89,12 @@ func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
 		tr.DialContext = dialer.DialContext
 	}
 	var rt http.RoundTripper = tr
+	if task.WebScope != nil && task.WebScope.MaxRequestsPerHost > 0 {
+		// A discovery task (a web scope with a request cap) reads hostile
+		// answers by design: its response headers are bounded at 64 KiB
+		// (pkg/webdiff checks the same bound after reading them).
+		tr.MaxResponseHeaderBytes = 64 << 10
+	}
 	if task.WebScope != nil {
 		hosts := make([]string, 0, len(task.Targets))
 		for _, t := range task.Targets {
@@ -95,7 +102,7 @@ func NewHTTPClient(m tool.Manifest, task tool.Task) *http.Client {
 				hosts = append(hosts, h)
 			}
 		}
-		rt = scopedTransport{next: tr, scope: task.WebScope, targets: hosts}
+		rt = scopedTransport{next: tr, scope: task.WebScope, targets: hosts, budget: newRequestBudget(task.WebScope.MaxRequestsPerHost)}
 	}
 	timeout := 5 * time.Minute
 	defaults := requestDefaults{next: rt, ua: EffectiveUserAgent(m, task), identity: task.Identity}
@@ -218,21 +225,63 @@ func (u requestDefaults) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // scopedTransport refuses every request outside the job's web scope,
-// redirects included (each one is a new round trip).
+// redirects included (each one is a new round trip), and every request past
+// the scope's request cap.
 type scopedTransport struct {
 	next    http.RoundTripper
 	scope   *webscope.Scope
 	targets []string
+	budget  *requestBudget
 }
 
 func (s scopedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if err := s.scope.Allows(req.Method, req.URL, s.targets); err != nil {
+	err := s.scope.Allows(req.Method, req.URL, s.targets)
+	if err == nil {
+		err = s.budget.spend(req.URL.Hostname())
+	}
+	if err != nil {
 		if req.Body != nil {
 			_ = req.Body.Close()
 		}
 		return nil, err
 	}
 	return s.next.RoundTrip(req)
+}
+
+// requestBudget is the web scope's request cap on the task's own client
+// (webscope.Scope.MaxRequestsPerHost): requests per host name, whatever the
+// port or scheme. A confined task's forwarder counts the same requests and
+// refuses past the same cap; this count fails a request before it is sent.
+// nil: no cap.
+type requestBudget struct {
+	mu   sync.Mutex
+	max  int
+	sent map[string]int
+}
+
+// maxBudgetHosts bounds the host names one task's budget tracks.
+const maxBudgetHosts = 4096
+
+func newRequestBudget(n int) *requestBudget {
+	if n <= 0 {
+		return nil
+	}
+	return &requestBudget{max: n, sent: map[string]int{}}
+}
+
+func (b *requestBudget) spend(host string) error {
+	if b == nil {
+		return nil
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n, known := b.sent[host]
+	if (!known && len(b.sent) >= maxBudgetHosts) || n >= b.max {
+		return fmt.Errorf("%w: request cap of %d requests per host reached", webscope.ErrOutOfScope, b.max)
+	}
+	b.sent[host] = n + 1
+	return nil
 }
 
 // VendorHosts are the hosts of a manifest's permissions.vendor_hosts, with

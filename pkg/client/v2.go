@@ -154,6 +154,16 @@ type V2Progress struct {
 	Acked map[int]string `json:"acked,omitempty"`
 	// Restarts counts report-id restarts (bounded).
 	Restarts int `json:"restarts,omitempty"`
+	// GeneratedAt is the metadata.generated_at the report is sent with when
+	// it carries none, kept so a re-PUT sends the same bytes (the platform
+	// answers an identical replay idempotently).
+	GeneratedAt time.Time `json:"generated_at,omitzero"`
+	// Accepted: the platform answered the report (202) and it waits for a
+	// final status (client.deliverReport). StatusPolls counts the status
+	// reads since, RePuts the re-sends after a failed status.
+	Accepted    bool `json:"accepted,omitempty"`
+	StatusPolls int  `json:"status_polls,omitempty"`
+	RePuts      int  `json:"re_puts,omitempty"`
 	// DocumentID is the metadata.id the report is sent with when the report
 	// carries no valid one of its own (a producer UUIDv7, kept across
 	// restarts so the platform recognizes a retry).
@@ -172,6 +182,9 @@ type V2PushOptions struct {
 	// CommandID binds the report to a command this sensor claimed ("" for
 	// unsolicited results).
 	CommandID string
+	// LeaseEpoch is the lease epoch CommandID was held under when the
+	// report was made (a stored report's); 0: the epoch held now.
+	LeaseEpoch int
 	// Progress resumes an earlier attempt (nil: start).
 	Progress *V2Progress
 	// OnProgress persists progress after every acknowledged segment and
@@ -477,6 +490,7 @@ func (c *Client) PushResultsV2(ctx context.Context, report *ctis.Report, opts *V
 	plan := v2Plan{
 		manifest: slices.Contains(hello.Features, protov2.FeatureResultsManifest),
 		resumed:  opts.Progress != nil,
+		epoch:    opts.LeaseEpoch,
 	}
 	for {
 		commandID := opts.CommandID
@@ -577,6 +591,8 @@ type v2Plan struct {
 	// resumed: the push continues an earlier attempt (a delivery after a
 	// restart): segments the server already holds are not sent again.
 	resumed bool
+	// epoch: the lease epoch a bound report states (0: the one held now).
+	epoch int
 }
 
 // pushV2Once plans and sends the report under p.ReportID.
@@ -586,13 +602,23 @@ func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits pro
 	// the platform refuses the results of a run it has handed out again.
 	var lease http.Header
 	if commandID != "" {
-		lease = leaseHeader(c.leases.epoch(commandID))
+		epoch := plan.epoch
+		if epoch <= 0 {
+			epoch = c.leases.epoch(commandID)
+		}
+		lease = resultsLeaseHeader(epoch)
 	}
 	r := *report
 	r.Version, r.Schema = ctis.SchemaVersion, ctis.SchemaURL
 	r.Metadata.ID = documentID(report, commandID, p)
 	if r.Metadata.GeneratedAt.IsZero() {
-		r.Metadata.GeneratedAt = time.Now().UTC()
+		if p.GeneratedAt.IsZero() {
+			p.GeneratedAt = time.Now().UTC().Truncate(time.Millisecond)
+			if err := save(); err != nil {
+				return nil, err
+			}
+		}
+		r.Metadata.GeneratedAt = p.GeneratedAt
 	}
 	// Copy the slices BindFindingAssets and the canonical values write to,
 	// never the caller's.

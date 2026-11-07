@@ -9,12 +9,14 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/adapt"
+	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
 // A target answering 429 with Retry-After slows the host down and holds
@@ -154,14 +156,63 @@ func TestForwarderClosedPortsAreNotPushBack(t *testing.T) {
 // a blocked gap that names the edge; a bare 403 does not.
 func TestForwarderEdgeChallengeOnFirstAnswerIsABlock(t *testing.T) {
 	f := New(Scope{Prefixes: []netip.Prefix{pfx("127.0.0.1/32")}}, Limits{})
-	f.observeResponse("plain.example", &http.Response{StatusCode: 403, Header: http.Header{"Server": {"nginx"}}})
+	f.observeResponse("plain.example", &http.Response{StatusCode: 403, Header: http.Header{"Server": {"nginx"}}}, nil)
 	if _, n := f.TargetRate().Gaps(); n != 0 {
 		t.Fatal("a bare 403 was read as a block")
 	}
 	f.observeResponse("shop.example", &http.Response{StatusCode: 403, Header: http.Header{
-		"Server": {"cloudflare"}, "Cf-Mitigated": {"challenge"}}})
+		"Server": {"cloudflare"}, "Cf-Mitigated": {"challenge"}}}, nil)
 	gaps, n := f.TargetRate().Gaps()
 	if n != 1 || gaps[0].Host != "shop.example" || gaps[0].Reason != adapt.GapBlocked || gaps[0].Edge != "challenged" || gaps[0].Vendor != "cloudflare" {
 		t.Fatalf("gaps %+v (%d), want shop.example blocked by a cloudflare challenge", gaps, n)
+	}
+}
+
+// SECURITY: a challenge page that shows only in its body (no vendor header)
+// is classified from the start of the body that came with the headers: the
+// task's guarded connection reports it to the rate controller as a block
+// from the first answer, and the page still reaches the tool unchanged.
+func TestForwarderClassifiesAChallengeFromTheBufferedBody(t *testing.T) {
+	const page = "<html><head><title>Just a moment...</title></head><body><script src=\"/cdn-cgi/challenge-platform/h/b/orchestrate\"></script></body></html>"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, page)
+	}))
+	defer srv.Close()
+	f, pa := webForwarder(t, &webscope.Scope{Methods: []string{"GET", "HEAD"}, MaxRequestsPerHost: 10})
+	c := proxiedClient(t, pa, nil)
+	resp, err := c.Get("http://app.test:" + strconv.Itoa(portOf(t, srv.URL)) + "/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 403 || string(body) != page {
+		t.Fatalf("the page was changed: %d %q", resp.StatusCode, body)
+	}
+	gaps, n := f.TargetRate().Gaps()
+	if n != 1 || gaps[0].Host != "app.test" || gaps[0].Reason != adapt.GapBlocked || gaps[0].Edge != "challenged" {
+		t.Fatalf("gaps %+v (%d), want app.test blocked by a challenge", gaps, n)
+	}
+}
+
+// The body start is never read past what arrived, and a compressed body is
+// not classified from its raw bytes.
+func TestBufferedBodyReadsOnlyWhatArrived(t *testing.T) {
+	raw := "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
+	br := bufio.NewReader(strings.NewReader(raw))
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(bufferedBody(br, resp)); got != "hello" {
+		t.Errorf("body start %q", got)
+	}
+	raw = "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 5\r\n\r\nhello"
+	br = bufio.NewReader(strings.NewReader(raw))
+	resp, _ = http.ReadResponse(br, nil)
+	if got := bufferedBody(br, resp); got != nil {
+		t.Errorf("compressed body read: %q", got)
 	}
 }

@@ -111,6 +111,11 @@ type Detected struct {
 	SystemResolvers, Resolvers []netip.Addr
 	// ResolversFromEnv: Resolvers come from SENSOR_DNS_RESOLVERS.
 	ResolversFromEnv bool
+	// UpstreamResolvers are the servers a local stub forwards to, when
+	// resolv.conf names them: Docker's embedded DNS (127.0.0.11) writes
+	// them in an "# ExtServers: [...]" comment. Loopback ones (a resolver
+	// on the Docker host itself) are left out.
+	UpstreamResolvers []netip.Addr
 	// ResolvConfRead: resolv.conf could be read.
 	ResolvConfRead bool
 	// SearchDomains are resolv.conf's search (or domain) entries.
@@ -163,6 +168,7 @@ func Detect(src Sources) Detected {
 		if raw, err := src.ResolvConf(); err == nil {
 			d.ResolvConfRead = true
 			d.SystemResolvers, d.SearchDomains = parseResolvConf(raw)
+			d.UpstreamResolvers = parseExtServers(raw)
 		}
 	}
 	d.Resolvers = d.SystemResolvers
@@ -375,6 +381,40 @@ func parseResolvConf(raw []byte) ([]netip.Addr, []string) {
 		search = search[:MaxSearchDomains]
 	}
 	return servers, append([]string(nil), search...)
+}
+
+// parseExtServers reads Docker's "# ExtServers: [host(10.0.0.53) 10.0.0.54]"
+// comment (the embedded DNS server's upstreams), bounded, loopback left out.
+func parseExtServers(raw []byte) []netip.Addr {
+	var out []netip.Addr
+	sc := bufio.NewScanner(bytes.NewReader(raw))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		rest, ok := strings.CutPrefix(line, "# ExtServers:")
+		if !ok {
+			continue
+		}
+		rest = strings.Trim(strings.TrimSpace(rest), "[]")
+		for _, f := range strings.Fields(rest) {
+			f = strings.TrimSuffix(strings.TrimPrefix(f, "host("), ")")
+			if h, _, err := net.SplitHostPort(f); err == nil {
+				f = h
+			}
+			a, err := netip.ParseAddr(strings.Trim(f, "[]"))
+			if err != nil {
+				continue
+			}
+			a = a.WithZone("").Unmap()
+			if a.IsLoopback() || a.IsUnspecified() || containsAddr(out, a) {
+				continue
+			}
+			out = append(out, a)
+			if len(out) == MaxResolvers {
+				return out
+			}
+		}
+	}
+	return out
 }
 
 // parseResolverList reads SENSOR_DNS_RESOLVERS ("10.0.0.2,[2001:db8::53]:53,

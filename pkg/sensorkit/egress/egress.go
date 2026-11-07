@@ -218,11 +218,15 @@ type Forwarder struct {
 
 	rate     *rate.Limiter
 	hostRate *adapt.HostRate
-	mu       sync.Mutex
-	records  []Record
-	dropped  int
-	tally    Tally
-	conns    chan struct{}
+	// webMu guards webRequests, the requests the task sent per host name
+	// under its web scope's request cap (spendWebRequest).
+	webMu       sync.Mutex
+	webRequests map[string]int
+	mu          sync.Mutex
+	records     []Record
+	dropped     int
+	tally       Tally
+	conns       chan struct{}
 }
 
 // New returns the forwarder of one task. Names are normalized (lower case,

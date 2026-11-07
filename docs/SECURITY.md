@@ -767,15 +767,18 @@ first thing in `main`), which confines itself and then becomes the tool:
 | RLIMIT_DATA, RLIMIT_NPROC (the user's current count plus the task's allowance), RLIMIT_FSIZE, RLIMIT_NOFILE, RLIMIT_CORE=0, RLIMIT_CPU when set | memory exhaustion, fork bombs, disk filling, core dumps of secrets |
 | no_new_privs | setuid and file-capability escalation |
 | Landlock (Linux 5.13+; works under Docker's default seccomp profile) | writes outside the task directory and the declared write paths; reads of the protected paths (credentials file, outbox and its key, local policy, configuration), including through symlinks that lead into them |
-| seccomp filter | ptrace, process_vm_*, mount/namespaces (also clone with namespace flags; clone3 answers ENOSYS), kernel modules, kexec, keyrings, bpf, perf, clock changes, file handles, userfaultfd; a syscall from another ABI kills the task |
+| seccomp filter | ptrace, process_vm_*, mount/namespaces (also clone with namespace flags; clone3 answers ENOSYS), kernel modules, kexec, keyrings, bpf, perf, clock changes, file handles, userfaultfd, io_uring; a syscall from another ABI kills the task |
 | Process group, killed whole on timeout or cancel | stray children |
 | The sensor is non-dumpable | reading its memory, environment or open files through /proc |
+| PID namespace per confined task, the inner launcher its init (reaps orphans; when it ends the kernel kills every process of the task) | signals to the sensor or another task (same user), a process that leaves its process group (`setsid`) outliving the task, zombies piling up |
 | Network confinement (`Config.ConfineNetwork`, api RFC-060): its own user, network and mount namespaces per task, only loopback, a relay on 127.0.0.1:1080 (proxy) and :53 (DNS) to the task's forwarder (`pkg/sensorkit/egress`); the tool runs as a child of the launcher with no capabilities (`SECBIT_NOROOT` locked, empty bounding set) | any connection or lookup that does not go through the forwarder: a tool that ignores the proxy, raw sockets, DNS exfiltration, the sensor's own loopback services |
 
 **Network confinement requires unprivileged user namespaces.**
 - In a container, the seccomp profile must allow `unshare` and `clone` with the user, network and mount flags; the runtime's default profile refuses them.
 - On a host with `kernel.apparmor_restrict_unprivileged_userns=1`, an AppArmor profile must grant the sensor binary `userns`.
-- Where neither is in place, `Status.NetworkEnforced` is false and `Status.NetworkMissing` says why. With `SENSOR_SANDBOX_NETWORK=auto` (the default) tasks then run unconfined with a warning; with `required` (shared sensors) the sensor refuses to start.
+- On the host, `kernel.unprivileged_userns_clone` must not be 0 (Debian, Ubuntu) and `user.max_user_namespaces` must be positive. Where the sensor reports `userns_disabled_host`, the host admin sets `kernel.unprivileged_userns_clone=1` (or a positive `user.max_user_namespaces`) in `/etc/sysctl.d/` and runs `sysctl --system`. Keep `kernel.apparmor_restrict_unprivileged_userns=1` and the container's `docker-default` AppArmor profile, so unconfined local processes stay restricted; never set the restriction to 0. If confinement still fails with the restriction on and `docker-default` applied, give the sensor container an AppArmor profile that grants `userns`. On a shared machine, a dedicated host or VM for the sensor is the cleanest option.
+- The sensor's `runtime.sandbox_network` check tells the causes apart from the host knobs it can read from inside the container (`userns_disabled_host`, `userns_restricted`, `userns_blocked` for the seccomp profile only when the host allows user namespaces) and lists the knob values it read as evidence; a knob it cannot read is reported as unknown.
+- Where none of this is in place, `Status.NetworkEnforced` is false and `Status.NetworkMissing` says why. With `SENSOR_SANDBOX_NETWORK=auto` (the default) tasks then run unconfined with a warning; with `required` (shared sensors) the sensor refuses to start.
 
 **Content packs (api RFC-061).** A tool's templates, rules and wordlists are packs in the sensor's content cache. That cache is a private root hidden from every task (`executor.Config.Private`). A task gets read-only grants for exactly its own packs (`TaskSpec.ReadPaths`, checked by `tool.CheckTaskContent` against the manifest's slots and against `toolhost.Host.ContentRoot`). One tenant's task cannot read another tenant's packs, and a job cannot point a task at any other path.
 
@@ -808,20 +811,31 @@ A job asks for callbacks with `allow_interactsh: true`. A local policy without t
 Modes (`SENSOR_SANDBOX` for sensorkit): `auto` (default) enforces what the
 host supports and logs what it cannot; `required` refuses to start unless
 every control is enforced; `off` runs tools as plain child processes.
-Where `auto` runs on a host with no sandbox at all (it is Linux only, so
-every macOS or Windows sensor), tools of
+Where `auto` cannot enforce the sandbox (macOS or Windows, which have none;
+or on Linux a launcher that fails, blocked user namespaces, or no Landlock,
+which leaves the sensor's signing key readable to a tool running as the same
+user), tools of
 tier T1 and above, the ones that contact their targets, are refused before
 they run (`core.RefusalUnconfinedSandbox`, `executor.Status.RefusesActiveTools`);
 passive T0 lookups still run. `SENSOR_SANDBOX=off` is the operator's explicit
 acknowledgement that every tool runs unconfined. The state is in the
 manifest posture (`sandbox.unconfined`: `refused` or `acknowledged`) and in
 the config report (`runtime.sandbox_unconfined`: `sandboxed`, `active_refused`
-(a failure), `acknowledged` (a warning)). Each
-`ExecResult.Sandbox` records what the run was under. Residual risks: without a
-separate user per task, a task can still send signals to processes of the same
-user (Landlock signal scoping needs Linux 6.12), and a task that escapes its
-process group with `setsid` is bounded by its rlimits but not killed with the
-group. The sandbox never uses a Docker socket; future backends (a Kubernetes
+(a failure; the excerpt lists the failed controls `launcher`, `os`, `landlock`
+and the reason), `acknowledged` (a warning)). Missing network confinement
+alone does not refuse tools (the key paths stay denied); it is reported by
+`runtime.sandbox_network`, and `SENSOR_SANDBOX_NETWORK=required` refuses to
+start without it. Each
+`ExecResult.Sandbox` records what the run was under. Residual risks: a confined task
+cannot signal processes outside its PID namespace, and nothing it starts
+outlives it. A task that runs unconfined (no user namespaces on the host) can
+still send signals to processes of the same user (Landlock signal scoping
+needs Linux 6.12), and one that escapes its process group with `setsid` is
+bounded by its rlimits (and killed with its cgroup envelope, where there is
+one) but not with the group. A confined task still sees the container's
+`/proc` (the process list and command lines of the sensor's other tasks, not
+their environment or memory): a sensor that runs jobs of many tenants passes
+no secret on a command line. The sandbox never uses a Docker socket; future backends (a Kubernetes
 Pod per task, a rootless container) plug in behind the same interface.
 
 #### Organization proxy pools (`SENSOR_SCAN_EGRESS`)
@@ -1016,6 +1030,28 @@ policy refuses to start (before pairing): its targets come from many
 tenants, and the operator's own target, range, port and tool rules must
 bound them.
 
+#### Isolation level and proven backends
+
+A tool manifest may say `isolation: strong` (default `process`): the least
+isolation it needs from the backend that runs it. The process sandbox above is
+the only backend that ships today. At start-up the sensor runs a confined task
+on each backend it has (`Kit.ProbeIsolation`, `executor.ProbeBackends`) and
+reports what really worked, as the config check `runtime.isolation`. It
+advertises `isolation.strong@1` only when a strong backend passed its latest
+probe (a later failed probe withdraws it), so no setting, environment variable
+or declaration can add it: a tool that lists the capability itself does not
+advertise it, and the platform counts only what the sensor itself reported.
+
+The sensor enforces it, not only the platform's placement. Before any tool
+runs, the command gate (`BaseSensor.CommandToolGate`) refuses a job whose tool
+needs `strong` unless the sensor advertises `isolation.strong@1`, with the
+refusal rule `strong_isolation_missing`; the job is reported failed and never
+executed, and it is never run on the process sandbox. The same gate refuses a
+job whose `required_features` name a capability the sensor does not advertise
+(rule `required_feature_missing`). Nothing in the payload can satisfy either
+check. No bundled tool needs `strong` yet, and no strong backend ships yet, so
+today every job of a `strong` tool is refused by a sensor.
+
 ### 7. Web scope of a job (`pkg/webscope`)
 
 A job can carry a web scope (`web_scope`): the hosts (`app.example.com`, or
@@ -1038,6 +1074,17 @@ SDK enforces it:
   contract's `webpath.Denied`, the one the platform uses. `Validate` adds the
   decoded form of each escaped deny path to the list a tool reads. Without
   `methods`, only GET, HEAD and OPTIONS are allowed.
+  The path reading is contract `webpath`, the same functions the platform
+  plans path discovery with, so an exclusion is never read two ways.
+- A scope may carry a request cap (`max_requests_per_host`, 0 to 1,000,000;
+  0 is no cap): the most requests the task sends to one host name, whatever
+  the port, scheme or connection. Path discovery jobs carry one, with
+  `methods: ["GET", "HEAD"]`. `tool.Context.HTTP` fails a request past it
+  before it is sent; on a confined sandbox the forwarder counts every
+  request it lets through (redirects followed by the tool included) and
+  refuses the ones past the cap with the same 403 as a request outside the
+  scope. The count lives in the task's forwarder: a new connection, another
+  port or a redirect never resets it.
 - A networked tool that does not declare `features.web_scope` is refused a
   job with a web scope, because it would run unrestricted. An invalid scope
   is refused too, never ignored. A scanner that cannot take capability jobs
@@ -1068,6 +1115,36 @@ SDK enforces it:
   `vuln.templates` suite of a tool that declares `features.web_scope` runs it
   again with `/.env` denied: it fails a tool that requests it (directly or
   behind a redirect) and one that no longer finds the exposed `/.git/config`.
+- The forwarder classifies every answer on a guarded connection with
+  contract `edgeprotect`: from its headers and from the start of its body
+  that arrived with them (never waiting for more, never a compressed body).
+  A vendor's challenge or block page makes the host a blocked coverage gap
+  from the first answer; a vendor's rate-limit page is push-back whatever
+  its status.
+- The conformance kit's `enumerate.web_paths` suite gives the tool a
+  candidate list in its `web-paths` slot, a GET/HEAD web scope with a request
+  cap and a denied directory, on a site whose missing paths answer 200 with
+  dynamic content. It fails a tool that sends another method, requests the
+  denied directory, goes past the cap, reports a soft-404 answer or reports
+  a path that was not in its list.
+- Path discovery decides with `pkg/webdiff`, never with a status alone. A
+  candidate is compared with baselines of three random names of its class
+  (directory and shape), within noise bands; a difference is repeated, and a
+  directory or a 403 must have a random child that answers like a missing
+  path (a firewall rule that blocks a word anywhere gives nothing). Redirects
+  are never followed. A body is read up to 256 KiB, a gzip body is decoded by
+  the differ with the expansion bounded at 100:1, headers are bounded at
+  64 KiB (the task client of a capped web scope refuses larger ones), an
+  exchange has a 10 s deadline and the body a minimum rate; an answer that
+  breaks a bound stops the origin. An edge challenge or block is never a
+  signal and stops the origin; 429 and 503 back off and are retried at most
+  twice, never a hit. Baselines live for one task. Nothing of a body leaves
+  the differ but its size and a 64-bit hash of its normalised text.
+- Wordlists for web requests (`web-paths`, `web-files`, `api-routes`,
+  `params`) never carry an entry that names a state-changing action
+  (contract `webpath.Destructive`: `logout`, `delete`, `reset`, ...):
+  `wordlist.Normalize` drops it when a list is built and when a task's list
+  is composed.
 
 #### Job identification on every request
 
@@ -1128,6 +1205,20 @@ or the task does not start:
   unspecified addresses are still refused, and `HTTP(S)_PROXY` / `NO_PROXY`
   are honored. `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE` is no longer needed to
   reach the platform; it only widens what scanners and collectors may reach.
+- DNS outage fallback (`httpsec.LastGood`): when the platform host name
+  stops resolving (a `net.DNSError`, not a canceled request, a TLS or an
+  HTTP error), the API clients dial the addresses the last successful lookup
+  returned, for at most `SENSOR_CONTROL_DNS_MAX_STALE` (default 24 h; 0 turns
+  it off). Only the dialed IP changes: SNI and the certificate check against
+  the platform host name, and the trust (system store, `SetAPIRootCAs`, the
+  pinned sensor CA for gRPC), are the same, so a stale address taken over by
+  someone else, or a planted address, fails the handshake exactly as a
+  spoofed DNS answer would. Only https base URLs and the gRPC endpoint are
+  tracked (never plain http, where nothing would verify the peer); with a
+  proxy the proxy resolves the platform and the proxy host is never tracked.
+  Cached addresses pass the API dial guard when stored, when loaded from the
+  state file (`platform-addrs.json`, mode 0600, at most 8 hosts x 16
+  addresses, 64 KiB, future timestamps refused) and when dialed.
 - Other `httpsec.SafeHTTPClient` users follow redirects but never downgrade
   https to http, and strip credential headers on any origin change.
 - The base URL must be `http`/`https` with a host and no embedded
@@ -1161,10 +1252,19 @@ certificate from any other CA, such as a TLS-inspecting proxy whose CA is in
 the trust store or a publicly trusted certificate from another CA, leads to
 another anchor and is refused. The trust store still checks the chain, name
 and validity first: the pin narrows it and never widens it. It does not
-stop a mis-issued certificate from the same CA; for that, and for the
-first contact itself (the pin is learned on first use, inside the pairing
-whose fingerprint an administrator compares), pin with
+stop a mis-issued certificate from the same CA; for that, pin with
 `SENSOR_CA_FINGERPRINT` from the install snippet.
+
+When the platform names the root CAs of its TLS certificate in its signed
+pairing grant (`tls_anchors`: a platform configured with a private CA,
+`PLATFORM_CA_CERT_FILE`), the anchor the pairing connections verified must
+be one of them, or pairing fails and saves nothing
+(`identity.ErrTLSAnchorMismatch`). A platform with a publicly trusted
+certificate names none, and the sensor pins the anchor it verified: a
+publicly trusted certificate from another CA during the first pairing is
+then pinned instead, but the job signer, the content keys and the identity
+still come only from the signed grant (see Signed pairing answers), so such
+a certificate cannot make the sensor run anyone else's jobs.
 
 - Within one pairing, every request must lead to the anchor of the first;
   a change is refused (`httpsec.ErrPlatformChangedDuringPairing`).
@@ -1178,6 +1278,46 @@ whose fingerprint an administrator compares), pin with
   http) keeps trusting the trust store, reports `pin: none`, and logs a
   start-up warning.
 - A malformed pin stops the sensor rather than run unpinned.
+
+#### Signed pairing answers
+
+The fingerprint an administrator compares covers the start of pairing only.
+Someone in the middle of the first pairing (a DNS hijack plus a publicly
+trusted certificate, a TLS-inspecting proxy) could relay the start untouched,
+so the fingerprints match, and then swap what the sensor learns afterwards.
+So the platform signs everything the sensor pins in one statement, the
+grant (`pairing.Grant`, member `grant` of the approval and confirm answers):
+the identity, the content-signing keys, the job signer's keys and key set
+(the hello's `signed_jobs` block), and the root CAs of its TLS certificate
+when it knows them. It signs with the same pairing key as the start answer
+(`domain ‖ 0 ‖ payload`, domain `openctem/sensor-pairing/grant/v1`), and the
+statement names the pairing id, the sensor's public key and the nonce the
+sensor revealed, so a grant is valid for one request of one sensor only.
+
+`identity.Pair` verifies the grant with the platform key of the verified
+start answer:
+
+- on the approval answer, before it confirms (a bad one is never confirmed);
+- on the confirm answer, which must state the same sensor, organization,
+  key and scope it confirmed;
+- and it saves only what the confirm answer's grant states. The hello is
+  not read during pairing.
+
+Any failure (no grant, a signature that does not verify, a grant for
+another request, key or nonce, a TLS anchor the grant does not name) stops
+pairing with an error that names the step (`approval answer`, `confirm
+answer`) and `pairing_answer_unsigned`; nothing is saved, and the request
+in `pairing.json` is dropped. A platform from before signed answers is
+refused the same way, with "upgrade the platform": the sensor never falls
+back to the unsigned identity. Platforms add the member, so sensors from
+before it pair as before. `conformance.RunPairingGrantSuite` checks another
+implementation's verifier against the same cases.
+
+After pairing, the job signer changes only through the pinned root: a new
+signer key arrives in a key set signed by that root (a lower version is a
+rollback and refused), keys pinned without a root are never replaced, and
+the content keys are never taken from a content route. Replacing the root
+or the content keys takes a new pairing.
 
 **Protocol v3 gRPC CA bundle.** The gRPC binding trusts only the CA bundle
 of the platform's certificate service, fetched with the client certificate

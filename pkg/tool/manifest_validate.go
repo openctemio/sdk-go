@@ -105,6 +105,9 @@ func (m Manifest) Validate() error {
 	default:
 		add("/tier", "must be T0, T1 or T2")
 	}
+	if m.Isolation != "" && m.Isolation != IsolationProcess && m.Isolation != IsolationStrong {
+		add("/isolation", "must be process or strong")
+	}
 	checkList(add, "/capabilities", m.Capabilities, func(s string) string {
 		if !capabilityRE.MatchString(s) {
 			return "must match ^[a-z0-9][a-z0-9._:-]{0,63}$"
@@ -317,6 +320,16 @@ func (m Manifest) validatePermissions(add func(p, format string, args ...any), s
 		if !slices.Contains(allowedCaps, c) {
 			add(fmt.Sprintf("/permissions/linux_caps/%d", i), "must be one of %s", strings.Join(allowedCaps, ", "))
 		}
+	}
+	switch p.Sandbox {
+	case "":
+	case SandboxBrowser:
+		// A browser reaches the network only as the targets' tool.
+		if p.Network != NetTargets {
+			add("/permissions/sandbox", "%s needs network %s", SandboxBrowser, NetTargets)
+		}
+	default:
+		add("/permissions/sandbox", "must be empty or %s", SandboxBrowser)
 	}
 }
 

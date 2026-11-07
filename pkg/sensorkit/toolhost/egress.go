@@ -404,12 +404,12 @@ func (h *Host) checkUnconfined(m tool.Manifest) *tool.Error {
 	if !st.RefusesActiveTools() || !m.Tier.Exceeds(tool.T0) {
 		return nil
 	}
-	why := "this host has no tool sandbox"
-	if len(st.Missing) > 0 {
-		why += " (" + strings.Join(st.Missing, "; ") + ")"
+	why := "this host's tool sandbox is not fully enforced: " + strings.Join(st.FailedControls(), ", ")
+	if d := st.UnconfinedDetail(); d != "" {
+		why += " (" + d + ")"
 	}
 	return tool.AsError(tool.Refused(fmt.Sprintf("tool %s (tier %s) contacts its targets and %s, so it would run unconfined; "+
-		"run the sensor on Linux with the sandbox, or set SENSOR_SANDBOX=off to acknowledge running tools unconfined (%s)",
+		"fix the sandbox (see the sensor log), or set SENSOR_SANDBOX=off to acknowledge running tools unconfined (%s)",
 		m.Name, m.Tier, why, core.RefusalUnconfinedSandbox)))
 }
 

@@ -343,6 +343,8 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "Test switch: lets SDK HTTP clients and target checks reach loopback addresses. The sensor warns at start when it is on; never set it in production."},
 		settingsreg.Setting{Name: httpsec.EnvAllowInsecureHTTP, Type: settingsreg.Bool, Group: "network",
 			Description: "Development only: allow a plain-http platform URL to a host that is not loopback (refused otherwise: the API key and jobs would cross the network in clear text)."},
+		settingsreg.Setting{Name: EnvControlDNSMaxStale, Type: settingsreg.Duration, Default: "24h", Group: "network",
+			Description: "How old the platform's last-known-good address may be and still be dialed when the platform host name does not resolve (TLS still verifies the name). 0 turns the fallback off."},
 		settingsreg.Setting{Name: netctx.EnvSite, Type: settingsreg.String, Group: "network",
 			Description: "Site label of this host (1 to 64 of A-Z a-z 0-9 . _ -), sent in the network report; the platform only suggests a network from it."},
 		settingsreg.Setting{Name: netctx.EnvReach, Type: settingsreg.List, Group: "network",

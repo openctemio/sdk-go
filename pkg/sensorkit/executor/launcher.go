@@ -19,6 +19,10 @@ import (
 // launcher. It is not a user-facing command.
 const LauncherArg = "__openctem-task"
 
+// browserStageArg makes the sensor binary the first step of a browser task's
+// tool (see browserStage). It is not a user-facing command.
+const browserStageArg = "__openctem-task-stage"
+
 // launchSpec is what the parent tells the launcher. It is passed as one
 // base64 argument (visible in the process list: it holds paths and limits,
 // never a secret).
@@ -46,6 +50,8 @@ type launchSpec struct {
 	// confined launcher (which is a fresh, dumpable process: the sensor
 	// itself is not, so it could not write the new namespace's id maps).
 	Inner bool `json:"inner,omitempty"`
+	// Browser: the tool runs in the browser sandbox (TaskSpec.Browser).
+	Browser bool `json:"browser,omitempty"`
 	// Probe makes the launcher apply everything, print its Status as JSON
 	// and exit instead of running a tool.
 	Probe bool `json:"probe,omitempty"`
@@ -86,6 +92,9 @@ func RunLauncherIfRequested() {
 		// The envelope probe (EnableEnvelopes): started inside a task
 		// cgroup to prove that works, nothing to do.
 		os.Exit(0)
+	}
+	if len(os.Args) >= 3 && os.Args[1] == browserStageArg {
+		os.Exit(runBrowserStage(os.Args[2:]))
 	}
 	if len(os.Args) < 3 || os.Args[1] != LauncherArg {
 		launcherWired.Store(true)
@@ -145,7 +154,7 @@ func runLauncher(args []string) int {
 	}
 	if ls.Confined {
 		// The relay lives in this process: run the tool as a child.
-		return superviseTool(ls.Binary, rest[1:], os.Environ())
+		return superviseTool(ls.Binary, rest[1:], os.Environ(), ls.Browser)
 	}
 	if err := execTool(ls.Binary, rest[1:], os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "openctem sandbox: run %s: %v\n", ls.Binary, err)

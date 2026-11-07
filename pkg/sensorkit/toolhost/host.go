@@ -469,6 +469,13 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	}
 	task.Config = cfg
 	pol := h.Policy
+	if m.Permissions.Sandbox == tool.SandboxBrowser {
+		// A browser runs a target's scripts: only where every control holds
+		// and the task's network namespace leads to its forwarder alone.
+		if st := h.backend().Status(); !st.NetworkEnforced || st.Mode != executor.ModeRequired || !st.Complete() {
+			return nil, refusedErr("%s runs a web browser: only on a sandbox that enforces every control in required mode and confines the network", m.Name), nil
+		}
+	}
 	if h.Shared {
 		if st := h.backend().Status(); !st.NetworkEnforced || st.Mode != executor.ModeRequired {
 			return nil, tool.AsError(tool.Refused("a shared sensor runs tools only on a sandbox that enforces every control and confines the network")), nil
@@ -801,6 +808,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 			}
 		}, Finished: core.ReapScannerProcess},
 		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(), Envelope: envelopeFor(m),
+		Browser: m.Permissions.Sandbox == tool.SandboxBrowser,
 	})
 	if err != nil {
 		_ = inR.Close()

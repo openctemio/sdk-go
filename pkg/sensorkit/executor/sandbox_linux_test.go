@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -33,15 +34,16 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func hostileTool(mode string, args []string) int {
-	report := func(err error) int {
-		if err != nil {
-			fmt.Println("ERR", err)
-			return 3
-		}
-		fmt.Println("OK")
-		return 0
+func report(err error) int {
+	if err != nil {
+		fmt.Println("ERR", err)
+		return 3
 	}
+	fmt.Println("OK")
+	return 0
+}
+
+func hostileTool(mode string, args []string) int {
 	switch mode {
 	case "read":
 		_, err := os.ReadFile(args[0])
@@ -86,6 +88,14 @@ func hostileTool(mode string, args []string) int {
 	case "ptrace":
 		pid, _ := strconv.Atoi(args[0])
 		return report(unix.PtraceAttach(pid))
+	case "iouring":
+		var params [120]byte                                                                      // struct io_uring_params
+		fd, _, e := unix.Syscall(unix.SYS_IO_URING_SETUP, 1, uintptr(unsafe.Pointer(&params)), 0) //nolint:gosec // the io_uring ABI takes a pointer to its parameters
+		if e != 0 {
+			return report(e)
+		}
+		_ = unix.Close(int(fd))
+		return report(nil)
 	case "mount":
 		return report(unix.Mount("tmpfs", args[0], "tmpfs", 0, ""))
 	case "sleep":
@@ -97,6 +107,47 @@ func hostileTool(mode string, args []string) int {
 			return report(err)
 		}
 		fmt.Print(strings.ToUpper(string(b)))
+		return 0
+	case "signal":
+		pid, _ := strconv.Atoi(args[0])
+		return report(syscall.Kill(pid, 0))
+	case "escape":
+		// Leave a process behind in a session of its own (out of the
+		// task's process group): it writes args[0] after a while.
+		exe, err := os.Executable()
+		if err != nil {
+			return report(err)
+		}
+		c := exec.Command(exe, args[0])
+		c.Env = append(os.Environ(), "EXECUTOR_TEST_TOOL=late-write")
+		c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := c.Start(); err != nil {
+			return report(err)
+		}
+		return report(c.Process.Release())
+	case "late-write":
+		time.Sleep(2 * time.Second)
+		_ = os.WriteFile(args[0], []byte("survived"), 0o600)
+		return 0
+	case "orphans":
+		// Leave n children orphaned (their parent, a shell, exits at
+		// once): the launcher must reap them.
+		n, _ := strconv.Atoi(args[0])
+		for range n {
+			if err := exec.Command("/bin/sh", "-c", "/bin/sleep 0.2 &").Run(); err != nil {
+				return report(err)
+			}
+		}
+		time.Sleep(time.Second)
+		zombies := 0
+		entries, _ := os.ReadDir("/proc")
+		for _, e := range entries {
+			b, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
+			if err == nil && strings.Contains(string(b), ") Z ") {
+				zombies++
+			}
+		}
+		fmt.Println("ZOMBIES", zombies)
 		return 0
 	case "kill-parent":
 		return report(syscall.Kill(os.Getppid(), 0))
@@ -144,8 +195,97 @@ func hostileTool(mode string, args []string) int {
 		}
 		fmt.Println()
 		return 0
+	case "procwrite":
+		return report(os.WriteFile("/proc/self/oom_score_adj", []byte("100"), 0))
 	case "proxyenv":
 		fmt.Println(os.Getenv("HTTPS_PROXY"), os.Getenv("NO_PROXY") == "", os.Getenv("OPENCTEM_EGRESS_PROXY"))
+		return 0
+	}
+	return namespaceTool(mode, args)
+}
+
+// namespaceTool holds the hostile modes of the browser sandbox tests: ids,
+// namespaces and sockets.
+func namespaceTool(mode string, args []string) int {
+	switch mode {
+	case "uid":
+		fmt.Println(os.Getuid(), os.Getgid())
+		return 0
+	case "clonens":
+		// Start this binary again in new namespaces: "browser" asks for the
+		// ones a browser sandbox makes, "mount" adds a mount namespace.
+		flags := uintptr(unix.CLONE_NEWUSER | unix.CLONE_NEWPID | unix.CLONE_NEWNET)
+		if args[0] == "mount" {
+			flags |= unix.CLONE_NEWNS
+		}
+		cmd := exec.Command("/proc/self/exe")
+		cmd.Env = []string{"EXECUTOR_TEST_TOOL=uid"}
+		cmd.SysProcAttr = &syscall.SysProcAttr{Cloneflags: flags}
+		return report(cmd.Run())
+	case "clonenswith":
+		// Start this binary again in the named namespace (uts, ipc,
+		// cgroup) next to the user namespace.
+		flags := map[string]uintptr{"uts": unix.CLONE_NEWUTS, "ipc": unix.CLONE_NEWIPC, "cgroup": unix.CLONE_NEWCGROUP}[args[0]]
+		cmd := exec.Command("/proc/self/exe")
+		cmd.Env = []string{"EXECUTOR_TEST_TOOL=uid"}
+		cmd.SysProcAttr = &syscall.SysProcAttr{Cloneflags: unix.CLONE_NEWUSER | flags}
+		return report(cmd.Run())
+	case "unshareflag":
+		flags := map[string]int{"uts": unix.CLONE_NEWUTS, "ipc": unix.CLONE_NEWIPC, "cgroup": unix.CLONE_NEWCGROUP, "time": unix.CLONE_NEWTIME}[args[0]]
+		return report(unix.Unshare(flags))
+	case "setns":
+		f, err := os.Open("/proc/self/ns/net")
+		if err != nil {
+			return report(err)
+		}
+		defer f.Close()
+		return report(unix.Setns(int(f.Fd()), unix.CLONE_NEWNET))
+	case "socket":
+		domain, _ := strconv.Atoi(args[0])
+		typ, _ := strconv.Atoi(args[1])
+		proto, _ := strconv.Atoi(args[2])
+		fd, err := unix.Socket(domain, typ, proto)
+		if err == nil {
+			_ = unix.Close(fd)
+		}
+		return report(err)
+	case "seccompsocket":
+		// The browser filter alone, with no sandbox around it: each socket
+		// family it refuses answers EPERM, the ones a browser needs open.
+		if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+			return report(err)
+		}
+		if err := applySeccomp(true); err != nil {
+			return report(err)
+		}
+		try := func(domain, typ, proto int) string {
+			fd, err := unix.Socket(domain, typ, proto)
+			if err != nil {
+				return err.Error()
+			}
+			_ = unix.Close(fd)
+			return "ok"
+		}
+		fmt.Println("packet", try(unix.AF_PACKET, unix.SOCK_RAW, 0))
+		fmt.Println("key", try(15, unix.SOCK_RAW, 2))
+		fmt.Println("netfilter", try(unix.AF_NETLINK, unix.SOCK_RAW, 12))
+		fmt.Println("xfrm", try(unix.AF_NETLINK, unix.SOCK_RAW, 6))
+		fmt.Println("route", try(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_ROUTE))
+		fmt.Println("udp", try(unix.AF_INET, unix.SOCK_DGRAM, 0))
+		return 0
+	case "clonesocket":
+		// Open a socket from a process in new user and network namespaces,
+		// where it holds CAP_NET_RAW and CAP_NET_ADMIN of its own.
+		cmd := exec.Command("/proc/self/exe", args...)
+		cmd.Env = []string{"EXECUTOR_TEST_TOOL=socket"}
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.SysProcAttr = &syscall.SysProcAttr{Cloneflags: unix.CLONE_NEWUSER | unix.CLONE_NEWNET}
+		if err := cmd.Run(); err != nil {
+			fmt.Println("ERR", strings.TrimSpace(out.String()), err)
+			return 3
+		}
+		fmt.Print(out.String())
 		return 0
 	}
 	return 99
@@ -373,6 +513,9 @@ func TestDangerousSyscallsAreRefused(t *testing.T) {
 	if out, _ := runTool(t, b, TaskSpec{}, "mount", t.TempDir()); !strings.Contains(out, "operation not permitted") {
 		t.Errorf("mount: %q", out)
 	}
+	if out, _ := runTool(t, b, TaskSpec{}, "iouring"); !strings.Contains(out, "operation not permitted") {
+		t.Errorf("io_uring_setup: %q", out)
+	}
 }
 
 // A canceled task is killed, and its result says so.
@@ -417,6 +560,14 @@ func TestModes(t *testing.T) {
 	b, err := NewProcessBackend(Config{Mode: ModeAuto, Launcher: "/bin/true"})
 	if err != nil || b.Status().Sandboxed || len(b.Status().Missing) == 0 {
 		t.Errorf("auto with a broken launcher: %v %+v", err, b.Status())
+	}
+	// The fallback is never silent: the status refuses active tools and
+	// names the failed control; off is the explicit acknowledgement.
+	if st := b.Status(); !st.RefusesActiveTools() || strings.Join(st.FailedControls(), ",") != "launcher" || !strings.Contains(st.UnconfinedDetail(), "launcher") {
+		t.Errorf("auto with a broken launcher does not refuse active tools: %+v", st)
+	}
+	if offB, _ := NewProcessBackend(Config{Mode: ModeOff}); offB.Status().RefusesActiveTools() || offB.Status().Unconfined() != UnconfinedAcknowledged {
+		t.Errorf("off refuses active tools: %+v", offB.Status())
 	}
 	if _, err := NewProcessBackend(Config{Mode: "loose"}); err == nil {
 		t.Error("unknown mode accepted")

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -39,6 +40,11 @@ type OutboxConfig struct {
 	// delivery before answering "queued" (default 30s; negative: do not
 	// wait).
 	SyncWait time.Duration
+	// ReportStatusPoll is the first wait before the status of a report the
+	// platform accepted (202) is read; later reads wait 3x, 12x, then 60x
+	// it (default 5s). The report stays in the outbox until that status is
+	// final (research/467 D0).
+	ReportStatusPoll time.Duration
 	// LegacyRetryQueueDir is a pre-outbox retry-queue directory whose
 	// reports are imported once (default ~/.openctem/retry-queue; "-" skips
 	// the import).
@@ -106,6 +112,7 @@ func (c *Client) EnableOutbox(cfg OutboxConfig) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	c.ob, c.obCancel, c.obDone = ob, cancel, done
+	c.obStatusPoll = cfg.ReportStatusPoll
 	c.obSyncWait = cfg.SyncWait
 	if c.obSyncWait == 0 {
 		c.obSyncWait = DefaultOutboxSyncWait
@@ -207,6 +214,9 @@ func (c *Client) enqueueReport(ctx context.Context, ob *outbox.Outbox, report *c
 		return nil, fmt.Errorf("marshal report: %w", err)
 	}
 	meta := outbox.Meta{Kind: outbox.KindReport, CommandID: core.CommandIDFromContext(ctx)}
+	if meta.CommandID != "" {
+		meta.LeaseEpoch = c.leases.epoch(meta.CommandID)
+	}
 	tenant, err := c.jobLedger().Report(meta.CommandID)
 	if err != nil {
 		return nil, err
@@ -371,31 +381,157 @@ func (c *Client) deliverReport(ctx context.Context, d *outbox.Delivery) (any, er
 			prog = &p
 		}
 	}
-	st, err := c.PushResultsV2(ctx, &r, &V2PushOptions{
-		ReportID:  d.Meta.ReportID,
-		CommandID: d.Meta.CommandID,
-		Progress:  prog,
+	if prog != nil && prog.Accepted {
+		// Sent and answered 202 before: read where the platform is with it.
+		return c.checkAcceptedReport(ctx, d, &r, prog)
+	}
+	return c.sendReport(ctx, d, &r, prog)
+}
+
+// Durable acknowledgement of a report (research/467 D0). A 202 says the
+// platform took the report, not that it was processed: the outbox keeps
+// the report (outbox.Accepted) and reads its status resource until it is
+// final. completed deletes it; failed sends the same report id with the
+// same bytes again (the platform re-queues a failed report on an identical
+// replay), at most maxReportRePuts times; expired, or failed past the cap,
+// keeps it as a dead letter the outbox never deletes on its own.
+const maxReportRePuts = 5
+
+// defaultReportStatusPoll is OutboxConfig.ReportStatusPoll's default.
+const defaultReportStatusPoll = 5 * time.Second
+
+// reportStatusDelay is how long to wait before reading an accepted
+// report's status again: base, 3x, 12x, then every 60x (5 s, 15 s, 1 min,
+// 5 min by default), less up to a fifth of jitter.
+func (c *Client) reportStatusDelay(polls int) time.Duration {
+	base := c.obStatusPoll
+	if base <= 0 {
+		base = defaultReportStatusPoll
+	}
+	steps := []time.Duration{base, 3 * base, 12 * base}
+	d := 60 * base
+	if polls < len(steps) {
+		d = steps[polls]
+	}
+	return d - time.Duration(rand.Int64N(int64(d/5)+1)) //nolint:gosec // jitter, not a secret
+}
+
+// saveReportProgress persists p as the item's v2 progress.
+func saveReportProgress(d *outbox.Delivery, p V2Progress) error {
+	b, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	return d.SaveProgress(b)
+}
+
+// sendReport sends (or re-sends) the report and settles the answer.
+func (c *Client) sendReport(ctx context.Context, d *outbox.Delivery, r *ctis.Report, prog *V2Progress) (any, error) {
+	var last V2Progress
+	if prog != nil {
+		last = *prog
+	}
+	st, err := c.PushResultsV2(ctx, r, &V2PushOptions{
+		ReportID:   d.Meta.ReportID,
+		CommandID:  d.Meta.CommandID,
+		LeaseEpoch: d.Meta.LeaseEpoch,
+		Progress:   prog,
 		OnProgress: func(p V2Progress) error {
-			b, err := json.Marshal(p)
-			if err != nil {
-				return err
-			}
-			return d.SaveProgress(b)
+			last = p
+			return saveReportProgress(d, p)
 		},
 		Logf: c.v2Logf(),
 	})
 	if err == nil {
+		return c.reportAnswered(d, st, last)
+	}
+	return nil, c.reportSendError(err)
+}
+
+// reportAnswered settles a status the platform answered a send with.
+func (c *Client) reportAnswered(d *outbox.Delivery, st *protov2.Status, last V2Progress) (any, error) {
+	if st.State == protov2.StateCompleted {
+		c.logReceipt(st)
 		return v2PushResult(st), nil
 	}
+	if st.ReportID != "" {
+		last.ReportID = st.ReportID
+	}
+	last.Accepted, last.StatusPolls = true, 0
+	if err := saveReportProgress(d, last); err != nil {
+		// Without the mark the next attempt sends again: an identical
+		// replay, which the platform answers idempotently.
+		return nil, err
+	}
+	return nil, outbox.Accepted(c.reportStatusDelay(0),
+		fmt.Sprintf("report %s accepted by the platform (%s); waiting for it to be processed", last.ReportID, st.State), v2PushResult(st))
+}
+
+// checkAcceptedReport reads the status of a report the platform accepted.
+func (c *Client) checkAcceptedReport(ctx context.Context, d *outbox.Delivery, r *ctis.Report, prog *V2Progress) (any, error) {
+	st, err := c.GetReportStatus(ctx, prog.ReportID)
+	if err != nil {
+		var ve *V2Error
+		switch {
+		case isRouteMissing(err):
+			// A platform without the status resource cannot confirm
+			// ingest: its acceptance is all there is.
+			c.logOutbox(c.obLogf, "report %s: the platform cannot report its processing status; treating its acceptance as delivery", prog.ReportID)
+			return &core.PushResult{Success: true, ReportID: prog.ReportID, Message: "accepted (status not available)"}, nil
+		case errors.As(err, &ve) && ve.ProblemName() == protov2.ProblemReportNotFound:
+			return c.rePutReport(ctx, d, r, prog, "the platform no longer knows the report it accepted")
+		}
+		return nil, classify(err)
+	}
+	switch st.State {
+	case protov2.StateCompleted:
+		c.logReceipt(st)
+		return v2PushResult(st), nil
+	case protov2.StateFailed:
+		return c.rePutReport(ctx, d, r, prog, "the platform could not process it")
+	case protov2.StateExpired:
+		return nil, outbox.Permanent(0, fmt.Sprintf("report %s expired on the platform before it was committed; kept, not re-sent", prog.ReportID), nil, nil)
+	}
+	prog.StatusPolls++
+	if err := saveReportProgress(d, *prog); err != nil {
+		return nil, err
+	}
+	return nil, outbox.Accepted(c.reportStatusDelay(prog.StatusPolls),
+		fmt.Sprintf("report %s %s on the platform", prog.ReportID, st.State), nil)
+}
+
+// rePutReport sends an accepted report again under the same id and bytes.
+func (c *Client) rePutReport(ctx context.Context, d *outbox.Delivery, r *ctis.Report, prog *V2Progress, why string) (any, error) {
+	if prog.RePuts >= maxReportRePuts {
+		return nil, outbox.Permanent(0, fmt.Sprintf("report %s: %s, also after %d re-sends; kept for a person to look at", prog.ReportID, why, prog.RePuts), nil, nil)
+	}
+	c.logOutbox(c.obLogf, "report %s: %s; sending it again (%d of %d)", prog.ReportID, why, prog.RePuts+1, maxReportRePuts)
+	next := *prog
+	next.RePuts++
+	next.Accepted, next.StatusPolls, next.Acked = false, 0, nil
+	if err := saveReportProgress(d, next); err != nil {
+		return nil, err
+	}
+	return c.sendReport(ctx, d, r, &next)
+}
+
+// logReceipt writes what the platform did with a processed report.
+func (c *Client) logReceipt(st *protov2.Status) {
+	c.logOutbox(c.obLogf, "report %s processed: %d findings and %d assets accepted, %d findings rejected, %d quarantined",
+		st.ReportID, st.Accepted.Findings, st.Accepted.Assets, st.Rejected.Findings, st.Quarantined.Findings)
+}
+
+// reportSendError classifies a failed send.
+func (c *Client) reportSendError(err error) error {
 	if errors.Is(err, ErrV2NoTool) {
-		return nil, outbox.Permanent(0, err.Error(), nil, err)
+		return outbox.Permanent(0, err.Error(), nil, err)
 	}
 	if isRouteMissing(err) {
 		// The platform stopped serving the v2 results route: keep the
 		// report queued and ask hello again.
-		return nil, c.v2Missing(err)
+		return c.v2Missing(err)
 	}
-	return nil, classify(err)
+	return classify(err)
 }
 
 func v2PushResult(st *protov2.Status) *core.PushResult {

@@ -23,14 +23,17 @@
 // corrupt/ and never crashes the process or blocks the queue.
 //
 // The outbox never fills the disk, and never drops a result the platform has
-// not acknowledged: a byte cap (default 1 GiB, and never more than a fraction
+// not acknowledged. A report answered 202 is accepted, not acknowledged: it
+// stays (state Accepted) until the deliverer reads a final status
+// (AcceptedError); a refused report stays as a dead letter that no cap or
+// age deletes (only a person, DiscardDead). A byte cap (default 1 GiB, and never more than a fraction
 // of the free space) first evicts dead letters and command log batches
 // (oldest first, with a log line, a counter and OnEvict); when pending
 // results alone fill it, Enqueue refuses new items with ErrFull and
 // AcceptsWork tells the sensor to stop claiming jobs until deliveries make
 // room (results beat new work). A small reserve keeps room for command
 // results, so running commands can still finish. An age cap (default 7
-// days) deletes old dead letters only.
+// days) deletes old dead letters only, never a report's.
 //
 // Delivery is the caller's: Run hands each item, oldest first, to a
 // Deliverer, which classifies the outcome by the error it returns (see
@@ -148,6 +151,10 @@ type Meta struct {
 	ReportID string `json:"report_id,omitempty"`
 	// CommandID binds the item to a platform command.
 	CommandID string `json:"command_id,omitempty"`
+	// LeaseEpoch is the lease epoch the sensor held CommandID under when the
+	// item was stored (0: unknown). A report delivered later, after a
+	// restart or a re-claim, states this epoch, never the one held then.
+	LeaseEpoch int `json:"lease_epoch,omitempty"`
 	// TenantID, on a shared sensor, is the organization of the command's
 	// verified signed job (core.JobLedger): every item of a job carries it.
 	TenantID string `json:"tenant_id,omitempty"`
@@ -173,6 +180,12 @@ type State struct {
 	// quarantined as unreadable): the command must not be reported as a
 	// clean, complete run. It says why.
 	LostResults string `json:"lost_results,omitempty"`
+	// Accepted: the platform accepted the item but has not confirmed it as
+	// processed (a report answered 202 whose status is not final yet). The
+	// item stays until the deliverer sees a final status: an acceptance is
+	// not a durable acknowledgement. An accepted report no longer holds
+	// back its command's result.
+	Accepted bool `json:"accepted,omitempty"`
 }
 
 // DeadLetter is an item the platform refused for good.
@@ -305,6 +318,9 @@ func (e *entry) size() int64 { return e.itemSize + e.stateSize }
 type Result struct {
 	// Delivered: the platform acknowledged the item.
 	Delivered bool
+	// Accepted: Delivered is the platform's acceptance only; the outbox
+	// keeps the item until its final status (AcceptedError).
+	Accepted bool
 	// Value is what the Deliverer returned with the acknowledgement.
 	Value any
 	// Dead is set when the item was dead-lettered.
@@ -776,7 +792,7 @@ func (o *Outbox) enforceCapsLocked(extra int64) ([]Meta, string) {
 	var evicted []Meta
 	reasons := map[string]bool{}
 	cutoff := o.cfg.now().Add(-o.cfg.MaxAge)
-	for _, e := range o.sortedLocked(func(e *entry) bool { return e.dead != nil }) {
+	for _, e := range o.sortedLocked(func(e *entry) bool { return e.dead != nil && !e.keptDead() }) {
 		if e.inflight || !e.meta.CreatedAt.Before(cutoff) {
 			continue
 		}
@@ -789,7 +805,7 @@ func (o *Outbox) enforceCapsLocked(extra int64) ([]Meta, string) {
 	if used+extra > limit {
 		// Dead letters first, then log batches (best effort by design),
 		// each oldest first.
-		order := o.sortedLocked(func(e *entry) bool { return e.dead != nil })
+		order := o.sortedLocked(func(e *entry) bool { return e.dead != nil && !e.keptDead() })
 		order = append(order, o.sortedLocked(func(e *entry) bool { return e.dead == nil && e.meta.Kind == KindCommandLog })...)
 		for _, e := range order {
 			if used+extra <= limit {
@@ -1009,6 +1025,30 @@ func (o *Outbox) DeadLetterForCommand(commandID string) (DeadLetter, bool) {
 	return DeadLetter{}, false
 }
 
+// keptDead reports whether e is a dead letter the caps and the janitor
+// never delete: a report the platform refused or never confirmed. Its
+// findings exist nowhere else; only a person removes it (DiscardDead), or
+// requeues it (RequeueDead). It counts towards AcceptsWork, so a disk full
+// of them stops claiming instead of losing results.
+func (e *entry) keptDead() bool { return e.dead != nil && e.meta.Kind == KindReport }
+
+// DiscardDead deletes one dead letter (a person decided its results are
+// not wanted). A pending item is never touched.
+func (o *Outbox) DiscardDead(id string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	e, ok := o.entries[id]
+	if !ok || e.dead == nil {
+		return fmt.Errorf("outbox: no dead letter %s", id)
+	}
+	if e.inflight {
+		return fmt.Errorf("outbox: dead letter %s is in use", id)
+	}
+	o.cfg.Logf("dead letter %s (%s, command %s) discarded by the operator: %s", id, e.meta.Kind, e.meta.CommandID, e.dead.Reason)
+	o.evictLocked(e)
+	return syncDir(o.deadDir)
+}
+
 // RequeueDead moves a dead letter back to pending with a fresh attempt count
 // (after the operator fixed the cause).
 func (o *Outbox) RequeueDead(id string) error {
@@ -1126,7 +1166,7 @@ func (o *Outbox) PurgeDead(ctx context.Context, maxAge time.Duration, limit int)
 	cutoff := o.cfg.now().Add(-maxAge)
 	n := 0
 	var freed int64
-	for _, e := range o.sortedLocked(func(e *entry) bool { return e.dead != nil }) {
+	for _, e := range o.sortedLocked(func(e *entry) bool { return e.dead != nil && !e.keptDead() }) {
 		if ctx.Err() != nil || (limit > 0 && n >= limit) {
 			break
 		}
@@ -1158,7 +1198,7 @@ func (o *Outbox) AcceptsWork() (bool, string) {
 	limit := o.capBytesLocked()
 	var held int64
 	for _, e := range o.entries {
-		if e.dead == nil && e.meta.Kind != KindCommandLog {
+		if (e.dead == nil && e.meta.Kind != KindCommandLog) || e.keptDead() {
 			held += e.size()
 		}
 	}

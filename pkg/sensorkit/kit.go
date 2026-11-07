@@ -21,6 +21,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/localstore"
 	"github.com/openctemio/sdk-go/pkg/netctx"
 	"github.com/openctemio/sdk-go/pkg/resource"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
 	settingsreg "github.com/openctemio/sdk-go/pkg/sensorkit/settings"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/pairing"
@@ -346,6 +347,8 @@ type middleware struct {
 // and calls Run.
 type Kit struct {
 	opts Options
+	// isolation is what ProbeIsolation proved.
+	isolation executor.Posture
 	// feedRelayOrigins: the feed relay's origin allowlist (ServeFeedRelay);
 	// nil: the relay is off.
 	feedRelayOrigins []string
@@ -499,6 +502,9 @@ func New(opts Options) (*Kit, error) {
 	}
 
 	s.stateDir = ResolveStateDir(opts.StateDir)
+	if err := k.applyControlDNS(); err != nil {
+		return nil, err
+	}
 	k.preflightNew(proxies, proxyOpts)
 	k.checkStorage()
 

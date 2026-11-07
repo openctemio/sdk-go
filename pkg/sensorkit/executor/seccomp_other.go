@@ -7,4 +7,4 @@ import "errors"
 var errSeccompUnsupported = errors.New("seccomp unsupported")
 
 // applySeccomp: no filter for this architecture (reported as missing).
-func applySeccomp() error { return errSeccompUnsupported }
+func applySeccomp(bool) error { return errSeccompUnsupported }

@@ -15,9 +15,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -74,15 +76,21 @@ func exitStatus(err error) int {
 	return launcherExit
 }
 
-// confineAttrs makes the launcher start in its own user, network and mount
-// namespaces, as root of the user namespace mapped to this process's user
-// (no other id is mapped, so it gains nothing outside).
+// confineAttrs makes the launcher start in its own user, network, mount and
+// PID namespaces, as root of the user namespace mapped to this process's
+// user (no other id is mapped, so it gains nothing outside).
+//
+// The PID namespace keeps the task's processes among themselves: a task
+// cannot signal the sensor or another task, though they run as the same
+// user, and the inner launcher is its init, so when the launcher ends the
+// kernel kills every process of the task, one that left its process group
+// (setsid) included.
 func confineAttrs(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	a := cmd.SysProcAttr
-	a.Cloneflags |= syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS
+	a.Cloneflags |= syscall.CLONE_NEWUSER | syscall.CLONE_NEWNET | syscall.CLONE_NEWNS | syscall.CLONE_NEWPID
 	a.UidMappings = []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}}
 	a.GidMappings = []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}}
 	a.GidMappingsEnableSetgroups = false
@@ -332,7 +340,7 @@ func dnsOverStream(path string, q []byte) ([]byte, error) {
 // child inherits no_new_privs, Landlock and seccomp. The child gets no
 // capabilities: root of the user namespace gains none at exec
 // (SECBIT_NOROOT, locked) and the bounding set is emptied first.
-func superviseTool(bin string, argv []string, env []string) int {
+func superviseTool(bin string, argv []string, env []string, browser bool) int {
 	if bin == "" || len(argv) == 0 {
 		fmt.Fprintln(os.Stderr, "openctem sandbox: no command")
 		return launcherExit
@@ -342,18 +350,162 @@ func superviseTool(bin string, argv []string, env []string) int {
 		return launcherExit
 	}
 	cmd := &exec.Cmd{Path: bin, Args: argv, Env: env, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
+	var stage *browserStage
+	if browser {
+		var err error
+		if stage, err = browserTool(cmd); err != nil {
+			fmt.Fprintf(os.Stderr, "openctem sandbox: browser: %v\n", err)
+			return launcherExit
+		}
+	}
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, unix.SIGTERM, unix.SIGINT, unix.SIGHUP)
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "openctem sandbox: run %s: %v\n", bin, err)
 		return launcherExit
 	}
+	if stage != nil {
+		if err := stage.release(); err != nil {
+			_ = cmd.Process.Kill()
+			fmt.Fprintf(os.Stderr, "openctem sandbox: browser: %v\n", err)
+			return launcherExit
+		}
+	}
 	go func() {
 		for s := range sigs {
 			_ = cmd.Process.Signal(s)
 		}
 	}()
+	reapUntil(cmd.Process.Pid)
 	return exitStatus(cmd.Wait())
+}
+
+// browserUID is the user (and group) a browser task runs as in its own user
+// namespace: a browser refuses to run as root, and the task holds no
+// capability over the confined namespaces (they belong to the launcher's
+// user namespace, the parent of the task's).
+const browserUID = 1000
+
+// browserStage is the launcher's side of the first step of a browser task's
+// tool. The tool must run as browserUID in a user namespace of its own, whose
+// id maps the launcher writes through /proc/<pid>. The launcher lives in the
+// task's PID namespace but sees the /proc of the namespace beneath it (it
+// cannot mount its own where a container profile denies mount), so the pid
+// the kernel gives it names another process there, and Go's own id map
+// writing fails with "permission denied". The first step of the tool is
+// therefore this binary again: it tells the launcher its pid as /proc names
+// it, waits for the maps, and then replaces itself with the tool.
+type browserStage struct {
+	pid, ack         *os.File // the launcher's ends: read the pid, write the go-ahead
+	stagePid, stageA *os.File // the step's ends, closed here once it started
+}
+
+// browserTool makes cmd start the browser stage, in a user namespace of its
+// own beneath the launcher's, instead of the tool directly. It stays in the
+// task's network and mount namespaces.
+func browserTool(cmd *exec.Cmd) (*browserStage, error) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	ar, aw, err := os.Pipe()
+	if err != nil {
+		_ = pr.Close()
+		_ = pw.Close()
+		return nil, err
+	}
+	cmd.Args = append([]string{"stage", browserStageArg, cmd.Path}, cmd.Args...)
+	cmd.Path = "/proc/self/exe"
+	cmd.ExtraFiles = []*os.File{pw, ar} // descriptors 3 and 4 of the step
+	cmd.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWUSER}
+	return &browserStage{pid: pr, ack: aw, stagePid: pw, stageA: ar}, nil
+}
+
+// release gives the started step its id maps and lets it run the tool.
+func (s *browserStage) release() error {
+	_ = s.stagePid.Close()
+	_ = s.stageA.Close()
+	defer s.pid.Close()
+	defer s.ack.Close()
+	_ = s.pid.SetReadDeadline(time.Now().Add(10 * time.Second))
+	var buf [32]byte
+	n, err := s.pid.Read(buf[:])
+	if err != nil {
+		return fmt.Errorf("the tool's first step did not answer: %w", err)
+	}
+	procPid := strings.TrimSpace(string(buf[:n]))
+	if p, err := strconv.Atoi(procPid); err != nil || p <= 0 {
+		return fmt.Errorf("the tool's first step answered %q", procPid)
+	}
+	dir := "/proc/" + procPid + "/"
+	idmap := fmt.Sprintf("%d 0 1\n", browserUID)
+	// The user maps to the launcher's own user, so no capability is needed;
+	// the group map needs setgroups denied first.
+	for _, w := range []struct{ file, data string }{{"setgroups", "deny\n"}, {"gid_map", idmap}, {"uid_map", idmap}} {
+		if err := os.WriteFile(dir+w.file, []byte(w.data), 0); err != nil {
+			return fmt.Errorf("%s: %w", w.file, err)
+		}
+	}
+	_, err = s.ack.Write([]byte{1})
+	return err
+}
+
+// runBrowserStage is the first step of a browser task's tool (see
+// browserStage): args are the tool's path and its argv.
+func runBrowserStage(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "openctem sandbox: no command")
+		return launcherExit
+	}
+	pid, ack := os.NewFile(3, "pid"), os.NewFile(4, "ack")
+	self, err := os.Readlink("/proc/self")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openctem sandbox: browser: %v\n", err)
+		return launcherExit
+	}
+	if _, err := pid.WriteString(self); err != nil {
+		fmt.Fprintf(os.Stderr, "openctem sandbox: browser: %v\n", err)
+		return launcherExit
+	}
+	_ = pid.Close()
+	var b [1]byte
+	if _, err := ack.Read(b[:]); err != nil {
+		fmt.Fprintf(os.Stderr, "openctem sandbox: browser: no id maps: %v\n", err)
+		return launcherExit
+	}
+	_ = ack.Close()
+	if err := syscall.Exec(args[0], args[1:], os.Environ()); err != nil { //nolint:gosec // the caller's tool, resolved by the parent
+		fmt.Fprintf(os.Stderr, "openctem sandbox: run %s: %v\n", args[0], err)
+	}
+	return launcherExit
+}
+
+// siginfoPid is the offset of si_pid in a siginfo_t on 64-bit Linux (after
+// si_signo, si_errno, si_code and padding).
+const siginfoPid = 16
+
+// reapUntil reaps, as the init of the task's PID namespace, every child of
+// this process that ends (the orphans of the tool's processes are
+// reparented to it) until the tool itself has ended; the tool's own status
+// is left for its Wait. Returning ends the launcher and, with it, every
+// process left in the namespace.
+func reapUntil(tool int) {
+	for {
+		var info unix.Siginfo
+		err := unix.Waitid(unix.P_ALL, 0, &info, unix.WEXITED|unix.WNOWAIT, nil)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
+			return
+		}
+		pid := int(*(*int32)(unsafe.Pointer(uintptr(unsafe.Pointer(&info)) + siginfoPid))) //nolint:gosec // the kernel's siginfo_t layout
+		if pid == tool || pid <= 0 {
+			return
+		}
+		var ws unix.WaitStatus
+		_, _ = unix.Wait4(pid, &ws, unix.WNOHANG, nil)
+	}
 }
 
 // Secure bits (linux/securebits.h).

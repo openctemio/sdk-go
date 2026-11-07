@@ -59,6 +59,17 @@ func TestLeaseEpoch_ClaimWithoutEpochSendsNoHeader(t *testing.T) {
 	}
 }
 
+func TestResultsLeaseHeader(t *testing.T) {
+	h := resultsLeaseHeader(3)
+	if h.Get(protov2.HeaderLeaseEpoch) != "3" || h.Get(protov2.HeaderSensorFeatures) != protov2.FeatureResultsLeaseEpoch {
+		t.Fatalf("results lease header %v", h)
+	}
+	// An unknown epoch states nothing and promises nothing.
+	if resultsLeaseHeader(0) != nil {
+		t.Fatal("an unknown epoch produced a header")
+	}
+}
+
 func TestLeaseTable(t *testing.T) {
 	var lt leaseTable
 	if lt.epoch("x") != 0 {

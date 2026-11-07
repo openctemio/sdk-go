@@ -8,6 +8,153 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.48.0 — 2026-11-06
+
+### Security: pairing saves only what the platform signed
+
+- The platform's approval and confirm answers carry a signed grant
+  (`pairing.SignedGrant`, member `grant`): the identity, the content-signing
+  keys, the job signer's keys and key set, and the root CAs of the
+  platform's TLS certificate when it knows them, signed with the pairing key
+  of the start answer that the administrator's fingerprint check covers. It
+  names the pairing id, the sensor's key and the nonce the sensor revealed,
+  so it cannot be replayed to another sensor or request.
+- `identity.Pair` verifies the grant before it confirms and again on the
+  confirm answer, and saves only what that grant states. Before, someone in
+  the middle of the first pairing could relay the start untouched (the
+  fingerprints matched) and swap the job-signing keys, the content keys or
+  the TLS pin the sensor learned afterwards.
+- A missing or invalid grant, a grant for another request, key or nonce, or
+  a TLS anchor the grant does not name stops pairing with an error naming
+  the step and `pairing_answer_unsigned`; nothing is saved.
+- New: `pairing.Grant`, `SignGrant`, `VerifyGrant`, `GrantTranscript`,
+  `identity.ErrTLSAnchorMismatch`, `conformance.RunPairingGrantSuite`; the
+  shared pairing vectors gain `grant_payload` and `grant_signature`.
+
+### Security: SENSOR_SANDBOX=auto no longer runs active tools unconfined
+
+- In `auto` mode on Linux, when the tool sandbox cannot be enforced (the
+  launcher fails or is not wired, user namespaces are blocked, or Landlock is
+  missing), tools of tier T1 and above are now refused with
+  `unconfined_sandbox` instead of running with only a warning as the sensor's
+  user, where they could read `signing.key`. Passive (T0) tools still run.
+  `SENSOR_SANDBOX=off` stays the explicit acknowledgement; `required` still
+  refuses to start.
+- `executor.Status.FailedControls` and `UnconfinedDetail` say which control
+  failed; the sensor log and the `runtime.sandbox_unconfined` check show them.
+
+### Behaviour change: a new sensor does not pair with a platform that does not sign its answers
+
+- A platform from before signed pairing answers is refused with "upgrade the
+  platform"; there is no fallback to the unsigned identity. Platforms only
+  add the member, so sensors from before it still pair with a new platform.
+- Pairing no longer reads the hello for the job signer: it comes from the
+  grant. A request saved in `pairing.json` by an older SDK (no sensor nonce)
+  is not resumed; a new request starts.
+
+### Added: a browser sandbox for tools that run a web browser
+
+- A tool manifest may declare `permissions.sandbox: browser` (with `network: targets`). Its task runs only on a sandbox
+  that enforces every control in required mode and confines the network; otherwise the tool host refuses it (never
+  unconfined). The tool runs as a non-root user (1000) of its own user namespace beneath the confined one, so it holds
+  no capability over the task's network namespace; it may create user, PID and network namespaces (what Chromium's
+  renderer sandbox makes) and no mount, UTS, IPC, cgroup or time namespace, never `setns`; and it may write `/proc`
+  (the browser writes its sandboxed children's id maps). Every other control is unchanged.
+- `executor.TaskSpec.Browser` and `executor.ErrBrowserNeedsConfinement` (Prepare refuses a browser task on an
+  unconfined backend or with the sandbox off).
+
+### Added: the control channel survives a DNS outage
+
+- When the platform host name in the API URL stops resolving (a DNS error only: never a TLS or HTTP error), the API clients dial the addresses the last successful lookup returned, for up to `SENSOR_CONTROL_DNS_MAX_STALE` (default `24h`; `0` turns it off). TLS is unchanged: the handshake still sends the platform host name and verifies the certificate against it with the same trust, so an address that now belongs to someone else fails as a spoofed answer would. Only https platform URLs and the gRPC endpoint are covered; a plain-http URL never is, and with a proxy the proxy resolves the platform. The sensor logs once when it switches to the cached address and once when it switches back.
+- The addresses are kept in `platform-addrs.json` in the state directory (mode 0600, bounded, addresses re-checked against the API dial guard on load), so a sensor restarted during an outage still reaches the platform.
+- New config check `runtime.control_dns`: `resolving`, `cached_address` (since when, the cause: `timeout`, `server_misbehaving`, `not_found`, ...), `lookup_failed` (no recent address: the sensor cannot reach the platform) and `recovered` (information only, with the outage window).
+- New config check `network.core_addresses` (information only): the sensor's resolvers (behind Docker's embedded DNS, the servers it forwards to, read from the `# ExtServers:` line of `/etc/resolv.conf`), the tools' resolvers (`SENSOR_DNS_RESOLVERS`), the default gateways, the sensor's address as the platform's egress echo saw it and the platform's addresses, so the platform can warn when a scan covers them. Only addresses the local policy lets the sensor scan are named, and none with `SENSOR_NETWORK_REPORT=off`.
+- New in `pkg/httpsec`: `LastGood`, `APILastGood`, `SetAPILastGood`, `DNSCause`; in `pkg/netctx`: `Detected.UpstreamResolvers`, `Scope.Names`.
+
+### Added: an isolation level in the tool manifest, and proven isolation backends
+
+- `tool.yaml` takes `isolation: process|strong` (default `process`, additive in `openctem.io/tool/v1`): the least isolation the tool needs from the backend that runs it. The sensor's tool contract carries it. No bundled tool asks for `strong` yet.
+- `executor.ProbeBackends` and `Kit.ProbeIsolation` run a confined task on each isolation backend at start-up and report what really worked (config check `runtime.isolation`). The capability `isolation.strong@1` is advertised only when a strong backend passed its probe; a setting, an environment variable or a declaration cannot add it. A later failed probe withdraws it. The sensor enforces it: the command gate refuses, before any tool runs, a job whose tool needs `strong` unless the sensor advertises it (rule `strong_isolation_missing`), and a job whose `required_features` name a capability the sensor does not advertise (`required_feature_missing`). No strong backend ships yet, so no sensor advertises it today and such jobs are refused.
+
+### Added: every local policy report says whether private targets are admitted
+
+- `LocalPolicyReport.AllowPrivate` (`allow_private`) is sent on every heartbeat and manifest, also when the sensor has no local policy file. It is true only when the host's `SENSOR_ALLOW_PRIVATE_TARGETS=1` switch (and, with a policy, its `targets.allow_private`) admits RFC1918 and IPv6 ULA targets, and false when a required policy is missing. Before, it was reported only inside an enforced policy's summary, so the platform could not see that a default install refuses private targets and dispatched jobs that then failed on the host. No operator action; the platform uses the field to refuse such scans at plan time.
+- New `LocalPolicy.AllowsPrivate()` returns the same value.
+
+### Fixed
+
+- The browser sandbox test accepts the general refusal of a target-contacting tool on a host whose sandbox is not fully enforced, which now runs before the browser check; the tool is still refused either way. Test only.
+
+### Fixed: a stored report states the lease epoch it was made under
+
+- A command-bound report kept in the outbox now records the lease epoch its
+  command was held under when the report was stored (`outbox.Meta.LeaseEpoch`),
+  and every PUT and commit of the report states that epoch
+  (`X-OpenCTEM-Lease-Epoch`), never the one held at delivery. Before, a report
+  delivered after a restart stated no epoch, so a platform that had handed the
+  run out again bound the late results to the new run.
+- Command-bound result requests that state an epoch also name the
+  `results_lease_epoch` feature in `X-OpenCTEM-Sensor-Features`: the platform
+  then refuses such a request without an epoch.
+- `V2PushOptions.LeaseEpoch` sets the epoch a pushed report states (0: the
+  one held now).
+- Protocol v3: `PutResult` and `CommitResult` carry `lease_epoch` (the proto
+  copy follows the platform's); the client fills it from the request.
+- The conformance fake enforces the same rules as the platform.
+
+### Fixed: the network confinement check names the real cause of a missing user namespace
+
+- `runtime.sandbox_network` no longer tells the operator to apply the sensor's seccomp profile when the cause is the host. It reads the knobs visible inside the container (`kernel.unprivileged_userns_clone`, `user.max_user_namespaces`, `kernel.apparmor_restrict_unprivileged_userns`, the AppArmor label, the seccomp mode) and reports `userns_disabled_host` (set `kernel.unprivileged_userns_clone=1`, keep the AppArmor restriction on), `userns_restricted`, `userns_blocked` (only when the host allows user namespaces) or `unavailable`. The excerpt lists the knob values read.
+
+## v0.47.4 — 2026-11-05
+
+### Security
+
+- A confined task (`executor.Config.ConfineNetwork`, the sensor's `SENSOR_SANDBOX_NETWORK`) now runs in its own PID namespace, with the launcher as its init. A tool can no longer signal the sensor or another task running as the same user (on a shared sensor, another tenant's job), a process that leaves the task's process group with `setsid` no longer outlives the task, and the launcher reaps the tool's orphans. No operator action: the sensor's seccomp profile already allows the namespace.
+- The per-task seccomp filter refuses `io_uring_setup`, `io_uring_enter` and `io_uring_register`. This matters most where the sensor runs without the container profile (a VM or bare-metal install); the container profile already refused them.
+
+## v0.47.3 — 2026-11-05
+
+### Security
+
+- `pkg/webdiff` never follows a redirect, reads at most 256 KiB of a body, decodes gzip itself with the expansion bounded at 100:1, bounds headers at 64 KiB, gives an exchange a 10 s deadline and the body a minimum rate; an answer that breaks a bound stops the origin. An edge challenge or block is never a signal; 429 and 503 back off and are never a hit. Baselines live for one task only.
+- `tool.Context.HTTP` of a task whose web scope carries a request cap (a discovery task) refuses response headers over 64 KiB.
+
+### Security: out-of-band callbacks use only the sensor's own interaction server, through the forwarder
+
+- New `egress.OOBServer` (`Scope.OOB`, `toolhost.RunOptions.OOB`): a confined task's forwarder carries the interaction API (`POST /register`, `GET /poll`, `POST /deregister`, body at most 64 KiB) of the one server the sensor's operator configured, adds its token itself (the tool's `Authorization` and `Cookie` are dropped), and dials it with verified TLS at public addresses only unless the operator allowed a private server. Any other request toward that host, and any public interaction server, is refused. The job's web scope and path limits do not apply to it, and it is not counted as a target.
+- Measured with the real nuclei v3.11.1 (built with interactsh v1.4.1) behind the forwarder in a web-scoped task: `-iserver http://<server> -pi` registers, polls and deregisters through the forwarder with the forwarder's token only, the callback payloads name the server's zone, and nothing else is proxied.
+- The extra-args guard now refuses nuclei's long names `-interactsh-server` and `-interactsh-token` (only `-iserver` and `-itoken` were refused, so an extra arg could point callbacks at any server) and the callback timing flags the sensor sets.
+
+### Security: tools that contact their targets no longer run unconfined without the operator saying so
+
+- With `SENSOR_SANDBOX=auto` (the default) on a host where the tool sandbox is not available (it is Linux only: every macOS or Windows sensor), tools ran as plain child processes with only a start-up warning. The tool host now refuses tools of tier T1 and above (they contact their targets) on such a host, with refusal `unconfined_sandbox` (`core.RefusalUnconfinedSandbox`); passive T0 lookups still run. `SENSOR_SANDBOX=off` is the explicit acknowledgement that every tool runs unconfined.
+- A Linux host where the sandbox could not start keeps today's behaviour (the start-up warning and `Status.Missing` say why).
+- New `executor.Status.NoSandboxOnHost`, `Unconfined()` / `RefusesActiveTools()`, manifest posture `sandbox.unconfined` (`refused`, `acknowledged`) and config report check `runtime.sandbox_unconfined` (`sandboxed`, `active_refused`, `acknowledged`).
+- Upgrade note: a sensor that relied on `auto` running tools unconfined must now set `SENSOR_SANDBOX=off` to keep running T1 tools there.
+
+### Security: a per-host request cap in the job's web scope, enforced by the forwarder
+
+- `webscope.Scope` gains `MaxRequestsPerHost` (`max_requests_per_host`, 0 to 1,000,000; 0 is no cap). A confined task's forwarder counts every request it lets through to a host name (any port, scheme or connection; a followed redirect included) and refuses the ones past the cap with the same 403 as a request outside the scope; nothing the task does resets the count. `tool.Context.HTTP` fails such a request before sending it. Path discovery jobs carry the cap with `methods: ["GET", "HEAD"]`, so the forwarder also refuses any other method.
+- `pkg/webscope` reads paths with contract `webpath` (`CleanPath`, `Denied`, `Under`), the reading the platform plans with; behaviour is unchanged.
+- The forwarder classifies a guarded connection's answers with contract `edgeprotect` from the start of the body that arrived with the headers too (never waiting for more), so a challenge page that shows only in its body is a block from the first answer. A vendor's rate-limit page under another status than 429 or 503 slows the host like a 429.
+- `wordlist.Normalize` drops entries that name a state-changing action (contract `webpath.Destructive`: logout, delete, reset, ...) for the `web-paths`, `web-files`, `api-routes` and `params` purposes, when a list is built and when a task's list is composed.
+
+### Behaviour change: a local policy without allow_interactsh follows the platform, and a refusal of callbacks narrows the job
+
+- `allow_interactsh` absent from a local policy now follows the platform's job; only `allow_interactsh: false` turns callbacks off. A job that asks for callbacks on a sensor whose policy turns them off (or that requires a policy and has none) is no longer refused: it runs without them (`ScanOptions.OOBOffReason`), and its result metadata `oob` says why.
+- New `core.OOBState`, `ScanResult.OOB` and result metadata key `oob` (`core.MetaOOB`): what a scan did with the callbacks its job asked for (`on`, or `unavailable` with a reason).
+
+### Added: `pkg/webdiff`, the calibrated differ of path discovery
+
+- `webdiff.Prober` probes candidate paths of one origin for one task: per (directory, shape: bare, slash, `ext:<e>`, dot) it takes baselines of three random names, derives noise bands (length and simhash over the normalised body), and reports a hit only when the answer differs from the baseline, the difference repeats, and, for a directory or a 403, a random child answers like a missing path. It recalibrates after 200 requests or when more than 2 % of differences fail to confirm. Hits carry status, media type, auth state (none, required, redirect_login), labels and evidence (decoded size, 64-bit hash of the normalised body); `webdiff.Endpoint` turns one into a CTIS endpoint with the evidence in `extensions["io.openctem"].response`.
+- Gap reasons: `catch_all`, `auth_wall`, `edge_protected`, `throttled`, `blocked`, `unstable_baseline`, `budget`, `hostile_response`, `protocol`, `scope_filtered`.
+- The conformance kit gains an `enumerate.web_paths` suite.
+
+### Changed
+
+- Requires `github.com/openctemio/contract` with package `webpath` (pinned to the commit that adds it until its release).
+
 ## v0.47.2 — 2026-11-05
 
 ### Security: the egress forwarder bounds every response head it reads
