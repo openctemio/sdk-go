@@ -101,37 +101,58 @@ func ownCgroup() (string, error) {
 	return "", errors.New("no cgroup v2 hierarchy")
 }
 
-// setupEnvelopes makes root/<own>/openctem-sensor (where every process of
-// the sensor's cgroup moves) and root/<own>/openctem-tasks with the
-// controllers enabled for task cgroups.
-func setupEnvelopes(root string, pid int) (*cgroupEnvelopes, error) {
+// delegatedCgroup checks, without changing anything, that this process's
+// cgroup v2 delegates the memory and pids controllers and is writable, and
+// returns its directory and the controllers task cgroups get.
+func delegatedCgroup(root string) (dir string, ctrls []string, err error) {
 	if _, err := os.Stat(filepath.Join(root, "cgroup.controllers")); err != nil {
-		return nil, errors.New("no cgroup v2 unified hierarchy")
+		return "", nil, errors.New("no cgroup v2 unified hierarchy")
 	}
 	own, err := ownCgroup()
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if filepath.Base(own) == resource.EnvelopeSelfLeaf {
 		own = filepath.Dir(own)
 	}
-	dir := filepath.Join(root, own)
+	dir = filepath.Join(root, own)
 	avail, err := readFields(filepath.Join(dir, "cgroup.controllers"))
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	var ctrls []string
 	for _, c := range []string{"cpu", "memory", "pids"} {
 		if slices.Contains(avail, c) {
 			ctrls = append(ctrls, c)
 		}
 	}
 	if !slices.Contains(ctrls, "memory") || !slices.Contains(ctrls, "pids") {
-		return nil, fmt.Errorf("the sensor's cgroup does not delegate the memory and pids controllers (has %q)", strings.Join(avail, " "))
+		return "", nil, fmt.Errorf("the sensor's cgroup does not delegate the memory and pids controllers (has %q)", strings.Join(avail, " "))
 	}
 	if unix.Access(filepath.Join(dir, "cgroup.subtree_control"), unix.W_OK) != nil ||
 		unix.Access(filepath.Join(dir, "cgroup.procs"), unix.W_OK) != nil {
-		return nil, errors.New("the sensor's cgroup is not writable (read-only cgroup mount or no delegation)")
+		return "", nil, errors.New("the sensor's cgroup is not writable (read-only cgroup mount or no delegation)")
+	}
+	return dir, ctrls, nil
+}
+
+// CheckEnvelopes reports, without changing anything, whether per-task
+// cgroup envelopes can be set up here: "" when this process's cgroup v2
+// delegates the memory and pids controllers and is writable, else why not.
+// The doctor uses it; EnableEnvelopes also needs the cgroup to itself.
+func CheckEnvelopes() string {
+	if _, _, err := delegatedCgroup(cgroupRoot); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// setupEnvelopes makes root/<own>/openctem-sensor (where every process of
+// the sensor's cgroup moves) and root/<own>/openctem-tasks with the
+// controllers enabled for task cgroups.
+func setupEnvelopes(root string, pid int) (*cgroupEnvelopes, error) {
+	dir, ctrls, err := delegatedCgroup(root)
+	if err != nil {
+		return nil, err
 	}
 	self := filepath.Join(dir, resource.EnvelopeSelfLeaf)
 	if err := os.Mkdir(self, 0o750); err != nil && !errors.Is(err, os.ErrExist) {

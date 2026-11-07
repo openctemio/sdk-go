@@ -1041,6 +1041,16 @@ func (lp *LocalPolicy) KillSwitchEngaged() bool {
 	return lp.killSwitchReason() != ""
 }
 
+// KillSwitchFiles are the kill switch files the sensor watches
+// (SENSOR_KILL_SWITCH_FILE, the policy's kill_switch_file); none when
+// neither is set.
+func (lp *LocalPolicy) KillSwitchFiles() []string {
+	if lp == nil {
+		return nil
+	}
+	return slices.Clone(lp.killSwitchFiles)
+}
+
 func (lp *LocalPolicy) killSwitchReason() string {
 	if lp == nil {
 		return ""
