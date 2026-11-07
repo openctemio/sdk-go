@@ -136,3 +136,46 @@ The port changes on every run, so before comparing with the expect file (and bef
 1. `validate`;
 2. `test --capability --scope --fuzz 30s`;
 3. `diff` against the target branch's `tool.yaml`.
+
+## `openctem import`: import the output of a tool you ran
+
+`openctem import` converts the output of a tool that the sensor does not run for you into a CTIS report on your machine, and imports it into your organization. Parsing happens locally with the same importers the platform and the sensor use (`github.com/openctemio/ctis/v2/importer`); nothing of the tool is executed.
+
+```text
+export OPENCTEM_URL=https://console.example.com
+export OPENCTEM_API_KEY=...        # Update Findings, Manage Assets, Import Assets
+
+nmap -sV -oX - 192.0.2.0/24 | openctem import --format nmap
+testssl.sh --jsonfile scan.json www.example.com; openctem import --format testssl scan.json
+gau example.com | openctem import --format lines --as url --tool gau
+openctem import --mapping wafw00f.mapping.json --tool wafw00f waf.json
+```
+
+| Flag | Meaning |
+|---|---|
+| `--format` | `auto` (from the content) or a format: `nmap`, `testssl`, `lines`, `ctis`, `nuclei`, `nessus`, `sarif`, ... (`openctem import -h` lists them). `lines` is never detected |
+| `--as` | `--format lines`: what each line names (`auto`, `host`, `domain`, `ip`, `url`) |
+| `--tool` | the tool name to record (for `lines` and mappings) |
+| `--mapping` | a declarative mapping file (`openctem.io/mapping/v2`, JSON) for any other JSON, CSV or XML |
+| `--target-hint` | `type:value` of the asset for records that name none |
+| `--min-severity` | leave out findings below it |
+| `--dry-run` | print the CTIS report to stdout and a summary to stderr; send nothing |
+| `--out` | write the report to a file (mode 0600) and send nothing; upload it later with `openctem import <file>` |
+| `--wait` | follow the receipt until applied (default 60s; 0: do not wait) |
+| `--json` | print the platform's answer as JSON |
+
+What is uploaded is exactly what `--dry-run` prints (`format=ctis`). The platform validates it again, imports it as a partial upload with the API key's rights (an import never closes findings), judges every host against your scope (hosts outside it are recorded as candidates, never scanned) and answers with a receipt. Exit status: 0 imported, 1 refused or failed, 2 usage or input error, 3 still queued.
+
+The key is read from `OPENCTEM_API_KEY` only, sent only over HTTPS (plain HTTP only to localhost) and never to a redirect target.
+
+### Give the tool its input: `openctem targets export` and `openctem run`
+
+```text
+openctem targets export --type domain > names.txt                 # in-scope names, one per line
+openctem targets export --type ip --tag prod --export-format json  # {"type","value"} per line
+
+openctem run --type ip --format nmap -- nmap -sV -iL {targets_file} -oX {output_file}
+openctem run --type domain --format lines --as domain --tool puredns -- puredns resolve {targets_file} -w {output_file}
+```
+
+`targets export` reads the organization's assets through the API with the key's data scope; by default only those an active scope entry covers (`--scope in_scope`). `run` exports them to a private temporary file, runs your command (no shell) with `{targets_file}` and `{output_file}` replaced, imports what it wrote (`{output_file}`, else its standard output) with the `openctem import` flags you gave, and removes the file. Your command does not see `OPENCTEM_API_KEY`. Schedule either from cron or a CI job. The platform cannot check what your command actually scanned: results outside your scope are recorded as candidates that grant nothing, and authorisation to scan is yours.

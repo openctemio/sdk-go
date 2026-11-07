@@ -58,7 +58,7 @@ const VEXArtifact = "vex-statements.json"
 type Config struct {
 	// Format of every input; auto detects it per input from its first
 	// bytes.
-	Format string `json:"format" default:"auto" enum:"auto,nessus,qualys,defectdojo,cyclonedx,spdx,osv,csaf,openvex,reconftw" description:"Format of the inputs; auto detects it per input. reconftw reads the one input, a reconFTW results directory, as a bundle."`
+	Format string `json:"format" default:"auto" enum:"auto,nessus,qualys,defectdojo,cyclonedx,spdx,osv,csaf,openvex,nmap,testssl,ctis,reconftw" description:"Format of the inputs; auto detects it per input (nmap XML, testssl.sh JSON and CTIS reports included). reconftw reads the one input, a reconFTW results directory, as a bundle."`
 	// MinSeverity drops findings below it.
 	MinSeverity string `json:"min_severity" default:"info" enum:"info,low,medium,high,critical" description:"Findings below this severity are left out."`
 }
@@ -66,8 +66,8 @@ type Config struct {
 // Manifest describes the tool.
 var Manifest = tool.Manifest{
 	Name:        Name,
-	Version:     "1.1.0",
-	Description: "Converts exported scanner, SBOM, VEX and findings files to CTIS (Nessus, Qualys with KnowledgeBase, DefectDojo Generic JSON, CycloneDX, SPDX, osv-scanner, CSAF, OpenVEX) and a reconFTW results directory.",
+	Version:     "1.2.0",
+	Description: "Converts exported scanner, SBOM, VEX and findings files to CTIS (Nessus, Qualys with KnowledgeBase, DefectDojo Generic JSON, CycloneDX, SPDX, osv-scanner, CSAF, OpenVEX, nmap XML, testssl.sh JSON, CTIS reports) and a reconFTW results directory.",
 	Class:       tool.Parser,
 	Tier:        tool.T0,
 	Consumes:    []string{"file:application/xml", "file:application/json", "file:application/zip"},
