@@ -18,9 +18,16 @@ const EnvSandbox = "SENSOR_SANDBOX"
 
 // EnvSandboxNetwork sets network confinement (api RFC-060): auto (default:
 // each task in its own network namespace whose only way out is its
-// forwarder, where user namespaces are available), required (refuse to
-// start without it; for shared sensors) or off.
+// forwarder, where user namespaces are available), required (never run a
+// tool that contacts its targets without it) or off.
 const EnvSandboxNetwork = "SENSOR_SANDBOX_NETWORK"
+
+// EnvSandboxRequiredExit: 1 makes a host that cannot give what
+// SENSOR_SANDBOX=required or SENSOR_SANDBOX_NETWORK=required asks for a
+// start failure, as before research/468 D3. Unset or 0 (the default): the
+// sensor starts, reports the cause and refuses every tool that contacts its
+// targets; passive (tier T0) work goes on. A shared sensor always fails.
+const EnvSandboxRequiredExit = "SENSOR_SANDBOX_REQUIRED_EXIT"
 
 // sandboxModes reads the tool sandbox mode (sandbox, else SENSOR_SANDBOX)
 // and SENSOR_SANDBOX_NETWORK.
@@ -36,16 +43,41 @@ func sandboxModes(sandbox string, shared bool) (mode, netMode executor.Mode, err
 	if !ok {
 		return "", "", usageError(fmt.Errorf("%s must be off, auto or required", EnvSandboxNetwork))
 	}
+	if netMode == executor.ModeRequired && mode == executor.ModeOff {
+		// A contradiction in the settings, not a host limit: network
+		// confinement is part of the sandbox the operator turned off.
+		return "", "", usageError(fmt.Errorf("%s=required needs the tool sandbox, but %s=off", EnvSandboxNetwork, EnvSandbox))
+	}
 	return mode, netMode, nil
 }
 
-// ValidateSandboxNetwork fails when SENSOR_SANDBOX_NETWORK=required and this
-// host cannot confine a tool's network (no unprivileged user namespaces, a
-// container profile that blocks them, or the tool sandbox off). sandbox is
-// the tool sandbox mode, "" for SENSOR_SANDBOX. It only probes: nothing is
-// installed. New calls it before pairing, and a pair command should too: a
-// host that can never run confined is refused before the platform admits
-// it and gives it an identity.
+// newProcessBackend builds the tool backend (a test seam: tests stand in a
+// host that cannot give a control).
+var newProcessBackend = executor.NewProcessBackend
+
+// sandboxRequiredExit reads SENSOR_SANDBOX_REQUIRED_EXIT.
+func sandboxRequiredExit() (bool, error) {
+	v := strings.TrimSpace(os.Getenv(EnvSandboxRequiredExit))
+	if v == "" {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, usageError(fmt.Errorf("%s=%q is not recognized: set it to 1 to exit when a required sandbox control is missing, or 0 (or unset)", EnvSandboxRequiredExit, v))
+	}
+	return b, nil
+}
+
+// ValidateSandboxNetwork fails when the sandbox settings are invalid, and,
+// for a shared sensor (SENSOR_SHARED_MODE=1) or with
+// SENSOR_SANDBOX_REQUIRED_EXIT=1, when SENSOR_SANDBOX_NETWORK=required and
+// this host cannot confine a tool's network (no unprivileged user
+// namespaces, a container profile that blocks them). sandbox is the tool
+// sandbox mode, "" for SENSOR_SANDBOX. It only probes: nothing is installed.
+// New calls it before pairing, and a pair command should too: a host that
+// must exit is refused before the platform admits it and gives it an
+// identity. Any other sensor starts on such a host and refuses the tools
+// that contact their targets (research/468 D3).
 //
 // With SENSOR_SHARED_MODE=1 both the sandbox and its network confinement
 // are required (see EnvSharedMode).
@@ -62,7 +94,11 @@ func validateSandboxNetwork(sandbox string, shared bool) error {
 	if err != nil || netMode != executor.ModeRequired {
 		return err
 	}
-	if _, err := executor.NewProcessBackend(executor.Config{Mode: mode, ConfineNetwork: true, RequireNetwork: true, Shared: shared}); err != nil {
+	exit, err := sandboxRequiredExit()
+	if err != nil || (!shared && !exit) {
+		return err
+	}
+	if _, err := newProcessBackend(executor.Config{Mode: mode, ConfineNetwork: true, RequireNetwork: true, Shared: shared}); err != nil {
 		if shared {
 			return usageError(fmt.Errorf("%s=1: %w", EnvSharedMode, err))
 		}
@@ -72,14 +108,23 @@ func validateSandboxNetwork(sandbox string, shared bool) error {
 }
 
 // setupSandbox installs the executor backend every tool run uses, with the
-// kit's protected paths, and logs what it enforces.
+// kit's protected paths, and logs what it enforces. A control that
+// SENSOR_SANDBOX=required or SENSOR_SANDBOX_NETWORK=required asks for and
+// this host cannot give does not stop the sensor (unless
+// SENSOR_SANDBOX_REQUIRED_EXIT=1 or shared mode): the backend refuses every
+// tool that contacts its targets, and the config report names the cause.
 func (k *Kit) setupSandbox() error {
 	mode, netMode, err := sandboxModes(k.opts.Sandbox, k.s.shared)
 	if err != nil {
 		return err
 	}
-	b, err := executor.NewProcessBackend(executor.Config{Mode: mode, ReadDeny: k.protectedPaths(),
-		ConfineNetwork: netMode != executor.ModeOff, RequireNetwork: netMode == executor.ModeRequired, Shared: k.s.shared})
+	exit, err := sandboxRequiredExit()
+	if err != nil {
+		return err
+	}
+	b, err := newProcessBackend(executor.Config{Mode: mode, ReadDeny: k.protectedPaths(),
+		ConfineNetwork: netMode != executor.ModeOff, RequireNetwork: netMode == executor.ModeRequired, Shared: k.s.shared,
+		RefuseActiveWhenUnmet: !exit})
 	if err != nil {
 		return usageError(err)
 	}
@@ -97,10 +142,13 @@ func (k *Kit) setupSandbox() error {
 	for _, m := range st.Missing {
 		_, _ = fmt.Fprintf(k.errw, "Warning: tool sandbox: %s\n", m)
 	}
-	switch st.Unconfined() {
-	case executor.UnconfinedRefused:
+	switch {
+	case st.RequiredUnmet != "":
+		_, _ = fmt.Fprintf(k.errw, "Warning: %s is not met on this host (%s): the sensor stays online and refuses every tool that contacts its targets (tier T1 and above); passive lookups still run. Fix the host (see the %s check), or set %s=1 to exit instead\n",
+			requiredSetting(mode, netMode), st.RequiredUnmet, CheckSandboxNetwork, EnvSandboxRequiredExit)
+	case st.Unconfined() == executor.UnconfinedRefused:
 		_, _ = fmt.Fprintf(k.errw, "Warning: a tool sandbox control is not enforced on this host: tools that contact their targets (tier T1 and above) are refused (%s); passive lookups still run. Fix it, or run on Linux with the sandbox, or set %s=off to acknowledge running every tool unconfined\n", strings.Join(st.FailedControls(), ", "), EnvSandbox)
-	case executor.UnconfinedAcknowledged:
+	case st.Unconfined() == executor.UnconfinedAcknowledged:
 		_, _ = fmt.Fprintf(k.errw, "Warning: tools run unconfined (%s=off), the ones that contact their targets included\n", EnvSandbox)
 	}
 	k.setupEnvelopes()
@@ -113,6 +161,18 @@ func (k *Kit) setupSandbox() error {
 		_, _ = fmt.Fprintf(k.errw, "Warning: tool network not confined (%s=%s): %s\n", EnvSandboxNetwork, netMode, st.NetworkMissing)
 	}
 	return nil
+}
+
+// requiredSetting names the setting(s) that required what is missing.
+func requiredSetting(mode, netMode executor.Mode) string {
+	var out []string
+	if mode == executor.ModeRequired {
+		out = append(out, EnvSandbox+"=required")
+	}
+	if netMode == executor.ModeRequired {
+		out = append(out, EnvSandboxNetwork+"=required")
+	}
+	return strings.Join(out, " and ")
 }
 
 // setupEnvelopes turns on per-task cgroup envelopes where the sensor's
@@ -191,6 +251,10 @@ func unconfinedCheck(st executor.Status) core.ConfigCheck {
 	case executor.UnconfinedRefused:
 		c.Status, c.Code = core.CheckFail, "active_refused"
 		c.Summary = "a tool sandbox control is not enforced on this host: tools that contact their targets are refused, passive lookups still run"
+		if st.RequiredUnmet != "" {
+			c.Keys = []string{EnvSandbox, EnvSandboxNetwork, EnvSandboxRequiredExit}
+			c.Summary = "a sandbox control this sensor requires is not available on this host: the sensor stays online, tools that contact their targets are refused, passive lookups still run"
+		}
 		c.Excerpt = truncateBytes(strings.Join(st.FailedControls(), ", ")+": "+st.UnconfinedDetail(), maxUnavailableExcerptSize)
 	default:
 		c.Status, c.Code = core.CheckWarn, "acknowledged"
@@ -212,6 +276,12 @@ func (k *Kit) sandboxNetworkCheck(mode, netMode executor.Mode, st executor.Statu
 	default:
 		host = readUsernsHost(procRoot)
 		c.Code = classifyUserns(host, strings.ToLower(st.NetworkMissing))
+	}
+	if !st.NetworkEnforced && netMode == executor.ModeRequired && mode != executor.ModeOff {
+		// Required and missing: tools that contact their targets are
+		// refused (Status.RequiredUnmet), which the checklist shows as a
+		// failure with the same cause.
+		c.Status = core.CheckFail
 	}
 	if !st.NetworkEnforced {
 		c.Summary = "tool runs are not network-confined"
