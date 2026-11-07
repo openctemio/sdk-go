@@ -30,7 +30,17 @@
             "operating-system"
           ],
           "confidence": 100,
-          "name": "Linux Kernel 5.15.0-91-generic on Ubuntu 22.04"
+          "cpe": "cpe:2.3:o:canonical:ubuntu_linux:22.04:*:*:*:*:*:*:*",
+          "name": "Linux Kernel 5.15.0-91-generic on Ubuntu 22.04",
+          "version": "22.04"
+        },
+        {
+          "categories": [
+            "application"
+          ],
+          "cpe": "cpe:2.3:a:openbsd:openssh:8.9p1:*:*:*:*:*:*:*",
+          "name": "OpenBSD OpenSSH",
+          "version": "8.9p1"
         }
       ],
       "type": "host",
@@ -303,6 +313,7 @@
         "compliance-check-id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
         "compliance-full-id": "0000000000000000000000000000000000000000000000000000000000000000",
         "compliance-functional-id": "c0ffee00c0",
+        "compliance-mappings": "nist_800_53||AC-6(2)\ncis|controls v8|5.4",
         "compliance-policy-value": "expect: ^[\\s]*permitrootlogin[\\s]+no",
         "compliance-reference": "800-53|AC-6(2),CSCv8|5.4",
         "compliance-result": "FAILED",
