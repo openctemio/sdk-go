@@ -291,6 +291,7 @@ jobs:
           } finally {
             Stop-Process -Id $server.Id -Force
           }
+          exit 0  # the refused install left its exit status behind
 
       - name: TEMP probe Mark-of-the-Web on downloads
         continue-on-error: true
