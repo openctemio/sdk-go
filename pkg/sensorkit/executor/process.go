@@ -60,7 +60,20 @@ type Config struct {
 	// cache, output directory or configuration directory is shared between
 	// jobs. Read-only content (signed packs, ReadPaths) is unaffected.
 	Shared bool
+	// RefuseActiveWhenUnmet: when Mode is required or RequireNetwork is set
+	// and this host cannot give what is required, NewProcessBackend returns
+	// a backend that refuses every task that may contact its targets
+	// (Status.RequiredUnmet) instead of an error, so the sensor stays online
+	// and passive work goes on. Never with Shared: a shared sensor still
+	// fails.
+	RefuseActiveWhenUnmet bool
 }
+
+// ErrActiveRefused: the sandbox controls this sensor requires are not
+// available on this host (Status.RequiredUnmet), so a task that may contact
+// its targets is refused. Only passive tasks (TaskSpec.Passive) and tasks
+// without network (NetworkNone) run.
+var ErrActiveRefused = errors.New("executor: a required sandbox control is not available on this host: tasks that contact their targets are refused")
 
 // ErrBrowserNeedsConfinement: a browser task (TaskSpec.Browser) runs only in
 // a sandbox that confines its network; it never runs unconfined.
@@ -82,8 +95,31 @@ type ProcessBackend struct {
 // once in probe mode, and returns the backend. With ModeRequired it fails
 // unless every control is enforced; with ModeAuto it degrades and lists what
 // is missing in Status. With RequireNetwork it fails unless tasks' network
-// is confined.
+// is confined. With RefuseActiveWhenUnmet a required control that is missing
+// gives a backend that refuses active tasks instead (Status.RequiredUnmet).
 func NewProcessBackend(cfg Config) (*ProcessBackend, error) {
+	b, err := newRequiredBackend(cfg)
+	if err == nil || !cfg.RefuseActiveWhenUnmet || cfg.Shared || (cfg.Mode != ModeRequired && !cfg.RequireNetwork) {
+		return b, err
+	}
+	// The same backend without the requirement: what the host does give,
+	// for the passive tasks. A configuration error (an unknown mode, a bad
+	// protected path) fails the same way here and is returned as it was.
+	lax := cfg
+	if lax.Mode == ModeRequired {
+		lax.Mode = ModeAuto
+	}
+	lax.RequireNetwork = false
+	lb, lerr := newRequiredBackend(lax)
+	if lerr != nil {
+		return nil, err
+	}
+	lb.cfg.Mode, lb.status.Mode = cfg.Mode, cfg.Mode
+	lb.status.RequiredUnmet = err.Error()
+	return lb, nil
+}
+
+func newRequiredBackend(cfg Config) (*ProcessBackend, error) {
 	if cfg.Shared {
 		if cfg.Mode != ModeRequired {
 			return nil, fmt.Errorf("executor: a shared sensor needs the sandbox in required mode, not %q", cfg.Mode)
@@ -218,6 +254,9 @@ var taskIDRE = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 func (b *ProcessBackend) Prepare(spec TaskSpec) (Task, error) {
 	if len(spec.Argv) == 0 || spec.Argv[0] == "" {
 		return nil, errors.New("executor: empty argv")
+	}
+	if b.status.RequiredUnmet != "" && !spec.Passive && spec.Network != NetworkNone {
+		return nil, ErrActiveRefused
 	}
 	t := &processTask{b: b, spec: spec}
 	if b.launcher == "" {

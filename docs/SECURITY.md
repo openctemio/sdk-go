@@ -778,7 +778,14 @@ first thing in `main`), which confines itself and then becomes the tool:
 - On a host with `kernel.apparmor_restrict_unprivileged_userns=1`, an AppArmor profile must grant the sensor binary `userns`.
 - On the host, `kernel.unprivileged_userns_clone` must not be 0 (Debian, Ubuntu) and `user.max_user_namespaces` must be positive. Where the sensor reports `userns_disabled_host`, the host admin sets `kernel.unprivileged_userns_clone=1` (or a positive `user.max_user_namespaces`) in `/etc/sysctl.d/` and runs `sysctl --system`. Keep `kernel.apparmor_restrict_unprivileged_userns=1` and the container's `docker-default` AppArmor profile, so unconfined local processes stay restricted; never set the restriction to 0. If confinement still fails with the restriction on and `docker-default` applied, give the sensor container an AppArmor profile that grants `userns`. On a shared machine, a dedicated host or VM for the sensor is the cleanest option.
 - The sensor's `runtime.sandbox_network` check tells the causes apart from the host knobs it can read from inside the container (`userns_disabled_host`, `userns_restricted`, `userns_blocked` for the seccomp profile only when the host allows user namespaces) and lists the knob values it read as evidence; a knob it cannot read is reported as unknown.
-- Where none of this is in place, `Status.NetworkEnforced` is false and `Status.NetworkMissing` says why. With `SENSOR_SANDBOX_NETWORK=auto` (the default) tasks then run unconfined with a warning; with `required` (shared sensors) the sensor refuses to start.
+- Where none of this is in place, `Status.NetworkEnforced` is false and `Status.NetworkMissing` says why. With `SENSOR_SANDBOX_NETWORK=auto` (the default) tasks then run unconfined with a warning. With `required`, the sensor stays online, the check is a failure with the classified cause, and every tool that contacts its targets is refused (see "Required controls a host cannot give" below). A shared sensor, or `SENSOR_SANDBOX_REQUIRED_EXIT=1`, refuses to start instead.
+
+**Required controls a host cannot give (research/468 D3).** `SENSOR_SANDBOX=required` and `SENSOR_SANDBOX_NETWORK=required` keep their guarantee: no tool that contacts its targets ever runs without the required control. On a host that cannot give it, the sensor no longer exits:
+- The cause is classified first (`runtime.sandbox_network`: `userns_disabled_host`, `userns_restricted`, `userns_blocked`, with the host knob values as evidence).
+- The executor installs a backend with `Status.RequiredUnmet` set (`executor.Config.RefuseActiveWhenUnmet`). The tool host refuses every tool of tier T1 and above, and a tool with an unknown tier, with `core.RefusalUnconfinedSandbox` (`FailedControls` names `required`). The backend refuses such tasks too: `Prepare` returns `executor.ErrActiveRefused` for any task that has network and is not marked passive (`TaskSpec.Passive`, which only the tool host sets, from the tool's tier). A scanner run through `core.ExecuteScanner`, which carries no tier, is refused.
+- The sensor stays online, reports `runtime.sandbox_unconfined` as `active_refused` (a failure) and keeps running passive T0 lookups.
+- `SENSOR_SANDBOX_REQUIRED_EXIT=1` restores the exit at start, before pairing, for operators who want it. A shared sensor (`SENSOR_SHARED_MODE=1`) always refuses to start. `SENSOR_SANDBOX_NETWORK=required` with `SENSOR_SANDBOX=off` is a settings error and refuses to start.
+- Threat: a host change (a sysctl, a runtime profile) that silently removes confinement. It cannot widen what runs: the refusal sits in the backend every task goes through, not only in the tool host's check.
 
 **Content packs (api RFC-061).** A tool's templates, rules and wordlists are packs in the sensor's content cache. That cache is a private root hidden from every task (`executor.Config.Private`). A task gets read-only grants for exactly its own packs (`TaskSpec.ReadPaths`, checked by `tool.CheckTaskContent` against the manifest's slots and against `toolhost.Host.ContentRoot`). One tenant's task cannot read another tenant's packs, and a job cannot point a task at any other path.
 
@@ -809,8 +816,9 @@ A job asks for callbacks with `allow_interactsh: true`. A local policy without t
 - What the forwarder reads from a host is bounded. A response head (and every informational response before it) is at most 64 KiB and must arrive within one `UpstreamIdle` window, as must the TLS handshake of a terminated connection. A host that sends an endless or a dripping header has its connection closed, so it cannot exhaust the sensor's memory or hold a connection beyond that window. Bodies are streamed, never buffered.
 
 Modes (`SENSOR_SANDBOX` for sensorkit): `auto` (default) enforces what the
-host supports and logs what it cannot; `required` refuses to start unless
-every control is enforced; `off` runs tools as plain child processes.
+host supports and logs what it cannot; `required` never runs a tool that
+contacts its targets unless every control is enforced; `off` runs tools as
+plain child processes.
 Where `auto` cannot enforce the sandbox (macOS or Windows, which have none;
 or on Linux a launcher that fails, blocked user namespaces, or no Landlock,
 which leaves the sensor's signing key readable to a tool running as the same
@@ -824,8 +832,8 @@ the config report (`runtime.sandbox_unconfined`: `sandboxed`, `active_refused`
 (a failure; the excerpt lists the failed controls `launcher`, `os`, `landlock`
 and the reason), `acknowledged` (a warning)). Missing network confinement
 alone does not refuse tools (the key paths stay denied); it is reported by
-`runtime.sandbox_network`, and `SENSOR_SANDBOX_NETWORK=required` refuses to
-start without it. Each
+`runtime.sandbox_network`, and `SENSOR_SANDBOX_NETWORK=required` refuses
+every tool that contacts its targets without it. Each
 `ExecResult.Sandbox` records what the run was under. Residual risks: a confined task
 cannot signal processes outside its PID namespace, and nothing it starts
 outlives it. A task that runs unconfined (no user namespaces on the host) can

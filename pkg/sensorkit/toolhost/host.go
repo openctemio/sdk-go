@@ -808,7 +808,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 			}
 		}, Finished: core.ReapScannerProcess},
 		EgressProxy: eg.proxyPath(), EgressDNS: eg.dnsPath(), Envelope: envelopeFor(m),
-		Browser: m.Permissions.Sandbox == tool.SandboxBrowser,
+		Browser: m.Permissions.Sandbox == tool.SandboxBrowser, Passive: !m.Tier.Exceeds(tool.T0),
 	})
 	if err != nil {
 		_ = inR.Close()

@@ -207,6 +207,12 @@ type TaskSpec struct {
 	// and network namespaces (the browser's renderer sandbox) and no other,
 	// and may write /proc (the browser writes its children's id maps).
 	Browser bool
+	// Passive is the caller's statement that the task is a passive (tier
+	// T0) tool that does not contact its targets. A backend whose required
+	// controls are missing (Status.RequiredUnmet) runs only passive tasks
+	// and tasks without network; the tool host sets it from the tool's
+	// tier, and a caller that does not know the tier leaves it false.
+	Passive bool
 }
 
 // ProcessHooks are the caller's process-level adjustments, called by the
@@ -296,6 +302,12 @@ type Status struct {
 	// NoSandboxOnHost is true when the host's operating system has no
 	// sandbox at all (it is Linux only: macOS, Windows).
 	NoSandboxOnHost bool `json:"no_sandbox_on_host,omitempty"`
+	// RequiredUnmet says why a control the operator required
+	// (SENSOR_SANDBOX=required, SENSOR_SANDBOX_NETWORK=required) is not
+	// available on this host when the backend was asked to refuse active
+	// tasks instead of failing (Config.RefuseActiveWhenUnmet). Non-empty:
+	// tasks that may contact their targets are refused (ErrActiveRefused).
+	RequiredUnmet string `json:"required_unmet,omitempty"`
 }
 
 // Unconfined states (Status.Unconfined): how a backend that runs tools
@@ -322,10 +334,13 @@ const (
 // blocked or Landlock is missing (FailedControls says which). Network
 // confinement missing alone does not refuse: the key paths are still denied,
 // the sensor reports the gap (NetworkMissing, the sandbox_network check) and
-// SENSOR_SANDBOX_NETWORK=required makes it a start failure. Required mode never gets here:
-// the sensor does not start.
+// SENSOR_SANDBOX_NETWORK=required makes it refuse active tools
+// (RequiredUnmet). A required control that is missing (RequiredUnmet)
+// always refuses.
 func (s Status) Unconfined() string {
 	switch {
+	case s.RequiredUnmet != "":
+		return UnconfinedRefused
 	case s.Mode == ModeOff:
 		return UnconfinedAcknowledged
 	case s.Mode == "":
@@ -339,8 +354,9 @@ func (s Status) Unconfined() string {
 
 // FailedControls names the controls that are not enforced and make
 // Unconfined refuse: "launcher" (the sandbox did not start), "os" (the host
-// has no sandbox), and "landlock" (the sensor's key paths are not denied). Empty when Unconfined is
-// not UnconfinedRefused.
+// has no sandbox), "landlock" (the sensor's key paths are not denied) and
+// "required" (a control the operator required is missing: RequiredUnmet).
+// Empty when Unconfined is not UnconfinedRefused.
 func (s Status) FailedControls() []string {
 	if s.Unconfined() != UnconfinedRefused {
 		return nil
@@ -354,13 +370,20 @@ func (s Status) FailedControls() []string {
 	} else if s.Landlock == 0 {
 		out = append(out, "landlock")
 	}
+	if s.RequiredUnmet != "" {
+		out = append(out, "required")
+	}
 	return out
 }
 
 // UnconfinedDetail is the reasons behind FailedControls, as the status
 // recorded them.
 func (s Status) UnconfinedDetail() string {
-	d := append([]string(nil), s.Missing...)
+	var d []string
+	if s.RequiredUnmet != "" {
+		d = append(d, "required: "+s.RequiredUnmet)
+	}
+	d = append(d, s.Missing...)
 	if s.NetworkMissing != "" {
 		d = append(d, "network: "+s.NetworkMissing)
 	}
