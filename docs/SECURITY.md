@@ -1335,6 +1335,15 @@ even when the platform's hello lists no protocol v3.
 
 ---
 
+### Host check: `doctor` (`sensorkit.DoctorCommand`)
+
+The doctor (research/468 D2) is read-only and local:
+
+- It changes no setting, file or sysctl. The sandbox probe runs the launcher once, as the sensor's start does; the cgroup check only reads (`executor.CheckEnvelopes`), it never moves a process or enables a controller.
+- It contacts only the configured platform URL (`SENSOR_API_URL`, checked by `httpsec.CheckAPIBaseURL`), with one `GET /api/v2/sensor/hello` that carries no API key, signature, token or cookie. TLS is verified as for the sensor; the evidence is the CA's SHA-256 fingerprint, never a key.
+- Its output goes through the config report's scrubber (`core.ConfigReport.Finalize`): no secret setting's value (API key, enrollment token, pairing code, proxy URLs) or URL credential appears in the table or the JSON. It never reads the signing key, the outbox key or the store's master key.
+- The kill switch check reports where the file must be (`/etc/openctem/STOP`, mounted read-only from the host) and whether it is engaged; it never creates or removes it.
+
 ## Security Best Practices
 
 ### 1. Credential Management

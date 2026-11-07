@@ -21,6 +21,10 @@ func EnableEnvelopes() (mode, missing string) {
 	return EnvelopeRlimit, "cgroup envelopes are available on Linux only"
 }
 
+// CheckEnvelopes reports why per-task cgroup envelopes are not available:
+// they are Linux only.
+func CheckEnvelopes() string { return "cgroup envelopes are available on Linux only" }
+
 type cgroupEnvelopes struct{}
 
 type taskCgroup struct{}
