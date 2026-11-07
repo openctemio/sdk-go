@@ -1300,18 +1300,45 @@ start answer:
 - on the approval answer, before it confirms (a bad one is never confirmed);
 - on the confirm answer, which must state the same sensor, organization,
   key and scope it confirmed;
-- and it saves only what the confirm answer's grant states. The hello is
-  not read during pairing.
+- and it saves only what the confirm answer's grant states. Nothing the
+  hello says is pinned or trusted during pairing (see the capability check
+  below).
 
 Any failure (no grant, a signature that does not verify, a grant for
 another request, key or nonce, a TLS anchor the grant does not name) stops
 pairing with an error that names the step (`approval answer`, `confirm
 answer`) and `pairing_answer_unsigned`; nothing is saved, and the request
 in `pairing.json` is dropped. A platform from before signed answers is
-refused the same way, with "upgrade the platform": the sensor never falls
-back to the unsigned identity. Platforms add the member, so sensors from
-before it pair as before. `conformance.RunPairingGrantSuite` checks another
+refused the same way, with "upgrade the platform to v0.21.0 or later"
+(`pairing.MinPlatformSignedGrant`): the sensor never falls back to the
+unsigned identity. Platforms add the member, so sensors from before it pair
+as before. `conformance.RunPairingGrantSuite` checks another
 implementation's verifier against the same cases.
+
+**Capability check before pairing (research/468 D9).** Before a new pairing
+request starts, the sensor asks `GET /api/v2/sensor/hello` once. A platform
+that answers with its features and does not list `pairing_answer_signed`
+(`protov2.FeaturePairingAnswerSigned`) cannot pair this sensor: it stops with
+`identity.ErrPlatformUnsignedPairing`, which names the platform version to
+upgrade to and the older sensor release to pair with instead, before an
+administrator approves a request that could never complete. Any other answer
+(a platform that serves hello only to paired sensors answers 401) proves
+nothing, and pairing goes on with the grant still verified. The features are
+public facts and a hint only: a forged list can delay pairing (as anyone in
+the middle can) but never make the sensor accept an unsigned answer.
+
+**Stops are held, not retried in a loop (research/468 D8).** The daemon
+(`PairOptions.HoldOnStop`, on in sensorkit) treats a refused enrollment
+token, a refused grant (`pairing_answer_unsigned`), a TLS anchor mismatch and
+a platform without signed answers as a hold, not an exit: it writes
+`identity/pairing-hold.json` (0600; the time, the reason, the number of stops
+in a row and a SHA-256 digest of the platform URL, token and code, never
+their values), stays up, and tries again after 15 minutes, doubling with each
+stop in a row up to 6 hours. A restart within the hold waits the rest of it
+without any platform request, so a supervisor's restart loop cannot exhaust
+the platform's pairing budget (HTTP 429). New settings (another token or
+code) end the hold at once, and a successful pairing removes it. The CLI
+`pair` still exits with the error.
 
 After pairing, the job signer changes only through the pinned root: a new
 signer key arrives in a key set signed by that root (a lower version is a

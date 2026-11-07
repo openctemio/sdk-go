@@ -69,6 +69,11 @@ type fakePlatform struct {
 	// contentSigning is what the granted identity lists (nil: none).
 	contentSigning *pairing.ContentSigning
 	helloAsked     int
+	// publicHello: the features a hello asked before pairing answers
+	// (nil: 401, a platform that serves hello only to paired sensors);
+	// preHellos counts those requests.
+	publicHello []string
+	preHellos   int
 	// startReplies answer the next starts, one each, before a normal start.
 	startReplies []func(w http.ResponseWriter)
 	// link: a platform that answers every start with its code and the
@@ -204,6 +209,13 @@ func (f *fakePlatform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ident := f.identity()
 		_ = json.NewEncoder(w).Encode(pairing.StatusResponse{Status: pairing.StatusCompleted, Identity: ident,
 			Grant: f.signedGrant("confirm", ident)})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v2/sensor/hello" && f.sensorPub == nil:
+		f.preHellos++
+		if f.publicHello == nil {
+			http.Error(w, "unauthenticated", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(protov2.Hello{Protocol: 2, Features: f.publicHello})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v2/sensor/hello" && f.signedJobs != nil:
 		f.verify(r, f.sensorPub)
 		f.helloAsked++
