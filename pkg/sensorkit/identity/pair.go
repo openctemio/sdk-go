@@ -168,6 +168,15 @@ type PairOptions struct {
 	// spends the platform's pairing budget in a loop). A refused enrollment
 	// token, a denial or a platform key mismatch still returns.
 	RetryTransient bool
+	// HoldOnStop keeps a daemon alive on a stop that retrying soon cannot
+	// change: a refused enrollment token, an answer without a valid platform
+	// signature (nothing is saved), or a platform that does not sign pairing
+	// answers. Pair records a hold in the state directory (HoldFile: 15
+	// minutes, doubling with each stop in a row up to 6 hours), waits it out
+	// and tries again; a restart within the hold waits the rest of it
+	// without calling the platform. New settings (another token or code)
+	// end the hold. Off, Pair returns the error.
+	HoldOnStop bool
 	// Out receives the lines a person reads (the code, the fingerprint).
 	Out io.Writer
 	// HTTPClient sends the requests; it is wrapped to sign them. Default:
@@ -184,6 +193,8 @@ type PairOptions struct {
 	// spentPrefix is the first 4 characters of a code whose request ended;
 	// that code is never sent again.
 	spentPrefix string
+	// capsChecked: the platform's pairing capabilities were read once.
+	capsChecked bool
 }
 
 // DefaultHostFacts describes this host.
@@ -260,9 +271,17 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 	rotated := false
 	lastWait := ""
 	tokenOnce := o.EnrollmentToken != "" && !o.OrganizationEnrollment
+	if o.HoldOnStop {
+		if err := waitHold(ctx, &o); err != nil {
+			return nil, err
+		}
+	}
 	for {
 		id, err := pairOnce(ctx, pc, signer, &o)
 		if err == nil {
+			if o.HoldOnStop {
+				o.Store.ClearHold()
+			}
 			return id, nil
 		}
 		err = explainUntrustedTLS(err)
@@ -303,6 +322,12 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 			}
 			err = ErrKeyRegistered
 		}
+		if o.HoldOnStop && holdable(err) {
+			if herr := holdStop(ctx, &o, err); herr != nil {
+				return nil, herr
+			}
+			continue
+		}
 		if !o.RetryTransient {
 			return nil, err
 		}
@@ -330,6 +355,28 @@ func Pair(ctx context.Context, o PairOptions) (*Identity, error) {
 			return nil, err
 		}
 	}
+}
+
+// holdStop records a hold for err (a holdable stop), says so once and
+// waits it out. The error is returned only when the wait was canceled.
+func holdStop(ctx context.Context, o *PairOptions, err error) error {
+	prev, lerr := o.Store.LoadHold()
+	if lerr != nil {
+		return lerr
+	}
+	h := nextHold(prev, holdInputs(o), time.Now(), err.Error())
+	if serr := o.Store.SaveHold(h); serr != nil {
+		_, _ = fmt.Fprintf(o.Out, "WARNING: the pairing hold could not be saved, so a restart does not honor it: %v\n", serr)
+	}
+	_, _ = fmt.Fprintf(o.Out, "Pairing stopped: %v\nThe sensor stays up and tries again at %s (a restart waits too). Fix the cause, "+
+		"then change the setting (a new enrollment token or pairing code) to try at once.\n", err, h.Until.UTC().Format(time.RFC3339))
+	if werr := o.sleep(ctx, time.Until(h.Until)); werr != nil {
+		return err
+	}
+	// A refused single-use token stays refused: the platform says so again
+	// at the next try, which is cheap at this pace.
+	o.capsChecked = false
+	return nil
 }
 
 func isKeyRegistered(err error) bool {
@@ -412,6 +459,9 @@ func pairOnce(ctx context.Context, pc *pairClient, signer *sensorsig.Signer, o *
 		return id, err
 	}
 	o.Store.ClearPending()
+	if err := checkPairingCapabilities(ctx, pc, o); err != nil {
+		return nil, err
+	}
 	nonce, err := pairing.NewNonce()
 	if err != nil {
 		return nil, err

@@ -158,6 +158,12 @@ const (
 	// FeatureKeyBind: a bearer-key sensor may bind its own Ed25519 key at
 	// IdentityBindPath (api RFC-052 §4.8).
 	FeatureKeyBind = "key_bind"
+	// FeaturePairingAnswerSigned: the platform's pairing approval and
+	// confirm answers carry a signed grant (pairing.SignedGrant). A
+	// platform that serves hello without credentials lists it there, so a
+	// new sensor learns before it starts a pairing request whether this
+	// platform can pair it (research/468 D9).
+	FeaturePairingAnswerSigned = "pairing_answer_signed"
 )
 
 // KeyBindProofContext prefixes the message a sensor signs to prove it holds
