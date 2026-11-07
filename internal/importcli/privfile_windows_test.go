@@ -19,10 +19,17 @@ func assertPrivate(t *testing.T, path string, _ os.FileInfo) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := privateSDDL()
+	wantSDDL, err := privateSDDL()
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Round-trip the expected form so both use the same aliases (the
+	// built-in administrator's SID prints as LA, for example).
+	wsd, err := windows.SecurityDescriptorFromString(wantSDDL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := wsd.String()
 	got := sd.String()
 	// The string form may add flags (AI, AR) after "D:P"; the entries must
 	// be exactly ours.

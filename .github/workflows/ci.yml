@@ -219,6 +219,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
+      # Golden files compare byte for byte: check out LF as committed.
+      - name: Keep line ends
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Go
