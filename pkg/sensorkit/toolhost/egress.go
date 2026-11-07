@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"net"
 	"net/netip"
@@ -68,6 +69,13 @@ type taskEgress struct {
 // network. A tool with network "none" gets none (no way out at all); a
 // backend that does not confine gets none (nil, the task runs as before).
 func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared) (*taskEgress, error) {
+	if p.m.Permissions.Network == tool.NetNone || !be.Status().NetworkEnforced {
+		if p.inject != nil {
+			// prepare admitted the task because the forwarder adds its
+			// identification: never run it without one (fail closed).
+			return nil, fmt.Errorf("toolhost: the job's identification needs the task's forwarder, and the sandbox does not confine the network")
+		}
+	}
 	if p.m.Permissions.Network == tool.NetNone {
 		return nil, nil
 	}
@@ -80,6 +88,7 @@ func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared
 	}
 	scope := h.taskScope(ctx, p.m, p.task)
 	scope.OOB = p.oob
+	scope.Identity = p.inject
 	if p.m.Permissions.Network == tool.NetVendor {
 		// The hosts the task's delivered provider keys may be sent to: a
 		// keyed host is reachable only when its key was delivered.
@@ -570,4 +579,17 @@ func egressRefusedVerdicts(out *Outcome, items []tool.RetestItem) {
 				Detail: "the sensor's network confinement refused every connection toward the target"}
 		}
 	}
+}
+
+// forwarderIdentity is the identification a task's forwarder puts on every
+// request: the headers, the query parameter, and each host's User-Agent.
+func forwarderIdentity(id *tool.Identity) *egress.Identity {
+	out := &egress.Identity{Headers: maps.Clone(id.Headers)}
+	if id.Query != nil {
+		out.QueryName, out.QueryValue = id.Query.Name, id.Query.Value
+	}
+	if id.UserAgent != "" || len(id.UserAgents) > 0 {
+		out.UserAgent = id.UserAgentFor
+	}
+	return out
 }

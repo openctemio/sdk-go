@@ -152,6 +152,7 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 	// host and must be checked again.
 	req.Header.Del("Proxy-Authorization")
 	req.Header.Del("Proxy-Connection")
+	f.scope.Identity.apply(req, req.URL.Host)
 	req.Close = true
 	out := &countWriter{w: up}
 	if err := req.Write(out); err != nil {

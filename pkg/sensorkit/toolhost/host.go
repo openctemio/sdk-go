@@ -318,7 +318,7 @@ func (h *Host) lifecycle(ctx context.Context, m tool.Manifest, task tool.Task, r
 	}
 	start := time.Now()
 	started := map[string]any{"tool": m.Name, "tool_version": m.Version, "targets": len(task.Targets), "capability": task.Capability}
-	if mg, _ := effectiveHTTP(m, h.Policy, orgPolicyFor(m, task), sendsHTTPToTargets(m, task)); mg != nil && mg.eff.String() != "" {
+	if mg, _ := effectiveHTTP(m, h.Policy, orgPolicyFor(m, task), sendsHTTPToTargets(m, task), taskHosts(task)); mg != nil && mg.eff.String() != "" {
 		s := mg.eff.String()
 		// What the tool's requests look like to the targets (tool.yaml http),
 		// recorded with the task.
@@ -424,6 +424,9 @@ type prepared struct {
 	egress core.EgressDialer
 	// applied is the identification the task's requests carry (nil: none).
 	applied *tool.AppliedIdentity
+	// inject is the identification the task's forwarder puts on every
+	// request, for a tool that cannot (nil: the tool carries it).
+	inject *egress.Identity
 	// secretKey is Host.SecretFingerprintKey.
 	secretKey []byte
 }
@@ -499,7 +502,7 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	// {{http.headers:-flag}}), so it never reaches a passive source, a
 	// vendor API or a registry. The organization's TLS rule still applies.
 	org := orgPolicyFor(m, task)
-	mg, ierr := effectiveHTTP(m, h.Policy, org, sendsHTTPToTargets(m, task))
+	mg, ierr := effectiveHTTP(m, h.Policy, org, sendsHTTPToTargets(m, task), taskHosts(task))
 	if ierr != nil {
 		return nil, ierr, nil
 	}
@@ -509,8 +512,23 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	}
 	task.HTTP, task.OrgHTTP = mg.eff, nil
 	applied := mg.applied
-	if ierr := checkIdentity(m, task); ierr != nil {
+	// The forwarder can carry the identification for a tool that cannot
+	// only where it is the tool's sole way out: a sandbox that confines
+	// the network of a tool that reaches its targets.
+	canInject := m.Permissions.Network == tool.NetTargets && h.backend().Status().NetworkEnforced
+	inject, ierr := checkIdentity(m, task, canInject)
+	if ierr != nil {
 		return nil, ierr, nil
+	}
+	var injected *egress.Identity
+	if applied != nil && task.Identity != nil {
+		applied.Carrier = tool.CarrierTool
+	}
+	if inject {
+		injected = forwarderIdentity(task.Identity)
+		applied.Carrier = tool.CarrierForwarder
+		// The forwarder sets each host's own User-Agent on every request.
+		applied.UserAgentReason = ""
 	}
 	contentPaths, err := tool.CheckTaskContent(m, task, h.ContentRoot)
 	if err != nil {
@@ -518,7 +536,7 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	}
 	task.Egress = nil // kept in prepared only: it never travels with the task
 	p := &prepared{secretKey: h.SecretFingerprintKey, m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine, contentPaths: contentPaths,
-		targetRate: o.TargetRate, egress: egressDialer, applied: applied, oob: o.OOB}
+		targetRate: o.TargetRate, egress: egressDialer, applied: applied, oob: o.OOB, inject: injected}
 	if task.IsRetest() && len(adm.Refused) > 0 {
 		// A retest never reaches a target the policy refused: its items
 		// are not sent and end unverifiable.

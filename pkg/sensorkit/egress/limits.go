@@ -114,7 +114,7 @@ func (f *Forwarder) guardFor(host string, port int) *guard {
 			return g
 		}
 	}
-	if f.scope.Web != nil {
+	if f.scope.Web != nil || f.scope.Identity != nil {
 		return g
 	}
 	return nil
@@ -322,6 +322,7 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 		}
 		req.Header.Del("Proxy-Authorization")
 		req.Header.Del("Proxy-Connection")
+		f.scope.Identity.apply(req, req.Host)
 		if err := req.Write(uw); err != nil {
 			f.observeErr(host, err)
 			return

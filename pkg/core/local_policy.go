@@ -40,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openctemio/contract/identity"
 	"golang.org/x/net/idna"
 	"gopkg.in/yaml.v3"
 )
@@ -195,6 +196,9 @@ type LocalPolicy struct {
 	// httpUserAgent replaces every tool's User-Agent ("": the tools');
 	// allowInsecureTLS false refuses tools that skip TLS verification.
 	httpUserAgent string
+	// httpUserAgents is http.user_agents: a rotation list, used instead of
+	// httpUserAgent (the two are exclusive).
+	httpUserAgents []string
 	// httpHeaders are http.headers, validated.
 	httpHeaders      []LocalHTTPHeader
 	allowInsecureTLS bool
@@ -263,6 +267,11 @@ type policyHTTP struct {
 	// UserAgent replaces every tool's User-Agent (a scanner the
 	// network's owners recognize in their logs).
 	UserAgent *string `yaml:"user_agent"`
+	// UserAgents is a rotation list instead of one User-Agent: each target
+	// host of a run gets one of them, the same for every request of the
+	// run (contract identity.SelectUserAgent). At most 200; exclusive
+	// with user_agent. The job's locked User-Agent is never replaced.
+	UserAgents []string `yaml:"user_agents"`
 	// AllowInsecureTLS false refuses tasks of tools that skip
 	// certificate verification. Default true.
 	AllowInsecureTLS *bool `yaml:"allow_insecure_tls"`
@@ -935,10 +944,27 @@ func (lp *LocalPolicy) readHTTP(h *policyHTTP) error {
 		}
 		lp.httpUserAgent = ua
 	}
+	if len(h.UserAgents) > 0 {
+		if h.UserAgent != nil {
+			return errors.New("http.user_agent and http.user_agents are exclusive: set one")
+		}
+		if err := identity.CheckUserAgents(h.UserAgents); err != nil {
+			return fmt.Errorf("http.user_agents: %w", err)
+		}
+		lp.httpUserAgents = slices.Clone(h.UserAgents)
+	}
 	if h.AllowInsecureTLS != nil {
 		lp.allowInsecureTLS = *h.AllowInsecureTLS
 	}
 	return nil
+}
+
+// HTTPUserAgents is the owner's rotation list (http.user_agents; nil none).
+func (lp *LocalPolicy) HTTPUserAgents() []string {
+	if !lp.Present() {
+		return nil
+	}
+	return slices.Clone(lp.httpUserAgents)
 }
 
 // HTTPHeaders are the identification headers the sensor's owner sets
@@ -1163,6 +1189,8 @@ type LocalPolicySummary struct {
 	// every tool ("" none). AllowInsecureTLS is http.allow_insecure_tls.
 	HTTPUserAgent    string `json:"http_user_agent,omitempty"`
 	AllowInsecureTLS bool   `json:"allow_insecure_tls"`
+	// HTTPUserAgents is the length of http.user_agents (0 none).
+	HTTPUserAgents int `json:"http_user_agents,omitempty"`
 	// HTTPHeaderNames are the names of http.headers; the values stay
 	// on the host.
 	HTTPHeaderNames []string `json:"http_header_names,omitempty"`
@@ -1191,6 +1219,7 @@ func (lp *LocalPolicy) Report() *LocalPolicyReport {
 		ManagedAccept:        lp.managedAccept,
 		HTTPUserAgent:        lp.httpUserAgent,
 		AllowInsecureTLS:     lp.allowInsecureTLS,
+		HTTPUserAgents:       len(lp.httpUserAgents),
 	}
 	for _, h := range lp.httpHeaders {
 		s.HTTPHeaderNames = append(s.HTTPHeaderNames, h.Name)

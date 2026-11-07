@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/openctemio/contract/identity"
 )
 
 // OrgHTTPPolicy is what the organization decides about its tools' requests
@@ -33,6 +35,31 @@ type OrgHTTPPolicy struct {
 	// job's tools send to their targets (nil none). A tool that cannot carry
 	// it (features.http_query) reports it "not applied".
 	Query *HTTPQuery `json:"query,omitempty"`
+	// UserAgents is a rotation list (at most identity.MaxUserAgents): each
+	// target host of the run gets one value of it, chosen by
+	// identity.SelectUserAgent with UserAgentKey, the same for every
+	// request of the run to that host. UserAgent then holds the list's
+	// first value, for a sensor that predates rotation. UserAgentLocked
+	// locks the whole list: the sensor-local layer cannot replace it.
+	UserAgents []string `json:"user_agents,omitempty"`
+	// UserAgentKey is the rotation key: the scan run's id (the job's id
+	// for a job outside a run). Not a secret.
+	UserAgentKey string `json:"user_agent_key,omitempty"`
+	// IdentificationRequired: every HTTP request the job's tools send to
+	// their targets must carry the job's identification headers and query
+	// parameter. A task whose tool cannot carry them, on a sensor that
+	// cannot add them at its forwarder, is refused before it starts; a job
+	// that requires identification but carries no header and no query
+	// parameter is refused too. A platform layer, the organization or a
+	// program sets it; no lower layer clears it.
+	IdentificationRequired bool `json:"identification_required,omitempty"`
+}
+
+// HasIdentification reports whether the policy carries an identification
+// header or query parameter (the User-Agent is not identification: it may
+// rotate).
+func (p *OrgHTTPPolicy) HasIdentification() bool {
+	return p != nil && (len(p.Headers) > 0 || p.Query != nil)
 }
 
 // HTTPQuery is a query parameter the organization adds to its scan
@@ -110,6 +137,12 @@ func (p *OrgHTTPPolicy) validate(maxHeaders int) error {
 	}
 	if len(p.LockedHeaders) > maxHeaders {
 		return fmt.Errorf("http_policy.locked_headers: at most %d names", maxHeaders)
+	}
+	if err := identity.CheckUserAgents(p.UserAgents); err != nil {
+		return fmt.Errorf("http_policy.user_agents: %w", err)
+	}
+	if err := identity.CheckKey(p.UserAgentKey); err != nil {
+		return fmt.Errorf("http_policy.user_agent_key: %w", err)
 	}
 	return p.Query.Validate()
 }

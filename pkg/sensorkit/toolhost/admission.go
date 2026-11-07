@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openctemio/contract/identity"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
@@ -119,6 +120,17 @@ func Admit(ctx context.Context, m tool.Manifest, task tool.Task, pol Policy, mod
 // sensor that predates a part of it ignores the fields it does not know.
 const CapabilityHTTPIdentity = "http.identity@1"
 
+// CapabilityHTTPIdentityRequired is the capability a sensor advertises,
+// with CapabilityHTTPIdentity, when its tool host also enforces the job's
+// required identification (core.OrgHTTPPolicy.IdentificationRequired: a
+// task whose tool cannot carry the headers and the query parameter, on a
+// sandbox that cannot add them at the forwarder, is refused before any
+// request) and sends each target host its own value of a User-Agent
+// rotation list (user_agents, user_agent_key). A sensor without it would
+// ignore those fields, so the platform gives a job that requires
+// identification only to a sensor that reports it.
+const CapabilityHTTPIdentityRequired = "http.identity.required@1"
+
 // HTTPPolicy is a policy that decides about the tools' requests
 // (*core.LocalPolicy, policy v1): a User-Agent that replaces every tool's,
 // and whether a tool may skip TLS verification.
@@ -131,6 +143,88 @@ type HTTPPolicy interface {
 // (*core.LocalPolicy, policy v1).
 type HTTPHeaderPolicy interface {
 	HTTPHeaders() []core.LocalHTTPHeader
+}
+
+// HTTPUserAgentsPolicy is a policy with the sensor owner's User-Agent
+// rotation list (*core.LocalPolicy, http.user_agents).
+type HTTPUserAgentsPolicy interface {
+	HTTPUserAgents() []string
+}
+
+// userAgentsInForce are the User-Agent values a task's requests carry and
+// the layer they came from: the sensor owner's (http.user_agents, else
+// localUA) win over the job's unless the job locks its own; a list is
+// replaced whole, never merged. job is the job's own values (nil none).
+func userAgentsInForce(pol Policy, localUA string, org *core.OrgHTTPPolicy) (list []string, source string, job []string) {
+	var local []string
+	if lp, ok := pol.(HTTPUserAgentsPolicy); ok && lp != nil {
+		local = lp.HTTPUserAgents()
+	}
+	if len(local) == 0 && localUA != "" {
+		local = []string{localUA}
+	}
+	if org != nil {
+		job = org.UserAgents
+		if len(job) == 0 && org.UserAgent != "" {
+			job = []string{org.UserAgent}
+		}
+	}
+	switch {
+	case len(job) > 0 && org.UserAgentLocked:
+		return job, tool.SourceJobLocked, job
+	case len(local) > 0:
+		return local, tool.SourceSensor, job
+	case len(job) > 0:
+		return job, tool.SourceJob, job
+	}
+	return nil, "", job
+}
+
+// taskHosts are the task's target hosts, canonical (contract
+// identity.CanonicalHost), each once, sorted.
+func taskHosts(task tool.Task) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range task.Targets {
+		h := identity.CanonicalHost(t.Host())
+		if h == "" {
+			h = identity.CanonicalHost(t.Value)
+		}
+		if h != "" && !seen[h] {
+			seen[h] = true
+			out = append(out, h)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// distinctUserAgents counts the different values the hosts get.
+func distinctUserAgents(key string, hosts, list []string) int {
+	seen := map[string]bool{}
+	for _, h := range hosts {
+		seen[identity.SelectUserAgent(key, h, list)] = true
+	}
+	return len(seen)
+}
+
+// userAgentGap is why a tool cannot put a User-Agent on its requests ("":
+// it can): it declares no features.http_identity and its argv passes no
+// {{http.user_agent}}. Only an exec tool can lack both; a tool in the
+// sensor's process sends through Context.HTTP, which sets it.
+func userAgentGap(m tool.Manifest) string {
+	if m.Features != nil && m.Features.HTTPIdentity {
+		return ""
+	}
+	if m.Run == nil || m.Run.Profile != tool.ProfileExec {
+		return ""
+	}
+	for _, a := range m.Run.Argv {
+		if slices.Contains(tool.ArgvPlaceholders(a), "http.user_agent") {
+			return ""
+		}
+	}
+	return fmt.Sprintf("%s cannot set a User-Agent (no features.http_identity, no {{http.user_agent}} in its argv): it sends its own unless the forwarder adds the identification", m.Name)
 }
 
 // httpMerge is the result of merging the job's identification with the
@@ -157,7 +251,7 @@ type httpMerge struct {
 //
 // More than maxOrgHTTPHeaders names in all refuse the task, naming the
 // cap; nothing is dropped. nil eff when nothing is set.
-func effectiveHTTP(m tool.Manifest, pol Policy, org *core.OrgHTTPPolicy, sendsHTTP bool) (*httpMerge, *tool.Error) {
+func effectiveHTTP(m tool.Manifest, pol Policy, org *core.OrgHTTPPolicy, sendsHTTP bool, hosts []string) (*httpMerge, *tool.Error) {
 	var eff *tool.HTTPSpec
 	if m.HTTP != nil {
 		c := *m.HTTP
@@ -176,35 +270,33 @@ func effectiveHTTP(m tool.Manifest, pol Policy, org *core.OrgHTTPPolicy, sendsHT
 	if !allowInsecure && skips {
 		return nil, refusedErr("the local policy forbids skipping TLS verification (http.allow_insecure_tls: false); %s sets tls.insecure_skip_verify", m.Name)
 	}
+	if org != nil && org.AllowInsecureTLS != nil && !*org.AllowInsecureTLS && skips {
+		return nil, refusedErr("the organization's policy forbids skipping TLS verification; %s sets tls.insecure_skip_verify", m.Name)
+	}
 	applied := &tool.AppliedIdentity{Tool: m.Name}
-	uaSource := ""
-	if ua != "" {
-		uaSource = tool.SourceSensor
-	}
+	userAgents, uaSource, job := userAgentsInForce(pol, ua, org)
+	key := ""
 	if org != nil {
-		if org.AllowInsecureTLS != nil && !*org.AllowInsecureTLS && skips {
-			return nil, refusedErr("the organization's policy forbids skipping TLS verification; %s sets tls.insecure_skip_verify", m.Name)
-		}
-		// The local policy's User-Agent wins over the organization's,
-		// unless the job locks it.
-		if org.UserAgent != "" && (ua == "" || org.UserAgentLocked) {
-			ua, uaSource = org.UserAgent, tool.SourceJob
-			if org.UserAgentLocked {
-				uaSource = tool.SourceJobLocked
-			}
-		}
+		key = org.UserAgentKey
 	}
-	if ua != "" {
+	// The value a tool that takes one User-Agent per process gets: the
+	// one of the task's first target host.
+	first := ""
+	if len(hosts) > 0 {
+		first = hosts[0]
+	}
+	taskUA := identity.SelectUserAgent(key, first, userAgents)
+	if taskUA != "" {
 		if eff == nil {
 			eff = &tool.HTTPSpec{}
 		}
-		eff.UserAgent = ua
+		eff.UserAgent = taskUA
 	}
-	var local []core.LocalHTTPHeader
+	var localHeaders []core.LocalHTTPHeader
 	if hh, ok := pol.(HTTPHeaderPolicy); ok && hh != nil && sendsHTTP {
-		local = hh.HTTPHeaders()
+		localHeaders = hh.HTTPHeaders()
 	}
-	merged, err := mergeIdentityHeaders(org, local)
+	merged, err := mergeIdentityHeaders(org, localHeaders)
 	if err != nil {
 		return nil, refusedErr("%v", err)
 	}
@@ -239,23 +331,42 @@ func effectiveHTTP(m tool.Manifest, pol Policy, org *core.OrgHTTPPolicy, sendsHT
 	id := &tool.Identity{Headers: idHeaders}
 	// The identification's User-Agent is the job's, or the owner's when the
 	// owner's wins and the job also set one (the job's identification names
-	// a User-Agent: the owner's replaces it).
-	if org != nil && org.UserAgent != "" && eff != nil {
-		id.UserAgent = eff.UserAgent
+	// a User-Agent: the owner's replaces it). A rotation list travels whole
+	// with its key, so each request gets its host's value.
+	if len(job) > 0 {
+		id.UserAgent = taskUA
 	}
-	if eff != nil && eff.UserAgent != "" && uaSource != "" {
-		applied.UserAgent, applied.UserAgentSource = eff.UserAgent, uaSource
+	if len(userAgents) > 1 && sendsHTTP {
+		id.UserAgents, id.UserAgentKey = slices.Clone(userAgents), key
+		applied.UserAgentPool = len(userAgents)
+		if spread := distinctUserAgents(key, hosts, userAgents); spread > 1 {
+			applied.UserAgentReason = fmt.Sprintf("the task spans %d hosts with %d different User-Agents: requests through the tool host's HTTP client or the forwarder carry each host's own; a tool that takes one User-Agent per process sends %q to all", len(hosts), spread, taskUA)
+		}
+	}
+	if taskUA != "" {
+		applied.UserAgent, applied.UserAgentSource = taskUA, uaSource
+		if why := userAgentGap(m); why != "" && sendsHTTP {
+			applied.UserAgentReason = why
+		}
+	}
+	if org != nil && org.IdentificationRequired && sendsHTTP {
+		id.Required, applied.Required = true, true
 	}
 	if org != nil && org.Query != nil {
 		q := &tool.AppliedQuery{Name: org.Query.Name, Value: org.Query.Value}
-		if carriesQuery(m) {
+		switch {
+		case carriesQuery(m):
 			id.Query, q.Applied = org.Query, true
-		} else {
+		case id.Required:
+			// The forwarder may carry it (checkIdentity decides, and
+			// refuses the task when nothing can).
+			id.Query, q.Applied = org.Query, true
+		default:
 			q.Reason = fmt.Sprintf("%s does not carry a query parameter (features.http_query)", m.Name)
 		}
 		applied.Query = q
 	}
-	if id.Empty() {
+	if id.Empty() && !id.Required {
 		id = nil
 	}
 	if id == nil && applied.UserAgent == "" && len(applied.Headers) == 0 && applied.Query == nil {
@@ -351,36 +462,65 @@ func refusedErr(format string, args ...any) *tool.Error {
 	return tool.AsError(tool.Refused(fmt.Sprintf(format, args...)))
 }
 
-// checkIdentity refuses a task whose identification the tool cannot put on
-// every request: a networked tool must declare features.http_identity, or
-// be an exec-profile tool whose argv passes the User-Agent
-// ({{http.user_agent}}) and the headers ({{http.headers:-flag}}) it is
-// given. A tool that would probe without the identification never starts
-// (CapabilityHTTPIdentity).
-func checkIdentity(m tool.Manifest, task tool.Task) *tool.Error {
-	if !task.Identity.NeedsHeaders() || !sendsHTTPToTargets(m, task) {
-		return nil
+// checkIdentity decides who puts the task's identification on its
+// requests, or refuses the task. The tool carries it when it can: a
+// networked tool that declares features.http_identity, or an exec-profile
+// tool whose argv passes the User-Agent ({{http.user_agent}}) and the
+// headers ({{http.headers:-flag}}) it is given; and for the query
+// parameter features.http_query or {{http.query:-flag}}. Otherwise the
+// task's forwarder adds it to every request (inject true) when canInject:
+// the sandbox confines the network, so the forwarder is the tool's only way
+// out and it then guards every connection (TLS terminated, anything that is
+// not HTTP/1.x refused). Otherwise the task is refused: a tool that would
+// probe without the identification never starts (CapabilityHTTPIdentity).
+//
+// A job that requires identification (Identity.Required) is refused when
+// it carries no header and no query parameter, and its query parameter is
+// carried or the task refused, like its headers. Without the requirement a
+// query parameter the tool cannot carry is reported "not applied".
+func checkIdentity(m tool.Manifest, task tool.Task, canInject bool) (inject bool, ierr *tool.Error) {
+	id := task.Identity
+	if id == nil || !sendsHTTPToTargets(m, task) {
+		return false, nil
 	}
+	if id.Required && len(id.Headers) == 0 && id.Query == nil {
+		return false, refusedErr("the job requires identification but carries no identification header or query parameter: set one at the platform, organization or program layer")
+	}
+	headersOK := !id.NeedsHeaders() || carriesHeaders(m, id)
+	queryOK := !id.Required || id.Query == nil || carriesQuery(m)
+	if headersOK && queryOK {
+		return false, nil
+	}
+	if canInject {
+		return true, nil
+	}
+	if !headersOK {
+		return false, refusedErr("%s cannot send the job's identification (User-Agent and headers) on every request: it declares no features.http_identity, and this sensor cannot add it at its forwarder (the sandbox does not confine the network)", m.Name)
+	}
+	return false, refusedErr("%s cannot carry the query parameter %s the job requires on every request (features.http_query or {{http.query:-flag}}), and this sensor cannot add it at its forwarder (the sandbox does not confine the network); no request is sent", m.Name, id.Query.Name)
+}
+
+// carriesHeaders reports whether the tool puts the identification's
+// User-Agent and headers on its requests itself.
+func carriesHeaders(m tool.Manifest, id *tool.Identity) bool {
 	if m.Features != nil && m.Features.HTTPIdentity {
-		return nil
+		return true
 	}
-	if m.Run != nil && m.Run.Profile == tool.ProfileExec {
-		var ua, headers bool
-		for _, a := range m.Run.Argv {
-			for _, name := range tool.ArgvPlaceholders(a) {
-				if name == "http.user_agent" {
-					ua = true
-				}
-				if _, ok := tool.HeaderArgs(name); ok {
-					headers = true
-				}
+	if m.Run == nil || m.Run.Profile != tool.ProfileExec {
+		return false
+	}
+	var ua, headers bool
+	for _, a := range m.Run.Argv {
+		for _, name := range tool.ArgvPlaceholders(a) {
+			if name == "http.user_agent" {
+				ua = true
+			}
+			if _, ok := tool.HeaderArgs(name); ok {
+				headers = true
 			}
 		}
-		if (task.Identity.UserAgent == "" || ua) && (len(task.Identity.Headers) == 0 || headers) {
-			return nil
-		}
 	}
-	return refusedErr("%s cannot send the job's identification (User-Agent and headers) on every request: it declares no features.http_identity", m.Name)
+	return (id.UserAgent == "" || ua) && (len(id.Headers) == 0 || headers)
 }
 
 // sendsHTTPToTargets reports whether the task may send HTTP requests to
