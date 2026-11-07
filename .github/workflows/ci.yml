@@ -293,37 +293,6 @@ jobs:
           }
           exit 0  # the refused install left its exit status behind
 
-      - name: TEMP probe Mark-of-the-Web on downloads
-        continue-on-error: true
-        shell: powershell
-        run: |
-          $u = 'https://github.com/openctemio/sdk-go/releases/download/v0.48.0/openctem_0.48.0_linux_amd64.tar.gz'
-          $d = Join-Path $env:RUNNER_TEMP 'motw'; New-Item -ItemType Directory $d | Out-Null
-          $PSVersionTable.PSVersion.ToString()
-          [Environment]::OSVersion.VersionString
-          Invoke-WebRequest -UseBasicParsing $u -OutFile "$d\iwr.bin"
-          curl.exe -sSL -o "$d\curl.bin" $u
-          (New-Object Net.WebClient).DownloadFile($u, "$d\webclient.bin")
-          Start-BitsTransfer -Source $u -Destination "$d\bits.bin" -ErrorAction SilentlyContinue
-          foreach ($f in 'iwr','curl','webclient','bits') { $s = Get-Item "$d\$f.bin" -Stream Zone.Identifier -ErrorAction SilentlyContinue; "MOTW $f (powershell 5.1): " + [bool]$s }
-          Set-Content -Path "$d\marked.zip:Zone.Identifier" -Value "[ZoneTransfer]`r`nZoneId=3"
-          Compress-Archive -Path "$d\iwr.bin" -DestinationPath "$d\z.zip"
-          Set-Content -Path "$d\z.zip:Zone.Identifier" -Value "[ZoneTransfer]`r`nZoneId=3"
-          Expand-Archive "$d\z.zip" -DestinationPath "$d\x"
-          "MOTW propagated by Expand-Archive: " + [bool](Get-Item "$d\x\iwr.bin" -Stream Zone.Identifier -ErrorAction SilentlyContinue)
-          Unblock-File "$d\z.zip"
-          "MOTW after Unblock-File: " + [bool](Get-Item "$d\z.zip" -Stream Zone.Identifier -ErrorAction SilentlyContinue)
-
-      - name: TEMP probe Mark-of-the-Web (pwsh 7)
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $u = 'https://github.com/openctemio/sdk-go/releases/download/v0.48.0/openctem_0.48.0_linux_amd64.tar.gz'
-          $d = Join-Path $env:RUNNER_TEMP 'motw7'; New-Item -ItemType Directory $d | Out-Null
-          $PSVersionTable.PSVersion.ToString()
-          Invoke-WebRequest $u -OutFile "$d\iwr.bin"
-          "MOTW iwr (pwsh 7): " + [bool](Get-Item "$d\iwr.bin" -Stream Zone.Identifier -ErrorAction SilentlyContinue)
-
       - name: go install from the module proxy (no replace directives)
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         shell: pwsh
