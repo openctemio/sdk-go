@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Sensor protocol v3 (openctem api RFC-059) in sdk-go:
-#   1. proto/sensor-v3 is a byte-for-byte copy of the platform's
-#      api/proto/openctem/sensor/v3/sensor.proto (openctemio/openctem,
-#      branch PROTO_UPSTREAM_REF, default develop);
+#   1. proto/sensor-v3 is a copy of the platform's
+#      server/proto/openctem/sensor/v3/sensor.proto (openctemio/openctem,
+#      branch PROTO_UPSTREAM_REF, default develop; api/proto before the
+#      platform's backend directory rename), equal except the go_package
+#      option, which names the platform's Go package (buf.gen.yaml sets ours);
 #   2. buf lint;
 #   3. the committed pkg/sensorproto/v3 is what buf generate writes.
 #
@@ -15,7 +17,8 @@ BUF_SHA256=8f2986298ad08f0cc1bf999b9797b7c383adf32d7edf0f73d6f1e1a701baeac1
 PROTOC_GEN_GO_VERSION=v1.36.12
 PROTOC_GEN_CONNECT_GO_VERSION=v1.21.0
 UPSTREAM_REF="${PROTO_UPSTREAM_REF:-develop}"
-UPSTREAM="https://raw.githubusercontent.com/openctemio/openctem/${UPSTREAM_REF}/api/proto/openctem/sensor/v3/sensor.proto"
+UPSTREAM_BASE="https://raw.githubusercontent.com/openctemio/openctem/${UPSTREAM_REF}"
+UPSTREAM_FILE="proto/openctem/sensor/v3/sensor.proto"
 
 cd "$(dirname "$0")/.."
 root="$(pwd)"
@@ -49,14 +52,20 @@ echo "== the .proto is the platform's ($UPSTREAM_REF)"
 upstream="$(mktemp)"
 out="$(mktemp -d)"
 trap 'find "$out" -delete; rm -f "$upstream"' EXIT
-if curl -fsSL -o "$upstream" "$UPSTREAM"; then
-  if ! cmp -s "$upstream" proto/sensor-v3/openctem/sensor/v3/sensor.proto; then
+fetched=""
+for dir in server api; do
+  if curl -fsSL -o "$upstream" "$UPSTREAM_BASE/$dir/$UPSTREAM_FILE" 2>/dev/null; then fetched="$dir"; break; fi
+done
+no_go_package() { grep -v '^option go_package = ' "$1"; }
+if [ -n "$fetched" ]; then
+  echo "compared with $UPSTREAM_REF:$fetched/$UPSTREAM_FILE"
+  if ! cmp -s <(no_go_package "$upstream") <(no_go_package proto/sensor-v3/openctem/sensor/v3/sensor.proto); then
     diff -u "$upstream" proto/sensor-v3/openctem/sensor/v3/sensor.proto || true
     echo "::error::proto/sensor-v3 differs from openctem $UPSTREAM_REF: copy it again and run scripts/check-proto-v3.sh --generate"
     exit 1
   fi
 else
-  echo "::warning::could not fetch $UPSTREAM; the copy was not compared"
+  echo "::warning::could not fetch $UPSTREAM_FILE from openctem $UPSTREAM_REF (server/ or api/); the copy was not compared"
 fi
 
 echo "== buf lint"

@@ -6,7 +6,7 @@
 // leaves the sensor host (OpenCTEM research/26, F3/F4: values of non-secret
 // settings are a later phase, secret values never).
 //
-// Design: https://github.com/openctemio/openctem/blob/develop/api/docs/rfcs/RFC-033-sensor-manifest.md
+// Design: https://github.com/openctemio/openctem/blob/develop/server/docs/rfcs/RFC-033-sensor-manifest.md
 // (config report section) and OpenCTEM research/26.
 //
 // Stability: Stable (docs/STABILITY.md).
