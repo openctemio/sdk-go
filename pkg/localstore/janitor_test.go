@@ -537,3 +537,23 @@ func TestHighWatermarkNeedsAnAbsoluteFloorToo(t *testing.T) {
 		t.Fatalf("default HighFreeBytes %d", d)
 	}
 }
+
+// The low mark's share of the volume is capped: 5 % of 2 TiB stopped a
+// sensor with 100 GiB free.
+func TestDiskLowShareIsCapped(t *testing.T) {
+	const gib = uint64(1) << 30
+	for _, tc := range []struct {
+		free, total uint64
+		want        DiskLevel
+	}{
+		{free: 90 * gib, total: 2048 * gib, want: DiskOK},
+		{free: 7 * gib, total: 2048 * gib, want: DiskLow},
+		{free: 1 * gib, total: 30 * gib, want: DiskLow},
+	} {
+		sp := space{freeBytes: tc.free, totalBytes: tc.total, freeFiles: 1e6, totalFiles: 2e6}
+		s := openT(t, t.TempDir(), func(o *Options) { o.space = func(string) (space, bool) { return sp, true } })
+		if got := s.Disk().Level; got != tc.want {
+			t.Fatalf("%d GiB free of %d GiB: %s, want %s", tc.free/gib, tc.total/gib, got, tc.want)
+		}
+	}
+}
