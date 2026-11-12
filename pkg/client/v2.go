@@ -145,6 +145,12 @@ type V2Progress struct {
 	ReportID string `json:"report_id"`
 	// Unbound: the command is gone; the report is sent unsolicited.
 	Unbound bool `json:"unbound,omitempty"`
+	// LateCommand and LateLeaseEpoch are the command and lease epoch an
+	// Unbound report was made for (0: the epoch was not known). They go
+	// with the report as its provenance (protov2.HeaderLateCommand), so the
+	// platform can refuse the late results of a run it handed out again.
+	LateCommand    string `json:"late_command,omitempty"`
+	LateLeaseEpoch int    `json:"late_lease_epoch,omitempty"`
 	// SegFindings and SegBytes cap the segments after a 413 (0: the
 	// server's limits). Each 413 halves the segment that was refused.
 	SegFindings int `json:"seg_findings,omitempty"`
@@ -555,10 +561,25 @@ func (c *Client) PushResultsV2(ctx context.Context, report *ctis.Report, opts *V
 			// Lost while sending: never re-sent unbound.
 			return nil, err
 		case ve.ProblemName() == protov2.ProblemCommandNotFound && commandID != "":
+			// Sent again without the command, but never anonymously: the
+			// command and the epoch the run held it under go with it, so
+			// the platform can tell a late report of a closed command from
+			// one of a run it took back and handed out again.
 			p.Unbound = true
+			p.LateCommand, p.LateLeaseEpoch = commandID, c.reportEpoch(commandID, plan.epoch)
 			if rerr := restart("its command is no longer open on the platform"); rerr != nil {
 				return nil, errors.Join(err, rerr)
 			}
+		case ve.ProblemName() == protov2.ProblemLeaseSuperseded:
+			// The platform handed the run out again; the run that replaced
+			// it reports for the command. Final: kept, not re-sent.
+			late := p.LateCommand
+			if late == "" {
+				late = opts.CommandID
+			}
+			logf("report %s: not delivered: the platform handed command %s out again (lease epoch %d superseded); the run that replaced it reports for it",
+				p.ReportID, late, p.LateLeaseEpoch)
+			return nil, err
 		case ve.ProblemName() == protov2.ProblemReportExpired,
 			ve.ProblemName() == protov2.ProblemSegmentSetMismatch,
 			ve.ProblemName() == protov2.ProblemSegmentHeaderMismatch,
@@ -610,18 +631,27 @@ type v2Plan struct {
 	epoch int
 }
 
+// reportEpoch is the lease epoch a report of commandID states: the stored
+// report's (epoch > 0), else the one the command is held under now (0: none
+// known).
+func (c *Client) reportEpoch(commandID string, epoch int) int {
+	if epoch > 0 {
+		return epoch
+	}
+	return c.leases.epoch(commandID)
+}
+
 // pushV2Once plans and sends the report under p.ReportID.
 func (c *Client) pushV2Once(ctx context.Context, report *ctis.Report, limits protov2.Limits, commandID string,
 	p *V2Progress, save func() error, plan v2Plan) (*protov2.Status, error) {
 	// A bound report states the lease epoch its command is held under, so
 	// the platform refuses the results of a run it has handed out again.
 	var lease http.Header
-	if commandID != "" {
-		epoch := plan.epoch
-		if epoch <= 0 {
-			epoch = c.leases.epoch(commandID)
-		}
-		lease = resultsLeaseHeader(epoch)
+	switch {
+	case commandID != "":
+		lease = resultsLeaseHeader(c.reportEpoch(commandID, plan.epoch))
+	case p.LateCommand != "":
+		lease = lateReportHeader(p.LateCommand, p.LateLeaseEpoch)
 	}
 	r := *report
 	r.Version, r.Schema = ctis.SchemaVersion, ctis.SchemaURL

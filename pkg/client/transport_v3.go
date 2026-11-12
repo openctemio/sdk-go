@@ -103,7 +103,10 @@ func (t *v3RoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		return t.next.RoundTrip(req)
 	}
 	rest := strings.TrimPrefix(req.URL.Path, t.prefix)
-	if !v3Carries(req.Method, rest) {
+	if !v3Carries(req.Method, rest) || req.Header.Get(protov2.HeaderLateCommand) != "" {
+		// A late report's provenance has no v3 field yet: v2 HTTPS
+		// carries it, so the platform can refuse a superseded run's
+		// results whatever the binding.
 		return t.next.RoundTrip(req)
 	}
 	var body []byte

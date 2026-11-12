@@ -129,6 +129,19 @@ func resultsLeaseHeader(epoch int) http.Header {
 	return h
 }
 
+// lateReportHeader is the provenance of a report sent without a command
+// after the platform refused it bound: the command and the lease epoch the
+// run held it under (protov2.HeaderLateCommand). A v3 binding does not carry
+// it, so such a request stays on v2 HTTPS (v3RoundTripper).
+func lateReportHeader(commandID string, epoch int) http.Header {
+	h := http.Header{}
+	h.Set(protov2.HeaderLateCommand, commandID)
+	if epoch > 0 {
+		h.Set(protov2.HeaderLateLeaseEpoch, strconv.Itoa(epoch))
+	}
+	return h
+}
+
 // leaseLostError says that a complete or fail sent under a lease epoch was
 // refused because the command is no longer held under it. It unwraps to
 // the platform's answer, so IsCommandGone and the error classifiers see the
