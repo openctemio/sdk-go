@@ -29,6 +29,7 @@ import (
 	"github.com/openctemio/ctis/v2"
 
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/useragent"
 )
 
@@ -104,7 +105,9 @@ func (c *CIRunConfig) normalize() {
 		c.IDTokenVar = DefaultIDTokenVar
 	}
 	if c.HTTPClient == nil {
-		c.HTTPClient = &http.Client{Timeout: 30 * time.Second}
+		// No redirect is followed: the run token and the id token go only
+		// to the addresses configured for them.
+		c.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: httpsec.RefuseRedirects}
 	}
 }
 
