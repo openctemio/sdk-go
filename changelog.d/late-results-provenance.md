@@ -4,3 +4,4 @@
 - A platform that knows the headers can refuse a superseded run's late report with the new problem `lease-superseded` (`protov2.ProblemLeaseSuperseded`): the SDK treats it as final (the outbox keeps it as a dead letter, never re-sent under another report id) and logs which command and epoch were superseded. Platforms that do not know the headers ignore them: behaviour there is unchanged.
 - Such a report always goes over v2 HTTPS, also on a v3 binding, until the v3 protocol has fields for its provenance.
 - `client.V2Progress` gains `LateCommand` and `LateLeaseEpoch` (persisted by the outbox, so the provenance survives a restart).
+- The late headers are assertions by the sensor, not covered by the request signature (it covers only the method, path, query and `Content-Digest`): they stop the late results of an honest sensor, not a hostile one.

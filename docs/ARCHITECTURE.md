@@ -277,6 +277,12 @@ the outbox keeps the report queued until the platform serves v2.
 | 401 | delivery paused until the key is accepted (heartbeat) or replaced (`SetAPIKey`) |
 | other 4xx | refused: dead letter |
 
+The late headers are assertions by the sensor: the request signature of a
+key-bound sensor covers only the method, path, query and `Content-Digest`,
+not these headers. They let the platform stop the late results of an honest
+sensor whose run was taken back; they do not stop a hostile sensor, which can
+leave them out or state another command.
+
 **Outbox.** `Client.EnableOutbox(client.OutboxConfig{Dir: ...})` (the sensor
 does it by default in daemon mode) makes delivery durable (`pkg/outbox`):
 

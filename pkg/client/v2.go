@@ -558,8 +558,12 @@ func (c *Client) PushResultsV2(ctx context.Context, report *ctis.Report, opts *V
 		case ve.ProblemName() == protov2.ProblemLeaseSuperseded:
 			// The platform handed the run out again; the run that replaced
 			// it reports for the command. Final: kept, not re-sent.
+			late := p.LateCommand
+			if late == "" {
+				late = opts.CommandID
+			}
 			logf("report %s: not delivered: the platform handed command %s out again (lease epoch %d superseded); the run that replaced it reports for it",
-				p.ReportID, p.LateCommand, p.LateLeaseEpoch)
+				p.ReportID, late, p.LateLeaseEpoch)
 			return nil, err
 		case ve.ProblemName() == protov2.ProblemReportExpired,
 			ve.ProblemName() == protov2.ProblemSegmentSetMismatch,

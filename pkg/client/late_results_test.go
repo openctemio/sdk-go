@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -170,4 +171,65 @@ type panicSensorService struct {
 func isPermanent(err error) bool {
 	var p *outbox.PermanentError
 	return errors.As(err, &p)
+}
+
+// A late report whose epoch the sensor never knew (0) names its command but
+// states no epoch: "0" would read as a real epoch to the platform.
+func TestPushResultsV2_LateReportWithoutEpochOmitsTheEpochHeader(t *testing.T) {
+	if h := lateReportHeader(lateCmd, 0); h.Get(protov2.HeaderLateCommand) != lateCmd || len(h.Values(protov2.HeaderLateLeaseEpoch)) != 0 {
+		t.Fatalf("lateReportHeader(cmd, 0) = %v, want the command and no epoch", h)
+	}
+	lp := &latePlatform{}
+	srv := httptest.NewServer(http.HandlerFunc(lp.handler))
+	defer srv.Close()
+
+	c := New(&Config{BaseURL: srv.URL, APIKey: "k"})
+	if _, err := c.PushResultsV2(context.Background(), lateReport(), &V2PushOptions{CommandID: lateCmd}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	lp.mu.Lock()
+	defer lp.mu.Unlock()
+	if len(lp.unbound) == 0 {
+		t.Fatal("the report was never sent again unbound")
+	}
+	for i, h := range lp.unbound {
+		if h.Get(protov2.HeaderLateCommand) != lateCmd {
+			t.Errorf("unbound request %d lost its command", i)
+		}
+		if v := h.Values(protov2.HeaderLateLeaseEpoch); len(v) != 0 {
+			t.Errorf("unbound request %d states lease epoch %q, want none", i, v)
+		}
+	}
+}
+
+// A lease-superseded answer to a request that carried no late provenance
+// (the bound request itself) still names the command in the log line.
+func TestPushResultsV2_SupersededLogNamesTheCommand(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == protov2.PathPrefix+protov2.HelloPath {
+			w.Header().Set("Content-Type", protov2.MediaTypeJSON)
+			_ = json.NewEncoder(w).Encode(protov2.Hello{Protocol: 2,
+				Features:   []string{protov2.FeatureResults, protov2.FeatureResultsLeaseEpoch},
+				MediaTypes: []string{protov2.MediaTypeCTIS}})
+			return
+		}
+		w.Header().Set("Content-Type", protov2.MediaTypeProblem)
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(protov2.Problem{Type: protov2.ProblemTypeBase + string(protov2.ProblemLeaseSuperseded), Status: http.StatusConflict})
+	}))
+	defer srv.Close()
+
+	var logs []string
+	c := New(&Config{BaseURL: srv.URL, APIKey: "k"})
+	_, err := c.PushResultsV2(context.Background(), lateReport(), &V2PushOptions{
+		CommandID: lateCmd, LeaseEpoch: 3,
+		Logf: func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }})
+	var ve *V2Error
+	if !errors.As(err, &ve) || ve.ProblemName() != protov2.ProblemLeaseSuperseded {
+		t.Fatalf("err = %v, want lease-superseded", err)
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "superseded") || !strings.Contains(joined, lateCmd) {
+		t.Fatalf("the superseded log line does not name the command: %q", joined)
+	}
 }
