@@ -8,7 +8,11 @@
 //
 //   - each source has its own pace (one request per interval, shared by
 //     every lookup of the process) and a cool-down after a 429 or a
-//     Retry-After, so a busy sensor does not hammer a source;
+//     Retry-After (at most 15 minutes: it is shared by every organization
+//     the sensor serves), so a busy sensor does not hammer a source;
+//   - crt.sh may use only part of a lookup's time (all but a share of at
+//     least 25 s or 30 %, at most half), so a slow crt.sh still leaves Cert
+//     Spotter its turn and the lookup an answer listing both source states;
 //   - crt.sh gets a few attempts with jittered exponential back-off, and a
 //     server's Retry-After is honored within a bound;
 //   - every response body is capped and read as a stream, one row at a time:
@@ -70,10 +74,19 @@ const (
 )
 
 const (
-	crtshAttempts       = 3
-	retryBase           = 2 * time.Second
-	retryCap            = 30 * time.Second
-	maxRetryAfter       = 60 * time.Second
+	crtshAttempts = 3
+	retryBase     = 2 * time.Second
+	retryCap      = 30 * time.Second
+	maxRetryAfter = 60 * time.Second
+	// maxCoolDown bounds how long one source is left alone after a 429 or a
+	// Retry-After. The cool-down is shared by every organization the sensor
+	// serves (the quota is per address), so a source that asks for a day must
+	// not switch CT monitoring off for a day for all of them.
+	maxCoolDown = 15 * time.Minute
+	// fallbackReserve is the least share of a lookup's time left for Cert
+	// Spotter when crt.sh is slow (the share is at least 30 % of the time
+	// left, and never more than half of it).
+	fallbackReserve     = 25 * time.Second
 	certSpotterMaxPages = 10
 	// maxPaceWait is the longest a lookup waits for its turn at a source;
 	// a source cooling down for longer is reported rate_limited at once.
@@ -101,9 +114,10 @@ type Config struct {
 	CacheTTL     time.Duration
 	CacheBytes   int64
 
-	// now and sleep are replaced by tests.
-	now   func() time.Time
-	sleep func(ctx context.Context, d time.Duration) error
+	// now, sleep and fallbackMin are replaced by tests.
+	now         func() time.Time
+	sleep       func(ctx context.Context, d time.Duration) error
+	fallbackMin time.Duration
 }
 
 // Client runs CT lookups. It is safe for concurrent use.
@@ -152,6 +166,9 @@ func New(cfg Config) (*Client, error) {
 	if cfg.sleep == nil {
 		cfg.sleep = sleepCtx
 	}
+	if cfg.fallbackMin <= 0 {
+		cfg.fallbackMin = fallbackReserve
+	}
 	c := &Client{cfg: cfg, cache: newCache(cfg.CacheBytes)}
 	c.crtsh = &pacer{interval: cfg.Interval, now: cfg.now}
 	c.cs = &pacer{interval: cfg.Interval, now: cfg.now}
@@ -173,7 +190,11 @@ func (c *Client) Lookup(ctx context.Context, tenant string, in ctlookup.Input) (
 	}
 
 	var out ctlookup.Output
-	recs, st := c.queryCRTSH(ctx, in.Domain)
+	// crt.sh may use the lookup's time only up to a point: Cert Spotter keeps
+	// a share, so a slow crt.sh cannot leave the lookup with no answer.
+	crtCtx, stop := c.crtshContext(ctx)
+	recs, st := c.queryCRTSH(crtCtx, in.Domain)
+	stop()
 	if err := ctx.Err(); err != nil {
 		return ctlookup.Output{}, err
 	}
@@ -207,6 +228,26 @@ func (c *Client) Lookup(ctx context.Context, tenant string, in ctlookup.Input) (
 		}
 	}
 	return clean, nil
+}
+
+// crtshContext bounds the crt.sh part of a lookup: it ends early enough to
+// leave Cert Spotter a share of the time the lookup has (see splitBudget). A
+// lookup with no deadline, or with no fallback, is not bounded further.
+func (c *Client) crtshContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	dl, ok := ctx.Deadline()
+	if !ok || c.cfg.CertSpotterOff {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, splitBudget(time.Until(dl), c.cfg.fallbackMin))
+}
+
+// splitBudget is the time crt.sh may use of the remaining time of a lookup:
+// what is left after the fallback's share, which is at least minReserve and
+// at least 30 % of the remaining time, but never more than half of it.
+func splitBudget(remaining, minReserve time.Duration) time.Duration {
+	reserve := max(minReserve, remaining*3/10)
+	reserve = min(reserve, remaining/2)
+	return max(remaining-reserve, 0)
 }
 
 // capSize turns an answer whose encoding is over the contract's bound into
@@ -454,11 +495,16 @@ func (c *Client) queryCertSpotter(ctx context.Context, domain, after string) ([]
 			return nil, st
 		}
 		if got == 0 || lastID == "" {
-			break
+			// An empty page, or no cursor to continue from: what was listed
+			// is all there is.
+			return out, ctlookup.SourceStatus{Source: ctlookup.SourceCertSpotter, State: ctlookup.StateOK}
 		}
 		after = lastID
 	}
-	return out, ctlookup.SourceStatus{Source: ctlookup.SourceCertSpotter, State: ctlookup.StateOK}
+	// The last page was not empty and the page limit stopped the listing:
+	// the list is cut. A cut list would read as names that vanished, so none
+	// of it is used (the contract's rule for an answer over a cap).
+	return nil, ctlookup.SourceStatus{Source: ctlookup.SourceCertSpotter, State: ctlookup.StateTooLarge}
 }
 
 // Errors of one request.
@@ -539,7 +585,7 @@ func (c *Client) get(ctx context.Context, p *pacer, source, rawURL string, hdr h
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		ra := parseRetryAfter(resp.Header.Get("Retry-After"))
+		ra := min(parseRetryAfter(resp.Header.Get("Retry-After")), maxCoolDown)
 		if resp.StatusCode == http.StatusTooManyRequests || ra > 0 {
 			p.coolDown(max(ra, c.cfg.Interval*30))
 		}
