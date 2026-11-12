@@ -266,7 +266,7 @@ Admission of a verified job, in order (`pkg/core/command_poller.go:executeComman
 flowchart TD
     J["Signed job verified (JobGuard.Check)"] --> ST{"POST start accepted?"}
     ST -- "no" --> NR["not run, nothing reported"]
-    ST -- "yes" --> AJ{"admitJob: kill switch, no_local_policy when required,<br/>checks.allow, tools.allow, custom templates,<br/>ports, MaxScanTargets"}
+    ST -- "yes" --> AJ{"admitJob: kill switch, no_local_policy when required,<br/>checks.allow, tools.allow, custom templates,<br/>ports (config, settings layers, params), MaxScanTargets"}
     AJ -- "refused" --> F1["fail with Refusal layer, rule, detail"]
     AJ -- "ok" --> PT["checkTarget per target"]
     PT --> R{"checkHost: LookupIP"}
@@ -335,6 +335,71 @@ exec.SetScanTargetPolicy(&core.ScanTargetPolicy{
 |----------|--------|
 | `OPENCTEM_SDK_SCAN_ROOTS` | Allowed roots (`:`-separated) for the default policy |
 | `SENSOR_ALLOW_PRIVATE_TARGETS=1` | Allow RFC1918/ULA targets (`SENSOR_ALLOW_PRIVATE_TARGETS=1` — or its pre-rename name `AGENT_ALLOW_PRIVATE_TARGETS=1`, read with a deprecation warning — and `OPENCTEM_SDK_HTTPSEC_ALLOW_PRIVATE=1` are honored too; setting the sensor and agent names to different values refuses every target) |
+
+#### `ports.allow` applies wherever a job names ports
+
+`ports.allow` is the sensor owner's list of destination ports, a limit the
+platform cannot widen. A job can name ports in more places than its `config`,
+so the policy is applied at three points:
+
+| Point | What it reads | Refusal |
+|---|---|---|
+| Admission (`LocalPolicy.AdmitCommand`, rule `ports.allow`) | The job's `config` and `scanner_config`, the tenant's and the sensor's `settings_layers` (they reach the tool's settings like `config` does), and the capability's standard `params` | A port list outside the allow-list, an unreadable one (`full`, `top-100`), a top-N count (`top_ports`, `top_n`), a port-scan capability that names no ports |
+| The executor, before the scanner starts (`LocalPolicy.CheckResolvedPorts`) | The settings the tool will run with: every layer and the schema's defaults, resolved | The same, on the resolved values: a layer that overrides another, a schema default, a key the tool's manifest maps a standard param to |
+| The tool's forwarder (`egress.Scope.Ports`, from `LocalPolicy.AllowedPorts`) | Every connection of a task whose manifest network is `targets` | `port N not allowed`, recorded in `Outcome.Egress`; this holds for a redirect or a tool that ignores its settings |
+
+- **Which settings name ports.** A tool's manifest maps the capability's
+  `ports` (type `port_list`) and `top_n` standard params onto its own config
+  keys (`implements[].params`); the scanner reports them
+  (`core.PortSettingsProvider`, implemented by `toolcompat.AsScanner`), and
+  the policy follows them whatever they are called. The settings schema itself
+  has no marker for a port setting, so a setting no manifest declares is
+  recognised by its name: `ports`, `port`, `tcp_ports`, `port_range`,
+  `port_list` and similar are port lists, `top_ports`, `top_n` and names with
+  `top` and `ports` are top-N counts, written in snake_case, kebab-case,
+  camelCase or PascalCase (`portRange`, `TCPPorts`, `topPorts`), in a group
+  (`net.ports`) or in a list of objects (`services: [{port: 22}]`), up to 4
+  levels deep (deeper is refused).
+  `exclude_ports` and `skip_ports` narrow a scan and are not checked. A tool
+  that calls its port list something else must map the standard `ports` param
+  to it in its manifest.
+- **Top-N.** The sdk does not know a tool's top-N list, so a top-N count that
+  any layer sets is refused. A count that is only the tool's default is
+  refused too, unless the job names a port list, which the tool scans
+  instead.
+- **A port scan that names no ports** (capability `scan.ports`) runs the tool's
+  own default list and is refused with "name the ports in the job; the tool's
+  default list cannot be checked against the local policy's ports.allow". The
+  fix is to name the ports in the job's `ports` param.
+- **Port numbers** a job names are plain digits: `+22` and `0022` are
+  refused (a tool may read a leading zero as octal), in settings and in
+  targets.
+- **URL targets** name their port through the scheme. The default ports of
+  common schemes (`ftp` 21, `ssh` 22, `smtp` 25, `redis` 6379, `postgres`
+  5432 and others) are checked; a scheme without a known default and without
+  a port in the URL is refused under `ports.allow`.
+- **A port scanner's job** (a tool whose manifest implements `scan.ports`,
+  `core.PortScanImplementer`) must name its ports even when the job names no
+  capability or another one.
+- **Forwarder.** A tool that reaches a vendor's hosts or the internet through
+  the sensor's egress is not scanning its targets' ports, so `ports.allow`
+  does not restrict those classes.
+
+Not covered:
+
+- A setting under a name these rules do not recognise, which the tool's
+  manifest does not map to the standard `ports` param, is not checked at
+  admission or by the executor; the forwarder still refuses other ports for
+  a manifest tool whose network is `targets` or `resolver`.
+- Legacy (non-manifest) scanners and any traffic that does not go through
+  the forwarder are checked only at admission and by the executor.
+- Raw-socket scans (a SYN port scan) bypass the forwarder: they rely on
+  those checks and on the tool sandbox denying `CAP_NET_RAW`.
+- Network-protocol templates that name their own port are covered only at
+  the forwarder.
+- A platform job has no free-form argument path: `ScanOptions.ExtraArgs` is
+  not taken from a command payload, and a setting value substituted into a
+  manifest exec tool's argv is one element that may not start with `-`.
 
 #### A sensor without a local policy: follow the platform's scope or fail closed
 
@@ -834,7 +899,7 @@ first thing in `main`), which confines itself and then becomes the tool:
 
 | Manifest `permissions.network` | Forwarder scope |
 |---|---|
-| `targets` | The admitted targets only. Names are dialed at the addresses the local policy admitted (`core.LocalPolicy.AdmittedAddrs`) and never resolved again; those addresses are also admitted when the tool dials them itself (it resolved the name through the forwarder's DNS, which answers with them: a port scanner does), each address alone, with the same ports and limits as its names, never its range; IP and CIDR targets as given |
+| `targets` | The admitted targets only. Names are dialed at the addresses the local policy admitted (`core.LocalPolicy.AdmittedAddrs`) and never resolved again; those addresses are also admitted when the tool dials them itself (it resolved the name through the forwarder's DNS, which answers with them: a port scanner does), each address alone, with the same ports and limits as its names, never its range; IP and CIDR targets as given. Only on the local policy's `ports.allow` ports (`egress.Scope.Ports`) |
 | `vendor` | The manifest's vendor hosts, at public addresses |
 | `resolver` | No connection at all. DNS questions about the admitted targets are answered (A and AAAA from the admitted addresses, other record types from the sensor's resolver); any other name is NXDOMAIN |
 | `egress-proxy` | Any public address. Loopback, private ranges, link-local and cloud metadata addresses are refused |

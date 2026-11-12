@@ -329,6 +329,15 @@ func (h *Host) rateCeiling(p *prepared) float64 {
 	return c
 }
 
+// PortsPolicy is a Policy with a list of destination ports (*core.LocalPolicy,
+// ports.allow): the forwarder connects a task to its targets on those ports
+// only, so a tool cannot reach another one, however its settings or a
+// redirect got it there.
+type PortsPolicy interface {
+	// AllowedPorts returns the allowed destination ports; nil: every port.
+	AllowedPorts() []int
+}
+
 // taskScope is what a task may reach: its admitted targets (names at the
 // addresses the policy admitted), the manifest's vendor hosts, or any
 // public address for a tool that reaches the internet through the
@@ -338,6 +347,9 @@ func (h *Host) taskScope(ctx context.Context, m tool.Manifest, task tool.Task) e
 	switch m.Permissions.Network {
 	case tool.NetTargets, tool.NetResolver:
 		s.DNSOnly = m.Permissions.Network == tool.NetResolver
+		if pp, ok := h.Policy.(PortsPolicy); ok {
+			s.Ports = pp.AllowedPorts()
+		}
 		s.Limits = task.Limits
 		s.Web = task.WebScope
 		for _, t := range task.Targets {

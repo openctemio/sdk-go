@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/openctemio/contract/capability"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -198,6 +199,47 @@ func (s *toolScanner) SettingsSchema() *core.SettingsSchema {
 		return p.SettingsSchema()
 	}
 	return nil
+}
+
+// PortSettings are the config keys the tool takes ports through: where its
+// manifest maps the port_list and top_n standard params of the capabilities
+// it implements (core.PortSettingsProvider). The local policy's ports.allow
+// is checked against the settings under these keys, whatever they are
+// named.
+func (s *toolScanner) PortSettings() map[string]core.PortSettingKind {
+	var out map[string]core.PortSettingKind
+	for _, im := range s.m.Implements {
+		c, ok := capability.Lookup(im.Capability)
+		if !ok {
+			continue
+		}
+		for name, pm := range im.Params {
+			p, ok := c.Param(name)
+			if !ok {
+				continue
+			}
+			if k := core.PortParamKind(name, p.Type); k != core.PortSettingNone {
+				if out == nil {
+					out = map[string]core.PortSettingKind{}
+				}
+				out[pm.ConfigKey(name)] = k
+			}
+		}
+	}
+	return out
+}
+
+// ImplementsPortScan reports whether the tool's manifest lists the
+// scan.ports capability among the ones it implements
+// (core.PortScanImplementer): under ports.allow its jobs must name their
+// ports whatever capability they name.
+func (s *toolScanner) ImplementsPortScan() bool {
+	for _, im := range s.m.Implements {
+		if id, _, ok := capability.ParseRef(strings.TrimSpace(im.Capability)); ok && id == "scan.ports" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *toolScanner) Scan(ctx context.Context, target string, opts *core.ScanOptions) (*core.ScanResult, error) {
