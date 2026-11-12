@@ -19,6 +19,7 @@ package conformance
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -38,6 +39,7 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
+	"github.com/openctemio/sdk-go/pkg/sensorsig"
 )
 
 // Request is one request the fake received.
@@ -93,6 +95,11 @@ type FakePlatform struct {
 	V2 bool
 	// Limits are published on hello.
 	Limits protov2.Limits
+	// SignedJobs, when set, is the hello's job signer (listed with
+	// protov2.FeatureSignedJobs). The fake does not sign its commands.
+	SignedJobs *protov2.SignedJobs
+	// sensorKey: v2 requests signed by it are accepted (TrustSensorKey).
+	sensorKey ed25519.PublicKey
 	// Tools are the sensor's declared tools (empty: any).
 	Tools []string
 	// Control serves the api RFC-029 control plane on v2 (heartbeat,
@@ -620,12 +627,25 @@ func (f *FakePlatform) serve(w http.ResponseWriter, r *http.Request) {
 
 func (f *FakePlatform) authed(r *http.Request) bool {
 	f.mu.Lock()
-	key, v3 := f.APIKey, f.v3
+	key, v3, sensorKey := f.APIKey, f.v3, f.sensorKey
 	f.mu.Unlock()
 	if v3 != nil && v3.signedByTrusted(r) {
 		return true
 	}
+	if sensorKey != nil {
+		if p, err := sensorsig.Parse(r.Header); err == nil && p.Params.KeyID == sensorsig.Thumbprint(sensorKey) && p.Verify(r, sensorKey) == nil {
+			return true
+		}
+	}
 	return r.Header.Get("Authorization") == "Bearer "+key
+}
+
+// TrustSensorKey accepts v2 requests signed (RFC 9421) by pub, as the
+// platform does for a key-bound sensor.
+func (f *FakePlatform) TrustSensorKey(pub ed25519.PublicKey) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sensorKey = pub
 }
 
 // SetAPIKey replaces the accepted sensor key (a key rotation).
@@ -718,10 +738,15 @@ func (f *FakePlatform) v2(w http.ResponseWriter, r *http.Request, body []byte) {
 				features = append(features, protov2.FeatureLogs)
 			}
 		}
+		signedJobs := f.SignedJobs
+		if signedJobs != nil {
+			features = append(features, protov2.FeatureSignedJobs)
+		}
 		f.mu.Unlock()
 		h := protov2.Hello{
 			Protocol: 2, Features: features, MediaTypes: []string{protov2.MediaTypeCTIS},
 			Encodings: []string{"gzip", "zstd"}, Digests: []string{"sha-256"}, Limits: f.Limits,
+			SignedJobs: signedJobs,
 		}
 		f.mu.Lock()
 		h.TransportV3 = f.v3Hello()

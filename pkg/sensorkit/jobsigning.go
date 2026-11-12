@@ -11,6 +11,9 @@ import (
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/pairing"
+	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
 // JobSigningStateFile keeps, in the state directory, the last job sequence
@@ -92,6 +95,9 @@ func (k *Kit) resolveJobSigning() error {
 	// the platform on first use (a root or keys a compromised platform could
 	// have served) is not trusted next to it.
 	exclusive := keysFromFile || rootFromFile
+	if envKeys.Len() == 0 && root == "" {
+		k.pinSelfBoundSigner()
+	}
 	pinned := 0
 	if s.identity != nil && s.identity.JobSigningRoot != "" && !exclusive {
 		idRoot, err := jobsig.ParseRoot(s.identity.JobSigningRoot)
@@ -244,6 +250,80 @@ func (k *Kit) resolveJobSigning() error {
 		k.startKeySet(trust)
 	}
 	return nil
+}
+
+// selfBoundSignerTimeout bounds the hello read of pinSelfBoundSigner.
+const selfBoundSignerTimeout = 30 * time.Second
+
+// pinSelfBoundSigner pins the platform's job signer on first use for an
+// identity that has none because it never went through pairing: a sensor
+// that bound its own key from an API key (keybind.go; such an identity has
+// no platform pairing key). Pairing pins the signer from its signed grant;
+// a self-bound sensor had nothing, so it ran with signed jobs off, verified
+// no job and could use no job's secrets. Its first start against a platform
+// that signs jobs now pins the root of the platform's key set (or its signer
+// keys), with the same trust as the API key it bound with: the platform's
+// TLS identity. From then on signed jobs are required, and a later platform
+// compromise cannot swap the signer. A paired identity that pinned nothing
+// (paired to accept unsigned jobs) and a configured key or root are left
+// alone; a failed read leaves the sensor as it was until its next start.
+func (k *Kit) pinSelfBoundSigner() {
+	s := &k.s
+	id := s.identity
+	if id == nil || s.shared || id.PlatformKey != "" || id.JobSigningRoot != "" || len(id.JobSigningKeys) > 0 || k.client == nil {
+		return
+	}
+	if required, set, err := core.RequireSignedJobsFromEnv(nil); err == nil && set && !required {
+		// The operator turned signed jobs off for this sensor: a pin would
+		// stop it at start (a pin may only raise the requirement).
+		_, _ = fmt.Fprintf(k.errw, "Warning: %s=false: the platform's job signer is not pinned and jobs are not verified\n",
+			core.EnvRequireSignedJobs)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), selfBoundSignerTimeout)
+	defer cancel()
+	h, err := k.client.Hello(ctx)
+	if err != nil {
+		_, _ = fmt.Fprintf(k.errw, "Warning: the platform's job signer could not be read (%v); signed jobs stay off until the next start\n", err)
+		return
+	}
+	if h.SignedJobs == nil || !h.Supports(protov2.FeatureSignedJobs) {
+		return
+	}
+	keys, root, err := identity.JobSignerOnFirstUse(k.errw, &pairing.JobSigning{
+		PayloadType: h.SignedJobs.PayloadType, Keys: pairingKeys(h.SignedJobs.Keys), KeySet: h.SignedJobs.KeySet})
+	if err != nil || (len(keys) == 0 && root == "") {
+		return
+	}
+	next := *id
+	next.JobSigningKeys, next.JobSigningRoot = keys, root
+	if err := identity.NewStore(s.stateDir).Save(&next); err != nil {
+		// Used for this run anyway; the next start pins it again.
+		_, _ = fmt.Fprintf(k.errw, "Warning: the job signer is pinned for this run but the identity could not be saved: %v\n", err)
+	}
+	s.identity = &next
+	what := "keys " + strings.Join(jobKeyIDs(keys), ", ")
+	if root != "" {
+		what = "root " + root
+	}
+	_, _ = fmt.Fprintf(k.errw, "Job signer pinned on first use: %s (this sensor bound its own key, so no pairing pinned one); "+
+		"signed jobs are now required. To pin another signer, set %s, or pair the sensor again\n", what, EnvJobSigningRoot)
+}
+
+func pairingKeys(in []protov2.SignedJobKey) []pairing.JobKey {
+	out := make([]pairing.JobKey, 0, len(in))
+	for _, k := range in {
+		out = append(out, pairing.JobKey{KeyID: k.KeyID, Algorithm: k.Algorithm, PublicKey: k.PublicKey})
+	}
+	return out
+}
+
+func jobKeyIDs(keys []jobsig.PublicKey) []string {
+	ids := make([]string, 0, len(keys))
+	for _, k := range keys {
+		ids = append(ids, k.KeyID)
+	}
+	return ids
 }
 
 // startKeySet fetches the root's key set once at start. Without a valid

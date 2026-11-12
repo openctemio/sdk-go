@@ -769,6 +769,20 @@ func contentKeys(o PairOptions, granted *pairing.Identity) (platform, tenant []j
 // by the root given out of band (SENSOR_JOB_SIGNING_ROOT).
 var ErrJobSigningRootMismatch = errors.New("pairing: the platform's job-signing key set is not signed by SENSOR_JOB_SIGNING_ROOT")
 
+// JobSignerOnFirstUse returns the job signer's keys and key-set root to pin
+// from a platform's hello (sj), for an identity that has none: a sensor
+// that bound its own key from an API key (no signed pairing grant). The
+// rules are pairing's without an out-of-band root: each key's id is
+// recomputed, the root a valid key set names is pinned, and anything not
+// valid is left out with a warning on out. Nothing is returned when the
+// platform does not sign jobs.
+func JobSignerOnFirstUse(out io.Writer, sj *pairing.JobSigning) ([]jobsig.PublicKey, string, error) {
+	if out == nil {
+		out = io.Discard
+	}
+	return jobSigning(PairOptions{Out: out}, sj)
+}
+
 // jobSigning returns the job signer's keys and the root of the key set the
 // platform's signed grant states (the hello's signed_jobs block as it was
 // when the platform signed the grant). Each key's id is recomputed; one that
