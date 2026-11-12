@@ -120,7 +120,7 @@ func names(out ctlookup.Output) []string {
 func TestCRTSHAnswerIsBoundToTheDomain(t *testing.T) {
 	h := newHarness(t, serve(fixture(t, "crtsh_example.com.json")), status(500, ""), nil)
 	out := h.lookup(t, "tenant-a", "Example.com")
-	if want := []string{"api.example.com", "dev.example.com", "example.com", "www.example.com"}; !slices.Equal(names(out), want) {
+	if want := []string{"*.dev.example.com", "api.example.com", "example.com", "www.example.com"}; !slices.Equal(names(out), want) {
 		t.Fatalf("names %v, want %v", names(out), want)
 	}
 	if len(out.Records) != 3 {
@@ -162,7 +162,7 @@ func TestFallbackToCertSpotterWithKeyAndPages(t *testing.T) {
 	if h.crt.count() != crtshAttempts {
 		t.Fatalf("crt.sh asked %d times, want %d", h.crt.count(), crtshAttempts)
 	}
-	if want := []string{"example.com", "mail.example.com", "vpn.example.com", "www.example.com"}; !slices.Equal(names(out), want) {
+	if want := []string{"*.mail.example.com", "example.com", "vpn.example.com", "www.example.com"}; !slices.Equal(names(out), want) {
 		t.Fatalf("names %v", names(out))
 	}
 	want := []ctlookup.SourceStatus{{Source: ctlookup.SourceCRTSH, State: ctlookup.StateUnavailable}, {Source: ctlookup.SourceCertSpotter, State: ctlookup.StateOK}}

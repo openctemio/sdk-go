@@ -21,7 +21,7 @@
 //     cache is never shared across tenants, so one tenant's timing cannot
 //     reveal another's watch list;
 //   - the answer passes ctlookup.Validate before it leaves: names bound to
-//     the queried domain, wildcard labels removed, bounds held.
+//     the queried domain, a leading wildcard label kept, bounds held.
 //
 // The HTTP client is the caller's: on a sensor it is the SSRF-guarded client
 // (httpsec.SafeHTTPClient), which honors the sensor's proxy.
