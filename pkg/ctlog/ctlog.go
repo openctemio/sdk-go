@@ -11,8 +11,11 @@
 //     Retry-After, so a busy sensor does not hammer a source;
 //   - crt.sh gets a few attempts with jittered exponential back-off, and a
 //     server's Retry-After is honored within a bound;
-//   - every response body is capped; an answer over the cap is refused as a
-//     whole (StateTooLarge), never read as a truncated list;
+//   - every response body is capped and read as a stream, one row at a time:
+//     an answer over the byte cap or over ctlookup.MaxRecords rows is refused
+//     as a whole (StateTooLarge) as soon as the cap is passed, never read in
+//     full and never taken as a truncated list; an empty body is a bad
+//     answer, not "no certificates" (crt.sh answers [] for none);
 //   - a source failure is a SourceStatus entry of the answer, never an
 //     error: the lookup itself fails only on a bad input or a canceled
 //     context;
@@ -253,13 +256,13 @@ func (c *Client) queryCRTSH(ctx context.Context, domain string) ([]ctlookup.Reco
 				return nil, unavailable(ctlookup.SourceCRTSH)
 			}
 		}
-		body, err := c.get(ctx, c.crtsh, ctlookup.SourceCRTSH, u.String(), nil)
+		var recs []ctlookup.Record
+		err := c.get(ctx, c.crtsh, ctlookup.SourceCRTSH, u.String(), nil, func(r io.Reader) (perr error) {
+			recs, perr = parseCRTSH(r)
+			return perr
+		})
 		if err == nil {
-			recs, perr := parseCRTSH(body)
-			if perr == nil {
-				return recs, ctlookup.SourceStatus{Source: ctlookup.SourceCRTSH, State: ctlookup.StateOK}
-			}
-			err = perr
+			return recs, ctlookup.SourceStatus{Source: ctlookup.SourceCRTSH, State: ctlookup.StateOK}
 		}
 		last = err
 		if st, final := finalStatus(ctlookup.SourceCRTSH, err); final {
@@ -276,38 +279,111 @@ func (c *Client) queryCRTSH(ctx context.Context, domain string) ([]ctlookup.Reco
 	return nil, st
 }
 
-// parseCRTSH reads crt.sh's JSON array. A row that does not decode makes
-// the whole answer unusable (crt.sh answers a bare array or an error page).
-func parseCRTSH(body []byte) ([]ctlookup.Record, error) {
-	trimmed := strings.TrimSpace(string(body))
-	if trimmed == "" {
-		return []ctlookup.Record{}, nil
-	}
-	var rows []crtshEntry
-	dec := json.NewDecoder(strings.NewReader(trimmed))
-	dec.UseNumber()
-	if err := dec.Decode(&rows); err != nil {
-		return nil, fmt.Errorf("%w: crt.sh answer is not a JSON list: %w", errBadAnswer, err)
-	}
-	if len(rows) > ctlookup.MaxRecords {
-		return nil, errTooMany
-	}
-	out := make([]ctlookup.Record, 0, len(rows))
-	for _, r := range rows {
-		names := strings.Split(r.NameValue, "\n")
-		if r.CommonName != "" {
-			names = append(names, r.CommonName)
+// parseCRTSH reads crt.sh's JSON array one row at a time, so a hostile
+// answer never sits in memory whole: it stops at the record cap. A row that
+// does not decode, an empty body or anything but a list makes the whole
+// answer unusable (crt.sh answers "[]" for no certificates, a bare array
+// otherwise, or an error page).
+func parseCRTSH(r io.Reader) ([]ctlookup.Record, error) {
+	out := []ctlookup.Record{}
+	err := decodeArray(r, ctlookup.MaxRecords, func(e crtshEntry) {
+		names := strings.Split(e.NameValue, "\n")
+		if e.CommonName != "" {
+			names = append(names, e.CommonName)
 		}
 		if len(names) > ctlookup.MaxNamesPerRecord {
 			names = names[:ctlookup.MaxNamesPerRecord]
 		}
 		out = append(out, ctlookup.Record{
-			Source: ctlookup.SourceCRTSH, EntryID: clipField(r.ID.String()), DNSNames: names,
-			Issuer: clipField(r.IssuerName), Serial: clipField(r.SerialNumber),
-			NotBefore: ctlookup.FormatTime(parseTime(r.NotBefore)), NotAfter: ctlookup.FormatTime(parseTime(r.NotAfter)),
+			Source: ctlookup.SourceCRTSH, EntryID: clipField(e.ID.String()), DNSNames: names,
+			Issuer: clipField(e.IssuerName), Serial: clipField(e.SerialNumber),
+			NotBefore: ctlookup.FormatTime(parseTime(e.NotBefore)), NotAfter: ctlookup.FormatTime(parseTime(e.NotAfter)),
 		})
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
+}
+
+// decodeArray decodes the JSON array in r one element at a time and calls
+// each with it. It stops with errTooMany at the first element past limit,
+// without reading further. A body that is empty, not an array or not valid
+// JSON is errBadAnswer; an error of the reader itself (a cut connection, the
+// size cap) is returned as it is.
+func decodeArray[T any](r io.Reader, limit int, each func(T)) error {
+	cr, ok := r.(*capReader)
+	if !ok {
+		cr = &capReader{r: r, max: -1}
+	}
+	bad := func(what string, err error) error {
+		if cr.err != nil {
+			return cr.err
+		}
+		return fmt.Errorf("%w: %s: %w", errBadAnswer, what, err)
+	}
+	dec := json.NewDecoder(cr)
+	dec.UseNumber()
+	tok, err := dec.Token()
+	if err != nil {
+		return bad("answer is not a JSON list", err)
+	}
+	if d, isDelim := tok.(json.Delim); !isDelim || d != '[' {
+		return fmt.Errorf("%w: answer is not a JSON list", errBadAnswer)
+	}
+	n := 0
+	for dec.More() {
+		if n >= limit {
+			return errTooMany
+		}
+		var v T
+		if err := dec.Decode(&v); err != nil {
+			return bad("row does not decode", err)
+		}
+		n++
+		each(v)
+	}
+	if _, err := dec.Token(); err != nil {
+		return bad("list is not closed", err)
+	}
+	// The size cap holds for the whole body: read what follows the list
+	// (nothing, for a well-formed answer) within the same cap.
+	if _, err := io.Copy(io.Discard, cr); err != nil {
+		return err
+	}
+	return nil
+}
+
+// capReader reads r, at most max bytes (max < 0: no cap); past the cap Read
+// fails with errTooLarge. Any other error of r is kept in err, so a caller
+// tells a cut connection from a body that is not valid.
+type capReader struct {
+	r   io.Reader
+	max int64
+	n   int64
+	err error
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if c.err != nil {
+		return 0, c.err
+	}
+	if c.max >= 0 {
+		// One byte more than the cap is read, so an over-long body shows.
+		if left := c.max + 1 - c.n; int64(len(p)) > left {
+			p = p[:left]
+		}
+	}
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	if c.max >= 0 && c.n > c.max {
+		c.err = fmt.Errorf("%w (%d bytes)", errTooLarge, c.max)
+		return n - int(c.n-c.max), c.err
+	}
+	if err != nil && err != io.EOF {
+		c.err = err
+	}
+	return n, err
 }
 
 // certSpotterIssuance is one record of Cert Spotter's /v1/issuances answer
@@ -347,7 +423,29 @@ func (c *Client) queryCertSpotter(ctx context.Context, domain, after string) ([]
 		}
 		u := *base
 		u.RawQuery = q.Encode()
-		body, err := c.get(ctx, c.cs, ctlookup.SourceCertSpotter, u.String(), hdr)
+		var lastID string
+		got := 0
+		err := c.get(ctx, c.cs, ctlookup.SourceCertSpotter, u.String(), hdr, func(r io.Reader) error {
+			// One issuance at a time, the record cap counted over all pages:
+			// a hostile page is never held whole.
+			return decodeArray(r, ctlookup.MaxRecords-len(out), func(it certSpotterIssuance) {
+				issuer := it.Issuer.FriendlyName
+				if issuer == "" {
+					issuer = it.Issuer.Name
+				}
+				names := it.DNSNames
+				if len(names) > ctlookup.MaxNamesPerRecord {
+					names = names[:ctlookup.MaxNamesPerRecord]
+				}
+				out = append(out, ctlookup.Record{
+					Source: ctlookup.SourceCertSpotter, EntryID: clipField(it.ID), DNSNames: names,
+					Issuer: clipField(issuer), Serial: clipField(it.CertSHA256),
+					NotBefore: ctlookup.FormatTime(parseTime(it.NotBefore)), NotAfter: ctlookup.FormatTime(parseTime(it.NotAfter)),
+				})
+				lastID = it.ID
+				got++
+			})
+		})
 		if err != nil {
 			st, _ := finalStatus(ctlookup.SourceCertSpotter, err)
 			if st.State == "" {
@@ -355,35 +453,10 @@ func (c *Client) queryCertSpotter(ctx context.Context, domain, after string) ([]
 			}
 			return nil, st
 		}
-		var items []certSpotterIssuance
-		if err := json.Unmarshal(body, &items); err != nil {
-			return nil, unavailable(ctlookup.SourceCertSpotter)
-		}
-		if len(items) == 0 {
+		if got == 0 || lastID == "" {
 			break
 		}
-		if len(out)+len(items) > ctlookup.MaxRecords {
-			return nil, ctlookup.SourceStatus{Source: ctlookup.SourceCertSpotter, State: ctlookup.StateTooLarge}
-		}
-		for _, it := range items {
-			issuer := it.Issuer.FriendlyName
-			if issuer == "" {
-				issuer = it.Issuer.Name
-			}
-			names := it.DNSNames
-			if len(names) > ctlookup.MaxNamesPerRecord {
-				names = names[:ctlookup.MaxNamesPerRecord]
-			}
-			out = append(out, ctlookup.Record{
-				Source: ctlookup.SourceCertSpotter, EntryID: clipField(it.ID), DNSNames: names,
-				Issuer: clipField(issuer), Serial: clipField(it.CertSHA256),
-				NotBefore: ctlookup.FormatTime(parseTime(it.NotBefore)), NotAfter: ctlookup.FormatTime(parseTime(it.NotAfter)),
-			})
-		}
-		after = items[len(items)-1].ID
-		if after == "" {
-			break
-		}
+		after = lastID
 	}
 	return out, ctlookup.SourceStatus{Source: ctlookup.SourceCertSpotter, State: ctlookup.StateOK}
 }
@@ -440,19 +513,20 @@ func seconds(d time.Duration) int {
 	return min(max(s, 0), ctlookup.MaxRetryAfter)
 }
 
-// get waits for the source's turn, performs one GET and returns the body of
-// a 200 answer.
-func (c *Client) get(ctx context.Context, p *pacer, source, rawURL string, hdr http.Header) ([]byte, error) {
+// get waits for the source's turn, performs one GET and hands the body of a
+// 200 answer to parse as a reader capped at MaxBodyBytes: the body is never
+// held whole, parse reads what it needs. A body over the cap is errTooLarge.
+func (c *Client) get(ctx context.Context, p *pacer, source, rawURL string, hdr http.Header, parse func(io.Reader) error) error {
 	if wait, ok := p.reserve(maxPaceWait); !ok {
-		return nil, &rateLimited{wait: wait}
+		return &rateLimited{wait: wait}
 	} else if wait > 0 {
 		if err := c.cfg.sleep(ctx, wait); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for k, v := range hdr {
 		req.Header[k] = v
@@ -461,7 +535,7 @@ func (c *Client) get(ctx context.Context, p *pacer, source, rawURL string, hdr h
 	req.Header.Set("User-Agent", c.cfg.UserAgent)
 	resp, err := c.cfg.HTTP.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -470,16 +544,12 @@ func (c *Client) get(ctx context.Context, p *pacer, source, rawURL string, hdr h
 			p.coolDown(max(ra, c.cfg.Interval*30))
 		}
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-		return nil, &statusError{code: resp.StatusCode, retryAfter: ra}
+		return &statusError{code: resp.StatusCode, retryAfter: ra}
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, c.cfg.MaxBodyBytes+1))
-	if err != nil {
-		return nil, err
+	if err := parse(&capReader{r: resp.Body, max: c.cfg.MaxBodyBytes}); err != nil {
+		return fmt.Errorf("%s: %w", source, err)
 	}
-	if int64(len(b)) > c.cfg.MaxBodyBytes {
-		return nil, fmt.Errorf("%s: %w (%d bytes)", source, errTooLarge, c.cfg.MaxBodyBytes)
-	}
-	return b, nil
+	return nil
 }
 
 // retryDelay is the wait before attempt n (n >= 1): the server's
