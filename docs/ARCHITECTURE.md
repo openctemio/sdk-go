@@ -269,7 +269,7 @@ the outbox keeps the report queued until the platform serves v2.
 |---|---|
 | 202, or 200 for an identical replay | delivered |
 | 429, 503 (`Retry-After`), 500, 502, 504, network | retried with the same `report_id`, back-off with jitter |
-| 413 | the refused request is halved into segments and sent again |
+| 413 | the refused request is halved into segments and sent again; when halving no longer makes the refused request smaller (one finding or asset above the limit), refused: dead letter, with a log line |
 | 409 `report-expired` / `segment-set-mismatch` | sent again under a new `report_id` |
 | 409 `report-conflict` / `report-committed` | delivered if the status resource says the report is committed |
 | 404 `command-not-found` (the command closed) | sent again unsolicited (not bound to the command) |
