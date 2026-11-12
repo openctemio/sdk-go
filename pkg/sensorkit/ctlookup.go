@@ -89,7 +89,7 @@ func (k *Kit) ctLookupBlocker() string {
 
 // ctLookupConfigFromEnv reads the host's CT source settings.
 func ctLookupConfigFromEnv() (ctlog.Config, error) {
-	cfg := ctlog.Config{HTTP: httpsec.SafeHTTPClient(ctlog.DefaultTimeout), UserAgent: "openctem-sensor-ctlog"}
+	cfg := ctlog.Config{HTTP: httpsec.SafeHTTPClientWith(ctlog.DefaultTimeout, ctlog.DefaultHeaderTimeout), UserAgent: "openctem-sensor-ctlog"}
 	if v := strings.TrimSpace(os.Getenv(EnvCTCRTSHURL)); v != "" {
 		if err := httpsURL(v); err != nil {
 			return cfg, fmt.Errorf("%s: %w", EnvCTCRTSHURL, err)

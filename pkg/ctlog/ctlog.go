@@ -71,6 +71,11 @@ const (
 	// DefaultTimeout bounds one HTTP request (crt.sh may take a minute on a
 	// large domain).
 	DefaultTimeout = 90 * time.Second
+	// DefaultHeaderTimeout is the wait for a source's response headers.
+	// crt.sh sends them only once its query is done, which takes longer
+	// than a general client's 15 s on a large domain; the lookup's budget
+	// (crt.sh's share of it) still bounds the wait.
+	DefaultHeaderTimeout = 75 * time.Second
 )
 
 const (
