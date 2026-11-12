@@ -163,7 +163,9 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // panicSensorService fails the test run if the v3 binding is used.
-type panicSensorService struct{ sensorv3connect.SensorServiceClient }
+type panicSensorService struct {
+	sensorv3connect.SensorServiceClient
+}
 
 func isPermanent(err error) bool {
 	var p *outbox.PermanentError
