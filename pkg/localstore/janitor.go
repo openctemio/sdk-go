@@ -17,9 +17,14 @@ type Watermark string
 const (
 	// WatermarkOK: room for new work.
 	WatermarkOK Watermark = "ok"
-	// WatermarkHigh: 85 % of the quota used or less than 15 % of the volume
-	// free. Cold cache is evicted; when that is not enough the sensor stops
-	// claiming new jobs (results beat new work).
+	// WatermarkHigh: 85 % of the quota used, or free space below both
+	// Policy.HighFreeFraction of the volume (default 15 %) and
+	// Policy.HighFreeBytes (default the quota, the workspace and pack
+	// budgets and 2 GiB: 16 GiB), or a workspace budget or the outbox over
+	// its bound. Cold cache is evicted; when that is not enough the sensor
+	// stops claiming new jobs (results beat new work). Once the free-space
+	// rule held, claiming resumes only when free space is 10 % above both
+	// marks, so the level does not flap around them.
 	WatermarkHigh Watermark = "high"
 	// WatermarkCritical: less than the store's critical free space. Only
 	// acknowledgements and deletions proceed.
@@ -115,6 +120,10 @@ func (p Policy) Normalize() Policy {
 // highFreeHeadroom is added to what the sensor may write to make the
 // default HighFreeBytes.
 const highFreeHeadroom = 2 << 30
+
+// highResume is how far above the high marks free space must be, once
+// they were crossed, before claiming resumes.
+const highResume = 1.1
 
 // PackPolicy is what the janitor asks a content pack cache to prune.
 type PackPolicy struct {
@@ -230,6 +239,9 @@ type Status struct {
 	// Sweeps counts sweeps since start; Last is the latest.
 	Sweeps int64  `json:"sweeps"`
 	Last   Report `json:"last"`
+
+	// diskHigh: the free-space rule set the high level (hysteresis).
+	diskHigh bool
 	// PendingErasures are tenants whose erasure is waiting for in-flight
 	// work.
 	PendingErasures []string `json:"pending_erasures,omitempty"`
@@ -245,9 +257,12 @@ type Janitor struct {
 
 	sweepMu sync.Mutex // one sweep at a time
 
-	mu       sync.Mutex
-	policy   Policy
-	status   Status
+	mu     sync.Mutex
+	policy Policy
+	status Status
+	// diskHigh: the last sweep found free space below the high marks; the
+	// marks are then 10 % higher until it is above them (hysteresis).
+	diskHigh bool
 	erasures map[string]bool
 	trigger  chan struct{}
 }
@@ -501,6 +516,7 @@ func (j *Janitor) Sweep(ctx context.Context) (Report, error) {
 	st.Sweeps = j.status.Sweeps + 1
 	st.Last = rep
 	j.status = st
+	j.diskHigh = st.diskHigh
 	j.mu.Unlock()
 	if st.Level != WatermarkOK {
 		j.cfg.Logf("storage %s: %s", st.Level, st.Reason)
@@ -587,16 +603,24 @@ func (j *Janitor) assess(pol Policy) Status {
 		st.Total += n
 	}
 	var reasons []string
+	j.mu.Lock()
+	wasHigh := j.diskHigh
+	j.mu.Unlock()
+	highFrac, highBytes := pol.HighFreeFraction, uint64(pol.HighFreeBytes) //nolint:gosec // Normalize makes it positive
+	if wasHigh {
+		highFrac, highBytes = highFrac*highResume, uint64(float64(highBytes)*highResume)
+	}
 	frac, free, known := j.cfg.Store.freeFraction()
 	if known {
 		st.FreeBytes, st.FreeFraction = free, frac
 		if free < uint64(j.cfg.Store.opts.CriticalFreeBytes) { //nolint:gosec // defaults make it positive
 			st.Level = WatermarkCritical
 			reasons = append(reasons, fmt.Sprintf("%d MiB free, below the critical mark", free>>20))
-		} else if frac < pol.HighFreeFraction && free < uint64(pol.HighFreeBytes) { //nolint:gosec // Normalize makes it positive
+		} else if frac < highFrac && free < highBytes {
 			st.Level = WatermarkHigh
+			st.diskHigh = true
 			reasons = append(reasons, fmt.Sprintf("%d MiB free (%.0f %% of the volume), below %.0f %% and below %d MiB",
-				free>>20, frac*100, pol.HighFreeFraction*100, pol.HighFreeBytes>>20))
+				free>>20, frac*100, highFrac*100, highBytes>>20))
 		}
 	}
 	if float64(st.Total) >= highQuotaFraction*float64(pol.StoreQuotaBytes) {

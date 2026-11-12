@@ -557,3 +557,46 @@ func TestDiskLowShareIsCapped(t *testing.T) {
 		}
 	}
 }
+
+// Once free space fell below the high marks, claiming resumes only 10 %
+// above them: a volume hovering around 16 GiB free does not flap between
+// claiming and not at every sweep.
+func TestHighWatermarkHasHysteresis(t *testing.T) {
+	const gib = uint64(1) << 30
+	sp := space{freeBytes: 14 * gib, totalBytes: 194 * gib, freeFiles: 1e6, totalFiles: 2e6}
+	s := openT(t, t.TempDir(), func(o *Options) { o.space = func(string) (space, bool) { return sp, true } })
+	jan := janitorT(t, s, nil)
+	for _, step := range []struct {
+		free uint64
+		high bool
+	}{
+		{free: 17 * gib, high: false}, // above 16 GiB, never crossed: ok
+		{free: 14 * gib, high: true},  // crossed
+		{free: 17 * gib, high: true},  // above 16 GiB, below 17.6 GiB: still high
+		{free: 18 * gib, high: false}, // 10 % above: claiming resumes
+		{free: 17 * gib, high: false}, // and stays until the mark is crossed again
+	} {
+		sp.freeBytes = step.free
+		if _, err := jan.Sweep(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		st := jan.Status()
+		if got := st.Level == WatermarkHigh; got != step.high || st.StopClaiming != step.high {
+			t.Fatalf("%d GiB free: high %v, stop %v, want %v (%s)", step.free/gib, got, st.StopClaiming, step.high, st.Reason)
+		}
+	}
+}
+
+// The 8 GiB cap applies to the default 5 % only: an operator who sets
+// MinFreeFraction gets that share in full.
+func TestDiskLowOperatorShareIsHonoured(t *testing.T) {
+	const gib = uint64(1) << 30
+	sp := space{freeBytes: 90 * gib, totalBytes: 2048 * gib, freeFiles: 1e6, totalFiles: 2e6}
+	s := openT(t, t.TempDir(), func(o *Options) {
+		o.space = func(string) (space, bool) { return sp, true }
+		o.MinFreeFraction = 0.05
+	})
+	if got := s.Disk().Level; got != DiskLow {
+		t.Fatalf("90 GiB free of 2 TiB with an operator's 5 %%: %s, want low", got)
+	}
+}

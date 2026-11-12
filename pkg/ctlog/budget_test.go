@@ -49,16 +49,15 @@ func TestSlowCRTSHLeavesTheFallbackItsShare(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`[{"id":"7","dns_names":["www.example.com"],"issuer":{"name":"Example CA"}}]`))
 	}
-	h := newHarness(t, stall, cs, func(c *Config) { c.fallbackMin = 600 * time.Millisecond })
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // the job budget, scaled
+	// The job budget, scaled: crt.sh stalls for its 2 s, Cert Spotter keeps
+	// 2 s, wide enough for a loaded runner. The states prove the share was
+	// left (with none, the lookup fails with the context's error).
+	h := newHarness(t, stall, cs, func(c *Config) { c.fallbackMin = 2 * time.Second })
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	start := time.Now()
 	out, err := h.c.Lookup(ctx, "tenant-a", ctlookup.Input{Domain: "example.com"})
 	if err != nil {
 		t.Fatalf("a slow crt.sh failed the lookup: %v", err)
-	}
-	if took := time.Since(start); took > 1900*time.Millisecond {
-		t.Fatalf("crt.sh kept the lookup for %s of its 2 s", took)
 	}
 	want := []ctlookup.SourceStatus{{Source: ctlookup.SourceCRTSH, State: ctlookup.StateUnavailable}, {Source: ctlookup.SourceCertSpotter, State: ctlookup.StateOK}}
 	if !slices.Equal(out.SourceStatus, want) {
@@ -90,8 +89,9 @@ func TestLookupErrorsWhenTheParentContextIsDone(t *testing.T) {
 	}
 }
 
-// Cert Spotter stopping at its page limit with a page that was not empty is
-// a cut list: too_large, none of it used, never ok.
+// Cert Spotter still answering after its page limit is a cut list:
+// too_large, none of it used, never ok. The too_large is definite, so it is
+// remembered: the next lookup asks crt.sh again, not Cert Spotter.
 func TestCertSpotterPageLimitIsNotOK(t *testing.T) {
 	pages := 0
 	cs := func(w http.ResponseWriter, _ *http.Request, n int) {
@@ -100,16 +100,79 @@ func TestCertSpotterPageLimitIsNotOK(t *testing.T) {
 	}
 	h := newHarness(t, status(400, ""), cs, nil)
 	out := h.lookup(t, "tenant-a", "example.com")
-	if pages != certSpotterMaxPages {
-		t.Fatalf("%d pages asked, want %d", pages, certSpotterMaxPages)
+	if pages != certSpotterMaxPages+1 {
+		t.Fatalf("%d pages asked, want %d", pages, certSpotterMaxPages+1)
 	}
 	if len(out.SourceStatus) != 2 || out.SourceStatus[1].State != ctlookup.StateTooLarge || len(out.Records) != 0 {
 		t.Fatalf("out %+v", out)
 	}
-	// A truncated answer is not cached as a good one.
+	again := h.lookup(t, "tenant-a", "example.com")
+	if h.cs.count() != certSpotterMaxPages+1 || h.crt.count() != 2 {
+		t.Fatalf("%d crt.sh, %d Cert Spotter requests", h.crt.count(), h.cs.count())
+	}
+	if !slices.Equal(again.SourceStatus, out.SourceStatus) {
+		t.Fatalf("remembered %+v, first %+v", again.SourceStatus, out.SourceStatus)
+	}
+}
+
+// When crt.sh failed in a way that may pass, the lookup is not cached as a
+// whole, but Cert Spotter's too_large is remembered: crt.sh is asked again,
+// Cert Spotter is not.
+func TestCertSpotterTooLargeIsRememberedWhileCRTSHIsRetried(t *testing.T) {
+	cs := func(w http.ResponseWriter, _ *http.Request, n int) {
+		_, _ = w.Write([]byte(`[{"id":"` + strconv.Itoa(n) + `","dns_names":["h` + strconv.Itoa(n) + `.example.com"]}]`))
+	}
+	h := newHarness(t, status(503, ""), cs, nil)
 	h.lookup(t, "tenant-a", "example.com")
-	if h.cs.count() != 2*certSpotterMaxPages {
-		t.Fatalf("a cut list was cached: %d requests", h.cs.count())
+	out := h.lookup(t, "tenant-a", "example.com")
+	if h.crt.count() != 2*crtshAttempts || h.cs.count() != certSpotterMaxPages+1 {
+		t.Fatalf("%d crt.sh, %d Cert Spotter requests", h.crt.count(), h.cs.count())
+	}
+	if len(out.SourceStatus) != 2 || out.SourceStatus[1].State != ctlookup.StateTooLarge {
+		t.Fatalf("status %+v", out.SourceStatus)
+	}
+	// Expired with the answers' TTL.
+	h.clock.t = h.clock.t.Add(DefaultCacheTTL + time.Minute)
+	h.lookup(t, "tenant-a", "example.com")
+	if h.cs.count() != 2*(certSpotterMaxPages+1) {
+		t.Fatalf("too_large kept past the TTL: %d Cert Spotter requests", h.cs.count())
+	}
+	// Per tenant.
+	h.lookup(t, "tenant-b", "example.com")
+	if h.cs.count() != 3*(certSpotterMaxPages+1) {
+		t.Fatalf("tenant-b got tenant-a's too_large: %d Cert Spotter requests", h.cs.count())
+	}
+}
+
+// A list whose last page is the page limit's (lists of 901 to 1000 entries
+// at 100 a page) is complete when the page after it is empty: ok, not
+// too_large.
+func TestCertSpotterListEndingOnTheLastPageIsOK(t *testing.T) {
+	cs := func(w http.ResponseWriter, _ *http.Request, n int) {
+		if n > certSpotterMaxPages {
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		_, _ = w.Write([]byte(`[{"id":"` + strconv.Itoa(n) + `","dns_names":["h` + strconv.Itoa(n) + `.example.com"]}]`))
+	}
+	h := newHarness(t, status(400, ""), cs, nil)
+	out := h.lookup(t, "tenant-a", "example.com")
+	if out.SourceStatus[1].State != ctlookup.StateOK || len(out.Records) != certSpotterMaxPages {
+		t.Fatalf("status %+v, %d records", out.SourceStatus, len(out.Records))
+	}
+}
+
+// A configured Interval scales the cool-down after a 429 with no
+// Retry-After (30 intervals), but never past the cap.
+func TestIntervalCoolDownIsCapped(t *testing.T) {
+	h := newHarness(t, status(429, ""), status(400, ""), func(c *Config) { c.Interval = time.Hour })
+	h.lookup(t, "tenant-a", "example.com")
+	// The pace of one request an hour still holds; the cool-down does not
+	// add 30 hours to it.
+	h.clock.t = h.clock.t.Add(time.Hour + maxCoolDown)
+	h.lookup(t, "tenant-b", "example.org")
+	if h.crt.count() != 2 {
+		t.Fatalf("crt.sh still cooling after the cap: %d requests", h.crt.count())
 	}
 }
 

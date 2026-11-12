@@ -116,8 +116,10 @@ type Options struct {
 	// which is always created).
 	CreateKey bool
 	// MinFreeBytes and MinFreeFraction set DiskLow: free space below
-	// max(MinFreeBytes, MinFreeFraction of the volume, at most 8 GiB). Defaults 256 MiB and
-	// 5 %.
+	// max(MinFreeBytes, MinFreeFraction of the volume). Defaults 256 MiB and
+	// 5 %; the default share counts for at most 8 GiB (5 % of a large
+	// volume is far more than the sensor needs), a share set here counts
+	// in full.
 	MinFreeBytes    int64
 	MinFreeFraction float64
 	// CriticalFreeBytes sets DiskCritical. Default 64 MiB.
@@ -130,6 +132,9 @@ type Options struct {
 
 	now   func() time.Time
 	space func(dir string) (space, bool)
+	// defaultFraction: MinFreeFraction is the default, so its share is
+	// capped (maxLowMarkFromShare).
+	defaultFraction bool
 }
 
 // Stats are the store's counters since Open.
@@ -209,6 +214,7 @@ func (o Options) withDefaults() Options {
 	}
 	if o.MinFreeFraction <= 0 {
 		o.MinFreeFraction = 0.05
+		o.defaultFraction = true
 	}
 	if o.CriticalFreeBytes <= 0 {
 		o.CriticalFreeBytes = 64 << 20
