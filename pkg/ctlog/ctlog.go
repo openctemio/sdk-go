@@ -514,7 +514,7 @@ func (c *capReader) Read(p []byte) (int, error) {
 		c.err = fmt.Errorf("%w (%d bytes)", errTooLarge, c.max)
 		return n - int(c.n-c.max), c.err
 	}
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		c.err = err
 	}
 	return n, err
