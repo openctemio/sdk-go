@@ -153,6 +153,9 @@ func (p *ScanTargetPolicy) ValidateNetworkTarget(ctx context.Context, target str
 		host = h
 		if p.Local.Present() {
 			n, perr := parsePort(port)
+			if perr == nil && !canonicalPort(port) {
+				perr = fmt.Errorf("%q is not a plain port number", port)
+			}
 			if perr != nil {
 				return refuse("targets", "%q: %v", target, perr)
 			}

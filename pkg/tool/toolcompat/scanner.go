@@ -229,6 +229,19 @@ func (s *toolScanner) PortSettings() map[string]core.PortSettingKind {
 	return out
 }
 
+// ImplementsPortScan reports whether the tool's manifest lists the
+// scan.ports capability among the ones it implements
+// (core.PortScanImplementer): under ports.allow its jobs must name their
+// ports whatever capability they name.
+func (s *toolScanner) ImplementsPortScan() bool {
+	for _, im := range s.m.Implements {
+		if id, _, ok := capability.ParseRef(strings.TrimSpace(im.Capability)); ok && id == "scan.ports" {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *toolScanner) Scan(ctx context.Context, target string, opts *core.ScanOptions) (*core.ScanResult, error) {
 	var targets []string
 	if strings.TrimSpace(target) != "" {

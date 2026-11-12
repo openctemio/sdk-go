@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/openctemio/contract/capability"
 )
@@ -77,26 +78,64 @@ var portExcludeTokens = []string{"exclude", "excluded", "skip", "ignore", "ignor
 // names with "top" and "ports") are top-N counts. A name that is only
 // similar ("support", "proxy_port") is not.
 func portKeyKind(key string) PortSettingKind {
-	key = strings.ToLower(key)
 	if i := strings.LastIndexByte(key, '.'); i >= 0 {
 		key = key[i+1:]
 	}
+	tokens := portKeyTokens(key)
+	key = strings.Join(tokens, "_")
 	if slices.Contains(topPortKeys, key) {
 		return PortSettingTopN
 	}
-	tokens := strings.FieldsFunc(key, func(r rune) bool { return r == '_' || r == '-' })
 	has := func(words ...string) bool {
 		return slices.ContainsFunc(tokens, func(t string) bool { return slices.Contains(words, t) })
 	}
 	switch {
 	case has(portExcludeTokens...):
 		return PortSettingNone
-	case has("top") && has("port", "ports"):
+	case has("top", "topports", "topport") && has("port", "ports", "topports", "topport"):
 		return PortSettingTopN
-	case key == "port", has("ports"), has("port") && has("range", "ranges", "list", "spec"):
+	case key == "port", has("ports"), has(joinedPortLists...), has("port") && has("range", "ranges", "list", "spec"):
 		return PortSettingList
 	}
 	return PortSettingNone
+}
+
+// joinedPortLists are port-list words written as one ("portrange",
+// "tcpports"). Only these exact words: a word that merely ends in "ports"
+// ("supports", "exports", "reports") is not a port list.
+var joinedPortLists = []string{"portrange", "portranges", "portlist", "portspec", "tcpports", "udpports", "sctpports", "scanports"}
+
+// portKeyTokens splits a setting name into lower-case words at '_', '-'
+// and ' ', and where the case changes the way camelCase and PascalCase
+// names are written: "topPorts" and "top_ports" are both [top ports],
+// "TCPPorts" is [tcp ports].
+func portKeyTokens(key string) []string {
+	var tokens []string
+	var cur []rune
+	flush := func() {
+		if len(cur) > 0 {
+			tokens = append(tokens, strings.ToLower(string(cur)))
+			cur = cur[:0]
+		}
+	}
+	runes := []rune(key)
+	for i, r := range runes {
+		if r == '_' || r == '-' || r == ' ' {
+			flush()
+			continue
+		}
+		if unicode.IsUpper(r) && len(cur) > 0 {
+			prev := runes[i-1]
+			nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
+			// fooBar | FOOBar (the last capital of a run starts a word)
+			if unicode.IsLower(prev) || unicode.IsDigit(prev) || (unicode.IsUpper(prev) && nextLower) {
+				flush()
+			}
+		}
+		cur = append(cur, r)
+	}
+	flush()
+	return tokens
 }
 
 // portSettingKind is the kind of the setting key: what the tool declared,
@@ -180,7 +219,7 @@ func (lp *LocalPolicy) checkPortValue(label string, v any) error {
 	if !ok {
 		return refuse("ports.allow", "%s %s cannot be checked against the policy", label, shortValue(v))
 	}
-	ranges, err := parsePorts(spec)
+	ranges, err := parseJobPorts(spec)
 	if err != nil {
 		return refuse("ports.allow", "%s %q cannot be checked against the policy", label, truncateBytes(spec, 64))
 	}
@@ -192,6 +231,34 @@ func (lp *LocalPolicy) checkPortValue(label string, v any) error {
 		}
 	}
 	return nil
+}
+
+// parseJobPorts reads a port list a job names, more strictly than the
+// policy file: every number is plain decimal digits without a sign or a
+// leading zero, so the sdk and the tool read the same port ("0022" is 22
+// here, but 18 to a tool that reads a leading zero as octal).
+func parseJobPorts(spec string) ([]portRange, error) {
+	for _, part := range strings.Split(spec, ",") {
+		lo, hi, isRange := strings.Cut(strings.TrimSpace(part), "-")
+		if !canonicalPort(strings.TrimSpace(lo)) || (isRange && !canonicalPort(strings.TrimSpace(hi))) {
+			return nil, fmt.Errorf("%q is not a plain port number or range", part)
+		}
+	}
+	return parsePorts(spec)
+}
+
+// canonicalPort reports whether s is a port number written plainly: ASCII
+// digits, no sign, no leading zero.
+func canonicalPort(s string) bool {
+	if s == "" || s[0] == '0' {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // refuseTopN is the refusal of a request for a tool's own top-N port list:
@@ -266,9 +333,19 @@ func (lp *LocalPolicy) checkPortConfig(what, prefix string, cfg map[string]any, 
 		v, path := cfg[k], prefix+k
 		if group, ok := v.(map[string]any); ok {
 			if depth >= maxPortConfigDepth {
-				return false, refuse("ports.allow", "the job's %s settings are nested deeper than %d levels and cannot be checked against the policy", what, maxPortConfigDepth)
+				return false, lp.refuseDeep(what)
 			}
 			n, err := lp.checkPortConfig(what, path+".", group, depth+1)
+			if err != nil {
+				return false, err
+			}
+			named = named || n
+			continue
+		}
+		if list, ok := v.([]any); ok && portKeyKind(k) == PortSettingNone {
+			// A list of objects (services: [{port: 22}]) names ports in
+			// its elements.
+			n, err := lp.checkPortArray(what, path, list, depth)
 			if err != nil {
 				return false, err
 			}
@@ -290,6 +367,38 @@ func (lp *LocalPolicy) checkPortConfig(what, prefix string, cfg map[string]any, 
 				return false, lp.refuseTopN(label, v)
 			}
 		}
+	}
+	return named, nil
+}
+
+// refuseDeep is the refusal of settings nested past maxPortConfigDepth.
+func (lp *LocalPolicy) refuseDeep(what string) error {
+	return refuse("ports.allow", "the job's %s settings are nested deeper than %d levels and cannot be checked against the policy", what, maxPortConfigDepth)
+}
+
+// checkPortArray checks the objects (and lists of them) in the list a
+// setting path holds, one level deeper than the setting, within the same
+// depth bound as groups. Scalars in a list under a key that names no ports
+// are not port requests.
+func (lp *LocalPolicy) checkPortArray(what, path string, list []any, depth int) (named bool, err error) {
+	for i, e := range list {
+		var n bool
+		switch x := e.(type) {
+		case map[string]any:
+			if depth >= maxPortConfigDepth {
+				return false, lp.refuseDeep(what)
+			}
+			n, err = lp.checkPortConfig(what, fmt.Sprintf("%s[%d].", path, i), x, depth+1)
+		case []any:
+			if depth >= maxPortConfigDepth {
+				return false, lp.refuseDeep(what)
+			}
+			n, err = lp.checkPortArray(what, fmt.Sprintf("%s[%d]", path, i), x, depth+1)
+		}
+		if err != nil {
+			return false, err
+		}
+		named = named || n
 	}
 	return named, nil
 }
@@ -427,7 +536,22 @@ func checkResolvedJobPorts(lp *LocalPolicy, schema *SettingsSchema, ts *ToolSett
 	if pp, ok := scanner.(PortSettingsProvider); ok {
 		declared = pp.PortSettings()
 	}
-	return lp.CheckResolvedPorts(ts, declared, p.Capability, namesPortParam(p.Capability, p.Params))
+	ref := p.Capability
+	if ps, ok := scanner.(PortScanImplementer); ok && ps.ImplementsPortScan() && !isPortScanCapability(ref) {
+		// A port scanner scans its default ports whatever capability the
+		// job names, or when it names none.
+		ref = "scan.ports"
+	}
+	return lp.CheckResolvedPorts(ts, declared, ref, namesPortParam(p.Capability, p.Params))
+}
+
+// PortScanImplementer is a Scanner that says whether it is a port scanner:
+// its tool manifest lists the scan.ports capability among the ones it
+// implements. Under ports.allow such a tool's job must name its ports
+// whatever capability the job names (or none): it would otherwise scan the
+// tool's default list. A wrapper around such a scanner should forward it.
+type PortScanImplementer interface {
+	ImplementsPortScan() bool
 }
 
 // AllowedPorts returns the destination ports ports.allow allows, ascending,

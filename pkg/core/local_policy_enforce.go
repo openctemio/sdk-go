@@ -481,6 +481,12 @@ func (lp *LocalPolicy) checkTarget(ctx context.Context, t string) error {
 		if err != nil {
 			return refuse("ports.allow", "%q: %v", t, err)
 		}
+		if p == 0 && lp.ports != nil {
+			// The tool would connect to the scheme's own default port,
+			// which this policy does not know: it cannot be checked.
+			return refuse("ports.allow", "%q: the %s scheme has no default port this sensor knows; name the port in the URL so it can be checked against %s",
+				truncateBytes(t, 128), truncateBytes(u.Scheme, 32), lp.portsText)
+		}
 		port = p
 	case isPathLike(t):
 		return nil
@@ -507,23 +513,34 @@ func (lp *LocalPolicy) checkTarget(ctx context.Context, t string) error {
 	return err
 }
 
-// urlPort is the URL's port, or its scheme's default (0 when the scheme
-// has none).
+// urlPort is the URL's port, or its scheme's default (0 when the sensor
+// does not know the scheme's default). A port is plain digits without a
+// leading zero (canonicalPort).
 func urlPort(u *url.URL) (int, error) {
 	if p := u.Port(); p != "" {
 		n, err := strconv.Atoi(p)
-		if err != nil || n < 1 || n > 65535 {
+		if err != nil || !canonicalPort(p) || n < 1 || n > 65535 {
 			return 0, fmt.Errorf("port %q is not valid", p)
 		}
 		return n, nil
 	}
-	switch strings.ToLower(u.Scheme) {
-	case "http", "ws":
-		return 80, nil
-	case "https", "wss":
-		return 443, nil
-	}
-	return 0, nil
+	return schemeDefaultPorts[strings.ToLower(u.Scheme)], nil
+}
+
+// schemeDefaultPorts are the default ports of the URL schemes a scan
+// target commonly has (IANA). A URL of another scheme without a port is
+// refused under ports.allow: its tool's default port is not known here.
+var schemeDefaultPorts = map[string]int{
+	"http": 80, "ws": 80, "https": 443, "wss": 443,
+	"ftp": 21, "ftps": 990, "sftp": 22, "ssh": 22, "telnet": 23,
+	"smtp": 25, "smtps": 465, "submission": 587, "dns": 53, "tftp": 69,
+	"pop3": 110, "pop3s": 995, "imap": 143, "imaps": 993, "nntp": 119, "nntps": 563,
+	"ldap": 389, "ldaps": 636, "smb": 445, "rtsp": 554, "rsync": 873,
+	"mssql": 1433, "sqlserver": 1433, "oracle": 1521, "mqtt": 1883, "mqtts": 8883,
+	"nfs": 2049, "mysql": 3306, "rdp": 3389, "postgres": 5432, "postgresql": 5432,
+	"amqp": 5672, "amqps": 5671, "xmpp": 5222, "sip": 5060, "sips": 5061,
+	"vnc": 5900, "redis": 6379, "irc": 6667, "ircs": 6697, "git": 9418,
+	"kafka": 9092, "memcached": 11211, "mongodb": 27017,
 }
 
 // splitNetworkTarget splits host, host:port, [v6]:port and image
@@ -536,8 +553,12 @@ func splitNetworkTarget(t string) (string, int, error) {
 	port := 0
 	if h, p, err := net.SplitHostPort(host); err == nil {
 		host = h
-		if n, err := strconv.Atoi(p); err == nil && n >= 1 && n <= 65535 {
+		if n, err := strconv.Atoi(p); err == nil && canonicalPort(p) && n >= 1 && n <= 65535 {
 			port = n
+		} else if err == nil {
+			// A number that is not a plain port ("0022", "+22", "0"):
+			// a tool may read it differently, so it is not checkable.
+			return "", 0, fmt.Errorf("port %q is not valid", p)
 		} else if !strings.Contains(t, "/") {
 			// host:tag of an image reference ("nginx:latest") is not a port.
 			if net.ParseIP(h) != nil || strings.Contains(h, ".") {

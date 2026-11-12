@@ -244,7 +244,8 @@ func TestLocalPolicy_CheckTarget(t *testing.T) {
 		"www.corp.example.com:22":             "ports.allow",
 		"203.0.113.9:443":                     "",
 		"[2001:db8::1]:443":                   "targets.allow",
-		"ftp://www.corp.example.com/":         "",
+		"ftp://www.corp.example.com/":         "ports.allow", // 21
+		"ftp://www.corp.example.com:8021/":    "",
 		"https://rebind.corp.example.com/":    "targets.deny",
 		"https://169.254.169.254/latest/meta": "builtin",
 		// An image reference reaches no target network.

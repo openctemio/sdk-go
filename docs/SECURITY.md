@@ -349,7 +349,10 @@ so the policy is applied at three points:
   has no marker for a port setting, so a setting no manifest declares is
   recognised by its name: `ports`, `port`, `tcp_ports`, `port_range`,
   `port_list` and similar are port lists, `top_ports`, `top_n` and names with
-  `top` and `ports` are top-N counts, in a group too (`net.ports`).
+  `top` and `ports` are top-N counts, written in snake_case, kebab-case,
+  camelCase or PascalCase (`portRange`, `TCPPorts`, `topPorts`), in a group
+  (`net.ports`) or in a list of objects (`services: [{port: 22}]`), up to 4
+  levels deep (deeper is refused).
   `exclude_ports` and `skip_ports` narrow a scan and are not checked. A tool
   that calls its port list something else must map the standard `ports` param
   to it in its manifest.
@@ -361,9 +364,35 @@ so the policy is applied at three points:
   own default list and is refused with "name the ports in the job; the tool's
   default list cannot be checked against the local policy's ports.allow". The
   fix is to name the ports in the job's `ports` param.
+- **Port numbers** a job names are plain digits: `+22` and `0022` are
+  refused (a tool may read a leading zero as octal), in settings and in
+  targets.
+- **URL targets** name their port through the scheme. The default ports of
+  common schemes (`ftp` 21, `ssh` 22, `smtp` 25, `redis` 6379, `postgres`
+  5432 and others) are checked; a scheme without a known default and without
+  a port in the URL is refused under `ports.allow`.
+- **A port scanner's job** (a tool whose manifest implements `scan.ports`,
+  `core.PortScanImplementer`) must name its ports even when the job names no
+  capability or another one.
 - **Forwarder.** A tool that reaches a vendor's hosts or the internet through
   the sensor's egress is not scanning its targets' ports, so `ports.allow`
   does not restrict those classes.
+
+Not covered:
+
+- A setting under a name these rules do not recognise, which the tool's
+  manifest does not map to the standard `ports` param, is not checked at
+  admission or by the executor; the forwarder still refuses other ports for
+  a manifest tool whose network is `targets` or `resolver`.
+- Legacy (non-manifest) scanners and any traffic that does not go through
+  the forwarder are checked only at admission and by the executor.
+- Raw-socket scans (a SYN port scan) bypass the forwarder: they rely on
+  those checks and on the tool sandbox denying `CAP_NET_RAW`.
+- Network-protocol templates that name their own port are covered only at
+  the forwarder.
+- A platform job has no free-form argument path: `ScanOptions.ExtraArgs` is
+  not taken from a command payload, and a setting value substituted into a
+  manifest exec tool's argv is one element that may not start with `-`.
 
 #### A sensor without a local policy: follow the platform's scope or fail closed
 
