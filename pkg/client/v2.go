@@ -88,6 +88,11 @@ var ErrV2NoTool = errors.New("protocol v2 requires report.tool.name")
 // more segments than the platform accepts: splitting further cannot help.
 var errTooManySegments = errors.New("too many segments")
 
+// errUnsplittable marks a 413 for a request that splitting does not make
+// smaller: a single finding or asset above the platform's (or a proxy's)
+// body limit.
+var errUnsplittable = errors.New("the report cannot be split below the platform's request limit")
+
 // V2Error is a non-2xx answer of a v2 resource.
 type V2Error struct {
 	Status     int
@@ -492,6 +497,9 @@ func (c *Client) PushResultsV2(ctx context.Context, report *ctis.Report, opts *V
 		resumed:  opts.Progress != nil,
 		epoch:    opts.LeaseEpoch,
 	}
+	// refused is the request the last 413 refused: a 413 for a request no
+	// smaller than it means the report cannot be split further.
+	var refused struct{ findings, bytes int }
 	for {
 		commandID := opts.CommandID
 		if p.Unbound {
@@ -514,9 +522,16 @@ func (c *Client) PushResultsV2(ctx context.Context, report *ctis.Report, opts *V
 			// A 413 without a problem document is a reverse proxy's body
 			// limit (an ingress below the platform's own limit): smaller
 			// segments pass it just the same.
-			if p.lastFindings <= 1 && p.lastBytes <= 1024 {
-				return nil, err // one finding is already too large
+			if (p.lastFindings <= 1 && p.lastBytes <= 1024) ||
+				(refused.bytes > 0 && p.lastFindings >= refused.findings && p.lastBytes >= refused.bytes) {
+				// Splitting did not make the refused request smaller (one
+				// finding, or one asset, larger than the limit): sending it
+				// again would loop on the same 413. Final.
+				logf("report %s: not delivered: a request of %d finding(s), %d bytes is too large for the platform (HTTP 413) and cannot be split further",
+					p.ReportID, p.lastFindings, p.lastBytes)
+				return nil, fmt.Errorf("%w: %w", errUnsplittable, err)
 			}
+			refused.findings, refused.bytes = p.lastFindings, p.lastBytes
 			p.SegFindings = max(1, p.lastFindings/2)
 			p.SegBytes = max(1024, p.lastBytes/2)
 			p.Split = true
