@@ -395,7 +395,16 @@ func (s Status) UnconfinedDetail() string {
 // operator did not turn it off (Unconfined).
 func (s Status) RefusesActiveTools() bool { return s.Unconfined() == UnconfinedRefused }
 
-// Complete reports whether every control is enforced.
+// ProcessTreeContained reports whether every process a task starts ends
+// with the task, also one that left the task's process group (setsid): the
+// task runs in a PID namespace of its own (network-confined) or in a
+// cgroup of its own (EnvelopeCgroup, for a task given an Envelope).
+// Otherwise a stop or a timeout kills the task's process group only.
+func (s Status) ProcessTreeContained() bool {
+	return s.NetworkEnforced || s.Envelope == EnvelopeCgroup
+}
+
+// Complete reports whether every control of the sandbox is enforced.
 func (s Status) Complete() bool {
 	return s.Sandboxed && s.Landlock > 0 && s.Seccomp && s.NoNewPrivs && s.Rlimits && len(s.Missing) == 0
 }

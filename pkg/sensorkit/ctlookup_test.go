@@ -1,10 +1,13 @@
 package sensorkit
 
 import (
+	"net/http"
 	"slices"
 	"testing"
 
 	"github.com/openctemio/contract/ctlookup"
+
+	"github.com/openctemio/sdk-go/pkg/ctlog"
 )
 
 // A shared sensor with a pinned job-signing key answers CT lookups by
@@ -66,5 +69,25 @@ func TestCTLookupSourceSettings(t *testing.T) {
 	t.Setenv(EnvCTCertSpotterKey, "k-123")
 	if on, err := relayKit(t, true, true).ServeCTLookup(); !on || err != nil {
 		t.Fatalf("mirror settings refused: %v", err)
+	}
+}
+
+// crt.sh sends its headers only once a large domain's query is done: the
+// general 15 s header wait cut every large organization off and sent it to
+// Cert Spotter (unexpired certificates only). The CT client waits up to
+// 75 s, inside its 90 s request bound and the lookup's budget.
+func TestCTLookupClientWaitsForSlowHeaders(t *testing.T) {
+	t.Setenv(EnvCTCRTSHURL, "")
+	t.Setenv(EnvCTCertSpotterURL, "")
+	cfg, err := ctLookupConfigFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr, ok := cfg.HTTP.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport %T", cfg.HTTP.Transport)
+	}
+	if tr.ResponseHeaderTimeout != ctlog.DefaultHeaderTimeout || cfg.HTTP.Timeout != ctlog.DefaultTimeout {
+		t.Fatalf("header wait %s, request bound %s", tr.ResponseHeaderTimeout, cfg.HTTP.Timeout)
 	}
 }

@@ -302,7 +302,7 @@ func doctorCgroupCheck() core.ConfigCheck {
 		return c
 	}
 	c.Status, c.Code = core.CheckWarn, "not_delegated"
-	c.Summary = "tasks get rlimits only, not a cgroup each: give the sensor a delegated cgroup v2 (systemd: Delegate=yes and MemoryMax=; a container: the default private cgroup namespace with a writable cgroup)"
+	c.Summary = "tasks get rlimits only, not a cgroup each, and a tool's process that leaves its process group (setsid) outlives a stop or a timeout unless the tool runs network-confined: give the sensor a delegated cgroup v2 (systemd: Delegate=yes and MemoryMax=; a container: the default private cgroup namespace with a writable cgroup)"
 	c.Excerpt = truncateBytes(why, maxUnavailableExcerptSize)
 	return c
 }

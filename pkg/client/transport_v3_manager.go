@@ -273,8 +273,10 @@ func (m *v3Manager) logf(format string, args ...any) {
 	}
 }
 
-// set installs a binding and restarts the control stream.
-func (m *v3Manager) set(svc sensorv3connect.SensorServiceClient, b Binding, reason string) {
+// set installs a binding and restarts the control stream. ctl is the
+// binding's control client (its own connection; nil: the control traffic
+// shares svc).
+func (m *v3Manager) set(svc, ctl sensorv3connect.SensorServiceClient, b Binding, reason string) {
 	old := m.state.Load()
 	if old != nil && old.blocked == nil && old.binding == b && old.reason == reason && old.svc == svc {
 		return
@@ -283,7 +285,7 @@ func (m *v3Manager) set(svc sensorv3connect.SensorServiceClient, b Binding, reas
 	if old != nil && old.binding == b {
 		since = old.since
 	}
-	m.state.Store(&v3State{svc: svc, binding: b, reason: reason, since: since})
+	m.state.Store(&v3State{svc: svc, ctl: ctl, binding: b, reason: reason, since: since})
 	m.mu.Lock()
 	m.failures = 0
 	close(m.streamGen)
@@ -333,11 +335,11 @@ func (m *v3Manager) failed(b Binding, _ error) {
 func (m *v3Manager) negotiate(ctx context.Context) error {
 	mode := m.opts.Mode
 	if mode == TransportV2 {
-		m.set(nil, BindingV2, ReasonForcedByConfig)
+		m.set(nil, nil, BindingV2, ReasonForcedByConfig)
 		return nil
 	}
 	if m.signer == nil {
-		m.set(nil, BindingV2, ReasonNotKeyBound)
+		m.set(nil, nil, BindingV2, ReasonNotKeyBound)
 		return nil
 	}
 	// The v2 hello says whether and where v3 is served. It runs on v2;
@@ -363,14 +365,14 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 		if mode == TransportGRPC {
 			return m.grpcRequired(ReasonPlatformUnreachable)
 		}
-		m.set(nil, BindingV2, ReasonPlatformUnreachable)
+		m.set(nil, nil, BindingV2, ReasonPlatformUnreachable)
 		return nil
 	}
 	if hello.TransportV3 == nil || hello.TransportV3.HTTPSPath == "" {
 		if mode == TransportGRPC {
 			return m.grpcRequired(ReasonPlatformWithoutV3)
 		}
-		m.set(nil, BindingV2, ReasonPlatformWithoutV3)
+		m.set(nil, nil, BindingV2, ReasonPlatformWithoutV3)
 		return nil
 	}
 	https := m.httpsClient(hello.TransportV3.HTTPSPath)
@@ -397,7 +399,9 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 		}
 		if svc != nil {
 			m.remember(BindingGRPC, "", time.Now())
-			m.set(svc, BindingGRPC, "")
+			// Heartbeats and command polls get a connection of their own,
+			// so a large result upload never holds them up.
+			m.set(svc, m.grpcClient(grpcEndpoint(hello.TransportV3)), BindingGRPC, "")
 			return nil
 		}
 		if mode == TransportGRPC {
@@ -412,7 +416,7 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 	cancel()
 	switch {
 	case err == nil:
-		m.set(https, BindingHTTPS, reason)
+		m.set(https, m.httpsControlClient(hello.TransportV3.HTTPSPath), BindingHTTPS, reason)
 		return nil
 	case identityError(err):
 		err = fmt.Errorf("%w: %v", ErrIdentityRefused, err)
@@ -421,7 +425,7 @@ func (m *v3Manager) negotiate(ctx context.Context) error {
 	case connect.CodeOf(err) == connect.CodeUnavailable && m.keep(old, mode, err):
 		return nil
 	}
-	m.set(nil, BindingV2, ReasonHTTPSUnavailable)
+	m.set(nil, nil, BindingV2, ReasonHTTPSUnavailable)
 	return nil
 }
 
@@ -470,6 +474,38 @@ func (m *v3Manager) httpsClient(path string) sensorv3connect.SensorServiceClient
 	// over it is ErrResponseTooLarge on both bindings (v3ReadLimitExceeded).
 	return sensorv3connect.NewSensorServiceClient(hc, strings.TrimRight(m.c.baseURL, "/")+path,
 		connect.WithReadMaxBytes(maxResponseBodyBytes))
+}
+
+// httpsControlClient is the HTTPS binding's client for control traffic
+// (heartbeats, command polls): the same signed transport as httpsClient,
+// on a connection pool of its own and the platform path's proxy
+// (SENSOR_CONTROL_PROXY), as the v2 control client has. Over HTTP/2 one
+// connection carries every request, so a large slow upload would otherwise
+// hold a heartbeat behind it until the sensor looks stale.
+func (m *v3Manager) httpsControlClient(path string) sensorv3connect.SensorServiceClient {
+	hc := &http.Client{Transport: ownPool(m.next), CheckRedirect: httpsec.RefuseRedirects}
+	return sensorv3connect.NewSensorServiceClient(hc, strings.TrimRight(m.c.baseURL, "/")+path,
+		connect.WithReadMaxBytes(maxResponseBodyBytes))
+}
+
+// ownPool is rt on a connection pool of its own: the *http.Transport
+// underneath (below the request signer, which is kept) is cloned with the
+// platform path's proxy. Another kind of transport is returned as it is.
+func ownPool(rt http.RoundTripper) http.RoundTripper {
+	inner, signer := rt, (*sensorsig.Transport)(nil)
+	if st, ok := inner.(*sensorsig.Transport); ok {
+		inner, signer = st.Base, st
+	}
+	tr, ok := inner.(*http.Transport)
+	if !ok {
+		return rt
+	}
+	ctl := tr.Clone()
+	ctl.Proxy = httpsec.APIProxy().Func()
+	if signer != nil {
+		return &sensorsig.Transport{Signer: signer.Signer, Base: ctl, MaxBody: signer.MaxBody}
+	}
+	return ctl
 }
 
 // tryGRPC gets a certificate when needed and says hello over gRPC. It

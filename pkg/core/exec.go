@@ -129,6 +129,12 @@ func runScanner(ctx context.Context, cfg *ExecConfig, stdoutLine, stderrLine fun
 				RecordProcessState(ctx, cmd.ProcessState)
 			},
 		},
+		// An envelope with no limits of its own: where the sensor's cgroup
+		// is delegated, the task runs in a cgroup of its own, and whatever
+		// it leaves running when it ends, is stopped or times out (a
+		// grandchild that called setsid, out of the process group the
+		// stop kills) is killed with the cgroup.
+		Envelope: &executor.Envelope{},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to start scanner: %w", err)

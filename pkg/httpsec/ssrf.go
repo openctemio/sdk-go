@@ -228,8 +228,28 @@ func ValidateURL(rawURL string) (*ValidationResult, error) {
 // policy (private addresses allowed; link-local, multicast and reserved
 // refused).
 func SafeHTTPClient(timeout time.Duration) *http.Client {
+	return SafeHTTPClientWith(timeout, 0)
+}
+
+// DefaultResponseHeaderTimeout is how long a SafeHTTPClient waits for the
+// response headers after sending a request.
+const DefaultResponseHeaderTimeout = 15 * time.Second
+
+// SafeHTTPClientWith is SafeHTTPClient with its own wait for the response
+// headers (headerTimeout; 0 or less: DefaultResponseHeaderTimeout), for a
+// source known to think long before it answers (crt.sh on a large domain).
+// The header wait never exceeds timeout when timeout is set: the request's
+// own bound still ends it.
+func SafeHTTPClientWith(timeout, headerTimeout time.Duration) *http.Client {
+	if headerTimeout <= 0 {
+		headerTimeout = DefaultResponseHeaderTimeout
+	}
+	if timeout > 0 {
+		headerTimeout = min(headerTimeout, timeout)
+	}
 	proxies := &sync.Map{}
 	tr := guardedTransportVia(IsIPBlocked, proxies)
+	tr.ResponseHeaderTimeout = headerTimeout
 	tr.Proxy = guardedProxy(ContentProxy().Func(), IsIPBlocked, proxies)
 	tr.TLSClientConfig = contentTLSConfig()
 	return &http.Client{
@@ -298,7 +318,7 @@ func guardedTransportResolve(blocked func(net.IP) bool, proxies *sync.Map,
 	return &http.Transport{
 		DialContext:           safeDialer,
 		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 15 * time.Second,
+		ResponseHeaderTimeout: DefaultResponseHeaderTimeout,
 		IdleConnTimeout:       30 * time.Second,
 	}
 }

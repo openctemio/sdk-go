@@ -1,0 +1,4 @@
+### Fixed: a scanner's process that leaves its process group no longer outlives the task where cgroups are delegated
+
+- `pkg/core`: a scanner run through `ExecuteScanner`, `StreamScanner` or `BaseScanner` got no resource envelope, so it never ran in a cgroup of its own. A process it started that called `setsid` left the process group that a stop or a timeout kills, and kept running (for example kept scanning after a stop or a scope revocation) when the tool was not network-confined. Every scanner task now gets an envelope with no limits of its own. Where the sensor's cgroup is delegated, the task runs in its own cgroup, and whatever it leaves behind is killed with it.
+- New: `executor.Status.ProcessTreeContained()`. The `runtime.cgroup_envelope` doctor warning now says that without a delegated cgroup, such a process outlives a stop unless the tool runs network-confined (its own PID namespace).

@@ -285,3 +285,27 @@ func TestSafeHTTPClient_ContentRootCAs(t *testing.T) {
 		t.Fatal("ContentRootCAs")
 	}
 }
+
+// SafeHTTPClient keeps its 15 s header wait; SafeHTTPClientWith sets its
+// own, never past the request's bound.
+func TestSafeHTTPClientWith_HeaderTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		timeout, header, want time.Duration
+	}{
+		{0, 0, DefaultResponseHeaderTimeout},
+		{90 * time.Second, 75 * time.Second, 75 * time.Second},
+		{30 * time.Second, 75 * time.Second, 30 * time.Second},
+		{0, 75 * time.Second, 75 * time.Second},
+	} {
+		c := SafeHTTPClientWith(tc.timeout, tc.header)
+		if got := c.Transport.(*http.Transport).ResponseHeaderTimeout; got != tc.want {
+			t.Errorf("SafeHTTPClientWith(%s, %s): header wait %s, want %s", tc.timeout, tc.header, got, tc.want)
+		}
+		if c.CheckRedirect == nil {
+			t.Error("the redirect guard is gone")
+		}
+	}
+	if got := SafeHTTPClient(time.Minute).Transport.(*http.Transport).ResponseHeaderTimeout; got != DefaultResponseHeaderTimeout {
+		t.Errorf("SafeHTTPClient header wait %s", got)
+	}
+}

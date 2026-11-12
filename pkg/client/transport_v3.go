@@ -52,7 +52,10 @@ const (
 // the gRPC endpoint's certificate was refused, or SENSOR_TRANSPORT=grpc
 // cannot be honored, and no other binding may stand in.
 type v3State struct {
-	svc     sensorv3connect.SensorServiceClient
+	svc sensorv3connect.SensorServiceClient
+	// ctl carries the control client's requests (heartbeats, command
+	// polls) on a connection of its own (nil: they share svc).
+	ctl     sensorv3connect.SensorServiceClient
 	binding Binding
 	reason  string
 	since   time.Time
@@ -70,12 +73,15 @@ type v3RoundTripper struct {
 	prefix string
 	// failed tells the manager about a transport failure of the binding.
 	failed func(b Binding, err error)
+	// control: this is the control client's round tripper; it calls the
+	// binding's control client (v3State.ctl) when there is one.
+	control bool
 }
 
 // withNext is the same round tripper over another next transport (the
 // control client's own pool).
 func (t *v3RoundTripper) withNext(next http.RoundTripper) *v3RoundTripper {
-	return &v3RoundTripper{next: next, state: t.state, prefix: t.prefix, failed: t.failed}
+	return &v3RoundTripper{next: next, state: t.state, prefix: t.prefix, failed: t.failed, control: true}
 }
 
 // identityHeartbeat lets the heartbeat through while the identity is
@@ -162,10 +168,14 @@ func v3Carries(method, rest string) bool {
 
 func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body []byte) (*http.Response, error) {
 	ctx := req.Context()
+	svc := st.svc
+	if t.control && st.ctl != nil {
+		svc = st.ctl
+	}
 	parts := strings.Split(strings.TrimPrefix(rest, "/"), "/")
 	switch {
 	case rest == protov2.HelloPath:
-		r, err := st.svc.Hello(ctx, connect.NewRequest(&sensorv3.HelloRequest{}))
+		r, err := svc.Hello(ctx, connect.NewRequest(&sensorv3.HelloRequest{}))
 		return answer(r, err, func(m *sensorv3.HelloResponse) *http.Response { return jsonResponse(http.StatusOK, m.GetHelloJson()) })
 
 	case rest == protov2.HeartbeatPath:
@@ -173,7 +183,7 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 		if err != nil {
 			return nil, err
 		}
-		r, err := st.svc.Heartbeat(ctx, connect.NewRequest(&sensorv3.HeartbeatRequest{
+		r, err := svc.Heartbeat(ctx, connect.NewRequest(&sensorv3.HeartbeatRequest{
 			HeartbeatJson: doc, Transport: transportOf(st),
 		}))
 		return answer(r, err, func(m *sensorv3.HeartbeatResponse) *http.Response {
@@ -192,7 +202,7 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 				features = append(features, f)
 			}
 		}
-		r, err := st.svc.ClaimCommands(ctx, connect.NewRequest(&sensorv3.ClaimCommandsRequest{
+		r, err := svc.ClaimCommands(ctx, connect.NewRequest(&sensorv3.ClaimCommandsRequest{
 			Limit: int32(limit), Features: features,
 		}))
 		if v3ReadLimitExceeded(err) {
@@ -213,7 +223,7 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 		if err != nil {
 			return nil, err
 		}
-		r, err := st.svc.AppendCommandLogs(ctx, connect.NewRequest(&sensorv3.AppendCommandLogsRequest{CommandId: parts[1], BodyJson: doc}))
+		r, err := svc.AppendCommandLogs(ctx, connect.NewRequest(&sensorv3.AppendCommandLogsRequest{CommandId: parts[1], BodyJson: doc}))
 		return answer(r, err, func(m *sensorv3.AppendCommandLogsResponse) *http.Response {
 			return jsonResponse(http.StatusOK, m.GetResponseJson())
 		})
@@ -229,7 +239,7 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 		}
 		in := &sensorv3.TransitionCommandRequest{CommandId: parts[1], Transition: tr, BodyJson: doc}
 		in.LeaseEpoch = v3LeaseEpoch(req)
-		r, err := st.svc.TransitionCommand(ctx, connect.NewRequest(in))
+		r, err := svc.TransitionCommand(ctx, connect.NewRequest(in))
 		return answer(r, err, func(m *sensorv3.TransitionCommandResponse) *http.Response {
 			return jsonResponse(http.StatusOK, m.GetCommandJson())
 		})
@@ -242,13 +252,13 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 		if err != nil {
 			return nil, err
 		}
-		r, err := st.svc.PutManifest(ctx, connect.NewRequest(&sensorv3.PutManifestRequest{ManifestJson: doc}))
+		r, err := svc.PutManifest(ctx, connect.NewRequest(&sensorv3.PutManifestRequest{ManifestJson: doc}))
 		return answer(r, err, func(m *sensorv3.PutManifestResponse) *http.Response {
 			return jsonResponse(http.StatusOK, m.GetResponseJson())
 		})
 
 	case rest == protov2.ManifestPath:
-		r, err := st.svc.GetManifest(ctx, connect.NewRequest(&sensorv3.GetManifestRequest{}))
+		r, err := svc.GetManifest(ctx, connect.NewRequest(&sensorv3.GetManifestRequest{}))
 		return answer(r, err, func(m *sensorv3.GetManifestResponse) *http.Response {
 			return jsonResponse(http.StatusOK, m.GetResponseJson())
 		})
@@ -258,7 +268,7 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 		if err != nil {
 			return nil, err
 		}
-		r, err := st.svc.PutConfigReport(ctx, connect.NewRequest(&sensorv3.PutConfigReportRequest{ReportJson: doc}))
+		r, err := svc.PutConfigReport(ctx, connect.NewRequest(&sensorv3.PutConfigReportRequest{ReportJson: doc}))
 		return answer(r, err, func(m *sensorv3.PutConfigReportResponse) *http.Response {
 			return jsonResponse(http.StatusOK, m.GetResponseJson())
 		})
@@ -268,7 +278,7 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 		if err != nil {
 			return nil, err
 		}
-		r, err := st.svc.CheckFingerprints(ctx, connect.NewRequest(&sensorv3.CheckFingerprintsRequest{RequestJson: doc}))
+		r, err := svc.CheckFingerprints(ctx, connect.NewRequest(&sensorv3.CheckFingerprintsRequest{RequestJson: doc}))
 		return answer(r, err, func(m *sensorv3.CheckFingerprintsResponse) *http.Response {
 			return jsonResponse(http.StatusOK, m.GetResponseJson())
 		})
@@ -278,7 +288,7 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 		if err != nil {
 			return nil, err
 		}
-		r, err := st.svc.BaselineDiff(ctx, connect.NewRequest(&sensorv3.BaselineDiffRequest{RequestJson: doc}))
+		r, err := svc.BaselineDiff(ctx, connect.NewRequest(&sensorv3.BaselineDiffRequest{RequestJson: doc}))
 		return answer(r, err, func(m *sensorv3.BaselineDiffResponse) *http.Response {
 			return jsonResponse(http.StatusOK, m.GetResponseJson())
 		})
