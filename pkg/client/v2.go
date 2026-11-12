@@ -908,7 +908,7 @@ func (c *Client) v2DoWith(ctx context.Context, method, path string, body []byte,
 		return nil, nil, fmt.Errorf("read response: %w", err)
 	}
 	if len(data) > maxResponseBodyBytes {
-		return nil, nil, fmt.Errorf("response body exceeds %d bytes", maxResponseBodyBytes)
+		return nil, resp.Header, newResponseTooLarge(data)
 	}
 	return data, resp.Header, nil
 }

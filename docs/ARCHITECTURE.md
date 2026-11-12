@@ -122,6 +122,27 @@ platform can give the command to another sensor. A command that ends here
 poll the platform refuses with `Retry-After` (429/503) is not repeated
 before it (capped at 5 min); only time lifts that wait.
 
+**Oversized poll answer.** The client reads at most 10 MiB of an answer. One
+command with a large payload can push the answer to `GET /api/v2/sensor/commands`
+over that; the platform holds what it returned, so the same command would come
+back at every poll and nothing would start. The client does not retry such an
+answer (it is the same bytes again): it returns a `*client.ResponseTooLargeError`
+(`errors.Is(err, core.ErrResponseTooLarge)`) that keeps the first 4 KiB. The
+poller logs it, even without verbose mode (again when the state changes, else
+at most every 10 minutes), and asks for half as many commands at each poll down
+to one; the cap grows back after successful polls. When one command alone is
+still too large, the poller reads its id from the first bytes (it must be a
+UUID), claims it if the platform did not, and fails it with "the command's
+payload is larger than the 10 MiB the sensor accepts", so the commands behind it
+start. Nothing is ever run from a truncated answer. If the id cannot be read,
+the poller keeps asking for one command and logs it; the platform's lease on
+that command ends and it is offered again.
+The protocol v3 clients read at most the same 10 MiB
+(`connect.WithReadMaxBytes`); an answer cut off there is the same
+`ErrResponseTooLarge` (the platform's own `resource_exhausted` stays a rate
+limit). A v3 message is dropped whole, so the commands poll is asked once more
+over v2 HTTPS, whose first bytes name the command.
+
 **Order of the checks on a claimed command.** A command passes, in order:
 the command types the sensor serves and its expiry (before the claim); the
 claim itself; its **job signature** (`CommandPoller.SetJobGuard`,

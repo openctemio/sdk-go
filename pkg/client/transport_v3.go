@@ -31,6 +31,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/openctemio/sdk-go/pkg/core"
 	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 	sensorv3 "github.com/openctemio/sdk-go/pkg/sensorproto/v3"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/v3/sensorv3connect"
@@ -194,6 +195,15 @@ func (t *v3RoundTripper) call(req *http.Request, st *v3State, rest string, body 
 		r, err := st.svc.ClaimCommands(ctx, connect.NewRequest(&sensorv3.ClaimCommandsRequest{
 			Limit: int32(limit), Features: features,
 		}))
+		if v3ReadLimitExceeded(err) {
+			// The answer is over the size limit, and a v3 message is cut
+			// off whole: nothing of it is kept. The same poll over v2
+			// HTTPS gives the first bytes, from which the poller reads the
+			// id of the command it cannot carry and fails it
+			// (core.ResponseHeadProvider); that answer is size-checked
+			// the same way.
+			return t.next.RoundTrip(req)
+		}
 		return answer(r, err, func(m *sensorv3.ClaimCommandsResponse) *http.Response {
 			return jsonResponse(http.StatusOK, m.GetCommandsJson())
 		})
@@ -354,6 +364,9 @@ func answer[T any](r *connect.Response[T], err error, ok func(*T) *http.Response
 	if !errors.As(err, &ce) {
 		return nil, err
 	}
+	if v3ReadLimitExceeded(err) {
+		return nil, &ResponseTooLargeError{Limit: maxResponseBodyBytes}
+	}
 	for _, d := range ce.Details() {
 		v, derr := d.Value()
 		if p, isProblem := v.(*sensorv3.Problem); derr == nil && isProblem && p.GetHttpStatus() >= 400 && p.GetHttpStatus() < 600 {
@@ -402,10 +415,19 @@ func statusForCode(c connect.Code) (int, bool) {
 	return 0, false
 }
 
+// v3ReadLimitExceeded reports an answer the client cut off because it is
+// larger than connect.WithReadMaxBytes (maxResponseBodyBytes): the client's
+// own resource-exhausted error, not one the platform sent (that one is a
+// rate limit, 429).
+func v3ReadLimitExceeded(err error) bool {
+	return err != nil && connect.CodeOf(err) == connect.CodeResourceExhausted && !connect.IsWireError(err)
+}
+
 // transportFailure reports an error of the binding itself (not a refusal):
 // the manager counts these to decide on a fallback.
 func transportFailure(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, core.ErrResponseTooLarge) {
+		// An answer over the size limit is an answer: the binding works.
 		return false
 	}
 	switch connect.CodeOf(err) {

@@ -466,7 +466,10 @@ func (m *v3Manager) httpsClient(path string) sensorv3connect.SensorServiceClient
 	// host a 307/308 names (the signature does not cover the host), sending
 	// the body there, even over plain http.
 	hc := &http.Client{Transport: m.next, CheckRedirect: httpsec.RefuseRedirects}
-	return sensorv3connect.NewSensorServiceClient(hc, strings.TrimRight(m.c.baseURL, "/")+path)
+	// The same answer size limit as v2 (maxResponseBodyBytes): an answer
+	// over it is ErrResponseTooLarge on both bindings (v3ReadLimitExceeded).
+	return sensorv3connect.NewSensorServiceClient(hc, strings.TrimRight(m.c.baseURL, "/")+path,
+		connect.WithReadMaxBytes(maxResponseBodyBytes))
 }
 
 // tryGRPC gets a certificate when needed and says hello over gRPC. It
@@ -555,7 +558,8 @@ func (m *v3Manager) grpcClient(endpoint string) sensorv3connect.SensorServiceCli
 	tr.TLSHandshakeTimeout = 10 * time.Second
 	tr.IdleConnTimeout = 90 * time.Second
 	tr.ForceAttemptHTTP2 = true
-	return sensorv3connect.NewSensorServiceClient(&http.Client{Transport: tr, CheckRedirect: httpsec.RefuseRedirects}, "https://"+endpoint, connect.WithGRPC())
+	return sensorv3connect.NewSensorServiceClient(&http.Client{Transport: tr, CheckRedirect: httpsec.RefuseRedirects}, "https://"+endpoint, connect.WithGRPC(),
+		connect.WithReadMaxBytes(maxResponseBodyBytes))
 }
 
 // haveCert loads a cached certificate for endpoint that is not yet due for
