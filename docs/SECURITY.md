@@ -1249,7 +1249,15 @@ or the task does not start:
 ### 8. API Client Transport
 
 - API clients (`pkg/client`, the key renewal client) refuse HTTP redirects; the API
-  never issues them and following one would forward the bearer key.
+  never issues them and following one would forward the bearer key. This
+  holds for every protocol: the protocol v3 HTTPS and gRPC clients refuse them
+  too (a 307/308 would otherwise make the signing transport sign the RPC again
+  for another host, the signature does not cover the host, and send it there,
+  over plain http as well). The relay transport (`pkg/relayclient`) refuses
+  them on the request path and the answer poll: the relay is not trusted and a
+  redirect would carry the sealed message and the ticket elsewhere. The
+  deprecated runner mode (`sensorkit.CIRun`) refuses them with its default
+  HTTP client.
 - They only ever talk to the operator-configured base URL, so they do not
   apply the scan-target IP blocklist: a platform on loopback, RFC1918, ULA
   or CGNAT (Tailscale) addresses works without any opt-in. Link-local

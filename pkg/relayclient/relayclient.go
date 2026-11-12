@@ -43,6 +43,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/sealedmsg"
 	"github.com/openctemio/sdk-go/pkg/sensorproto/relay"
 )
@@ -188,10 +189,13 @@ func New(cfg Config) (*Transport, error) {
 		IdleConnTimeout:     90 * time.Second,
 		DialContext:         (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 15 * time.Second}).DialContext,
 	}
+	// The relay is not trusted and does not redirect: a redirect (even to
+	// plain http, with no dial guard) would send the sealed message and
+	// the sensor's ticket somewhere else, so none is followed.
 	return &Transport{
 		cfg: cfg, base: strings.TrimRight(cfg.RelayURL, "/"),
-		hc:      &http.Client{Transport: tr, Timeout: 2 * time.Minute},
-		poll:    &http.Client{Transport: tr, Timeout: (pollWait + 20) * time.Second},
+		hc:      &http.Client{Transport: tr, Timeout: 2 * time.Minute, CheckRedirect: httpsec.RefuseRedirects},
+		poll:    &http.Client{Transport: tr, Timeout: (pollWait + 20) * time.Second, CheckRedirect: httpsec.RefuseRedirects},
 		pending: map[[32]byte]chan *sealedmsg.Response{},
 	}, nil
 }

@@ -221,7 +221,12 @@ is claimed, the kit:
 The command poller claims nothing while `Janitor.AcceptsWork` is false: the
 outbox holds 85 % of its cap in unacknowledged results (or the last refused
 item would not fit), storage is at the high watermark after the cold cache
-was evicted, or the volume is low. It resumes when that clears and logs each
+was evicted, or the volume is low. The volume is at the high watermark when
+its free space is below both a share of the volume (`HighFreeFraction`,
+15 %) and an absolute ceiling (`HighFreeBytes`; by default the store quota,
+the workspace and pack budgets and 2 GiB, 16 GiB in all), so a large volume
+with plenty of room never stops claiming for its share alone; the reason
+names the free MiB. It resumes when that clears and logs each
 change once. Unacknowledged results are never deleted for space; results beat
 new work. Tools cannot read the store: its directory and key file are in the
 sandbox's protected paths. The heartbeat carries `local_store` (bytes per
@@ -290,7 +295,7 @@ the outbox keeps the report queued until the platform serves v2.
 |---|---|
 | 202, or 200 for an identical replay | delivered |
 | 429, 503 (`Retry-After`), 500, 502, 504, network | retried with the same `report_id`, back-off with jitter |
-| 413 | the refused request is halved into segments and sent again |
+| 413 | the refused request is halved into segments and sent again; when halving no longer makes the refused request smaller (one finding or asset above the limit), refused: dead letter, with a log line |
 | 409 `report-expired` / `segment-set-mismatch` | sent again under a new `report_id` |
 | 409 `report-conflict` / `report-committed` | delivered if the status resource says the report is committed |
 | 404 `command-not-found` (the command closed) | sent again unsolicited (not bound to the command) |
@@ -603,7 +608,8 @@ languages.
   pinned at pairing (`identity.json` `platform_tls_pin`) or by
   `SENSOR_CA_FINGERPRINT`, with no fallback to the trust store; the gRPC CA
   bundle is sticky and a certificate failure never falls back to another
-  binding; no redirects followed by the API clients, SSRF-safe HTTP
+  binding; no redirects followed by the API clients (protocol v2 and v3) or
+  the relay transport, SSRF-safe HTTP
   (`pkg/httpsec`).
 - **Command path**: signed jobs (the platform's separate job signer signs
   every claimed command; a sensor that pinned its key verifies the
