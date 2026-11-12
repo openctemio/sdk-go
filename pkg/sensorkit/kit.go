@@ -17,6 +17,7 @@ import (
 	"github.com/openctemio/sdk-go/internal/sensorstate"
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
+	"github.com/openctemio/sdk-go/pkg/ctlog"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/localstore"
 	"github.com/openctemio/sdk-go/pkg/netctx"
@@ -352,8 +353,10 @@ type Kit struct {
 	// feedRelayOrigins: the feed relay's origin allowlist (ServeFeedRelay);
 	// nil: the relay is off.
 	feedRelayOrigins []string
-	s                settings
-	out, errw        io.Writer
+	// ctLookup: the CT lookup client (ServeCTLookup); nil: off.
+	ctLookup  *ctlog.Client
+	s         settings
+	out, errw io.Writer
 
 	client *client.Client
 	sensor *core.BaseSensor
@@ -1191,6 +1194,7 @@ func (k *Kit) Run(ctx context.Context) error {
 		close(pollerDone)
 	}
 	k.startFeedRelay(ctx)
+	k.startCTLookup(ctx)
 
 	if err := s.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start sensor: %w", err)

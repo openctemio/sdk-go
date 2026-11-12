@@ -71,6 +71,13 @@ const SensorScopeInstance = "instance"
 // origins the sensor may download from.
 const CommandTypeFeedRelay = "feed_relay"
 
+// CommandTypeLookup is the command type of a lookup job: the platform asks
+// a platform-owned sensor a passive question on behalf of one organization
+// (capability lookup.ct@1: which certificates CT lists for a root domain).
+// Its statement carries that organization's tenant id (the answer is bound
+// to it) and SensorScopeInstance: an organization's sensor never runs one.
+const CommandTypeLookup = "lookup"
+
 // PlatformTenantID is the tenant id of a statement that belongs to the
 // platform (the nil UUID). Only a feed relay statement carries it.
 const PlatformTenantID = "00000000-0000-0000-0000-000000000000"

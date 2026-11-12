@@ -1,0 +1,4 @@
+[
+ {"id":"1001","tbs_sha256":"aa","cert_sha256":"6b1f9a2a3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7","dns_names":["example.com","www.example.com"],"pubkey_sha256":"bb","issuer":{"friendly_name":"Example Trust","name":"C=US, O=Example Trust, CN=Example TLS CA 1"},"not_before":"2026-09-01T00:00:00Z","not_after":"2026-11-30T23:59:59Z","revoked":false},
+ {"id":"1002","cert_sha256":"7c","dns_names":["*.mail.example.com","victim.example.net"],"issuer":{"friendly_name":"","name":"C=US, O=Other CA"},"not_before":"2026-10-01T00:00:00Z","not_after":"2027-01-01T00:00:00Z"}
+]
