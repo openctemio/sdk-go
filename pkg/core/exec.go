@@ -109,9 +109,12 @@ func runScanner(ctx context.Context, cfg *ExecConfig, stdoutLine, stderrLine fun
 		SetEnv:     cfg.Env,
 		Dir:        cfg.WorkDir,
 		WritePaths: cfg.WritePaths,
-		Limits:     cfg.Limits,
-		Stdout:     stdout,
-		Stderr:     stderr,
+		// The job's own files under the private task root (its custom
+		// templates): only this job's tasks get them.
+		ReadPaths: executor.ReadPathsFrom(ctx),
+		Limits:    cfg.Limits,
+		Stdout:    stdout,
+		Stderr:    stderr,
 		Hooks: executor.ProcessHooks{
 			Configure: ConfigureScannerProcess,
 			Started: func(cmd *exec.Cmd) {

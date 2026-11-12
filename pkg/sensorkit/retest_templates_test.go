@@ -10,12 +10,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
 )
@@ -58,12 +60,14 @@ func rtSign(t *testing.T, priv ed25519.PrivateKey, cmdID string, tpls []core.Emb
 // rtFixture is a retest executor for "nuclei" (opted in to templates) whose
 // run records the task and answers with verdict().
 type rtFixture struct {
-	x       *retestExecutor
-	priv    ed25519.PrivateKey
-	calls   int
-	task    tool.Task
-	files   map[string]string // item ref -> file content seen during the run
-	verdict func(task tool.Task) []tool.RetestVerdict
+	x     *retestExecutor
+	priv  ed25519.PrivateKey
+	calls int
+	task  tool.Task
+	files map[string]string // item ref -> file content seen during the run
+	// readPaths are the read grants the run's context carried.
+	readPaths []string
+	verdict   func(task tool.Task) []tool.RetestVerdict
 }
 
 func newRTFixture(t *testing.T, policy *core.LocalPolicy) *rtFixture {
@@ -80,9 +84,10 @@ func newRTFixture(t *testing.T, policy *core.LocalPolicy) *rtFixture {
 	exec.SetTemplateVerifier(v)
 	exec.SetSensorID(rtSensorID)
 	f := &rtFixture{priv: priv, files: map[string]string{}}
-	run := func(_ context.Context, task tool.Task) (*toolhost.Outcome, error) {
+	run := func(ctx context.Context, task tool.Task) (*toolhost.Outcome, error) {
 		f.calls++
 		f.task = task
+		f.readPaths = executor.ReadPathsFrom(ctx)
 		for _, it := range task.Retest {
 			if it.TemplatePath != "" {
 				b, err := os.ReadFile(it.TemplatePath)
@@ -156,6 +161,14 @@ func TestRetestTemplates_DeliveredTemplateRunsAndIsRemoved(t *testing.T) {
 		t.Errorf("an item without a template got %q", f.task.Retest[1].TemplatePath)
 	}
 	path := f.task.Retest[0].TemplatePath
+	// Written under the private task root, and granted to this retest's
+	// tool runs only (other jobs' tasks cannot read it).
+	if !strings.HasPrefix(path, executor.TaskRoot()+string(filepath.Separator)) {
+		t.Errorf("template written to %s, outside the private task root", path)
+	}
+	if !slices.Equal(f.readPaths, []string{filepath.Dir(path)}) {
+		t.Errorf("the run was granted %v, want only the template directory %s", f.readPaths, filepath.Dir(path))
+	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("the template file outlived the retest: %v", err)
 	}

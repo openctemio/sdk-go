@@ -29,6 +29,7 @@ import (
 	"github.com/openctemio/sdk-go/pkg/resource"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress/upstream"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/webscope"
 )
 
@@ -1992,22 +1993,26 @@ func (e *DefaultCommandExecutor) Execute(ctx context.Context, cmd *Command) (*Co
 
 // applyCustomTemplates writes the templates the platform signed for the command
 // and points the options at them. The returned cleanup is never nil.
-func (e *DefaultCommandExecutor) applyCustomTemplates(cmd *Command, payload *ScanCommandPayload, opts *ScanOptions, local *LocalPolicy) (func(), error) {
+//
+// SECURITY: the directory is under the private task root; ctx is returned
+// carrying it as a read path, so the job's tools, and no other job's, read
+// it.
+func (e *DefaultCommandExecutor) applyCustomTemplates(ctx context.Context, cmd *Command, payload *ScanCommandPayload, opts *ScanOptions, local *LocalPolicy) (context.Context, func(), error) {
 	noop := func() {}
 	if len(payload.CustomTemplates) == 0 {
-		return noop, nil
+		return ctx, noop, nil
 	}
 	if !local.AllowsCustomTemplates() {
-		return noop, refuse("allow_custom_templates", "the job carries %d custom template(s); this sensor's policy does not allow platform-supplied templates", len(payload.CustomTemplates))
+		return ctx, noop, refuse("allow_custom_templates", "the job carries %d custom template(s); this sensor's policy does not allow platform-supplied templates", len(payload.CustomTemplates))
 	}
 	// SECURITY: only templates the platform signed for this command are
 	// written (see verifyCustomTemplates); nothing is written before.
 	if err := e.verifyCustomTemplates(cmd, payload); err != nil {
-		return noop, err
+		return ctx, noop, err
 	}
 	templateDir, cleanup, err := e.writeCustomTemplates(payload.Scanner, payload.CustomTemplates)
 	if err != nil {
-		return noop, fmt.Errorf("write custom templates: %w", err)
+		return ctx, noop, fmt.Errorf("write custom templates: %w", err)
 	}
 	if cleanup == nil {
 		cleanup = noop
@@ -2017,7 +2022,7 @@ func (e *DefaultCommandExecutor) applyCustomTemplates(cmd *Command, payload *Sca
 	if e.verbose.Load() {
 		fmt.Printf("[executor] Using custom templates from %s\n", templateDir)
 	}
-	return cleanup, nil
+	return executor.WithReadPaths(ctx, templateDir), cleanup, nil
 }
 
 func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) (*CommandExecutionResult, error) {
@@ -2139,7 +2144,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	opts.RuleSources = ruleSources
 
 	// Handle custom templates if provided
-	cleanupTemplates, err := e.applyCustomTemplates(cmd, &payload, opts, local)
+	ctx, cleanupTemplates, err := e.applyCustomTemplates(ctx, cmd, &payload, opts, local)
 	if err != nil {
 		return nil, err
 	}
@@ -2491,6 +2496,21 @@ func validateScanArgValue(v string) error {
 // MaxTemplatesPerCommand is the maximum number of templates allowed per command.
 const MaxTemplatesPerCommand = 50
 
+// safeDirPart keeps letters, digits, '-' and '_' of s (at most 32), for a
+// directory name.
+func safeDirPart(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if b.Len() >= 32 {
+			break
+		}
+		if r == '-' || r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // writeCustomTemplates writes embedded templates to a temp directory.
 // Returns the temp directory path and a cleanup function.
 // SECURITY: This function validates all templates before writing to prevent:
@@ -2504,12 +2524,12 @@ func (e *DefaultCommandExecutor) writeCustomTemplates(scannerName string, templa
 
 // WriteCustomTemplates writes verified custom templates (see
 // VerifyCustomTemplates; nothing unverified may be written) to a new
-// private temporary directory (0700, each file 0600) and returns the
-// directory, each template's file in order, and the cleanup that removes
-// them. The directory is outside the sandbox's task root, so a tool's
-// sandboxed child of this sensor reads it, as a scan's custom template
-// directory. The same name, size, type and content-hash checks as a scan's
-// templates apply.
+// private directory under the sandbox's task root (0700, each file 0600)
+// and returns the directory, each template's file in order, and the cleanup
+// that removes them. The sandbox hides the task root from every task: run
+// the job's tools with executor.WithReadPaths(ctx, dir) so that they, and
+// only they, read it. The same name, size, type and content-hash checks as
+// a scan's templates apply.
 func WriteCustomTemplates(scannerName string, templates []EmbeddedTemplate) (dir string, files []string, cleanup func(), err error) {
 	return writeTemplateFiles(scannerName, templates, false)
 }
@@ -2529,10 +2549,16 @@ func writeTemplateFiles(scannerName string, templates []EmbeddedTemplate, verbos
 		}
 	}
 
-	// Create temp directory for templates
-	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("openctem-templates-%s-*", scannerName))
+	// SECURITY: a private directory under the task root, which the sandbox
+	// hides from every task. Only a task started with the job's context
+	// (executor.WithReadPaths) reads it: on a shared sensor another
+	// organization's concurrent task cannot read or list these templates
+	// (they may carry credentials, such as auth headers). Under the
+	// system's temporary directory any task launched afterwards could
+	// read them.
+	tmpDir, err := executor.NewTaskDir("templates-" + safeDirPart(scannerName))
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("create temp dir: %w", err)
+		return "", nil, nil, fmt.Errorf("create template dir: %w", err)
 	}
 
 	cleanup := func() {
