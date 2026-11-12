@@ -25,6 +25,7 @@ func clearEnv(t *testing.T) {
 		"AGENT_ALLOW_PRIVATE_TARGETS", core.EnvLocalPolicy, core.EnvAllowedRanges, core.EnvAllowedPorts, core.EnvKillSwitchFile,
 		core.EnvRequireLocalPolicy, netctx.EnvSite, netctx.EnvReach, netctx.EnvDNSSuffixes, netctx.EnvInternet, netctx.EnvReport,
 		netctx.EnvDNSResolvers, EnvSharedMode, EnvSandboxRequiredExit, EnvStoreDir, EnvStoreKeyFile, EnvWorkspaceDir, EnvContentBudgetMB,
+		EnvCommandTypes,
 	} {
 		t.Setenv(k, "")
 		_ = os.Unsetenv(k)

@@ -119,6 +119,14 @@ type Options struct {
 	// DisableDoorbell ignores the heartbeat doorbell and polls on the fixed
 	// interval.
 	DisableDoorbell bool
+	// CommandTypes, when set, are the only command types the sensor
+	// accepts (SENSOR_COMMAND_TYPES, comma-separated): a worker that serves
+	// only its own command types, such as one handled with HandleCommand,
+	// sets it so that it never takes scan, collect or health_check commands.
+	// Run fails when a listed type has no handler (HandleCommand,
+	// UseCommandMiddleware) and is not one the SDK's executor serves. Unset,
+	// the sensor accepts scan, collect, health_check and every handled type.
+	CommandTypes []string
 	// MaxJobs caps the commands run at once, 1-100 (SENSOR_MAX_JOBS; default
 	// no cap: the slots follow the CPU, memory and tools' learned cost).
 	MaxJobs int
@@ -295,6 +303,9 @@ type settings struct {
 	name, apiURL, apiKey, sensorID, protocol string
 	commands                                 bool
 	shared                                   bool
+	// serveOnly are the only command types accepted (Options.CommandTypes);
+	// nil: the served types.
+	serveOnly []string
 	// scanEgress is the local veto on platform proxy pools (scan_egress.go).
 	scanEgress ScanEgress
 	// ledger: a shared sensor's held jobs; the client refuses results
@@ -586,6 +597,7 @@ func New(opts Options) (*Kit, error) {
 		s.pollInterval = DefaultCommandPollInterval
 	}
 	k.resolveAllowlist(opts.Tools)
+	s.serveOnly = resolveCommandTypes(opts.CommandTypes)
 
 	s.name = firstNonEmpty(opts.Name, os.Getenv(EnvSensorName))
 	if s.name == "" {
@@ -664,6 +676,9 @@ func (k *Kit) initSettings() {
 	}
 	if opts.Tools != nil {
 		k.reg.MarkOption(EnvTools)
+	}
+	if len(opts.CommandTypes) > 0 {
+		k.reg.MarkOption(EnvCommandTypes)
 	}
 	k.doc = newDoctor(k.reg, k.secretValues)
 }
@@ -1091,6 +1106,9 @@ func (k *Kit) Run(ctx context.Context) error {
 	// order added; the heartbeat probes them.
 	reg := s.Tools()
 	scanners := k.inventory(reg)
+	if err := k.checkServeOnly(scanners); err != nil {
+		return err
+	}
 	reg.SetMaxConcurrentJobs(k.s.maxJobs)
 	// A tool's version check runs in the background after the first one: on
 	// a saturated sensor it takes seconds, and the heartbeat must not wait
@@ -1401,6 +1419,11 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 		for _, t := range k.middlewares[i].types {
 			types = appendType(types, t)
 		}
+	}
+	// A worker that serves only its own types accepts exactly those
+	// (checkServeOnly made sure each is served).
+	if k.s.serveOnly != nil {
+		types = slices.Clone(k.s.serveOnly)
 	}
 
 	// Slots follow what this sensor may use (cgroup-aware CPU and memory)

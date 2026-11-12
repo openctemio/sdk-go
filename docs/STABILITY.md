@@ -117,6 +117,12 @@ never lists tools.
 - **A new command type**: `Kit.HandleCommand(type, executor)`; wrap
   existing ones with `Kit.UseCommandMiddleware`. A type a sensor does not
   handle stays pending for a sensor that does (the poller's allowed types).
+  A worker that serves only its own command types sets
+  `sensorkit.Options.CommandTypes` (`SENSOR_COMMAND_TYPES`); its executor
+  returns typed output in `core.CommandExecutionResult.Output`
+  (`core.CommandResult.Output` on the wire, at most
+  `core.MaxCommandOutputBytes`; error codes `core.ErrorCodeOutputTooLarge`,
+  `core.ErrorCodeOutputInvalid`) and reads `core.JobVerifiedFromContext`.
 - **A new tool option or flag**: it travels in the command payload
   (`core.Command.Payload` is raw JSON) and in the tool wrapper's own
   configuration, both in the sensor. `core.ScanOptions` holds only

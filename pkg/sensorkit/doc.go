@@ -31,9 +31,17 @@
 //
 // A sensor plugs its own parts in through Options (Content for managed
 // scanner content, ScanTargetPolicy, AssetResolver, UnavailableReason),
-// AddParser, HandleCommand and UseCommandMiddleware. pkg/core stays
-// available for anything the kit does not cover (Kit.Sensor, Kit.Tools,
-// Kit.Client).
+// AddParser, HandleCommand and UseCommandMiddleware. A worker that serves
+// only its own command types lists them, and the sensor then accepts no
+// scan, collect or health_check command:
+//
+//	kit, err := sensorkit.New(sensorkit.Options{Name: "example-worker", CommandTypes: []string{"example_job"}})
+//	sensorkit.Exit(err)
+//	kit.HandleCommand("example_job", myExecutor) // returns CommandExecutionResult.Output
+//	sensorkit.Exit(kit.Run(context.Background()))
+//
+// pkg/core stays available for anything the kit does not cover (Kit.Sensor,
+// Kit.Tools, Kit.Client).
 //
 // Stability: Stable (docs/STABILITY.md); runner mode (CIRun, Kit.RunOnce) is
 // Beta.

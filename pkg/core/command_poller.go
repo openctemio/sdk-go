@@ -125,6 +125,11 @@ type CommandResult struct {
 	// On a failed command they are the targets settled before the failure
 	// (FailureTargetOutcomes).
 	TargetOutcomes []outcome.Target `json:"target_outcomes,omitempty"`
+	// Output is the typed output of a completed command
+	// (CommandExecutionResult.Output), at most MaxCommandOutputBytes. The
+	// poller sets it in its reported form; it is sent and kept in the
+	// outbox byte for byte.
+	Output json.RawMessage `json:"output,omitempty"`
 }
 
 // GetCommandsResponse is the response from GetCommands.
@@ -329,6 +334,12 @@ type CommandExecutionResult struct {
 	// TargetOutcomes is how each of a scan job's targets ended, in job
 	// order (target_outcomes.go); nil for other commands.
 	TargetOutcomes []outcome.Target
+	// Output is the command's typed output: one JSON value, at most
+	// MaxCommandOutputBytes, that the platform stores as the handler wrote
+	// it (in compact form; see CommandResult.Output). Metadata is
+	// re-encoded, Output is not. A larger or invalid output fails the
+	// command (ErrorCodeOutputTooLarge, ErrorCodeOutputInvalid).
+	Output json.RawMessage
 }
 
 // CommandPoller polls the server for pending commands.
@@ -1382,6 +1393,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	// an outbox binds them to it and reports the command only after they
 	// were accepted.
 	ctx = WithCommandID(ctx, cmd.ID)
+	ctx = withJobVerified(ctx, cmd.jobVerified)
 	// A shared sensor holds the command (its result included, the defer
 	// above releases it last) for the organization its verified job names.
 	if p.ledger != nil {
@@ -1567,6 +1579,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 			reportResult.ExitCode = result.ExitCode
 			reportResult.Metadata = result.Metadata
 			reportResult.TargetOutcomes = result.TargetOutcomes
+			setCommandOutput(reportResult, result.Output)
 		}
 		if p.verbose.Load() {
 			fmt.Printf("[command-poller] Command %s completed (findings: %d)\n", cmd.ID, reportResult.FindingsCount)
