@@ -815,7 +815,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	cpu := &core.ProcessCPU{}
 	t, err := be.Prepare(executor.TaskSpec{
 		ID: m.Name, Argv: argv, Env: h.taskEnv(m, o.Env), SetEnv: h.taskSetEnv(o.Env), Dir: p.workdir,
-		WritePaths: append([]string{p.workdir}, o.WritePaths...), ReadPaths: p.contentPaths, Limits: o.Limits,
+		WritePaths: append([]string{p.workdir}, o.WritePaths...), ReadPaths: append(executor.ReadPathsFrom(ctx), p.contentPaths...), Limits: o.Limits,
 		Network: networkClass(m.Permissions.Network), Stdin: inR, Stdout: outW, Stderr: stderr,
 		Hooks: executor.ProcessHooks{Configure: core.ConfigureScannerProcess, Started: func(cmd *exec.Cmd) {
 			core.ApplyScannerPriority(cmd)

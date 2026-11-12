@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress/upstream"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
 	"github.com/openctemio/sdk-go/pkg/tool/toolcompat"
@@ -216,6 +219,9 @@ func (x *retestExecutor) Execute(ctx context.Context, cmd *core.Command) (*core.
 		return nil, err
 	}
 	defer cleanup()
+	// The templates sit in a private directory under the task root: this
+	// retest's tool runs, and no other job's, may read them.
+	ctx = executor.WithReadPaths(ctx, retestTemplateDirs(task)...)
 	timeout := defaultRetestTimeout
 	if p.TimeoutSeconds > 0 {
 		timeout = min(time.Duration(p.TimeoutSeconds)*time.Second, maxRetestTimeout)
@@ -355,6 +361,19 @@ func (x *retestExecutor) prepareTemplates(cmd *core.Command, name string, p rete
 		digests[it.Ref] = jobsig.TemplateDigest(contents[n])
 	}
 	return digests, cleanup, nil
+}
+
+// retestTemplateDirs are the directories of the task's delivered templates.
+func retestTemplateDirs(task tool.Task) []string {
+	var dirs []string
+	for _, it := range task.Retest {
+		if it.TemplatePath != "" {
+			if d := filepath.Dir(it.TemplatePath); !slices.Contains(dirs, d) {
+				dirs = append(dirs, d)
+			}
+		}
+	}
+	return dirs
 }
 
 // templatedVerdicts holds templated items to the template delivered: a
