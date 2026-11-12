@@ -89,6 +89,18 @@ const (
 	// RFC-035 D6). Optional; without it the platform fences by sensor and
 	// state.
 	HeaderLeaseEpoch = "X-OpenCTEM-Lease-Epoch"
+	// HeaderLateCommand and HeaderLateLeaseEpoch name the command and the
+	// lease epoch a report was made for when it is sent without a command
+	// after the platform refused it bound (command-not-found): the run's
+	// command closed, or the platform took the run back and handed the
+	// command out again. They are the report's provenance, not a binding:
+	// the report keeps the authority of a report of no command. A platform
+	// that knows them refuses a late report of a run it handed out again
+	// (ProblemLeaseSuperseded); one that does not ignores them. Sent on the
+	// PUT and the commit of such a report; HeaderLateLeaseEpoch only when
+	// the sensor knew the epoch.
+	HeaderLateCommand    = "X-OpenCTEM-Late-Command"
+	HeaderLateLeaseEpoch = "X-OpenCTEM-Late-Lease-Epoch"
 )
 
 // FeatureResults is the hello feature of the results resource.
@@ -158,6 +170,10 @@ const (
 	ProblemTooManyOpenReports    ProblemType = "too-many-open-reports"
 	ProblemInternal              ProblemType = "internal"
 	ProblemUnavailable           ProblemType = "unavailable"
+	// ProblemLeaseSuperseded: a late report (HeaderLateCommand) is of a run
+	// the platform took back and handed out again; the run that replaced
+	// it reports for the command. Final: the report is not sent again.
+	ProblemLeaseSuperseded ProblemType = "lease-superseded"
 )
 
 // ItemError is one per-item error on a 422 problem or on the status resource.

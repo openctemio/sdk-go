@@ -272,7 +272,8 @@ the outbox keeps the report queued until the platform serves v2.
 | 413 | the refused request is halved into segments and sent again |
 | 409 `report-expired` / `segment-set-mismatch` | sent again under a new `report_id` |
 | 409 `report-conflict` / `report-committed` | delivered if the status resource says the report is committed |
-| 404 `command-not-found` (the command closed) | sent again unsolicited (not bound to the command) |
+| 404 `command-not-found` (the command closed, or the platform took the run back) | sent again without the command, with `X-OpenCTEM-Late-Command` and `X-OpenCTEM-Late-Lease-Epoch` naming the command and epoch it was made for (over v2 HTTPS, also on a v3 binding) |
+| 409 `lease-superseded` (a late report of a run the platform handed out again) | refused: dead letter, with a log line naming the command and epoch |
 | 401 | delivery paused until the key is accepted (heartbeat) or replaced (`SetAPIKey`) |
 | other 4xx | refused: dead letter |
 
