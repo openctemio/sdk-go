@@ -45,7 +45,7 @@ type DiskState struct {
 // maxLowMarkFromShare caps the part of the low mark that comes from the
 // default share of the volume (5 %): 5 % of a 2 TiB volume would stop a
 // sensor with 100 GiB free. An operator's own Options.MinFreeFraction is
-// honoured as set, and a larger MinFreeBytes always applies.
+// honored as set, and a larger MinFreeBytes always applies.
 const maxLowMarkFromShare = 8 << 30
 
 // Disk reports the free space of the store's volume.

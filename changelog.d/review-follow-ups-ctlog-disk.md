@@ -11,4 +11,4 @@
 ### Fixed: the disk high watermark no longer flaps around its mark
 
 - `pkg/localstore`: once free space fell below the high marks (share of the volume and `HighFreeBytes`), claiming resumes only when free space is 10 % above both, so a volume hovering near 16 GiB free no longer switches claiming on and off at every sweep.
-- The 8 GiB cap of the low disk mark applies only to the default share (5 %): an operator's own `Options.MinFreeFraction` is honoured in full.
+- The 8 GiB cap of the low disk mark applies only to the default share (5 %): an operator's own `Options.MinFreeFraction` is honored in full.
