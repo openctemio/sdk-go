@@ -5,7 +5,7 @@
 // sensor moves. The sensor manifest carries the report (member "network")
 // to a platform that lists the "network" hello feature.
 //
-// Design: https://github.com/openctemio/openctem/blob/develop/api/docs/rfcs/RFC-089-reachability-aware-routing.md
+// Design: https://github.com/openctemio/openctem/blob/develop/server/docs/rfcs/RFC-089-reachability-aware-routing.md
 //
 // Security. The report is a hint the platform may use only to take work
 // away from this sensor or to rank sensors that are already authorized; it
