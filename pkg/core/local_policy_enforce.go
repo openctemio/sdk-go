@@ -8,7 +8,6 @@ package core
 // resolve to a denied address between the check and the connection.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,12 +15,9 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
-	"slices"
-	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/openctemio/contract/capability"
 	"github.com/openctemio/sdk-go/pkg/httpsec"
 	"github.com/openctemio/sdk-go/pkg/internal/absname"
 	"github.com/openctemio/sdk-go/pkg/reach"
@@ -56,6 +52,10 @@ type policyJob struct {
 	Params     map[string]json.RawMessage `json:"params"`
 	// CustomTemplates only needs its length.
 	CustomTemplates []json.RawMessage `json:"custom_templates"`
+	// SettingsLayers are the tenant's and the sensor's tool settings: they
+	// reach the tool's settings like Config does (resolveScanSettings), so
+	// a port list in one is a ports setting too.
+	SettingsLayers *SettingsLayers `json:"settings_layers"`
 }
 
 func (j *policyJob) tool(cmdType string) string {
@@ -344,20 +344,11 @@ func (lp *LocalPolicy) admitJob(cmd *Command) ([]string, error) {
 	}
 	// Out-of-band callbacks the policy turns off are not a refusal: the
 	// executor runs the job without them (applyJobConfig).
-	// A port list the job hands its tool as a setting (api RFC-038, e.g.
-	// naabu's "ports") must lie inside ports.allow too.
+	// A port list the job hands its tool, in its config, in the tenant's or
+	// the sensor's settings layer, or as a standard param, must lie inside
+	// ports.allow too (api RFC-038).
 	if lp.ports != nil {
-		for _, cfg := range []map[string]any{job.Config, job.ScannerConfig} {
-			if v, ok := cfg["ports"]; ok {
-				if err := lp.checkPortSetting(v); err != nil {
-					return nil, err
-				}
-			}
-			if err := lp.checkTopPortsSetting(cfg); err != nil {
-				return nil, err
-			}
-		}
-		if err := lp.checkPortParams(job.Capability, job.Params); err != nil {
+		if err := lp.checkJobPorts(&job); err != nil {
 			return nil, err
 		}
 	}
@@ -560,124 +551,6 @@ func splitNetworkTarget(t string) (string, int, error) {
 		return "", 0, fmt.Errorf("no host")
 	}
 	return host, port, nil
-}
-
-func (lp *LocalPolicy) checkPort(port int) error {
-	if lp.ports == nil {
-		return nil
-	}
-	for _, r := range lp.ports {
-		if port >= r.lo && port <= r.hi {
-			return nil
-		}
-	}
-	return refuse("ports.allow", "port %d is not in %s", port, lp.portsText)
-}
-
-// checkPortSetting checks a job's "ports" setting: a port number or a list
-// such as "80,443,8000-8100", every port of which ports.allow must allow. A
-// value the policy cannot read ("top-100", "full") is refused.
-func (lp *LocalPolicy) checkPortSetting(v any) error {
-	var spec string
-	switch x := v.(type) {
-	case string:
-		spec = x
-	case float64:
-		spec = strconv.FormatFloat(x, 'f', -1, 64)
-	default:
-		return refuse("ports.allow", "the job's ports setting %v cannot be checked against the policy", v)
-	}
-	ranges, err := parsePorts(spec)
-	if err != nil {
-		return refuse("ports.allow", "the job's ports setting %q cannot be checked against the policy", spec)
-	}
-	for _, r := range ranges {
-		for p := r.lo; p <= r.hi; p++ {
-			if err := lp.checkPort(p); err != nil {
-				return refuse("ports.allow", "the job's ports setting %q includes port %d, which is not in %s", spec, p, lp.portsText)
-			}
-		}
-	}
-	return nil
-}
-
-// topPortKeys are the settings that make a tool scan its own "top N" port
-// list instead of a list the job names (naabu "top_ports", the standard
-// param "top_n").
-var topPortKeys = []string{"top_ports", "top_n"}
-
-// checkTopPortsSetting refuses a job that asks for a top-N port list while
-// ports.allow is set. The sdk does not know a tool's top-N list, so it
-// cannot prove every port of it is allowed, and the list would otherwise
-// run outside the operator's allow-list: the job is refused (fail closed).
-// An operator who wants top-N scans lists those ports in ports.allow and
-// the platform names them in "ports". A null or absent value is no request.
-func (lp *LocalPolicy) checkTopPortsSetting(cfg map[string]any) error {
-	for _, k := range topPortKeys {
-		if v, ok := cfg[k]; ok && v != nil {
-			return refuse("ports.allow", "the job's %s setting (%v) asks the tool to pick the ports, which cannot be checked against %s; name the ports in the job's ports setting", k, v, lp.portsText)
-		}
-	}
-	return nil
-}
-
-// checkPortParams applies ports.allow to the standard params of a
-// capability job. A param is a port list when the capability's catalog
-// entry types it port_list (the manifest maps it onto the tool's ports key),
-// or, for a capability the catalog does not know, when it is named "ports";
-// "top_n" and "top_ports" ask the tool to pick the ports and are refused as
-// in checkTopPortsSetting. A null value is no request.
-func (lp *LocalPolicy) checkPortParams(ref string, params map[string]json.RawMessage) error {
-	if len(params) == 0 {
-		return nil
-	}
-	c, known := capability.Lookup(ref)
-	names := make([]string, 0, len(params))
-	for n := range params {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		raw := bytes.TrimSpace(params[name])
-		if len(raw) == 0 || string(raw) == "null" {
-			continue
-		}
-		if slices.Contains(topPortKeys, name) {
-			return refuse("ports.allow", "the job's %s param (%s) asks the tool to pick the ports, which cannot be checked against %s; name the ports in the job's ports param", name, raw, lp.portsText)
-		}
-		isPorts := name == "ports"
-		if known {
-			if p, ok := c.Param(name); ok && p.Type == capability.ParamPortList {
-				isPorts = true
-			}
-		}
-		if !isPorts {
-			continue
-		}
-		dec := json.NewDecoder(bytes.NewReader(raw))
-		var v any
-		if err := dec.Decode(&v); err != nil {
-			return refuse("ports.allow", "the job's %s param cannot be checked against the policy", name)
-		}
-		if list, ok := v.([]any); ok {
-			parts := make([]string, 0, len(list))
-			for _, e := range list {
-				switch x := e.(type) {
-				case string:
-					parts = append(parts, x)
-				case float64:
-					parts = append(parts, strconv.FormatFloat(x, 'f', -1, 64))
-				default:
-					return refuse("ports.allow", "the job's %s param cannot be checked against the policy", name)
-				}
-			}
-			v = strings.Join(parts, ",")
-		}
-		if err := lp.checkPortSetting(v); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // checkIP checks one address: the built-in deny list, the private-range

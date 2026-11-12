@@ -1,0 +1,11 @@
+### Security: the local policy's ports.allow covers every place a job names ports
+
+- `ports.allow` was applied only to the job's `config["ports"]`, `top_ports`/`top_n` and port-list standard params. The tenant's and the sensor's `settings_layers`, which the sensor merges into the tool's settings (and, for a manifest tool, its argv), were never read: a tenant layer with `ports: 1-65535` or `top_ports: 1000` reached the tool. A port list under another key (`port_range`, `tcp_ports`, a group such as `net.ports`, or whatever key a tool's manifest maps the standard `ports` param to) passed too.
+- Admission now reads `config`, `scanner_config` and both settings layers, and recognises port settings by their names. The executor then checks the settings the tool will run with once more (every layer and the schema's defaults resolved) and refuses the job with rule `ports.allow` when a port list is outside the allow-list or a top-N count is set. A tool's manifest tells which of its config keys are ports: `toolcompat.AsScanner` implements the new `core.PortSettingsProvider` from the `implements[].params` mapping of `ports` and `top_n`.
+- The egress forwarder enforces `ports.allow` at connect time: `egress.Scope.Ports` is filled from the local policy (`core.LocalPolicy.AllowedPorts`, the new optional `toolhost.PortsPolicy`) for a task whose manifest network is `targets` or `resolver`, so a tool cannot reach another port whatever its settings or a redirect say.
+
+### Behaviour change: a port scan must name its ports when ports.allow is set
+
+- A job of the port-scan capability (`scan.ports`) that names no ports used to run the tool's default top-N list, outside `ports.allow`. With `ports.allow` set it is now refused (rule `ports.allow`): "name the ports in the job; the tool's default list cannot be checked against the local policy's ports.allow". Name the ports in the job's `ports` param (or in a settings layer). A sensor without `ports.allow` is unchanged.
+- A tool's own default top-N setting (for example a schema default `top_ports: 100`) is refused under `ports.allow` unless the job names a port list; a default port list outside the allow-list is refused.
+- Not changed: `discover.hosts` and other capabilities that probe a few default ports are not port scans here; `exclude_ports`-style lists that narrow a scan are not checked.

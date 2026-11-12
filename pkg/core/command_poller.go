@@ -2067,10 +2067,16 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// The tenant's and the sensor's layers come with the command; the job's
 	// limits and per-target budget reach the tool's common options; the
 	// local policy caps the rate last.
-	settings, ignoredConfig, err := resolveScanSettings(e.scannerSettingsSchema(payload.Scanner, scanner), payload.SettingsLayers, payload.Config,
+	schema := e.scannerSettingsSchema(payload.Scanner, scanner)
+	settings, ignoredConfig, err := resolveScanSettings(schema, payload.SettingsLayers, payload.Config,
 		jobSettings{rate: opts.RateLimit, concurrency: opts.Concurrency, targetBudget: payload.Budget.Target(), capRate: local.CapRate})
 	if err != nil {
 		return nil, fmt.Errorf("invalid %s settings: %w", payload.Scanner, err)
+	}
+	// What the tool will run with (every layer and its defaults resolved)
+	// stays inside the local policy's ports, whichever setting names them.
+	if err := checkResolvedJobPorts(local, schema, settings, scanner, &payload); err != nil {
+		return nil, err
 	}
 	opts.Settings = settings
 	if len(ignoredConfig) > 0 && e.verbose.Load() {

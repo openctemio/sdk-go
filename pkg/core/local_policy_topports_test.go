@@ -66,11 +66,15 @@ func TestLocalPolicy_PortsAllowAppliesToCapabilityParams(t *testing.T) {
 		"ports array outside": {job("scan.ports@1", map[string]any{"ports": []string{"80", "22"}}), "ports.allow"},
 		"ports inside":        {job("scan.ports@1", map[string]any{"ports": "80,443"}), ""},
 		"ports array inside":  {job("scan.ports@1", map[string]any{"ports": []string{"80", "443"}}), ""},
-		"null top_n":          {job("scan.ports@1", map[string]any{"top_n": nil}), ""},
 		"unknown capability":  {job("nope.nothing@1", map[string]any{"ports": "22"}), "ports.allow"},
-		"unrelated param":     {job("scan.ports@1", map[string]any{"rate": 10}), ""},
-		"no params":           {job("scan.ports@1", nil), ""},
 		"hosts ports param":   {job("discover.hosts@1", map[string]any{"ports": "1-1024"}), "ports.allow"},
+		// A port scan that names no ports runs the tool's own default list,
+		// which the sdk cannot prove is inside ports.allow: these were
+		// admitted before, and are refused now (TestLocalPolicy_PortScanCapabilityMustNamePorts).
+		"null top_n":      {job("scan.ports@1", map[string]any{"top_n": nil}), "ports.allow"},
+		"unrelated param": {job("scan.ports@1", map[string]any{"rate": 10}), "ports.allow"},
+		"no params":       {job("scan.ports@1", nil), "ports.allow"},
+		"ports and rate":  {job("scan.ports@1", map[string]any{"ports": "80", "rate": 10}), ""},
 	} {
 		err := lp.AdmitCommand(context.Background(), tc.cmd)
 		if tc.rule == "" && err != nil {
