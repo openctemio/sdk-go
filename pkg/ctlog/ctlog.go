@@ -44,7 +44,6 @@
 package ctlog
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -523,47 +522,15 @@ func (c *capReader) Read(p []byte) (int, error) {
 // certSpotterIssuance is one record of Cert Spotter's /v1/issuances answer
 // with expand=dns_names and expand=issuer.
 type certSpotterIssuance struct {
-	ID        string      `json:"id"`
-	DNSNames  cappedNames `json:"dns_names"`
-	NotBefore string      `json:"not_before"`
-	NotAfter  string      `json:"not_after"`
+	ID        string   `json:"id"`
+	DNSNames  []string `json:"dns_names"`
+	NotBefore string   `json:"not_before"`
+	NotAfter  string   `json:"not_after"`
 	Issuer    struct {
 		FriendlyName string `json:"friendly_name"`
 		Name         string `json:"name"`
 	} `json:"issuer"`
 	CertSHA256 string `json:"cert_sha256"`
-}
-
-// cappedNames is a JSON list of names that keeps only the first
-// ctlookup.MaxNamesPerRecord: the rest are never made into strings. The row
-// it is part of is already capped at maxRowBytes and checked to be valid
-// JSON by the decoder before this runs.
-type cappedNames []string
-
-// UnmarshalJSON reads the list one name at a time and stops at the cap.
-func (n *cappedNames) UnmarshalJSON(b []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(b))
-	tok, err := dec.Token()
-	if err != nil {
-		return err
-	}
-	if tok == nil { // null
-		*n = nil
-		return nil
-	}
-	if d, ok := tok.(json.Delim); !ok || d != '[' {
-		return errors.New("dns_names is not a list")
-	}
-	out := []string{}
-	for dec.More() && len(out) < ctlookup.MaxNamesPerRecord {
-		var s string
-		if err := dec.Decode(&s); err != nil {
-			return err
-		}
-		out = append(out, s)
-	}
-	*n = out
-	return nil
 }
 
 // queryCertSpotter lists the unexpired issuances of domain and the names
@@ -603,7 +570,12 @@ func (c *Client) queryCertSpotter(ctx context.Context, domain, after string) ([]
 				if issuer == "" {
 					issuer = it.Issuer.Name
 				}
-				names := []string(it.DNSNames)
+				// The row is capped at maxRowBytes while it is read, which
+				// bounds this list; only the first names are kept.
+				names := it.DNSNames
+				if len(names) > ctlookup.MaxNamesPerRecord {
+					names = names[:ctlookup.MaxNamesPerRecord:ctlookup.MaxNamesPerRecord]
+				}
 				out = append(out, ctlookup.Record{
 					Source: ctlookup.SourceCertSpotter, EntryID: clipField(it.ID), DNSNames: names,
 					Issuer: clipField(issuer), Serial: clipField(it.CertSHA256),

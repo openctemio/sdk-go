@@ -1,6 +1,6 @@
 ### Fixed: one giant Certificate Transparency row no longer costs hundreds of MiB
 
-- `pkg/ctlog`: the record and byte caps held for an answer, but one row was still read whole: a crt.sh row of tens of MiB of names, or a Cert Spotter issuance with millions of `dns_names`, cost up to several GiB of allocations before the cap was reached. Each row is now capped at 2 MiB (a real row is a few KiB; the contract keeps at most 1000 names of 253 bytes) and an answer with a row over it is `too_large`; the names of a row are cut at the contract's 1000 while they are read.
+- `pkg/ctlog`: the record and byte caps held for an answer, but one row was still read whole: a crt.sh row of tens of MiB of names, or a Cert Spotter issuance with millions of `dns_names`, cost up to several GiB of allocations before the cap was reached. Each row is now capped at 2 MiB (a real row is a few KiB; the contract keeps at most 1000 names of 253 bytes) and an answer with a row over it is `too_large`; crt.sh's names are cut at the contract's 1000 while they are split.
 
 ### Fixed: a big domain no longer costs eleven Cert Spotter requests at every lookup
 

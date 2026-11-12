@@ -258,7 +258,7 @@ func TestCertSpotterOneGiantRowIsTooLargeAndCheap(t *testing.T) {
 	}
 }
 
-// A row under the row cap with many names keeps the first
+// A crt.sh row under the row cap with many names keeps the first
 // MaxNamesPerRecord, and the rest never become strings or slice entries.
 func TestRowNamesAreCutWhileRead(t *testing.T) {
 	const many = 100_000 // about 1.5 MiB: under the row cap
@@ -271,14 +271,6 @@ func TestRowNamesAreCutWhileRead(t *testing.T) {
 		if n != "a.example.com" {
 			t.Fatalf("crt.sh: a cut name kept the rest of the row (%d bytes)", len(n))
 		}
-	}
-	cs := giantRow{prefix: `[{"id":"1","dns_names":["a.example.com"`, unit: `,"a.example.com"`, suffix: `]}]`, n: many}
-	var got []certSpotterIssuance
-	if err := decodeArray(&cs, 10, func(it certSpotterIssuance) { got = append(got, it) }); err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || len(got[0].DNSNames) != ctlookup.MaxNamesPerRecord {
-		t.Fatalf("Cert Spotter: %d issuances", len(got))
 	}
 	// A row exactly at the cap is read; the cap is per row, not per answer.
 	var rows []crtshEntry
