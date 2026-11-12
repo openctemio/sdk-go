@@ -34,6 +34,11 @@ const (
 	// RefusalRuleSecretsInvalid: the job's signed secret list is not a
 	// valid secretref.Set.
 	RefusalRuleSecretsInvalid = "secrets_invalid"
+	// RefusalRuleSecretsUnverified: the job requires platform secrets and
+	// its signature was not verified (the sensor pins no job signer, or the
+	// job is unsigned). The secret list is honored only from a verified
+	// signed job, so the job could only run without its credentials.
+	RefusalRuleSecretsUnverified = "secrets_unverified"
 )
 
 // SecretsFetcher fetches the values of a job's refs for one task (the
@@ -54,6 +59,18 @@ type JobSecrets struct {
 	set    *secretref.Set
 	shared bool
 	fetch  SecretsFetcher
+	// ignored counts the optional refs of an unverified job's list: not
+	// used, and said so in the job's log (IgnoredOptional).
+	ignored int
+}
+
+// IgnoredOptional is the number of optional secret refs the job listed
+// that are not used because its signature was not verified.
+func (j *JobSecrets) IgnoredOptional() int {
+	if j == nil {
+		return 0
+	}
+	return j.ignored
 }
 
 // NewJobSecrets returns the secrets of command cmdID: set is the job's
@@ -136,14 +153,18 @@ func (j *JobSecrets) ForwarderRef(poolID string) (secretref.Ref, bool) {
 
 // JobSecretsFor reads the secret refs of cmd. Only a job whose signature
 // the JobGuard verified carries a list: an unverified payload's "secrets"
-// member is ignored (no platform values). A list that is not valid, or
-// that requires a kind this sensor does not know, refuses the job (a
-// *LocalPolicyError); an unknown kind on an optional ref is skipped by
-// every consumer.
+// member gives no platform values. An unverified job whose list requires a
+// secret is refused (RefusalRuleSecretsUnverified), so it neither runs
+// without its credentials nor fails later with a vaguer reason; its
+// optional refs are left out and counted (IgnoredOptional); a list that is
+// present but cannot be read refuses it too. A list that is
+// not valid, or that requires a kind this sensor does not know, refuses a
+// verified job (a *LocalPolicyError); an unknown kind on an optional ref is
+// skipped by every consumer.
 func JobSecretsFor(cmd *Command, shared bool, fetch SecretsFetcher) (*JobSecrets, error) {
 	js := &JobSecrets{cmdID: cmd.ID, shared: shared, fetch: fetch}
 	if !cmd.jobVerified {
-		return js, nil
+		return js, unverifiedSecrets(cmd.Payload, js)
 	}
 	set, err := secretSetOf(cmd.Payload)
 	if err != nil || set == nil {
@@ -153,8 +174,35 @@ func JobSecretsFor(cmd *Command, shared bool, fetch SecretsFetcher) (*JobSecrets
 	return js, nil
 }
 
-// secretSetOf decodes and checks the payload's secrets member (nil: none).
-func secretSetOf(payload json.RawMessage) (*secretref.Set, error) {
+// unverifiedSecrets refuses an unverified job whose (unused) secret list
+// requires a value and counts its optional refs in js. A list that is
+// present but cannot be read is refused the same way: the sensor cannot
+// tell whether it requires a secret, so the job must not run without the
+// credentials it may need.
+func unverifiedSecrets(payload json.RawMessage, js *JobSecrets) error {
+	set, err := secretListOf(payload)
+	if err != nil {
+		return &LocalPolicyError{Layer: RefusalLayerBuiltin, Rule: RefusalRuleSecretsUnverified,
+			Detail: "the job carries a platform secret list that cannot be read, which this sensor uses only from a verified signed job, " +
+				"and the job's signature was not verified (no job signer pinned: pair the sensor again, or set SENSOR_JOB_SIGNING_ROOT)"}
+	}
+	if set == nil {
+		return nil
+	}
+	for _, r := range set.Refs {
+		if r.Required {
+			return &LocalPolicyError{Layer: RefusalLayerBuiltin, Rule: RefusalRuleSecretsUnverified,
+				Detail: fmt.Sprintf("the job requires platform secret %s (%s), which this sensor uses only from a verified signed job, "+
+					"and the job's signature was not verified (no job signer pinned: pair the sensor again, or set SENSOR_JOB_SIGNING_ROOT)", r.ID, r.Kind)}
+		}
+	}
+	js.ignored = len(set.Refs)
+	return nil
+}
+
+// secretListOf decodes and validates the payload's secrets member (nil:
+// none).
+func secretListOf(payload json.RawMessage) (*secretref.Set, error) {
 	var p map[string]json.RawMessage
 	if len(bytes.TrimSpace(payload)) == 0 {
 		return nil, nil
@@ -176,13 +224,24 @@ func secretSetOf(payload json.RawMessage) (*secretref.Set, error) {
 		return nil, &LocalPolicyError{Layer: RefusalLayerBuiltin, Rule: RefusalRuleSecretsInvalid,
 			Detail: "the job's secret list is not valid: " + err.Error()}
 	}
+	return &set, nil
+}
+
+// secretSetOf decodes and checks the payload's secrets member (nil: none):
+// secretListOf, and a required ref of a kind this sensor does not know
+// refuses the job.
+func secretSetOf(payload json.RawMessage) (*secretref.Set, error) {
+	set, err := secretListOf(payload)
+	if err != nil || set == nil {
+		return nil, err
+	}
 	for _, r := range set.Refs {
 		if r.Required && !secretref.KnownKind(r.Kind) {
 			return nil, &LocalPolicyError{Layer: RefusalLayerBuiltin, Rule: RefusalRuleSecretKindUnsupported,
 				Detail: fmt.Sprintf("the job requires secret %s of kind %q, which this sensor does not support", r.ID, r.Kind)}
 		}
 	}
-	return &set, nil
+	return set, nil
 }
 
 type jobSecretsKey struct{}

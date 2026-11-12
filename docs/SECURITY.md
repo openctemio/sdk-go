@@ -21,6 +21,13 @@ Where a tool's credentials come from (contract `secretref`):
   policy. The list is part of the signed job; the sensor reads it only from
   a job whose signature it verified (`core.JobSecretsFor`) and refuses a
   job that requires a kind it does not know (`secret_kind_unsupported`).
+  A job whose signature was not verified (the sensor pins no job signer,
+  posture `jobs.signed: off`, or an unsigned job on a
+  `verified_when_present` sensor) never gets platform values: when its list
+  requires a secret, or when its list is present but cannot be read, it is
+  refused before it starts (`secrets_unverified`, naming the fix), so a proxy-pool or authenticated job
+  never runs without its credentials; optional refs are left out and the
+  job's log says how many.
   For each task, the tool host fetches the refs of the slots the tool's
   manifest declares (`client.Secrets`:
   `POST /api/v2/sensor/commands/{id}/secrets`, v2 HTTPS only). The request

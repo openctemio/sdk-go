@@ -1331,6 +1331,20 @@ func (p *CommandPoller) refuseByGate(ctx context.Context, cmd *Command, err erro
 	}
 }
 
+// withJobSecrets puts cmd's secret refs on ctx (JobSecretsFor); the job's
+// log says when optional refs of an unverified job are left out.
+func (p *CommandPoller) withJobSecrets(ctx context.Context, cmd *Command) (context.Context, error) {
+	js, err := JobSecretsFor(cmd, p.sharedSensor(), p.secretsFetcher())
+	if err != nil {
+		return ctx, err
+	}
+	if n := js.IgnoredOptional(); n > 0 {
+		p.clog(ctx, cmd.ID, "warn", fmt.Sprintf("The job lists %d optional platform secret(s) that are not used: its signature was not verified "+
+			"(no job signer pinned); it runs without them", n), nil)
+	}
+	return WithJobSecrets(ctx, js), nil
+}
+
 func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr error) {
 	defer p.releaseCommandSlot(cmd)
 
@@ -1374,10 +1388,7 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 	// The job's secret refs, from its verified signed job only: a list
 	// this sensor cannot honor refuses the job before it starts.
 	if jobErr == nil {
-		var js *JobSecrets
-		if js, jobErr = JobSecretsFor(cmd, p.sharedSensor(), p.secretsFetcher()); jobErr == nil {
-			ctx = WithJobSecrets(ctx, js)
-		}
+		ctx, jobErr = p.withJobSecrets(ctx, cmd)
 	}
 	if jobErr != nil {
 		p.clog(ctx, cmd.ID, "error", "Refused before running: "+jobErr.Error(), refusalFields(jobErr))
