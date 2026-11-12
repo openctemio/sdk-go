@@ -8,6 +8,238 @@ Unreleased changes are kept one file per change in
 
 ## Unreleased
 
+## v0.51.0 — 2026-11-12
+
+### Security: a hostile Certificate Transparency answer no longer costs gigabytes of memory
+
+- `pkg/ctlog` read a source's whole answer (up to 48 MiB), copied it into a string and decoded the full JSON list before refusing it for having more than 20,000 records, so one crafted 47 MiB answer from a mirror or a compromised source peaked at several GiB of heap on a shared sensor. crt.sh and Cert Spotter answers are now decoded one row at a time and refused (`too_large`) at the first row past the record cap; the 48 MiB byte cap still holds for the whole body.
+- An empty 200 answer from crt.sh is a bad answer (`unavailable`, not cached) and no longer "ok, no certificates"; crt.sh answers `[]` when it has none.
+
+### Security: one organization's custom templates are no longer readable by another's task
+
+- `pkg/core`, `pkg/sensorkit`: custom templates (a scan's or a retest's) were written to the system's temporary directory, which the tool sandbox leaves readable. On a shared sensor, a task of another organization launched while a job ran could read that job's templates, including credentials in them such as auth headers. They are now written to a private directory under the task root, which the sandbox hides from every task, and only the tool runs of the job that carries them are granted it.
+- New: `executor.WithReadPaths`/`ReadPathsFrom` carry a job's read grants on its context (`core.ExecuteScanner`, `StreamScanner` and the tool host apply them), and `executor.NewJobDir` makes a granted private directory. A scanner that copies, rewrites or signs the templates must make the copy with `executor.NewJobDir` and run its tool with the context it returns. A copy left in the system's temporary directory is still readable by other tasks.
+
+### Security: Go 1.27.4 toolchain
+
+- CI, release workflows and container base images (by digest) use Go 1.27.4, which fixes GO-2026-6859 (net/http in the standard library).
+
+### Security: late results name the command and lease epoch they were made for
+
+- A command-bound report the platform refuses as `command-not-found` (its command closed, or the platform took the run back after a lease loss and handed the command out again) is still sent again without the command, but no longer anonymously: the PUT and the commit carry `X-OpenCTEM-Late-Command` and `X-OpenCTEM-Late-Lease-Epoch` (new constants `protov2.HeaderLateCommand`, `protov2.HeaderLateLeaseEpoch`). Before, the results of a superseded run reached the platform as an ordinary unsolicited report, indistinguishable from a collector's push, so stale results of a taken-back run could refresh open findings after the run that replaced it.
+- A platform that knows the headers can refuse a superseded run's late report with the new problem `lease-superseded` (`protov2.ProblemLeaseSuperseded`): the SDK treats it as final (the outbox keeps it as a dead letter, never re-sent under another report id) and logs which command and epoch were superseded. Platforms that do not know the headers ignore them: behaviour there is unchanged.
+- Such a report always goes over v2 HTTPS, also on a v3 binding, until the v3 protocol has fields for its provenance.
+- `client.V2Progress` gains `LateCommand` and `LateLeaseEpoch` (persisted by the outbox, so the provenance survives a restart).
+- The late headers are assertions by the sensor, not covered by the request signature (it covers only the method, path, query and `Content-Digest`): they stop the late results of an honest sensor, not a hostile one.
+
+### Security: the local policy's ports.allow is checked in settings layers, more setting names, URL schemes and at the egress forwarder
+
+- `ports.allow` was applied only to the job's `config["ports"]`, `top_ports`/`top_n` and port-list standard params. The tenant's and the sensor's `settings_layers`, which the sensor merges into the tool's settings (and, for a manifest tool, its argv), were never read: a tenant layer with `ports: 1-65535` or `top_ports: 1000` reached the tool. A port list under another key (`port_range`, `tcp_ports`, a group such as `net.ports`, or whatever key a tool's manifest maps the standard `ports` param to) passed too.
+- Admission now reads `config`, `scanner_config` and both settings layers, and recognises port settings by their names: snake_case, kebab-case, camelCase and PascalCase (`port_range`, `portRange`, `TCPPorts`, `topPorts`), a few joined words (`portrange`, `tcpports`), in groups and in lists of objects (`services: [{port: 22}]`), up to 4 levels deep (deeper is refused). The executor then checks the settings the tool will run with once more (every layer and the schema's defaults resolved) and refuses the job with rule `ports.allow` when a port list is outside the allow-list or a top-N count is set. A tool's manifest tells which of its config keys are ports: `toolcompat.AsScanner` implements the new `core.PortSettingsProvider` from the `implements[].params` mapping of `ports` and `top_n`.
+- A port number a job names (in a port setting or a target such as `host:port` or a URL) must be plain digits: a sign or a leading zero (`+22`, `0022`) is refused, since a tool may read `0022` as octal.
+- A URL target names its port through its scheme: besides `http`/`https`/`ws`/`wss`, the default ports of common schemes (`ftp` 21, `ssh` 22, `smtp` 25, `redis` 6379, `postgres` 5432, `mongodb` 27017 and others) are checked against `ports.allow`; a URL of a scheme without a known default and without a port (`custom://host`, `mongodb+srv://host`) is refused while `ports.allow` is set. Before, such a URL was admitted on any port.
+- The egress forwarder enforces `ports.allow` at connect time: `egress.Scope.Ports` is filled from the local policy (`core.LocalPolicy.AllowedPorts`, the new optional `toolhost.PortsPolicy`) for a task whose manifest network is `targets` or `resolver`, so a tool cannot reach another port whatever its settings or a redirect say.
+
+### Security: what ports.allow does not cover
+
+- A tool setting that names ports under a name none of the rules above recognise and that its manifest does not map to the standard `ports` param is not checked at admission or by the executor; for a manifest tool whose network is `targets` or `resolver`, the egress forwarder still refuses any other port at connect time.
+- Legacy (non-manifest) scanners and any tool whose traffic does not go through the sensor's egress forwarder are checked only at admission and by the executor, not at connect time.
+- Raw-socket scans (for example a SYN port scan) do not go through the forwarder: they are held to `ports.allow` only by the checks above and by the tool sandbox, which must deny `CAP_NET_RAW`.
+- Network-protocol templates (a template that names its own port) are covered only at the forwarder.
+- Free-form arguments: a platform job cannot hand a tool raw arguments (`ScanOptions.ExtraArgs` is not taken from a command payload, and a setting value substituted into a manifest exec tool's argv is one element that may not start with `-`), so there is no free-form path to check.
+
+### Security: protocol v3 and relay clients refuse HTTP redirects
+
+- The protocol v3 HTTPS and gRPC clients and the relay transport followed Go's default redirect policy. A 307/308 from the platform origin (or anything in front of it) made the signing transport sign the RPC again for the other host (the RFC 9421 signature does not cover the host) and send its body there, over plain http as well; a redirect from the untrusted relay did the same with the sealed message and the sensor's ticket. All of them now refuse every redirect, as the protocol v2 client already did, and the call fails with an error naming the refused redirect. The default HTTP client of the deprecated `sensorkit.CIRun` refuses them too. A platform or relay that answers a redirect (a misconfigured base URL) now has to be configured with its final address.
+
+### Security: a sensor that bound its own key pins the platform's job signer
+
+- A sensor started with an API key that bound its own signing key (`SENSOR_KEY_BIND=auto`, the default) had no signed pairing grant, so no job signer was pinned: it ran with signed jobs `off`, verified no job, and could use no job's secret list (proxy-pool credentials were never fetched; the only trace was one refusal line).
+- At its first start against a platform that signs jobs, over https, such a sensor now pins the root of the platform's job-signing key set (or its signer keys) in `identity.json`, logs "Job signer pinned on first use", and requires signed jobs from then on, so a later platform compromise cannot swap the signer. Existing self-bound sensors pin at their first start after the upgrade.
+- Only over https: the API client verifies the platform's certificate (the platform TLS pin or `SENSOR_CA_FINGERPRINT` when set, the trust store otherwise) and follows no redirect. With a plain-http `SENSOR_API_URL` nothing is pinned (anyone on the network path could serve their own signer and have it pinned for good) and every start warns: use an https URL, or set `SENSOR_JOB_SIGNING_ROOT`.
+- A pin is taken only while none exists, never replaced: a later hello that serves another signer changes nothing. When the hello serves a valid key set, only its root is pinned (not the signer keys), so a key rotation within the key set is followed without a new pin.
+- When the hello cannot be read, the sensor stays unpinned with signed jobs off and warns at every start until a start reads it. The hello read waits at most 30 seconds, so an unpinned self-bound sensor's start takes at most that much longer when the platform is slow or unreachable.
+- Not done when `SENSOR_JOB_SIGNING_KEYS` or `SENSOR_JOB_SIGNING_ROOT` is set, when `SENSOR_REQUIRE_SIGNED_JOBS=false` (a pin would stop the sensor; it warns instead), for a shared sensor, or for an identity that came from pairing.
+- New `identity.JobSignerOnFirstUse`; the conformance `FakePlatform` gains `SignedJobs` (served on hello) and `TrustSensorKey` (accepts v2 requests signed by a key-bound sensor).
+
+### Upgrade notes
+
+- A scanner that starts its tool outside `core.ExecuteScanner`, `core.StreamScanner` or the tool host, or without the job's context, no longer reads the job's custom templates in the sandbox, and the scan fails visibly. Run it through those paths with the job's context.
+
+- A self-bound sensor whose platform signs only some of its commands would refuse the unsigned ones after this upgrade. A platform that lists `signed_jobs` signs every command it hands out; if yours does not, set `SENSOR_REQUIRE_SIGNED_JOBS=false` before upgrading.
+- If the platform later moves to a signer the pin does not cover (a pinned signer key replaced outside a key set, or a new key-set root), the sensor refuses its jobs (`job_signature`). To recover, set `SENSOR_JOB_SIGNING_ROOT` to the job-signing root shown in the console, or remove the `job_signing_keys` (or `job_signing_root`) entry from `identity.json` in the state directory so the next start pins again over https.
+
+### Upgrade notes: v0.51.0, what to roll out and in which order
+
+This release adds exported API and changes no contract version (everything stays v1). It changes what a sensor refuses and how it behaves on disk, network and certificate lookups, so read this before upgrading sensors.
+
+**Order of rollout**
+
+1. **Platform first.** Deploy a platform that has the companions below before any sensor built on this release runs against it. Platform changes that matter: refusing late results of a superseded run (`lease-superseded`), a cap on command payload size at creation, filling the `ports` parameter of port-scan jobs, and signing every command type when `signed_jobs` is advertised.
+2. **This SDK release.**
+3. **Sensors.** Re-pin the sensor's `go.mod` to this tag and run `go mod tidy`. A sensor that wraps `core.LocalPolicy` must forward `AllowedPorts` (`toolhost.PortsPolicy`), or the connect-time port check does not apply. A sensor that copies a job's custom templates must make the copy with `executor.NewJobDir` (see "Custom templates" below).
+
+**Platform companions (must be live before sensors with the matching setting upgrade)**
+
+- **`ports` for port-scan jobs.** With `ports.allow` set in a sensor's local policy, a `scan.ports` job that names no ports is refused (rule `ports.allow`). The platform must fill the job's `ports` from the allow-list the sensor reports in its policy, or from the job's own list.
+- **Late results.** A report sent after its command was claimed again carries `X-OpenCTEM-Late-Command` and `X-OpenCTEM-Late-Lease-Epoch`. The platform should resolve the command in the sensor's own tenant only and answer `409` with the problem `lease-superseded` when the command was claimed again after that epoch, held by another sensor, unknown or closed (the same answer for each, so it reveals nothing about other tenants). A platform that does not know the headers ignores them; late results then still land as unsolicited reports, as before.
+- **Payload cap.** Cap a command's payload at creation well below the sensor's 10 MiB poll read (for example 4 MiB) and refuse larger ones with a clear error.
+- **Signed commands.** A platform that lists `signed_jobs` must sign every command type it hands out (lookups, retests, egress and the rest). Self-bound sensors now pin the job signer and require signed jobs, so an unsigned command is refused with `job_signature`. If your platform does not sign some types, set `SENSOR_REQUIRE_SIGNED_JOBS=false` before upgrading, or fix the platform first.
+- Console suggestions, not blocking: show the refusal rule `secrets_unverified` with its fix, show `jobs.signed: off` as a sensor warning, and optionally show `slots_free: 0` while `local_store.stop_claiming` is set.
+
+**Jobs that need secrets are refused when unverified**
+
+- A job whose secret list requires a secret (a proxy-pool credential, an authenticated scan) is refused before it starts when its signature was not verified. The refusal rule is `secrets_unverified`; the detail names the secret and the fix: pair the sensor again, or set `SENSOR_JOB_SIGNING_ROOT`. Before, such a job ran without its credentials and could report an unauthenticated scan as a success.
+- A job with only optional secrets still runs; its log counts the secrets left out.
+
+**Self-bound sensors pin the job signer on first use, over https only**
+
+- A sensor that bound its own key from an API key (`SENSOR_KEY_BIND=auto`, the default) pins the platform's job-signing root at its first start against a platform that signs jobs, logs "Job signer pinned on first use" and requires signed jobs from then on.
+- Only over https. With a plain-http `SENSOR_API_URL` nothing is pinned and every start warns: use an https URL or set `SENSOR_JOB_SIGNING_ROOT`. A pin is never replaced by a later hello. If the hello cannot be read the sensor stays unpinned (signed jobs off) and warns at every start; start-up waits up to 30 seconds for it.
+- Not done when `SENSOR_JOB_SIGNING_KEYS` or `SENSOR_JOB_SIGNING_ROOT` is set, when `SENSOR_REQUIRE_SIGNED_JOBS=false` (it warns instead), on shared sensors and for paired identities.
+- Recovery when the platform later moves to a signer the pin does not cover (jobs refused with `job_signature`): set `SENSOR_JOB_SIGNING_ROOT` to the job-signing root shown in the console, or remove `job_signing_keys` (or `job_signing_root`) from `identity.json` in the state directory and restart over https so the sensor pins again.
+
+**`ports.allow` is strict**
+
+While `ports.allow` is set, these are refused with rule `ports.allow`:
+- a `scan.ports` job that names no ports (the tool's default top-N list cannot be checked), and a tool's default `top_ports` or top-N setting unless the job names a port list;
+- a port list outside the allow-list in `config`, `scanner_config`, the tenant or sensor `settings_layers`, or the settings the tool finally runs with, under any recognised port setting name (snake, kebab, camel or Pascal case), in groups or lists of objects up to 4 levels deep;
+- a port written with a sign or a leading zero (`+22`, `0022`);
+- a URL of a scheme without a known default port and without an explicit port (`custom://host`, `mongodb+srv://host`).
+
+URL schemes with a known default port (ftp 21, ssh 22, smtp 25, redis 6379, postgres 5432, mongodb 27017 and others) are checked against the allow-list. At connect time the egress forwarder refuses any other port for manifest tools whose network is `targets` or `resolver`. Not covered: raw-socket scans (the sandbox must deny `CAP_NET_RAW`), and legacy scanners whose traffic does not go through the forwarder (checked at admission and by the executor only).
+
+**Redirects are refused**
+
+- The v3 HTTPS and gRPC clients, the relay transport and `CIRun`'s default client refuse every HTTP redirect, as the v2 client already did. A configured URL that relies on a redirect (`http://` redirected to https, an old host) must be set to its final address.
+
+**Late results and `lease-superseded`**
+
+- A command-bound report the platform answers with `command-not-found` is re-sent unbound with the two late-result headers, over v2 HTTPS. A `lease-superseded` answer is final: the outbox keeps the report as a dead letter and logs the command and epoch.
+
+**Disk floor**
+
+- Claiming stops when free space is below both 15 % of the volume and `localstore.Policy.HighFreeBytes` (default 16 GiB: store quota + workspace budget + pack budget + 2 GiB). Once crossed, claiming resumes only when free space is 10 % above both marks. The low mark's default 5 % share counts for at most 8 GiB; an operator's own `MinFreeFraction` counts in full. The heartbeat reason names the free MiB. Tests that depend on a host's free space should inject the store's disk probe.
+
+**Certificate Transparency lookups**
+
+- A 429 or Retry-After cools a source down for at most 15 minutes (it was up to 24 hours, shared by every organization on the sensor); the interval-based cool-down is capped the same way.
+- Answers are decoded as a stream and refused `too_large` at the record cap; one row is capped at 2 MiB and names are cut at 1000 per record. An empty crt.sh body is `unavailable`, not "no certificates". A Cert Spotter list cut at the page limit is `too_large`, not `ok`. A source's `too_large` is remembered per organization and domain for the cache TTL.
+- crt.sh keeps at most the lookup budget minus Cert Spotter's share, and gets 75 seconds for its response headers (it got 15, so large organizations always fell back to Cert Spotter, which lists unexpired certificates only).
+
+**413 and oversized answers**
+
+- A report that cannot be split below the platform's request limit, or needs more segments than the platform accepts, is given up at once with a log line and kept as a dead letter instead of being retried. A commands-poll answer over 10 MiB is a typed error with no retry: the poller asks for fewer commands and fails a single oversized command by its id.
+
+**Custom templates are private to their job (security)**
+
+- Custom templates are written to a private directory under the task root and granted only to the tool runs of the job that carries them. Before, they were written to the system temporary directory, where another organization's concurrent task on a shared sensor could read them.
+- What a sensor must change: every scanner that copies a job's custom templates (or other job content) must make the copy with `executor.NewJobDir(ctx, ...)` and run its tool with the context it returns. A scanner that starts its tool outside `core.ExecuteScanner`, `core.StreamScanner` or the tool host, or without the job's context, no longer reads the templates in the sandbox and fails visibly. Search your sensor for `os.MkdirTemp("", ...)` calls that hold job content.
+
+**Process trees and v3 heartbeats**
+
+- Scanner tasks run in a cgroup of their own where the sensor's cgroup is delegated, so a grandchild that called `setsid` is killed with its task. Without a delegated cgroup, and when the tool is not network-confined, such a process still outlives a stop; the `runtime.cgroup_envelope` doctor check says so.
+- On protocol v3, heartbeats and command polls use a connection of their own, so a large upload no longer delays them. On the HTTPS binding they also honour `SENSOR_CONTROL_PROXY`.
+
+**New settings and API**
+
+- `SENSOR_COMMAND_TYPES` (comma-separated): the only command types the sensor accepts. A worker that serves only the types it registers with `Kit.HandleCommand` is never handed `scan`, `collect` or `health_check`. The sensor refuses to start when a listed type has no handler and is not one the SDK executor serves. Unset, nothing changes.
+- A command's typed output: `core.CommandExecutionResult.Output` is sent as `output`, byte for byte (compact form), also when replayed from the outbox. Capped at `core.MaxCommandOutputBytes` (256 KiB): larger fails the command with `output_too_large`, a value that is not one JSON value with `output_invalid`.
+- New exported API: `protov2.HeaderLateCommand`, `protov2.HeaderLateLeaseEpoch`, `protov2.ProblemLeaseSuperseded`, `client.V2Progress.LateCommand` and `LateLeaseEpoch`, `core.RefusalRuleSecretsUnverified`, `JobSecrets.IgnoredOptional`, `identity.JobSignerOnFirstUse`, `conformance.FakePlatform.SignedJobs` and `TrustSensorKey`, `localstore.Policy.HighFreeBytes`, `core.ErrResponseTooLarge`, `client.ResponseTooLargeError`, `core.LocalPolicy.AllowedPorts`, `toolhost.PortsPolicy`, `core.PortScanImplementer`, `executor.WithReadPaths`, `executor.ReadPathsFrom`, `executor.NewJobDir`, `httpsec.SafeHTTPClientWith`, `httpsec.DefaultResponseHeaderTimeout`, `ctlog.DefaultHeaderTimeout`, `executor.Status.ProcessTreeContained`, `core.CommandResult.Output`, `core.MaxCommandOutputBytes`, `core.JobVerifiedFromContext`, `sensorkit.Options.CommandTypes`.
+
+### Behaviour change: a Retry-After cools a source down for 15 minutes at most
+
+- A source's cool-down after a 429 or a Retry-After is shared by every organization a sensor serves. It was up to 24 hours (the contract's bound); it is now at most 15 minutes, and the `retry_after_s` of the source status is capped to match. The per-source pace is unchanged.
+
+### Behaviour change: a port scan must name its ports when ports.allow is set
+
+- A job of the port-scan capability (`scan.ports`) that names no ports used to run the tool's default top-N list, outside `ports.allow`. With `ports.allow` set it is now refused (rule `ports.allow`): "name the ports in the job; the tool's default list cannot be checked against the local policy's ports.allow". Name the ports in the job's `ports` param (or in a settings layer). A sensor without `ports.allow` is unchanged.
+- A tool's own default top-N setting (for example a schema default `top_ports: 100`) is refused under `ports.allow` unless the job names a port list; a default port list outside the allow-list is refused.
+- A job for a tool whose manifest implements `scan.ports` is treated as a port scan even when it names no capability or another one (new optional `core.PortScanImplementer`, implemented by `toolcompat.AsScanner`).
+- Not changed: `discover.hosts` and other capabilities that probe a few default ports are not port scans here; `exclude_ports`-style lists that narrow a scan are not checked.
+
+### Behaviour change: a job that requires platform secrets is refused when its signature was not verified
+
+- A sensor uses a job's secret list only from a verified signed job. Before, an unverified job (a sensor that pins no job signer, `jobs.signed: off`, for example one that bound its key itself from an API key; or an unsigned job on a `verified_when_present` sensor) ran without its credentials: a proxy-pool job failed later with "the job's signed secret list names none for it", and an authenticated scan could run unauthenticated and report success.
+- Such a job that requires a secret is now refused before it starts with the new refusal rule `secrets_unverified` (`core.RefusalRuleSecretsUnverified`); the detail names the secret and the fix (pair the sensor again, or set `SENSOR_JOB_SIGNING_ROOT`). An unverified job whose secret list is present but cannot be read is refused the same way, since the sensor cannot tell whether it requires a secret. A job with only optional secrets still runs; its log says how many were left out (`JobSecrets.IgnoredOptional`).
+- The start-up warning of a sensor with signed jobs off now says that such jobs are refused.
+
+### Added: Certificate Transparency lookups on shared sensors (lookup.ct@1)
+
+- New `pkg/ctlog`: the CT lookup a platform-owned sensor runs so the platform makes no request to a CT source itself. crt.sh first (three attempts with jittered back-off), then Cert Spotter (up to ten pages, optional key sent only to its host). Each source has its own pace and a cool-down after a 429 or Retry-After; a body over 48 MiB is refused whole (`too_large`); an answer with a source ok is cached per (tenant, domain) for 20 hours and never across tenants. A source failure is a `source_status` entry, never a failed lookup. Every answer passes the contract's `ctlookup.Validate` (names bound to the queried domain, a leading wildcard label kept) before it leaves.
+- New `pkg/lookupjob`: the sensor side of lookup jobs (`GET /api/v2/sensor/lookups/next`, `POST /api/v2/sensor/lookups/{id}/done`). A job's signed statement is verified (command type `lookup`, instance scope, this sensor, the job id, the payload as received, an organization's tenant id); a job for a capability or tool this sensor does not serve, or with other than one target, is refused and nothing is asked upstream.
+- `jobsig`: command type `lookup`, accepted only on a shared sensor for the instance scope; `core.JobGuard.VerifyLookup`.
+- `sensorkit.Kit.ServeCTLookup`: a shared sensor with a pinned job-signing key serves CT lookups and reports `lookup.ct@1` by default. New settings `SENSOR_CT_LOOKUP` (auto, 0, 1), `SENSOR_CT_CRTSH_URL`, `SENSOR_CT_CERTSPOTTER_URL` (https, or off), `SENSOR_CT_CERTSPOTTER_KEY` / `SENSOR_CT_CERTSPOTTER_KEY_FILE`.
+- Requires contract with package `ctlookup`.
+
+### Added: a worker that serves only its own command types, and typed output of a command
+
+- `sensorkit.Options.CommandTypes` (`SENSOR_COMMAND_TYPES`, comma-separated) lists the only command types a sensor accepts. A worker that serves only the command types it registers with `Kit.HandleCommand` sets it and is never handed a `scan`, `collect` or `health_check` command it cannot run: the poller hands such commands back unrun. `Run` refuses to start when a listed type has no handler and is not one the SDK executor serves. Unset, nothing changes.
+- `core.CommandExecutionResult.Output` (`json.RawMessage`) is a command's typed output, sent as `output` in the result (`core.CommandResult.Output`). Unlike `Metadata` it is not decoded and encoded again: the platform stores the bytes the handler wrote (in compact form), also when the result is replayed from the outbox. It is capped at `core.MaxCommandOutputBytes` (256 KiB); a larger output fails the command with error code `output_too_large`, one that is not a single JSON value with `output_invalid`.
+- `core.JobVerifiedFromContext(ctx)` tells a command's executor whether its signed job was verified against a pinned key.
+
+### Changed: CTIS 2.0.3, the Nessus compliance ERROR state is kept
+
+- `pkg/ctis` aliases are regenerated from `github.com/openctemio/ctis/v2` v2.0.3. A Nessus compliance result of ERROR (the check could not run) is kept as `compliance_outcome: error` instead of being folded into `skipped`.
+
+### Fixed: crt.sh answers for large domains are no longer cut at 15 seconds
+
+- `pkg/sensorkit`: crt.sh sends its response headers only once the query for a domain is done. On a large domain that takes longer than the 15 s header wait of the general content client, so large organizations always fell back to Cert Spotter, which lists unexpired certificates only. The CT client now waits up to 75 s for the headers, inside its 90 s request bound and the lookup's own budget.
+- New: `httpsec.SafeHTTPClientWith(timeout, headerTimeout)`, the SSRF-guarded client with its own header wait. `httpsec.SafeHTTPClient` is unchanged.
+
+### Fixed: a slow crt.sh no longer leaves a Certificate Transparency lookup with no answer
+
+- `pkg/ctlog`: crt.sh could use the whole job budget (each attempt may take 90 s, the job has 100 s), so Cert Spotter was never asked and the lookup failed with the context's error instead of an answer listing the source states. crt.sh now ends early enough to leave Cert Spotter a share of the time (all but at least 25 s or 30 %, at most half), and a lookup whose own context is still live always returns an answer (crt.sh `unavailable`, then Cert Spotter's state).
+
+### Fixed: a Cert Spotter list cut by the page limit is no longer reported ok
+
+- When Cert Spotter still answered a full page after the tenth, the answer read `ok` as if the list were complete, so names beyond it looked as if they had vanished. It is now `too_large` and none of the cut list is used, as the contract says for an answer over a cap.
+
+### Fixed: a sensor on a large volume no longer stops claiming with plenty of disk free
+
+- The storage high watermark (claiming stops) was reached whenever less than 15 % of the volume was free, whatever the absolute amount: a sensor with 29 GiB free on a 194 GiB volume, or 200 GiB free on 2 TiB, held every job while the sensor itself may write at most its store quota and budgets.
+- The high watermark now needs free space below both 15 % of the volume and an absolute ceiling, new `localstore.Policy.HighFreeBytes` (1 GiB to 1 TiB; default: store quota + workspace budget + pack budget + 2 GiB, 16 GiB with the defaults). Small volumes keep the share. The reason in the heartbeat's `local_store` now names the free MiB and both thresholds.
+- The volume's low mark (`DiskLow`, claiming stops) took 5 % of the volume without a cap, so 2 TiB stopped at 100 GiB free; the share part is now capped at 8 GiB (a larger `Options.MinFreeBytes` still applies).
+
+### Fixed: one command with a very large payload no longer stops all intake
+
+- The commands poll (`GET /api/v2/sensor/commands`) is read up to 10 MiB. A command whose payload pushed the answer over that was retried (downloading the oversized answer again each time), logged only in verbose mode, and came back at every poll, so a sensor never started anything again. The client now returns a typed error (`*client.ResponseTooLargeError`, `errors.Is(err, core.ErrResponseTooLarge)`) without retrying; the poller logs it, asks for fewer commands, and when a single command is too large it fails that command by its id ("the command's payload is larger than the 10 MiB the sensor accepts") so the next ones run. Nothing is executed from a truncated answer. The same typed, non-retried error applies to every other client answer over the limit.
+- The protocol v3 clients (HTTPS and gRPC bindings) now read at most the same 10 MiB (`connect.WithReadMaxBytes`); before, a v3 answer had no size limit. An answer cut off at the limit is the same `ErrResponseTooLarge` (not a rate limit, not a binding failure). A v3 message is dropped whole, so an oversized commands poll is asked once more over v2 HTTPS, whose first bytes name the command to fail.
+- The log lines naming an oversized command, and a failure to claim it, are throttled like the other oversized-answer lines (once per command, then at most every 10 minutes).
+
+### Fixed: a report that needs more segments than the platform accepts says why
+
+- `pkg/client`: a report that needed more segments than the platform's `max_segments_per_report` was given up with no log line. Both 413 give-ups (a request that splitting does not make smaller, and a report that cannot fit the segment count) now log the reason and end the same way: the outbox keeps the report as a dead letter instead of retrying it.
+
+### Fixed: one giant Certificate Transparency row no longer costs hundreds of MiB
+
+- `pkg/ctlog`: the record and byte caps held for an answer, but one row was still read whole: a crt.sh row of tens of MiB of names, or a Cert Spotter issuance with millions of `dns_names`, cost up to several GiB of allocations before the cap was reached. Each row is now capped at 2 MiB (a real row is a few KiB; the contract keeps at most 1000 names of 253 bytes) and an answer with a row over it is `too_large`; crt.sh's names are cut at the contract's 1000 while they are split.
+
+### Fixed: a big domain no longer costs eleven Cert Spotter requests at every lookup
+
+- `pkg/ctlog`: a source that answered `too_large` is remembered per organization, domain and cursor for the cache's lifetime (about 20 hours), so the next lookup does not ask it again; crt.sh is still retried when it failed in a way that may pass. A lookup answered `too_large` by every source is cached as a whole.
+- A Cert Spotter list that ends exactly on the last page the limit allows is now `ok`: one more page is asked after the limit, and only a non-empty one makes the list `too_large` (an empty page is the API's only end marker; its page size is not fixed). Lists one page short of the cut were reported `too_large` before.
+- The cool-down after a 429 without Retry-After (30 times the configured interval) is now capped at 15 minutes like every other cool-down.
+
+### Fixed: the disk high watermark no longer flaps around its mark
+
+- `pkg/localstore`: once free space fell below the high marks (share of the volume and `HighFreeBytes`), claiming resumes only when free space is 10 % above both, so a volume hovering near 16 GiB free no longer switches claiming on and off at every sweep.
+- The 8 GiB cap of the low disk mark applies only to the default share (5 %): an operator's own `Options.MinFreeFraction` is honored in full.
+
+### Fixed: a scanner's process that leaves its process group no longer outlives the task where cgroups are delegated
+
+- `pkg/core`: a scanner run through `ExecuteScanner`, `StreamScanner` or `BaseScanner` got no resource envelope, so it never ran in a cgroup of its own. A process it started that called `setsid` left the process group that a stop or a timeout kills, and kept running (for example kept scanning after a stop or a scope revocation) when the tool was not network-confined. Every scanner task now gets an envelope with no limits of its own. Where the sensor's cgroup is delegated, the task runs in its own cgroup, and whatever it leaves behind is killed with it.
+- New: `executor.Status.ProcessTreeContained()`. The `runtime.cgroup_envelope` doctor warning now says that without a delegated cgroup, such a process outlives a stop unless the tool runs network-confined (its own PID namespace).
+
+### Fixed: a report with one finding above the platform's request limit no longer loops on 413
+
+- A report whose single finding (or asset) is larger than the platform's or a reverse proxy's body limit was re-sent in a tight loop with no back-off: about 1,000 PUTs a second, each also rewriting the outbox progress and logging, until the delivery's context ended. The outbox delivers one item at a time by default, so every later result of the sensor waited behind it.
+- The SDK now stops as soon as halving the segment no longer makes the refused request smaller: the push fails with an error that says the report cannot be split below the limit, one log line names the request's size, and the outbox keeps the report as a dead letter.
+
+### Fixed: on protocol v3 a heartbeat no longer waits behind a result upload
+
+- `pkg/client`: on both v3 bindings (gRPC and HTTPS), heartbeats used the same service client as result uploads. Over HTTP/2 that meant the same connection, so a large, slow upload could hold a heartbeat back until the platform saw the sensor as stale. The control client's requests now use a service client of their own on its own connection. On the HTTPS binding that connection also takes the platform path's proxy (`SENSOR_CONTROL_PROXY`), as the v2 control client does. Internal change only: no setting or API changes.
+
 ## v0.50.0 — 2026-11-07
 
 ### Security: required identification fails closed

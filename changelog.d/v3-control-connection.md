@@ -1,3 +1,0 @@
-### Fixed: on protocol v3 a heartbeat no longer waits behind a result upload
-
-- `pkg/client`: on both v3 bindings (gRPC and HTTPS), heartbeats used the same service client as result uploads. Over HTTP/2 that meant the same connection, so a large, slow upload could hold a heartbeat back until the platform saw the sensor as stale. The control client's requests now use a service client of their own on its own connection. On the HTTPS binding that connection also takes the platform path's proxy (`SENSOR_CONTROL_PROXY`), as the v2 control client does. Internal change only: no setting or API changes.

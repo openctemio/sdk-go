@@ -1,5 +1,0 @@
-### Added: a worker that serves only its own command types, and typed output of a command
-
-- `sensorkit.Options.CommandTypes` (`SENSOR_COMMAND_TYPES`, comma-separated) lists the only command types a sensor accepts. A worker that serves only the command types it registers with `Kit.HandleCommand` sets it and is never handed a `scan`, `collect` or `health_check` command it cannot run: the poller hands such commands back unrun. `Run` refuses to start when a listed type has no handler and is not one the SDK executor serves. Unset, nothing changes.
-- `core.CommandExecutionResult.Output` (`json.RawMessage`) is a command's typed output, sent as `output` in the result (`core.CommandResult.Output`). Unlike `Metadata` it is not decoded and encoded again: the platform stores the bytes the handler wrote (in compact form), also when the result is replayed from the outbox. It is capped at `core.MaxCommandOutputBytes` (256 KiB); a larger output fails the command with error code `output_too_large`, one that is not a single JSON value with `output_invalid`.
-- `core.JobVerifiedFromContext(ctx)` tells a command's executor whether its signed job was verified against a pinned key.
