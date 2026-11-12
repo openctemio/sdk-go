@@ -461,7 +461,11 @@ func (m *v3Manager) grpcRequired(reason string) error {
 // httpsClient is the HTTPS binding's client: the platform host, the signed
 // v2 transport (RFC 9421) underneath.
 func (m *v3Manager) httpsClient(path string) sensorv3connect.SensorServiceClient {
-	hc := &http.Client{Transport: m.next}
+	// No redirect is followed: the platform does not issue any, and the
+	// signing transport underneath would sign the RPC again for whatever
+	// host a 307/308 names (the signature does not cover the host), sending
+	// the body there, even over plain http.
+	hc := &http.Client{Transport: m.next, CheckRedirect: httpsec.RefuseRedirects}
 	return sensorv3connect.NewSensorServiceClient(hc, strings.TrimRight(m.c.baseURL, "/")+path)
 }
 
@@ -551,7 +555,7 @@ func (m *v3Manager) grpcClient(endpoint string) sensorv3connect.SensorServiceCli
 	tr.TLSHandshakeTimeout = 10 * time.Second
 	tr.IdleConnTimeout = 90 * time.Second
 	tr.ForceAttemptHTTP2 = true
-	return sensorv3connect.NewSensorServiceClient(&http.Client{Transport: tr}, "https://"+endpoint, connect.WithGRPC())
+	return sensorv3connect.NewSensorServiceClient(&http.Client{Transport: tr, CheckRedirect: httpsec.RefuseRedirects}, "https://"+endpoint, connect.WithGRPC())
 }
 
 // haveCert loads a cached certificate for endpoint that is not yet due for

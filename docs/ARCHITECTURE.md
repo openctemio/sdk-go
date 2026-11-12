@@ -582,7 +582,8 @@ languages.
   pinned at pairing (`identity.json` `platform_tls_pin`) or by
   `SENSOR_CA_FINGERPRINT`, with no fallback to the trust store; the gRPC CA
   bundle is sticky and a certificate failure never falls back to another
-  binding; no redirects followed by the API clients, SSRF-safe HTTP
+  binding; no redirects followed by the API clients (protocol v2 and v3) or
+  the relay transport, SSRF-safe HTTP
   (`pkg/httpsec`).
 - **Command path**: signed jobs (the platform's separate job signer signs
   every claimed command; a sensor that pinned its key verifies the
