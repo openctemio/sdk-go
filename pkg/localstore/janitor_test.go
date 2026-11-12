@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -493,5 +494,46 @@ func TestFullOutboxStopsClaiming(t *testing.T) {
 	}
 	if ok, why := j.AcceptsWork(); !ok {
 		t.Fatalf("after deliveries made room: %q", why)
+	}
+}
+
+// A share of the volume alone stopped claiming on a large volume with
+// plenty of room: 29 GiB free of 194 GiB (15 %) and 200 GiB of 2 TiB (10 %)
+// held every job, though the sensor may write at most its quota and
+// budgets. The high watermark now needs free space below both the share
+// and an absolute ceiling (HighFreeBytes, by default what the sensor may
+// write plus 2 GiB); a small volume keeps the share.
+func TestHighWatermarkNeedsAnAbsoluteFloorToo(t *testing.T) {
+	const gib = uint64(1) << 30
+	for _, tc := range []struct {
+		name        string
+		free, total uint64
+		pol         Policy
+		high        bool
+	}{
+		{name: "large volume, 10 % free, 200 GiB", free: 200 * gib, total: 2048 * gib},
+		{name: "194 GiB volume, 14 % free, 27 GiB", free: 27 * gib, total: 194 * gib},
+		{name: "194 GiB volume, 7 % free, 14 GiB", free: 14 * gib, total: 194 * gib, high: true},
+		{name: "small volume, 10 % free, 3 GiB", free: 3 * gib, total: 30 * gib, high: true},
+		{name: "operator ceiling", free: 27 * gib, total: 194 * gib, pol: Policy{HighFreeBytes: 40 << 30}, high: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sp := space{freeBytes: tc.free, totalBytes: tc.total, freeFiles: 1e6, totalFiles: 2e6}
+			s := openT(t, t.TempDir(), func(o *Options) { o.space = func(string) (space, bool) { return sp, true } })
+			jan := janitorT(t, s, func(c *JanitorConfig) { c.Policy = tc.pol })
+			if _, err := jan.Sweep(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			st := jan.Status()
+			if got := st.Level == WatermarkHigh; got != tc.high {
+				t.Fatalf("high = %v, want %v (%+v)", got, tc.high, st)
+			}
+			if tc.high && !strings.Contains(st.Reason, "MiB free") {
+				t.Fatalf("the reason does not say how much is free: %q", st.Reason)
+			}
+		})
+	}
+	if d := (Policy{}).Normalize().HighFreeBytes; d != DefaultStoreQuota+DefaultWorkspaceBudget+DefaultPackBudget+highFreeHeadroom {
+		t.Fatalf("default HighFreeBytes %d", d)
 	}
 }

@@ -68,8 +68,15 @@ type Policy struct {
 	// high watermark is 85 % of it.
 	StoreQuotaBytes int64 `json:"store_quota_bytes,omitempty"`
 	// HighFreeFraction: free share of the volume below which the high
-	// watermark is reached (0.05 to 0.5).
+	// watermark is reached (0.05 to 0.5), when free space is also below
+	// HighFreeBytes.
 	HighFreeFraction float64 `json:"high_free_fraction,omitempty"`
+	// HighFreeBytes: free bytes below which, together with
+	// HighFreeFraction, the high watermark is reached. A share alone stops
+	// a sensor on a large volume with hundreds of GiB free; the ceiling is
+	// what the sensor itself may still write (1 GiB to 1 TiB; 0: the store
+	// quota, the workspace and pack budgets and 2 GiB of headroom).
+	HighFreeBytes int64 `json:"high_free_bytes,omitempty"`
 }
 
 func clampDur(v, def, lo, hi time.Duration) time.Duration {
@@ -101,8 +108,13 @@ func (p Policy) Normalize() Policy {
 		p.HighFreeFraction = DefaultHighFreeFraction
 	}
 	p.HighFreeFraction = min(max(p.HighFreeFraction, 0.05), 0.5)
+	p.HighFreeBytes = clampInt(p.HighFreeBytes, p.StoreQuotaBytes+p.WorkspaceBudgetBytes+p.PackBudgetBytes+highFreeHeadroom, gib, 1<<40)
 	return p
 }
+
+// highFreeHeadroom is added to what the sensor may write to make the
+// default HighFreeBytes.
+const highFreeHeadroom = 2 << 30
 
 // PackPolicy is what the janitor asks a content pack cache to prune.
 type PackPolicy struct {
@@ -581,9 +593,10 @@ func (j *Janitor) assess(pol Policy) Status {
 		if free < uint64(j.cfg.Store.opts.CriticalFreeBytes) { //nolint:gosec // defaults make it positive
 			st.Level = WatermarkCritical
 			reasons = append(reasons, fmt.Sprintf("%d MiB free, below the critical mark", free>>20))
-		} else if frac < pol.HighFreeFraction {
+		} else if frac < pol.HighFreeFraction && free < uint64(pol.HighFreeBytes) { //nolint:gosec // Normalize makes it positive
 			st.Level = WatermarkHigh
-			reasons = append(reasons, fmt.Sprintf("%.0f %% of the volume free, below %.0f %%", frac*100, pol.HighFreeFraction*100))
+			reasons = append(reasons, fmt.Sprintf("%d MiB free (%.0f %% of the volume), below %.0f %% and below %d MiB",
+				free>>20, frac*100, pol.HighFreeFraction*100, pol.HighFreeBytes>>20))
 		}
 	}
 	if float64(st.Total) >= highQuotaFraction*float64(pol.StoreQuotaBytes) {

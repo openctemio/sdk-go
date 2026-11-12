@@ -200,7 +200,12 @@ is claimed, the kit:
 The command poller claims nothing while `Janitor.AcceptsWork` is false: the
 outbox holds 85 % of its cap in unacknowledged results (or the last refused
 item would not fit), storage is at the high watermark after the cold cache
-was evicted, or the volume is low. It resumes when that clears and logs each
+was evicted, or the volume is low. The volume is at the high watermark when
+its free space is below both a share of the volume (`HighFreeFraction`,
+15 %) and an absolute ceiling (`HighFreeBytes`; by default the store quota,
+the workspace and pack budgets and 2 GiB, 16 GiB in all), so a large volume
+with plenty of room never stops claiming for its share alone; the reason
+names the free MiB. It resumes when that clears and logs each
 change once. Unacknowledged results are never deleted for space; results beat
 new work. Tools cannot read the store: its directory and key file are in the
 sandbox's protected paths. The heartbeat carries `local_store` (bytes per
