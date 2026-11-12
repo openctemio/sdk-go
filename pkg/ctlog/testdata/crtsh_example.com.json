@@ -1,0 +1,6 @@
+[
+ {"issuer_ca_id":1,"issuer_name":"C=US, O=Example Trust, CN=Example TLS CA 1","common_name":"www.example.com","name_value":"example.com\nwww.example.com","id":9000000001,"entry_timestamp":"2026-09-01T10:00:00.123","not_before":"2026-09-01T00:00:00","not_after":"2026-11-30T23:59:59","serial_number":"04a1b2c3d4e5f60718293a4b5c6d7e8f","result_count":2},
+ {"issuer_ca_id":1,"issuer_name":"C=US, O=Example Trust, CN=Example TLS CA 1","common_name":"*.dev.example.com","name_value":"*.dev.example.com\nadmin@example.com","id":9000000002,"entry_timestamp":"2026-08-01T10:00:00.123","not_before":"2026-08-01T00:00:00","not_after":"2026-10-30T23:59:59","serial_number":"0b","result_count":2},
+ {"issuer_ca_id":2,"issuer_name":"C=US, O=Other CA, CN=Other R3","common_name":"shop.example.org","name_value":"shop.example.org\nexample.com.evil.test","id":9000000003,"entry_timestamp":"2026-07-01T10:00:00.123","not_before":"2026-07-01T00:00:00","not_after":"2026-09-29T23:59:59","serial_number":"0c","result_count":2},
+ {"issuer_ca_id":1,"issuer_name":"C=US, O=Example Trust, CN=Example TLS CA 1","common_name":"api.example.com","name_value":"API.Example.com.","id":9000000004,"entry_timestamp":"2026-06-01T10:00:00","not_before":"2026-06-01T00:00:00","not_after":"2027-06-01T00:00:00","serial_number":"0d","result_count":1}
+]

@@ -39,6 +39,8 @@ without a tier fails the job.
 | `pkg/tool/toolcompat` | Transitional bridges: a `core.Scanner` or `core.Collector` run as a tool of the contract (`FromScanner`, `FromCollector`), out of process; a contract tool served to the command executor (`AsScanner`) | Beta; removed once every in-tree scanner is ported |
 | `pkg/blobsig` | Offline check of a cosign keyless signature bundle for a downloaded file: Fulcio chain, Rekor inclusion proof and an exact signer identity, against the embedded Sigstore public good trust root | Beta |
 | `pkg/feedrelay` | The feed relay (api RFC-142): a shared sensor downloads the signed feed files the platform asks for from allowed origins and streams them back (`feed.relay@1`) | Beta |
+| `pkg/ctlog` | Certificate Transparency lookups (`lookup.ct@1`): crt.sh, then Cert Spotter, with per-source pacing and cool-down, Retry-After, a body cap, a per-(tenant, domain) answer cache, and source failures reported as source status | Beta |
+| `pkg/lookupjob` | Lookup jobs: a shared sensor answers the platform's signed, tenant-bound passive questions (first `lookup.ct@1`) | Beta |
 | `pkg/webscope` | The web scope of a job: hosts, path prefixes, deny paths, methods and the per-host request cap of a web tool; `Allows` checks a request as the server sees its path (contract `webpath`) | Beta |
 | `pkg/testkit` | Run a tool in-process with the runtime's rules; golden CTIS | Stable |
 | `pkg/importtool` | The file importer as a parser-class tool: Nessus, Qualys with KnowledgeBase, DefectDojo Generic JSON, CycloneDX, SPDX, osv-scanner, CSAF and OpenVEX files, and a reconFTW results directory, to CTIS (the `ctis/importer` package), sandboxed with no network | Beta |
