@@ -265,6 +265,8 @@ github.com/openctemio/contract v1.6.1-0.20261112034811-260997ce9636 h1:Ppg37/ghU
 github.com/openctemio/contract v1.6.1-0.20261112034811-260997ce9636/go.mod h1:HxX5pwiijz4RjtUWUjbqsFMIUPMOPx4kyPnsoXVhwW4=
 github.com/openctemio/contract v1.6.1-0.20261112042130-5ac8fa796c90 h1:sHRqcIsoB7wv/wHPkzrNnJ6vYIRCMA9pGQ5yRwNl1mE=
 github.com/openctemio/contract v1.6.1-0.20261112042130-5ac8fa796c90/go.mod h1:HxX5pwiijz4RjtUWUjbqsFMIUPMOPx4kyPnsoXVhwW4=
+github.com/openctemio/contract v1.6.1-0.20261112042759-cf68d4ca7454 h1:EttmwCmbCCENftQA19WA5Q8NMENLv2hKf1PwtLVHhJ0=
+github.com/openctemio/contract v1.6.1-0.20261112042759-cf68d4ca7454/go.mod h1:HxX5pwiijz4RjtUWUjbqsFMIUPMOPx4kyPnsoXVhwW4=
 github.com/openctemio/ctis/v2 v2.0.3 h1:6Da/PSpZlsXNRU5GNeZNr8udj7Jbw9ICa+fUym/t2DE=
 github.com/openctemio/ctis/v2 v2.0.3/go.mod h1:BaBATGBV/+qKDaElbacvp8OXHLQj7MB/52ViXTNvmSk=
 github.com/openctemio/ctis/v2/interop/csaf v0.1.0 h1:abP8MV/a2gfzztYyAlEtgQi9e3orpbPr3+4GugLa+H4=
