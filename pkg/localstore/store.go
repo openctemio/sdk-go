@@ -116,7 +116,7 @@ type Options struct {
 	// which is always created).
 	CreateKey bool
 	// MinFreeBytes and MinFreeFraction set DiskLow: free space below
-	// max(MinFreeBytes, MinFreeFraction of the volume). Defaults 256 MiB and
+	// max(MinFreeBytes, MinFreeFraction of the volume, at most 8 GiB). Defaults 256 MiB and
 	// 5 %.
 	MinFreeBytes    int64
 	MinFreeFraction float64

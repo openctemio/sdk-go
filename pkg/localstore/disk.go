@@ -42,6 +42,11 @@ type DiskState struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// maxLowMarkFromShare caps the part of the low mark that comes from a share
+// of the volume (MinFreeFraction): 5 % of a 2 TiB volume would stop a
+// sensor with 100 GiB free. A larger MinFreeBytes still applies.
+const maxLowMarkFromShare = 8 << 30
+
 // Disk reports the free space of the store's volume.
 func (s *Store) Disk() DiskState {
 	sp, ok := s.opts.space(s.dir)
@@ -50,7 +55,7 @@ func (s *Store) Disk() DiskState {
 	}
 	st := DiskState{Level: DiskOK, FreeBytes: sp.freeBytes, TotalBytes: sp.totalBytes, FreeFiles: sp.freeFiles}
 	lowMark := uint64(s.opts.MinFreeBytes) //nolint:gosec // defaults make it positive
-	if frac := uint64(float64(sp.totalBytes) * s.opts.MinFreeFraction); frac > lowMark {
+	if frac := min(uint64(float64(sp.totalBytes)*s.opts.MinFreeFraction), maxLowMarkFromShare); frac > lowMark {
 		lowMark = frac
 	}
 	critMark := uint64(s.opts.CriticalFreeBytes) //nolint:gosec // defaults make it positive
