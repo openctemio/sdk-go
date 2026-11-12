@@ -344,6 +344,10 @@ func (v *Verifier) checkStatement(st *Statement, keyID string, b Binding) error 
 		return refusef(ReasonTenant, "the platform tenant id is only for a feed relay statement")
 	case st.CommandType == CommandTypeFeedRelay && (st.TenantID != PlatformTenantID || !b.Shared):
 		return refusef(ReasonTenant, "a feed relay belongs to the platform and runs only on a shared sensor")
+	// A lookup runs only on a platform (shared) sensor, for one
+	// organization.
+	case st.CommandType == CommandTypeLookup && (!b.Shared || st.SensorScope != SensorScopeInstance):
+		return refusef(ReasonSensorScope, "a lookup job runs only on a shared (platform) sensor")
 	case !b.Shared && (b.TenantID == "" || !strings.EqualFold(st.TenantID, b.TenantID)):
 		return refusef(ReasonTenant, "statement is for organization %q, not this sensor's", st.TenantID)
 	}

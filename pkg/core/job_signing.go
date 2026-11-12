@@ -272,6 +272,26 @@ func (g *JobGuard) VerifyFeedRelay(ctx context.Context, roundID string, payload,
 	})
 }
 
+// VerifyLookup verifies the signed statement of a lookup job (command type
+// lookup) against this shared sensor: signed for the instance scope and
+// this sensor, an organization's tenant id (never the platform's), the job
+// id as command id, lease epoch 0, and the payload exactly as received. It
+// returns the statement, whose tenant id the answer is bound to. Only a
+// shared sensor's guard with a pinned key or root verifies one.
+func (g *JobGuard) VerifyLookup(ctx context.Context, jobID string, payload, signedJob []byte) (*jobsig.Statement, error) {
+	if g == nil || !g.shared || g.v == nil {
+		return nil, errors.New("only a shared sensor with a pinned job-signing key or root runs lookup jobs")
+	}
+	if len(bytes.TrimSpace(signedJob)) == 0 {
+		return nil, errors.New("the lookup job is not signed")
+	}
+	g.refreshKeySet(ctx)
+	return g.v.Verify(ctx, signedJob, jobsig.Binding{
+		Shared: true, SensorID: g.sensorID, CommandID: jobID, CommandType: jobsig.CommandTypeLookup,
+		Payload: payload,
+	})
+}
+
 func jobRefusal(detail string) error {
 	return &LocalPolicyError{Layer: RefusalLayerBuiltin, Rule: RefusalRuleJobSignature, Detail: detail}
 }

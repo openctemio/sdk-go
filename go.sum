@@ -261,6 +261,8 @@ github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJw
 github.com/opencontainers/image-spec v1.1.1/go.mod h1:qpqAh3Dmcf36wStyyWU+kCeDgrGnAve2nCC8+7h8Q0M=
 github.com/openctemio/contract v1.6.0 h1:AmZs4JHCm+m6ANhJifM2H4YK9GOfOnjtQusaUhGXwGI=
 github.com/openctemio/contract v1.6.0/go.mod h1:HxX5pwiijz4RjtUWUjbqsFMIUPMOPx4kyPnsoXVhwW4=
+github.com/openctemio/contract v1.6.1-0.20261112034811-260997ce9636 h1:Ppg37/ghUeIGq996jtNZap+zxB1WdfsGlUHlCW02zKs=
+github.com/openctemio/contract v1.6.1-0.20261112034811-260997ce9636/go.mod h1:HxX5pwiijz4RjtUWUjbqsFMIUPMOPx4kyPnsoXVhwW4=
 github.com/openctemio/ctis/v2 v2.0.3 h1:6Da/PSpZlsXNRU5GNeZNr8udj7Jbw9ICa+fUym/t2DE=
 github.com/openctemio/ctis/v2 v2.0.3/go.mod h1:BaBATGBV/+qKDaElbacvp8OXHLQj7MB/52ViXTNvmSk=
 github.com/openctemio/ctis/v2/interop/csaf v0.1.0 h1:abP8MV/a2gfzztYyAlEtgQi9e3orpbPr3+4GugLa+H4=
