@@ -36,6 +36,8 @@ type oversizeState struct {
 	// lastLog and lastLogCap say when and for which limit it was last logged.
 	lastLog    time.Time
 	lastLogCap int
+	// lastNamed is the oversized command last named in the log.
+	lastNamed string
 }
 
 // limit applies the cap to what the poll would ask for.
@@ -75,6 +77,18 @@ func (s *oversizeState) ok(ask, want int) {
 	}
 }
 
+// named says whether to log the lines about command id: when the throttle
+// allows (logNow) or when it is another command than the last one named.
+func (s *oversizeState) named(id string, logNow bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if logNow || id != s.lastNamed {
+		s.lastNamed = id
+		return true
+	}
+	return false
+}
+
 // reset lifts the cap: the command that caused it was failed.
 func (s *oversizeState) reset() {
 	s.mu.Lock()
@@ -106,12 +120,18 @@ func (p *CommandPoller) handleOversize(ctx context.Context, ask int, err error) 
 		}
 		return
 	}
-	fmt.Printf("[command-poller] Command %s is larger than 10 MiB: failing it so the commands after it can start\n", id)
-	p.failOversized(ctx, id)
+	// Throttled like the lines above: a command that cannot be claimed
+	// comes back at every poll.
+	logNow = p.oversize.named(id, logNow)
+	if logNow {
+		fmt.Printf("[command-poller] Command %s is larger than 10 MiB: failing it so the commands after it can start\n", id)
+	}
+	p.failOversized(ctx, id, logNow)
 }
 
 // failOversized fails the command id, which the poll could not carry.
-func (p *CommandPoller) failOversized(ctx context.Context, id string) {
+// logNow says whether a failure to claim it is logged (throttled).
+func (p *CommandPoller) failOversized(ctx context.Context, id string, logNow bool) {
 	// A shared sensor's ledger lets results through only for a held command;
 	// this one was never started, only named by the platform.
 	if p.ledger != nil {
@@ -122,6 +142,9 @@ func (p *CommandPoller) failOversized(ctx context.Context, id string) {
 	// otherwise claim it, so it can be failed like any command. A replay of a
 	// transition is accepted.
 	if err := p.client.AcknowledgeCommand(ctx, id); err != nil {
+		if !logNow {
+			return
+		}
 		fmt.Printf("[command-poller] Could not claim the oversized command %s to fail it: %v\n", id, err)
 		return
 	}

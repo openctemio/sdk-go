@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -30,6 +31,7 @@ type oversizeClient struct {
 	asks   []int
 	failed map[string]string
 	acked  []string
+	ackErr error
 	head   func(first string) []byte
 }
 
@@ -66,7 +68,7 @@ func (c *oversizeClient) AcknowledgeCommand(_ context.Context, id string) error 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.acked = append(c.acked, id)
-	return nil
+	return c.ackErr
 }
 func (c *oversizeClient) StartCommand(context.Context, string) error { return nil }
 func (c *oversizeClient) ReportCommandProgress(context.Context, string, int, string) error {
@@ -191,6 +193,30 @@ func TestCommandPoller_OversizedLogIsThrottled(t *testing.T) {
 	}
 	if len(c.failed) != 0 {
 		t.Fatalf("failed %v with no readable id", c.failed)
+	}
+}
+
+// An oversized command the sensor cannot claim comes back at every poll:
+// the lines naming it are throttled too, not printed on every poll.
+func TestCommandPoller_OversizedCommandLogIsThrottled(t *testing.T) {
+	c := newOversizeClient()
+	c.ackErr = errors.New("platform unavailable")
+	p := NewCommandPoller(c, &idExecutor{}, &CommandPollerConfig{MaxConcurrent: 1})
+	out := captureStdout(t, func() {
+		for range 6 {
+			p.pollAndExecute(context.Background())
+		}
+	})
+	if n := strings.Count(out, "Command "+bigCommandID+" is larger"); n != 1 {
+		t.Fatalf("named the oversized command %d times in 6 polls, want 1; output:\n%s", n, out)
+	}
+	if n := strings.Count(out, "Could not claim the oversized command"); n != 1 {
+		t.Fatalf("logged the claim failure %d times in 6 polls, want 1; output:\n%s", n, out)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.acked) != 6 {
+		t.Errorf("tried to claim %d times in 6 polls, want 6 (only the log is throttled)", len(c.acked))
 	}
 }
 

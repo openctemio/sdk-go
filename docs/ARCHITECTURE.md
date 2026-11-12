@@ -137,6 +137,11 @@ payload is larger than the 10 MiB the sensor accepts", so the commands behind it
 start. Nothing is ever run from a truncated answer. If the id cannot be read,
 the poller keeps asking for one command and logs it; the platform's lease on
 that command ends and it is offered again.
+The protocol v3 clients read at most the same 10 MiB
+(`connect.WithReadMaxBytes`); an answer cut off there is the same
+`ErrResponseTooLarge` (the platform's own `resource_exhausted` stays a rate
+limit). A v3 message is dropped whole, so the commands poll is asked once more
+over v2 HTTPS, whose first bytes name the command.
 
 **Order of the checks on a claimed command.** A command passes, in order:
 the command types the sensor serves and its expiry (before the claim); the
