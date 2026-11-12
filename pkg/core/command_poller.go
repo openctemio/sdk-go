@@ -1377,6 +1377,10 @@ func (p *CommandPoller) executeCommand(ctx context.Context, cmd *Command, jobErr
 		var js *JobSecrets
 		if js, jobErr = JobSecretsFor(cmd, p.sharedSensor(), p.secretsFetcher()); jobErr == nil {
 			ctx = WithJobSecrets(ctx, js)
+			if n := js.IgnoredOptional(); n > 0 {
+				p.clog(ctx, cmd.ID, "warn", fmt.Sprintf("The job lists %d optional platform secret(s) that are not used: its signature was not verified "+
+					"(no job signer pinned); it runs without them", n), nil)
+			}
 		}
 	}
 	if jobErr != nil {

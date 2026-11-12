@@ -1,0 +1,5 @@
+### Behaviour change: a job that requires platform secrets is refused when its signature was not verified
+
+- A sensor uses a job's secret list only from a verified signed job. Before, an unverified job (a sensor that pins no job signer, `jobs.signed: off`, for example one that bound its key itself from an API key; or an unsigned job on a `verified_when_present` sensor) ran without its credentials: a proxy-pool job failed later with "the job's signed secret list names none for it", and an authenticated scan could run unauthenticated and report success.
+- Such a job that requires a secret is now refused before it starts with the new refusal rule `secrets_unverified` (`core.RefusalRuleSecretsUnverified`); the detail names the secret and the fix (pair the sensor again, or set `SENSOR_JOB_SIGNING_ROOT`). A job with only optional secrets still runs; its log says how many were left out (`JobSecrets.IgnoredOptional`).
+- The start-up warning of a sensor with signed jobs off now says that such jobs are refused.

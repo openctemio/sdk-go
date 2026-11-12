@@ -237,8 +237,9 @@ func (k *Kit) resolveJobSigning() error {
 		_, _ = fmt.Fprintf(k.errw, "Warning: signed jobs: verified when present, unsigned jobs still run (signer keys from %s); set %s=true to refuse them\n",
 			signers, core.EnvRequireSignedJobs)
 	default:
-		_, _ = fmt.Fprintf(k.errw, "Warning: signed jobs: off, no job-signing key or root is pinned so jobs are not verified (posture %q is reported to the platform); set %s or pair again\n",
-			core.JobsSignedOff, EnvJobSigningRoot)
+		_, _ = fmt.Fprintf(k.errw, "Warning: signed jobs: off, no job-signing key or root is pinned so jobs are not verified (posture %q is reported to the platform); "+
+			"jobs that require platform secrets (proxy pools, credentials) are refused (rule %s); set %s or pair again\n",
+			core.JobsSignedOff, core.RefusalRuleSecretsUnverified, EnvJobSigningRoot)
 	}
 	if trust != nil {
 		k.startKeySet(trust)
