@@ -59,7 +59,8 @@ func TestJobSecretsFor(t *testing.T) {
 // without its credentials (a proxy pool job failing later with a vague
 // reason, an authenticated scan running unauthenticated); optional refs
 // are left out and counted so the job log says so. An unreadable list on
-// an unverified job is not a refusal: nothing of it is used.
+// an unverified job is refused too: the sensor cannot tell whether it
+// requires a secret.
 func TestJobSecretsFor_Unverified(t *testing.T) {
 	unverified := func(p json.RawMessage) *Command { return &Command{ID: "c1", Payload: p} }
 	js, err := JobSecretsFor(unverified(secretsPayload(t, unknownRef(true))), false, nil)
@@ -91,8 +92,14 @@ func TestJobSecretsFor_Unverified(t *testing.T) {
 
 	bad := unknownRef(true)
 	bad["local"] = "sometimes"
-	if js, err := JobSecretsFor(unverified(secretsPayload(t, bad)), false, nil); err != nil || js.IgnoredOptional() != 0 {
-		t.Fatalf("unreadable list on an unverified job: %v", err)
+	if _, err := JobSecretsFor(unverified(secretsPayload(t, bad)), false, nil); RefusalOf(err) == nil || RefusalOf(err).Rule != RefusalRuleSecretsUnverified {
+		t.Fatalf("unreadable list on an unverified job: err=%v, want secrets_unverified", err)
+	}
+	if _, err := JobSecretsFor(unverified(json.RawMessage(`{"secrets":"not-a-list"}`)), false, nil); RefusalOf(err) == nil || RefusalOf(err).Rule != RefusalRuleSecretsUnverified {
+		t.Fatalf("undecodable list on an unverified job: err=%v, want secrets_unverified", err)
+	}
+	if js, err := JobSecretsFor(unverified(json.RawMessage(`{"secrets":null}`)), false, nil); err != nil || js.IgnoredOptional() != 0 {
+		t.Fatalf("null list on an unverified job: %v", err)
 	}
 	if js, err := JobSecretsFor(unverified(json.RawMessage(`{"scanner":"x"}`)), false, nil); err != nil || js.IgnoredOptional() != 0 {
 		t.Fatalf("no list: %v", err)

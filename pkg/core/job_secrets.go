@@ -156,7 +156,8 @@ func (j *JobSecrets) ForwarderRef(poolID string) (secretref.Ref, bool) {
 // member gives no platform values. An unverified job whose list requires a
 // secret is refused (RefusalRuleSecretsUnverified), so it neither runs
 // without its credentials nor fails later with a vaguer reason; its
-// optional refs are left out and counted (IgnoredOptional). A list that is
+// optional refs are left out and counted (IgnoredOptional); a list that is
+// present but cannot be read refuses it too. A list that is
 // not valid, or that requires a kind this sensor does not know, refuses a
 // verified job (a *LocalPolicyError); an unknown kind on an optional ref is
 // skipped by every consumer.
@@ -174,13 +175,19 @@ func JobSecretsFor(cmd *Command, shared bool, fetch SecretsFetcher) (*JobSecrets
 }
 
 // unverifiedSecrets refuses an unverified job whose (unused) secret list
-// requires a value and counts its optional refs in js. A list that cannot
-// be read gives nothing to use and is not a refusal here: nothing of an
-// unverified payload is trusted either way.
+// requires a value and counts its optional refs in js. A list that is
+// present but cannot be read is refused the same way: the sensor cannot
+// tell whether it requires a secret, so the job must not run without the
+// credentials it may need.
 func unverifiedSecrets(payload json.RawMessage, js *JobSecrets) error {
 	set, err := secretListOf(payload)
-	if err != nil || set == nil {
-		return nil //nolint:nilerr // an unverified list is never used; only a required ref refuses
+	if err != nil {
+		return &LocalPolicyError{Layer: RefusalLayerBuiltin, Rule: RefusalRuleSecretsUnverified,
+			Detail: "the job carries a platform secret list that cannot be read, which this sensor uses only from a verified signed job, " +
+				"and the job's signature was not verified (no job signer pinned: pair the sensor again, or set SENSOR_JOB_SIGNING_ROOT)"}
+	}
+	if set == nil {
+		return nil
 	}
 	for _, r := range set.Refs {
 		if r.Required {
