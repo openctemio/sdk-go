@@ -399,6 +399,10 @@ type CommandPoller struct {
 	claims       *claimBackoff
 	pollDeferred bool
 
+	// oversize limits what a poll asks for after the platform's answer was
+	// over the size limit (command_poller_oversize.go).
+	oversize oversizeState
+
 	// resources, when set, sizes the slots from the sensor's CPU, memory
 	// and learned tool costs (SetResourceManager); without it the slots
 	// are MaxConcurrent.
@@ -1055,22 +1059,15 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 	if p.verbose.Load() && p.doorbell != nil {
 		fmt.Printf("[command-poller] %s Polling for commands (%d free slots)\n", time.Now().Format("15:04:05.000"), free)
 	}
-	ask := free + min(int(p.skippedTypes.Load()), maxSkippedTypesAsk)
+	want := free + min(int(p.skippedTypes.Load()), maxSkippedTypesAsk)
+	ask := p.oversize.limit(want)
 	resp, err := p.getCommands(ctx, ask)
-	if gate != nil {
-		gate.MarkRejected(err, p.keyHint())
-	} else if backoff := p.ownGate.Observe(err, p.keyHint()); backoff > 0 {
-		p.ownNext = time.Now().Add(backoff)
-	} else {
-		p.ownNext = time.Time{}
-	}
+	p.observePoll(gate, err)
 	if err != nil {
-		p.claims.retryAfter(retryAfterOf(err))
-		if p.verbose.Load() {
-			fmt.Printf("[command-poller] Failed to poll commands: %v\n", err)
-		}
+		p.pollFailed(ctx, ask, err)
 		return
 	}
+	p.oversize.ok(ask, want)
 
 	// A full page means the platform may hold more for us: poll again as
 	// soon as a slot frees.
@@ -1197,6 +1194,38 @@ func (p *CommandPoller) pollAndExecute(ctx context.Context) {
 		p.activeCmds.Add(1)
 		started++
 		go p.executeCommand(cmdCtx, cmd, jobErr)
+	}
+}
+
+// pollFailed handles a poll that failed.
+func (p *CommandPoller) pollFailed(ctx context.Context, ask int, err error) {
+	// An answer over the size limit is not a transient fault: log it
+	// whatever the verbosity, ask for less, and fail the one command that
+	// cannot be carried.
+	if errors.Is(err, ErrResponseTooLarge) {
+		p.handleOversize(ctx, ask, err)
+		return
+	}
+	p.claims.retryAfter(retryAfterOf(err))
+	if p.verbose.Load() {
+		fmt.Printf("[command-poller] Failed to poll commands: %v\n", err)
+	}
+}
+
+// observePoll feeds the outcome of a poll to the auth gate (the heartbeat's,
+// or the poller's own).
+func (p *CommandPoller) observePoll(gate *AuthGate, err error) {
+	// An answer over the size limit is an answer: the platform is reachable
+	// and the key accepted, so it must not read as a connection failure.
+	if errors.Is(err, ErrResponseTooLarge) {
+		err = nil
+	}
+	if gate != nil {
+		gate.MarkRejected(err, p.keyHint())
+	} else if backoff := p.ownGate.Observe(err, p.keyHint()); backoff > 0 {
+		p.ownNext = time.Now().Add(backoff)
+	} else {
+		p.ownNext = time.Time{}
 	}
 }
 

@@ -587,7 +587,7 @@ func (c *Client) pushReportDirect(ctx context.Context, report *ctis.Report, asse
 		case isRouteMissing(err):
 			return nil, c.v2Missing(err)
 		case errors.As(err, &ve) && ve.Transient():
-		case errors.As(err, &ve), errors.Is(err, ErrV2NoTool), ctx.Err() != nil:
+		case errors.As(err, &ve), errors.Is(err, ErrV2NoTool), errors.Is(err, core.ErrResponseTooLarge), ctx.Err() != nil:
 			return nil, err
 		}
 	}
@@ -863,6 +863,12 @@ func (c *Client) doRequestFull(ctx context.Context, method, url string, body []b
 			return nil, nil, err
 		}
 
+		// An answer over the size limit comes back the same on every
+		// attempt: retrying only downloads it again.
+		if errors.Is(err, core.ErrResponseTooLarge) {
+			return nil, nil, err
+		}
+
 		// Don't retry on context errors
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
@@ -938,7 +944,7 @@ func (c *Client) doRequestOnce(ctx context.Context, method, url string, body []b
 		return nil, nil, fmt.Errorf("read response: %w", err)
 	}
 	if len(data) > maxResponseBodyBytes {
-		return nil, nil, fmt.Errorf("response body exceeds %d bytes", maxResponseBodyBytes)
+		return nil, resp.Header, newResponseTooLarge(data)
 	}
 
 	return data, resp.Header, nil

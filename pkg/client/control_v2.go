@@ -102,6 +102,11 @@ func (c *Client) v2JSONBody(ctx context.Context, method, path string, body []byt
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		// An answer over the size limit is the same on every attempt:
+		// retrying would download up to 10 MiB again for nothing.
+		if errors.Is(err, core.ErrResponseTooLarge) {
+			return hdr, err
+		}
 		var ve *V2Error
 		if errors.As(err, &ve) && !ve.Transient() {
 			return hdr, asControlError(err)
