@@ -521,7 +521,12 @@ func (c *Client) PushResultsV2(ctx context.Context, report *ctis.Report, opts *V
 			return nil, err
 		}
 		switch {
-		case ve.Status == http.StatusRequestEntityTooLarge && !errors.Is(err, errTooManySegments):
+		case errors.Is(err, errTooManySegments):
+			// Smaller segments would only make more of them: final, like a
+			// request that splitting does not make smaller.
+			logf("report %s: not delivered: %s (HTTP 413); it cannot be split to fit", p.ReportID, ve.Body)
+			return nil, fmt.Errorf("%w: %w", errUnsplittable, err)
+		case ve.Status == http.StatusRequestEntityTooLarge:
 			// Halve the segment that was refused and send smaller ones.
 			// Nothing of a refused request is stored, so the report id is
 			// kept unless acknowledged segments would no longer line up.

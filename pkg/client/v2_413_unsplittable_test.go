@@ -60,3 +60,42 @@ func TestPushResultsV2_UnsplittableFindingIsNotRetriedInALoop(t *testing.T) {
 		t.Fatalf("classify(%v) is not permanent: the outbox would retry it", err)
 	}
 }
+
+// A report that needs more segments than the platform accepts gave up
+// without a log line and without errUnsplittable. Both 413 give-ups now say
+// why and wrap errUnsplittable, and nothing is sent.
+func TestPushResultsV2_TooManySegmentsIsUnsplittableAndLogged(t *testing.T) {
+	var puts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == protov2.PathPrefix+protov2.HelloPath {
+			w.Header().Set("Content-Type", protov2.MediaTypeJSON)
+			_ = json.NewEncoder(w).Encode(protov2.Hello{Protocol: 2,
+				Features: []string{protov2.FeatureResults}, MediaTypes: []string{protov2.MediaTypeCTIS},
+				Limits: protov2.Limits{MaxFindingsPerSegment: 1, MaxSegmentsPerReport: 2}})
+			return
+		}
+		puts.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	c := New(&Config{BaseURL: srv.URL, APIKey: "k"})
+	r := ctis.NewReport()
+	r.Tool = &ctis.Tool{Name: "nuclei"}
+	r.Findings = []ctis.Finding{{Title: "a"}, {Title: "b"}, {Title: "c"}}
+	var logs []string
+	_, err := c.PushResultsV2(context.Background(), r, &V2PushOptions{Logf: func(f string, a ...any) { logs = append(logs, f) }})
+	if !errors.Is(err, errUnsplittable) || !errors.Is(err, errTooManySegments) {
+		t.Fatalf("err = %v, want errUnsplittable and errTooManySegments", err)
+	}
+	if puts.Load() != 0 {
+		t.Fatalf("%d requests sent for a report that cannot fit", puts.Load())
+	}
+	if !strings.Contains(strings.Join(logs, "\n"), "cannot be split to fit") {
+		t.Fatalf("no log line says why: %q", logs)
+	}
+	var pe *outbox.PermanentError
+	if !errors.As(classify(err), &pe) {
+		t.Fatalf("classify(%v) is not permanent: the outbox would retry it", err)
+	}
+}
