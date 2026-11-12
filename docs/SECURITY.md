@@ -162,6 +162,17 @@ fails before anything is written. Because every custom template passes
 this check, a scanner may load custom templates together with its own in
 one run.
 
+Custom templates are written to a private directory under the task root
+(`executor.TaskRoot()`, 0700, files 0600, removed when the job ends), never
+to the system's temporary directory. The sandbox hides the task root from
+every task; the job's context grants the directory (`executor.WithReadPaths`)
+to the tool runs of that job only (`core.ExecuteScanner`/`StreamScanner` and
+the tool host add the grant to the task's read paths). On a shared sensor,
+another organization's concurrent task cannot read or list the templates,
+which may carry credentials such as auth headers. A scanner that rewrites
+or signs a copy of the templates makes it with `executor.NewJobDir(ctx, …)`
+and runs its tool with the context it returns.
+
 The check is one function for every command type
 (`core.DefaultCommandExecutor.VerifyCustomTemplates`). A **retest** command
 may carry custom templates too (`custom_templates`, optionally
@@ -171,7 +182,8 @@ the kit refuses it unless the retest's tool opted in
 local policy allows custom templates, every templated item names a carried
 template of that tool's type, and the templates pass the verification and
 content check above. Only then are they written (`core.WriteCustomTemplates`:
-a new temporary directory, 0700, files 0600, removed when the retest ends)
+a new private directory under the task root, 0700, files 0600, granted to
+this retest's tool runs only, removed when the retest ends)
 and the item's file handed to the tool (`tool.RetestItem.TemplatePath`,
 set by the sensor, never by the platform). A templated item's `fixed` or
 `still_present` verdict stands only under the delivered template's digest;
