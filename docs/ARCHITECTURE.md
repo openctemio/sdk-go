@@ -586,6 +586,40 @@ New integrations should use the tool contract rather than a scanner: see
 [docs/adapter-protocol.md](adapter-protocol.md) for tools written in other
 languages.
 
+### Custom command types
+
+A sensor runs a command type of its own with `Kit.HandleCommand(type,
+executor)`. By default it still accepts the SDK executor's types (`scan`,
+`collect`, `health_check`) as well; a worker that serves only its own
+command types lists them in `Options.CommandTypes` (or
+`SENSOR_COMMAND_TYPES`, comma-separated). The poller then accepts exactly
+those types and hands every other command back unrun, and `Run` refuses to
+start when a listed type has no handler and is not one the SDK executor
+serves.
+
+```go
+kit, err := sensorkit.New(sensorkit.Options{Name: "example-worker", CommandTypes: []string{"example_job"}})
+sensorkit.Exit(err)
+kit.HandleCommand("example_job", myExecutor)
+sensorkit.Exit(kit.Run(context.Background()))
+```
+
+The executor returns the command's typed output in
+`CommandExecutionResult.Output` (one JSON value, at most
+`core.MaxCommandOutputBytes`, 256 KiB). Unlike `Metadata`, which is decoded
+and encoded again, the output reaches the platform byte for byte: the
+poller writes it once in compact form (no whitespace between tokens; `<`,
+`>` and `&` escaped, as `encoding/json` writes them), and the complete body,
+the outbox and its replay keep those bytes. A handler that hashes its output
+hashes that form (what `json.Marshal` produces). An output over the limit
+fails the command with error code `output_too_large`, one that is not a
+single JSON value with `output_invalid`.
+
+`core.JobVerifiedFromContext(ctx)` tells the executor whether the command
+came with a signed job the JobGuard verified against a pinned key. A
+handler that must run only verified jobs checks it first (and the sensor
+sets `SENSOR_REQUIRE_SIGNED_JOBS=true`).
+
 ## Best Practices
 
 1. **Keep the state directory.** Mount one persistent volume at

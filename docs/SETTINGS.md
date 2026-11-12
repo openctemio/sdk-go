@@ -29,6 +29,7 @@ Setup & health checklist shows each one's presence, never its value.
 | [`SENSOR_KEY_AUTORENEW`](https://docs.openctem.io/sensors/settings/#SENSOR_KEY_AUTORENEW) | bool |  | `auto` |  | API key auto-renewal: true, false, or unset (on when the state directory persists). |
 | [`SENSOR_MAX_JOBS`](https://docs.openctem.io/sensors/settings/#SENSOR_MAX_JOBS) | int |  |  |  | Cap on concurrent jobs, 1-100. Unset: the slots follow CPU, memory and tool costs. |
 | [`SENSOR_DRAIN_GRACE`](https://docs.openctem.io/sensors/settings/#SENSOR_DRAIN_GRACE) | duration |  | `30s` |  | How long running jobs may finish on shutdown. |
+| [`SENSOR_COMMAND_TYPES`](https://docs.openctem.io/sensors/settings/) | list |  |  |  | The only command types the sensor accepts (comma-separated), for a worker that serves only its own command types. Every listed type needs a handler. Unset: scan, collect, health_check and every handled type. |
 | [`SENSOR_JOB_ID`](https://docs.openctem.io/sensors/settings/#SENSOR_JOB_ID) | string |  |  |  | Run the one platform command with this id and exit (RunJob; a Kubernetes Job) instead of polling for work. The -job flag wins over it. |
 | [`SENSOR_SCANNER_PRIORITY`](https://docs.openctem.io/sensors/settings/#SENSOR_SCANNER_PRIORITY) | enum |  | `low` |  | Priority of scanner processes. |
 | [`SENSOR_TOOL_CGROUPS`](https://docs.openctem.io/sensors/settings/) | enum |  | `auto` |  | Per-task cgroup limits for tools where the sensor's cgroup is delegated (auto), or rlimits only (off). |

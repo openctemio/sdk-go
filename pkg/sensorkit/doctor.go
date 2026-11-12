@@ -272,6 +272,10 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "Cap on concurrent jobs, 1-100. Unset: the slots follow CPU, memory and tool costs."},
 		settingsreg.Setting{Name: EnvDrainGrace, Type: settingsreg.Duration, Default: "30s", Group: "runtime",
 			Description: "How long running jobs may finish on shutdown."},
+		settingsreg.Setting{Name: EnvCommandTypes, Type: settingsreg.List, Group: "runtime",
+			Description: "The only command types the sensor accepts (comma-separated), for a worker that serves only its own command types. Every listed type needs a handler. Unset: scan, collect, health_check and every handled type.",
+			// The reference page has no row for it yet: link the page.
+			Docs: settingsreg.DocsBase},
 		settingsreg.Setting{Name: EnvJobID, Type: settingsreg.String, Group: "runtime",
 			Description: "Run the one platform command with this id and exit (RunJob; a Kubernetes Job) instead of polling for work. The -job flag wins over it."},
 		settingsreg.Setting{Name: EnvScannerPriority, Type: settingsreg.Enum, Enum: []string{"low", "normal"}, Default: "low",

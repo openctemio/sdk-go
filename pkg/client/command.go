@@ -289,7 +289,12 @@ func (c *Client) reportCommandResultOnce(ctx context.Context, cmdID string, resu
 
 func (c *Client) reportCommandResult(ctx context.Context, cmdID string, result *core.CommandResult, retries int) error {
 	if result.Status == "completed" || result.Error == "" {
-		resultJSON, _ := json.Marshal(result)
+		// The result's typed output (Output) is a json.RawMessage: encoded
+		// as it is, it reaches the platform byte for byte.
+		resultJSON, err := json.Marshal(result)
+		if err != nil {
+			return fmt.Errorf("encode the result of command %s: %w", cmdID, err)
+		}
 		return c.completeCommand(ctx, cmdID, resultJSON, retries)
 	}
 	return c.failCommandResult(ctx, cmdID, result, retries)
