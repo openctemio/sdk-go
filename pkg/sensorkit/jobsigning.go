@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
+	"github.com/openctemio/sdk-go/pkg/sensorkit/identity"
+	"github.com/openctemio/sdk-go/pkg/sensorproto/pairing"
+	protov2 "github.com/openctemio/sdk-go/pkg/sensorproto/v2"
 )
 
 // JobSigningStateFile keeps, in the state directory, the last job sequence
@@ -92,6 +96,7 @@ func (k *Kit) resolveJobSigning() error {
 	// the platform on first use (a root or keys a compromised platform could
 	// have served) is not trusted next to it.
 	exclusive := keysFromFile || rootFromFile
+	k.pinSelfBoundSigner(envKeys, root)
 	pinned := 0
 	if s.identity != nil && s.identity.JobSigningRoot != "" && !exclusive {
 		idRoot, err := jobsig.ParseRoot(s.identity.JobSigningRoot)
@@ -245,6 +250,101 @@ func (k *Kit) resolveJobSigning() error {
 		k.startKeySet(trust)
 	}
 	return nil
+}
+
+// selfBoundSignerTimeout bounds the hello read of pinSelfBoundSigner: the
+// most an unpinned self-bound sensor's start waits for it.
+const selfBoundSignerTimeout = 30 * time.Second
+
+// pinSelfBoundSigner pins the platform's job signer on first use for an
+// identity that has none because it never went through pairing: a sensor
+// that bound its own key from an API key (keybind.go; such an identity has
+// no platform pairing key). Pairing pins the signer from its signed grant;
+// a self-bound sensor had nothing, so it ran with signed jobs off, verified
+// no job and could use no job's secrets. Its first start against a platform
+// that signs jobs now pins the root of the platform's key set (or its signer
+// keys), with the same trust as the API key it bound with: the platform's
+// TLS identity. That trust exists only over https: the API client verifies
+// the platform's certificate (the platform TLS pin or SENSOR_CA_FINGERPRINT
+// when set, the trust store otherwise) and follows no redirect, so the hello
+// came from the platform the sensor's URL names. Over plain http a network
+// attacker could serve its own signer and have it pinned for good, so
+// nothing is pinned and every start says how to fix it. From then on signed
+// jobs are required, and a later platform compromise cannot swap the
+// signer; a pin is never replaced (it is only taken while none exists). A
+// paired identity that pinned nothing (paired to accept unsigned jobs) and
+// a configured key or root are left alone (envKeys, root: configured out of
+// band); a failed read leaves the sensor as it was, with a warning, until
+// its next start.
+func (k *Kit) pinSelfBoundSigner(envKeys *jobsig.Keys, root string) {
+	s := &k.s
+	id := s.identity
+	if envKeys.Len() > 0 || root != "" || id == nil || s.shared || id.PlatformKey != "" || id.JobSigningRoot != "" || len(id.JobSigningKeys) > 0 || k.client == nil {
+		return
+	}
+	if required, set, err := core.RequireSignedJobsFromEnv(nil); err == nil && set && !required {
+		// The operator turned signed jobs off for this sensor: a pin would
+		// stop it at start (a pin may only raise the requirement).
+		_, _ = fmt.Fprintf(k.errw, "Warning: %s=false: the platform's job signer is not pinned and jobs are not verified\n",
+			core.EnvRequireSignedJobs)
+		return
+	}
+	if u, err := url.Parse(s.apiURL); err != nil || !strings.EqualFold(u.Scheme, "https") {
+		_, _ = fmt.Fprintf(k.errw, "Warning: the platform URL is not https, so the platform's job signer is not pinned on first use "+
+			"(over plain http anyone on the network path could serve their own); jobs are not verified and use no platform secrets. "+
+			"Use an https %s, or set %s to the job-signing root shown in the console\n", EnvAPIURL, EnvJobSigningRoot)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), selfBoundSignerTimeout)
+	defer cancel()
+	h, err := k.client.Hello(ctx)
+	if err != nil {
+		_, _ = fmt.Fprintf(k.errw, "Warning: the platform's job signer could not be read (%v); no job signer is pinned, so signed jobs stay off "+
+			"(jobs are not verified and use no platform secrets) until a start that reads it, or set %s\n", err, EnvJobSigningRoot)
+		return
+	}
+	if h.SignedJobs == nil || !h.Supports(protov2.FeatureSignedJobs) {
+		return
+	}
+	keys, root, err := identity.JobSignerOnFirstUse(k.errw, &pairing.JobSigning{
+		PayloadType: h.SignedJobs.PayloadType, Keys: pairingKeys(h.SignedJobs.Keys), KeySet: h.SignedJobs.KeySet})
+	if err != nil || (len(keys) == 0 && root == "") {
+		return
+	}
+	if root != "" {
+		// The root's key set says which signer keys are valid, and follows
+		// a rotation; keys pinned next to it would only go stale.
+		keys = nil
+	}
+	next := *id
+	next.JobSigningKeys, next.JobSigningRoot = keys, root
+	if err := identity.NewStore(s.stateDir).Save(&next); err != nil {
+		// Used for this run anyway; the next start pins it again.
+		_, _ = fmt.Fprintf(k.errw, "Warning: the job signer is pinned for this run but the identity could not be saved: %v\n", err)
+	}
+	s.identity = &next
+	what := "keys " + strings.Join(jobKeyIDs(keys), ", ")
+	if root != "" {
+		what = "root " + root
+	}
+	_, _ = fmt.Fprintf(k.errw, "Job signer pinned on first use: %s (this sensor bound its own key, so no pairing pinned one); "+
+		"signed jobs are now required. To pin another signer, set %s, or pair the sensor again\n", what, EnvJobSigningRoot)
+}
+
+func pairingKeys(in []protov2.SignedJobKey) []pairing.JobKey {
+	out := make([]pairing.JobKey, 0, len(in))
+	for _, k := range in {
+		out = append(out, pairing.JobKey{KeyID: k.KeyID, Algorithm: k.Algorithm, PublicKey: k.PublicKey})
+	}
+	return out
+}
+
+func jobKeyIDs(keys []jobsig.PublicKey) []string {
+	ids := make([]string, 0, len(keys))
+	for _, k := range keys {
+		ids = append(ids, k.KeyID)
+	}
+	return ids
 }
 
 // startKeySet fetches the root's key set once at start. Without a valid

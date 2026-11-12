@@ -608,6 +608,29 @@ Verification needs the sensor's own organization and id, which a paired
 that requires signed jobs without a pinned key. The manifest's posture
 reports `jobs.signed`: `required`, `verified_when_present` or `off`.
 
+A sensor that bound its own key from an API key (`SENSOR_KEY_BIND=auto`)
+has no signed pairing grant, so pairing pinned no job signer for it. At its
+first start against a platform that signs jobs (hello feature
+`signed_jobs`), it pins the root of the platform's key set, or its signer
+keys, in `identity.json`, with the same trust as the API key it bound with
+(the platform's TLS identity), says so on stderr ("Job signer pinned on
+first use"), and requires signed jobs from then on. It does not when a key
+or root is set (`SENSOR_JOB_SIGNING_KEYS`, `SENSOR_JOB_SIGNING_ROOT`), when
+`SENSOR_REQUIRE_SIGNED_JOBS=false`, or for an identity that came from
+pairing (it pinned what its grant named, or was paired to accept unsigned
+jobs). It pins only over https, where the API client verified the
+platform's certificate (the platform TLS pin or `SENSOR_CA_FINGERPRINT`
+when set, the trust store otherwise) and follows no redirect; over plain
+http a network attacker could serve its own signer and have it pinned for
+good, so nothing is pinned and every start warns (use an https URL, or set
+`SENSOR_JOB_SIGNING_ROOT`). A pin is never replaced by a later hello. With
+a valid key set only the root is pinned, so a rotation within it is
+followed. A failed read of the hello (at most 30 seconds at start) leaves
+it unpinned, with a warning at every start, until a start reads it. A
+sensor whose platform moved to a signer outside its pin refuses its jobs:
+set `SENSOR_JOB_SIGNING_ROOT`, or remove `job_signing_keys` (or
+`job_signing_root`) from `identity.json` so the next start pins again.
+
 ##### The offline root and the key set
 
 A sensor that pins an online signer key must be paired again when that key
