@@ -18,13 +18,20 @@
 //   - every response body is capped and read as a stream, one row at a time:
 //     an answer over the byte cap or over ctlookup.MaxRecords rows is refused
 //     as a whole (StateTooLarge) as soon as the cap is passed, never read in
-//     full and never taken as a truncated list; an empty body is a bad
-//     answer, not "no certificates" (crt.sh answers [] for none);
+//     full and never taken as a truncated list; one row is capped too
+//     (maxRowBytes), so a single giant row is refused the same way, and the
+//     names of a row are cut at ctlookup.MaxNamesPerRecord while they are
+//     read; an empty body is a bad answer, not "no certificates" (crt.sh
+//     answers [] for none);
 //   - a source failure is a SourceStatus entry of the answer, never an
 //     error: the lookup itself fails only on a bad input or a canceled
 //     context;
-//   - an answer with at least one source ok is cached per (tenant, domain,
-//     cursor) for about 20 hours, so a retried job does not query again; the
+//   - an answer with at least one source ok, or whose every source is
+//     too_large (a definite answer too: the list is over a cap), is cached
+//     per (tenant, domain, cursor) for about 20 hours, so a retried job does
+//     not query again; a source's too_large is also remembered on its own,
+//     so a big domain does not cost Cert Spotter's paced requests to a
+//     per-address quota at every lookup while crt.sh is still retried; the
 //     cache is never shared across tenants, so one tenant's timing cannot
 //     reveal another's watch list;
 //   - the answer passes ctlookup.Validate before it leaves: names bound to
@@ -37,6 +44,7 @@
 package ctlog
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -88,6 +96,14 @@ const (
 	// left, and never more than half of it).
 	fallbackReserve     = 25 * time.Second
 	certSpotterMaxPages = 10
+	// maxRowBytes caps one row of an answer (a crt.sh row or a Cert Spotter
+	// issuance). A real certificate row is a few KiB; the contract keeps at
+	// most 1000 names of 253 bytes per record, about 250 KiB. A row over the
+	// cap makes the answer too_large, so one giant row is never held whole.
+	maxRowBytes = 2 << 20
+	// tooLargeCacheBytes bounds the remembered too_large states (about
+	// 60 bytes each).
+	tooLargeCacheBytes = 1 << 20
 	// maxPaceWait is the longest a lookup waits for its turn at a source;
 	// a source cooling down for longer is reported rate_limited at once.
 	maxPaceWait = 60 * time.Second
@@ -126,6 +142,10 @@ type Client struct {
 	crtsh *pacer
 	cs    *pacer
 	cache *cache
+	// tooLarge remembers per (tenant, domain, cursor, source) a source
+	// that answered too_large; its own map, so its keys never meet the
+	// answers'.
+	tooLarge *cache
 }
 
 // New checks the configuration and returns a Client.
@@ -169,7 +189,7 @@ func New(cfg Config) (*Client, error) {
 	if cfg.fallbackMin <= 0 {
 		cfg.fallbackMin = fallbackReserve
 	}
-	c := &Client{cfg: cfg, cache: newCache(cfg.CacheBytes)}
+	c := &Client{cfg: cfg, cache: newCache(cfg.CacheBytes), tooLarge: newCache(tooLargeCacheBytes)}
 	c.crtsh = &pacer{interval: cfg.Interval, now: cfg.now}
 	c.cs = &pacer{interval: cfg.Interval, now: cfg.now}
 	return c, nil
@@ -192,19 +212,25 @@ func (c *Client) Lookup(ctx context.Context, tenant string, in ctlookup.Input) (
 	var out ctlookup.Output
 	// crt.sh may use the lookup's time only up to a point: Cert Spotter keeps
 	// a share, so a slow crt.sh cannot leave the lookup with no answer.
-	crtCtx, stop := c.crtshContext(ctx)
-	recs, st := c.queryCRTSH(crtCtx, in.Domain)
-	stop()
-	if err := ctx.Err(); err != nil {
-		return ctlookup.Output{}, err
+	recs, st, known := c.tooLargeBefore(key, ctlookup.SourceCRTSH)
+	if !known {
+		crtCtx, stop := c.crtshContext(ctx)
+		recs, st = c.queryCRTSH(crtCtx, in.Domain)
+		stop()
+		if err := ctx.Err(); err != nil {
+			return ctlookup.Output{}, err
+		}
 	}
 	out.SourceStatus = append(out.SourceStatus, st)
 	if st.State == ctlookup.StateOK {
 		out.Records = recs
 	} else if !c.cfg.CertSpotterOff {
-		recs, st = c.queryCertSpotter(ctx, in.Domain, in.After)
-		if err := ctx.Err(); err != nil {
-			return ctlookup.Output{}, err
+		recs, st, known = c.tooLargeBefore(key, ctlookup.SourceCertSpotter)
+		if !known {
+			recs, st = c.queryCertSpotter(ctx, in.Domain, in.After)
+			if err := ctx.Err(); err != nil {
+				return ctlookup.Output{}, err
+			}
 		}
 		out.SourceStatus = append(out.SourceStatus, st)
 		if st.State == ctlookup.StateOK {
@@ -221,13 +247,49 @@ func (c *Client) Lookup(ctx context.Context, tenant string, in ctlookup.Input) (
 		return ctlookup.Output{}, fmt.Errorf("ctlog: answer breaks the contract: %w", err)
 	}
 	clean = capSize(clean)
+	expires := c.cfg.now().Add(c.cfg.CacheTTL)
+	if cacheable(clean) {
+		c.cache.put(key, clean, expires)
+	}
+	// A source whose list is over a cap stays so for the cache's lifetime:
+	// remember it per source, so the next lookup asks only the sources that
+	// may answer (a big domain does not cost Cert Spotter's eleven paced
+	// requests again while crt.sh is still retried).
 	for _, s := range clean.SourceStatus {
-		if s.State == ctlookup.StateOK {
-			c.cache.put(key, clean, c.cfg.now().Add(c.cfg.CacheTTL))
-			break
+		if s.State == ctlookup.StateTooLarge {
+			c.tooLarge.put(sourceKey(key, s.Source), ctlookup.Output{SourceStatus: []ctlookup.SourceStatus{s}}, expires)
 		}
 	}
 	return clean, nil
+}
+
+func sourceKey(key, source string) string { return key + "\x00" + source }
+
+// tooLargeBefore returns the source's too_large status when it is
+// remembered for this tenant, domain and cursor.
+func (c *Client) tooLargeBefore(key, source string) ([]ctlookup.Record, ctlookup.SourceStatus, bool) {
+	if out, ok := c.tooLarge.get(sourceKey(key, source), c.cfg.now()); ok && len(out.SourceStatus) == 1 {
+		return nil, out.SourceStatus[0], true
+	}
+	return nil, ctlookup.SourceStatus{}, false
+}
+
+// cacheable tells a definite answer: a source answered ok, or every source
+// that was asked answered too_large. A too_large list stays too large for
+// the cache's lifetime, and asking again would cost up to eleven paced
+// requests to a per-address quota for the same answer. A failure that may
+// pass (unavailable, rate_limited) is never cached.
+func cacheable(out ctlookup.Output) bool {
+	tooLarge := 0
+	for _, s := range out.SourceStatus {
+		switch s.State {
+		case ctlookup.StateOK:
+			return true
+		case ctlookup.StateTooLarge:
+			tooLarge++
+		}
+	}
+	return tooLarge > 0 && tooLarge == len(out.SourceStatus)
 }
 
 // crtshContext bounds the crt.sh part of a lookup: it ends early enough to
@@ -328,7 +390,9 @@ func (c *Client) queryCRTSH(ctx context.Context, domain string) ([]ctlookup.Reco
 func parseCRTSH(r io.Reader) ([]ctlookup.Record, error) {
 	out := []ctlookup.Record{}
 	err := decodeArray(r, ctlookup.MaxRecords, func(e crtshEntry) {
-		names := strings.Split(e.NameValue, "\n")
+		// SplitN: the cut happens while splitting, so a row of many short
+		// names never becomes a slice of all of them.
+		names := strings.SplitN(e.NameValue, "\n", ctlookup.MaxNamesPerRecord+1)
 		if e.CommonName != "" {
 			names = append(names, e.CommonName)
 		}
@@ -378,7 +442,12 @@ func decodeArray[T any](r io.Reader, limit int, each func(T)) error {
 			return errTooMany
 		}
 		var v T
-		if err := dec.Decode(&v); err != nil {
+		// The row starts at the decoder's offset: what the reader hands out
+		// past it, for this row, is capped at maxRowBytes.
+		cr.startRow(dec.InputOffset())
+		err := dec.Decode(&v)
+		cr.endRow()
+		if err != nil {
 			return bad("row does not decode", err)
 		}
 		n++
@@ -396,18 +465,42 @@ func decodeArray[T any](r io.Reader, limit int, each func(T)) error {
 }
 
 // capReader reads r, at most max bytes (max < 0: no cap); past the cap Read
-// fails with errTooLarge. Any other error of r is kept in err, so a caller
-// tells a cut connection from a body that is not valid.
+// fails with errTooLarge. Between startRow and endRow it also hands out at
+// most maxRowBytes past the row's start, and fails with errTooLarge when the
+// decoder asks for more: one row is never read whole past that cap. Any
+// other error of r is kept in err, so a caller tells a cut connection from a
+// body that is not valid.
 type capReader struct {
 	r   io.Reader
 	max int64
 	n   int64
 	err error
+
+	inRow    bool
+	rowStart int64
 }
+
+// startRow starts the per-row cap at offset off of the body (the decoder's
+// position before the row: bytes it already holds past off count).
+func (c *capReader) startRow(off int64) { c.inRow, c.rowStart = true, off }
+
+func (c *capReader) endRow() { c.inRow = false }
 
 func (c *capReader) Read(p []byte) (int, error) {
 	if c.err != nil {
 		return 0, c.err
+	}
+	if c.inRow {
+		// One byte past the row cap may be handed out; the decoder asking
+		// for more after that means the row is longer than the cap.
+		left := c.rowStart + maxRowBytes + 1 - c.n
+		if left <= 0 {
+			c.err = fmt.Errorf("%w (a row over %d bytes)", errTooLarge, maxRowBytes)
+			return 0, c.err
+		}
+		if int64(len(p)) > left {
+			p = p[:left]
+		}
 	}
 	if c.max >= 0 {
 		// One byte more than the cap is read, so an over-long body shows.
@@ -430,10 +523,10 @@ func (c *capReader) Read(p []byte) (int, error) {
 // certSpotterIssuance is one record of Cert Spotter's /v1/issuances answer
 // with expand=dns_names and expand=issuer.
 type certSpotterIssuance struct {
-	ID        string   `json:"id"`
-	DNSNames  []string `json:"dns_names"`
-	NotBefore string   `json:"not_before"`
-	NotAfter  string   `json:"not_after"`
+	ID        string      `json:"id"`
+	DNSNames  cappedNames `json:"dns_names"`
+	NotBefore string      `json:"not_before"`
+	NotAfter  string      `json:"not_after"`
 	Issuer    struct {
 		FriendlyName string `json:"friendly_name"`
 		Name         string `json:"name"`
@@ -441,8 +534,44 @@ type certSpotterIssuance struct {
 	CertSHA256 string `json:"cert_sha256"`
 }
 
+// cappedNames is a JSON list of names that keeps only the first
+// ctlookup.MaxNamesPerRecord: the rest are never made into strings. The row
+// it is part of is already capped at maxRowBytes and checked to be valid
+// JSON by the decoder before this runs.
+type cappedNames []string
+
+// UnmarshalJSON reads the list one name at a time and stops at the cap.
+func (n *cappedNames) UnmarshalJSON(b []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if tok == nil { // null
+		*n = nil
+		return nil
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '[' {
+		return errors.New("dns_names is not a list")
+	}
+	out := []string{}
+	for dec.More() && len(out) < ctlookup.MaxNamesPerRecord {
+		var s string
+		if err := dec.Decode(&s); err != nil {
+			return err
+		}
+		out = append(out, s)
+	}
+	*n = out
+	return nil
+}
+
 // queryCertSpotter lists the unexpired issuances of domain and the names
-// under it, at most certSpotterMaxPages pages, from after on.
+// under it, at most certSpotterMaxPages pages, from after on. The list ends
+// at an empty page (the API's only end marker: its page size is neither
+// fixed nor documented, so a short page is not taken as the end). After the
+// last page one more is asked: empty, the list was complete; not empty, the
+// list is cut and too_large.
 func (c *Client) queryCertSpotter(ctx context.Context, domain, after string) ([]ctlookup.Record, ctlookup.SourceStatus) {
 	base, _ := url.Parse(c.cfg.CertSpotterURL)
 	base.Path = strings.TrimRight(base.Path, "/") + "/v1/issuances"
@@ -453,7 +582,7 @@ func (c *Client) queryCertSpotter(ctx context.Context, domain, after string) ([]
 		}
 	}
 	out := []ctlookup.Record{}
-	for page := 0; page < certSpotterMaxPages; page++ {
+	for page := 0; page <= certSpotterMaxPages; page++ {
 		q := url.Values{}
 		q.Set("domain", domain)
 		q.Set("include_subdomains", "true")
@@ -474,10 +603,7 @@ func (c *Client) queryCertSpotter(ctx context.Context, domain, after string) ([]
 				if issuer == "" {
 					issuer = it.Issuer.Name
 				}
-				names := it.DNSNames
-				if len(names) > ctlookup.MaxNamesPerRecord {
-					names = names[:ctlookup.MaxNamesPerRecord]
-				}
+				names := []string(it.DNSNames)
 				out = append(out, ctlookup.Record{
 					Source: ctlookup.SourceCertSpotter, EntryID: clipField(it.ID), DNSNames: names,
 					Issuer: clipField(issuer), Serial: clipField(it.CertSHA256),
@@ -501,8 +627,7 @@ func (c *Client) queryCertSpotter(ctx context.Context, domain, after string) ([]
 		}
 		after = lastID
 	}
-	// The last page was not empty and the page limit stopped the listing:
-	// the list is cut. A cut list would read as names that vanished, so none
+	// The page after the last one was not empty: the list is cut. A cut list would read as names that vanished, so none
 	// of it is used (the contract's rule for an answer over a cap).
 	return nil, ctlookup.SourceStatus{Source: ctlookup.SourceCertSpotter, State: ctlookup.StateTooLarge}
 }
@@ -587,7 +712,9 @@ func (c *Client) get(ctx context.Context, p *pacer, source, rawURL string, hdr h
 	if resp.StatusCode != http.StatusOK {
 		ra := min(parseRetryAfter(resp.Header.Get("Retry-After")), maxCoolDown)
 		if resp.StatusCode == http.StatusTooManyRequests || ra > 0 {
-			p.coolDown(max(ra, c.cfg.Interval*30))
+			// Both bounds: a configured Interval of minutes must not turn
+			// a 429 into a cool-down of hours.
+			p.coolDown(min(max(ra, c.cfg.Interval*30), maxCoolDown))
 		}
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		return &statusError{code: resp.StatusCode, retryAfter: ra}
