@@ -95,9 +95,7 @@ func (k *Kit) resolveJobSigning() error {
 	// the platform on first use (a root or keys a compromised platform could
 	// have served) is not trusted next to it.
 	exclusive := keysFromFile || rootFromFile
-	if envKeys.Len() == 0 && root == "" {
-		k.pinSelfBoundSigner()
-	}
+	k.pinSelfBoundSigner(envKeys, root)
 	pinned := 0
 	if s.identity != nil && s.identity.JobSigningRoot != "" && !exclusive {
 		idRoot, err := jobsig.ParseRoot(s.identity.JobSigningRoot)
@@ -266,11 +264,12 @@ const selfBoundSignerTimeout = 30 * time.Second
 // TLS identity. From then on signed jobs are required, and a later platform
 // compromise cannot swap the signer. A paired identity that pinned nothing
 // (paired to accept unsigned jobs) and a configured key or root are left
-// alone; a failed read leaves the sensor as it was until its next start.
-func (k *Kit) pinSelfBoundSigner() {
+// alone (envKeys, root: configured out of band); a failed read leaves the
+// sensor as it was until its next start.
+func (k *Kit) pinSelfBoundSigner(envKeys *jobsig.Keys, root string) {
 	s := &k.s
 	id := s.identity
-	if id == nil || s.shared || id.PlatformKey != "" || id.JobSigningRoot != "" || len(id.JobSigningKeys) > 0 || k.client == nil {
+	if envKeys.Len() > 0 || root != "" || id == nil || s.shared || id.PlatformKey != "" || id.JobSigningRoot != "" || len(id.JobSigningKeys) > 0 || k.client == nil {
 		return
 	}
 	if required, set, err := core.RequireSignedJobsFromEnv(nil); err == nil && set && !required {
