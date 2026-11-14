@@ -161,6 +161,10 @@ func TestExecuteScan_SettingsLayersFromPayload(t *testing.T) {
 	if v, src := intSetting(t, st, "threads"); v != 12 || src != SettingSourceSensor {
 		t.Fatalf("threads %d from %s", v, src)
 	}
+	// The executor hands the tool the keys a person set.
+	if got := strings.Join(sc.options.ChosenSettings, ","); got != "rate_limit,threads" {
+		t.Fatalf("ChosenSettings %q, want rate_limit,threads", got)
+	}
 	eff, _ := json.Marshal(res.Metadata["effective_settings"])
 	if !strings.Contains(string(eff), `"threads":{"source":"sensor","value":12}`) {
 		t.Fatalf("effective_settings %s", eff)
@@ -169,5 +173,37 @@ func TestExecuteScan_SettingsLayersFromPayload(t *testing.T) {
 	bad := `{"scanner":"rec","target":"https://example.com","settings_layers":{"sensor":{"threads":100000}}}`
 	if _, err := e.Execute(context.Background(), &Command{ID: "c2", Type: "scan", Payload: json.RawMessage(bad)}); err == nil {
 		t.Fatal("an out-of-range sensor layer ran")
+	}
+}
+
+// ChosenSettings names the keys a person set, also when the job's or the
+// local policy's caps lowered their value afterwards; defaults and caps
+// alone are never "chosen".
+func TestResolveScanSettings_ChosenKeys(t *testing.T) {
+	capAt := func(n int) func(int) int { return func(v int) int { return min(v, n) } }
+	for _, tc := range []struct {
+		name   string
+		layers *SettingsLayers
+		config map[string]any
+		job    jobSettings
+		want   []string
+	}{
+		{"defaults only", nil, nil, jobSettings{}, nil},
+		{"job caps a default", nil, nil, jobSettings{rate: 100, capRate: capAt(50)}, nil},
+		{"sensor raised, job lowered", &SettingsLayers{Sensor: map[string]any{"rate_limit": 600}}, nil, jobSettings{rate: 400}, []string{"rate_limit"}},
+		{"tenant and scan", &SettingsLayers{Tenant: map[string]any{"threads": 10}}, map[string]any{"retries": float64(0)}, jobSettings{}, []string{"retries", "threads"}},
+	} {
+		ts, chosen, _, err := resolveScanSettingsChosen(layersSchema(), tc.layers, tc.config, tc.job)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if strings.Join(chosen, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s: chosen %v, want %v", tc.name, chosen, tc.want)
+		}
+		if tc.name == "sensor raised, job lowered" {
+			if v, src := intSetting(t, ts, "rate_limit"); v != 400 || src != SettingSourceJob {
+				t.Errorf("%s: rate %d from %s", tc.name, v, src)
+			}
+		}
 	}
 }

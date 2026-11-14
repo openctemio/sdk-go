@@ -131,6 +131,15 @@ const minRequestTimeout = 2 * time.Second
 // settings is nil when nothing but defaults applies: the scanner then runs
 // exactly as without settings.
 func resolveScanSettings(schema *SettingsSchema, layers *SettingsLayers, config map[string]any, job jobSettings) (settings *ToolSettings, ignored []string, err error) {
+	settings, _, ignored, err = resolveScanSettingsChosen(schema, layers, config, job)
+	return settings, ignored, err
+}
+
+// resolveScanSettingsChosen is resolveScanSettings that also returns the
+// keys a person set (ScanOptions.ChosenSettings): every key the tenant's,
+// the sensor's or the scan's layer set, whatever the job's and the local
+// policy's caps did to its value afterwards.
+func resolveScanSettingsChosen(schema *SettingsSchema, layers *SettingsLayers, config map[string]any, job jobSettings) (settings *ToolSettings, chosen []string, ignored []string, err error) {
 	var upper []SettingsLayer
 	if layers != nil {
 		if len(layers.Tenant) > 0 {
@@ -154,16 +163,21 @@ func resolveScanSettings(schema *SettingsSchema, layers *SettingsLayers, config 
 	ignored = boundIgnoredKeys(ignored)
 	if schema == nil {
 		if len(upper) > 0 {
-			return nil, ignored, SettingsErrors{{Path: "", Message: "the tool has no settings"}}
+			return nil, nil, ignored, SettingsErrors{{Path: "", Message: "the tool has no settings"}}
 		}
-		return nil, ignored, nil
+		return nil, nil, ignored, nil
 	}
 	if len(scanLayer) > 0 {
 		upper = append(upper, SettingsLayer{Source: SettingSourceScan, Values: scanLayer})
 	}
 	base, err := schema.Resolve(upper...)
 	if err != nil {
-		return nil, ignored, err
+		return nil, nil, ignored, err
+	}
+	for _, k := range base.Keys() {
+		if base.Source(k) != SettingSourceDefault {
+			chosen = append(chosen, k)
+		}
 	}
 	jobLayer, localLayer := fitJobLayers(schema, base, job)
 	all := upper
@@ -174,13 +188,13 @@ func resolveScanSettings(schema *SettingsSchema, layers *SettingsLayers, config 
 		all = append(all, SettingsLayer{Source: SettingSourceLocal, Values: localLayer})
 	}
 	if len(all) == 0 {
-		return nil, ignored, nil
+		return nil, nil, ignored, nil
 	}
 	ts, err := schema.Resolve(all...)
 	if err != nil {
-		return nil, ignored, err
+		return nil, nil, ignored, err
 	}
-	return ts, ignored, nil
+	return ts, chosen, ignored, nil
 }
 
 // fitJobLayers maps the job's decision and the local policy's caps onto the
