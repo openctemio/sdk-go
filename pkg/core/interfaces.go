@@ -99,6 +99,12 @@ type ScanOptions struct {
 	// own defaults, as before. A tool maps each typed value to a specific
 	// flag; settings never become free-form arguments.
 	Settings *ToolSettings `yaml:"-" json:"-"`
+	// ChosenSettings are the settings keys a person set in a settings layer
+	// (tenant, sensor or scan), whatever the job's and the local policy's
+	// caps did to their value afterwards. The other keys hold the tool's
+	// default (perhaps lowered by those caps), which a tool may replace by
+	// its pacing level (adapt.Pacing); a chosen value it keeps.
+	ChosenSettings []string `yaml:"-" json:"-"`
 
 	// Capability, Params and MaxTier are a capability job's (see
 	// ScanCommandPayload); only a CapabilityScanner receives them.
@@ -1105,6 +1111,10 @@ type LiveHost struct {
 	// (see ResponseHeadersFrom): an allow-list of header values and the
 	// names and flags of the cookies, never a cookie value.
 	ResponseHeaders *ResponseHeaders `json:"response_headers,omitempty"`
+	// RetryAfter is the answer's Retry-After (adapt.ParseRetryAfter; 0 when
+	// absent or the probe did not read headers). It feeds the run's
+	// throttle tally (adapt.ThrottleTally) and is never reported.
+	RetryAfter time.Duration `json:"-"`
 	// CNAMEs is the DNS alias chain of the host, bounded by SanitizeCNAMEs.
 	CNAMEs []string `json:"cnames,omitempty"`
 	// WebContent is the result of a web content fetch (capability

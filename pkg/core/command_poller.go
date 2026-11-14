@@ -2126,7 +2126,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	// limits and per-target budget reach the tool's common options; the
 	// local policy caps the rate last.
 	schema := e.scannerSettingsSchema(payload.Scanner, scanner)
-	settings, ignoredConfig, err := resolveScanSettings(schema, payload.SettingsLayers, payload.Config,
+	settings, chosenSettings, ignoredConfig, err := resolveScanSettingsChosen(schema, payload.SettingsLayers, payload.Config,
 		jobSettings{rate: opts.RateLimit, concurrency: opts.Concurrency, targetBudget: payload.Budget.Target(), capRate: local.CapRate})
 	if err != nil {
 		return nil, fmt.Errorf("invalid %s settings: %w", payload.Scanner, err)
@@ -2136,7 +2136,7 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	if err := checkResolvedJobPorts(local, schema, settings, scanner, &payload); err != nil {
 		return nil, err
 	}
-	opts.Settings = settings
+	opts.Settings, opts.ChosenSettings = settings, chosenSettings
 	if len(ignoredConfig) > 0 && e.verbose.Load() {
 		fmt.Printf("[executor] %s does not take config keys %s; they have no effect\n", payload.Scanner, strings.Join(ignoredConfig, ", "))
 	}
