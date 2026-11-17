@@ -124,7 +124,7 @@ func TestTargetOutcomesFor_NothingCoveredIsNeverDone(t *testing.T) {
 }
 
 func TestTargetOutcomesFor_GapKinds(t *testing.T) {
-	targets := []string{"a.example", "b.example", "c.example", "d.example", "e.example", "f.example"}
+	targets := []string{"a.example", "b.example", "c.example", "d.example", "e.example", "f.example", "g.example"}
 	gaps := []adapt.Gap{
 		{Host: "a.example", Reason: adapt.GapBlocked},                                                   // a run of plain 403s
 		{Host: "b.example", Reason: adapt.GapBlocked, Edge: "blocked", Vendor: "akamai"},                // vendor block page
@@ -132,6 +132,7 @@ func TestTargetOutcomesFor_GapKinds(t *testing.T) {
 		{Host: "d.example", Reason: adapt.GapBreakerOpen},                                               // stopped answering
 		{Host: "e.example", Reason: adapt.GapBlocked, Edge: "blocked", Vendor: "Not A Token\n<script>"}, // hostile vendor text
 		{Host: "f.example", Reason: adapt.GapProxyUnavailable},                                          // the proxy pool failed
+		{Host: "g.example", Reason: adapt.GapSlotsFull},                                                 // the sensor's own slots were full
 	}
 	got := TargetOutcomesFor(context.Background(), targets, rev2(func(e *OutcomeEvidence) { e.Gaps = gaps }))
 	want := []outcome.Target{
@@ -141,9 +142,51 @@ func TestTargetOutcomesFor_GapKinds(t *testing.T) {
 		{Target: "d.example", State: outcome.Failed, Class: outcome.Unreachable, Cause: outcome.CauseTarget, Reason: "stopped_answering"},
 		{Target: "e.example", State: outcome.Failed, Class: outcome.EdgeBlocked, Cause: outcome.CauseTarget},
 		{Target: "f.example", State: outcome.Failed, Class: outcome.SensorNetworkFault, Cause: outcome.CauseSensor, Reason: "proxy_unavailable"},
+		// The sensor's own bound changes no outcome: the gap alone marks the
+		// host not covered.
+		{Target: "g.example", State: outcome.Done},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("outcomes = %+v\nwant %+v", got, want)
+	}
+}
+
+// A run whose only gap is the sensor's own slot refusal leaves no target
+// unfinished: an unfinished target would be handed out again at once as a
+// follow-up command and scan the host a second time. The tool's own outcome
+// stays, and an unreached target is still classified from the reach evidence.
+func TestTargetOutcomesFor_SlotsFullGapLeavesNoUnfinishedTarget(t *testing.T) {
+	targets := []string{"a.example", "https://b.example/", "c.example", "d.example"}
+	gaps := []adapt.Gap{
+		{Host: "a.example", Reason: adapt.GapSlotsFull, Detail: adapt.GapDetailSlotsFull},
+		{Host: "b.example", Reason: adapt.GapSlotsFull, Detail: adapt.GapDetailSlotsFull},
+		{Host: "c.example", Reason: adapt.GapSlotsFull, Detail: adapt.GapDetailSlotsFull},
+		{Host: "d.example", Reason: adapt.GapSlotsFull, Detail: adapt.GapDetailSlotsFull},
+	}
+	report := decodedReport(t, []ctis.TargetOutcome{
+		{Target: "c.example", State: ctis.TargetFailed, Class: ctis.TargetClassTimeout},
+	})
+	rec := reach.NewRecorder()
+	rec.Record(reach.Observation{Target: "d.example", Class: reach.Timeout})
+	for _, rev := range []int{1, 2} {
+		got := TargetOutcomesFor(context.Background(), targets, OutcomeEvidence{Report: report, Gaps: gaps, Reach: rec, Revision: rev})
+		if len(got) != len(targets) {
+			t.Fatalf("rev %d: %d outcomes for %d targets: %+v", rev, len(got), len(targets), got)
+		}
+		for _, o := range got {
+			if o.State == outcome.Unfinished {
+				t.Fatalf("rev %d: a slots_full gap left %q unfinished: %+v", rev, o.Target, got)
+			}
+		}
+		if got[0].State != outcome.Done || got[1].State != outcome.Done {
+			t.Fatalf("rev %d: the tool's done was overridden: %+v", rev, got)
+		}
+		if got[2].State != outcome.Failed {
+			t.Fatalf("rev %d: the tool's own failure was overridden: %+v", rev, got[2])
+		}
+		if got[3].State != outcome.Failed || got[3].Class != outcome.Unreachable {
+			t.Fatalf("rev %d: the reach evidence was ignored: %+v", rev, got[3])
+		}
 	}
 }
 

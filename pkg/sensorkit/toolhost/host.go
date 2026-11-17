@@ -479,12 +479,8 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if ierr := toolrt.CheckRetest(m, task); ierr != nil {
 		return nil, ierr, nil
 	}
-	if ierr := h.checkLimits(m, task); ierr != nil {
-		return nil, ierr, nil
-	}
-	// An unconfined active tool is refused, and so is a tool that connects
-	// to its targets without a per-host budget (budget.go).
-	if ierr := cmp.Or(h.checkUnconfined(m), requireBudget(m, o)); ierr != nil {
+	// Limits the task cannot keep, and an unconfined active tool, are refused.
+	if ierr := cmp.Or(h.checkLimits(m, task), h.checkUnconfined(m)); ierr != nil {
 		return nil, ierr, nil
 	}
 	egressDialer := taskEgressDialer(ctx, task)
@@ -499,11 +495,17 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if ierr != nil {
 		return nil, ierr, nil
 	}
+	// A tool that can connect to its targets is refused without a per-host
+	// budget (budget.go), read on the effective configuration: a vendor
+	// tool's ${config.<key>} vendor hosts are named there.
+	if ierr := requireBudget(m, tool.Task{Targets: task.Targets, Config: cfg}, o); ierr != nil {
+		return nil, ierr, nil
+	}
 	cfg, rateLine, err := capRate(m, cfg, h.Policy)
 	if err != nil {
 		return nil, tool.AsError(tool.Invalid("%v", err)), nil
 	}
-	budget := budgetOf(m, o)
+	budget := budgetOf(m, tool.Task{Targets: task.Targets, Config: cfg}, o)
 	cfg, budgetLine, err := capBudgetRate(m, cfg, budget, task.Targets, confines(h.backend(), m))
 	if err != nil {
 		return nil, tool.AsError(tool.Invalid("%v", err)), nil

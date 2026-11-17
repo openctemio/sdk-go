@@ -132,3 +132,23 @@ func TestLocalPolicyHostCeiling(t *testing.T) {
 		t.Fatalf("report %+v", r)
 	}
 }
+
+// The local policy's per-host ceiling also bounds the budget of a scan or
+// retest whose caller handed it none (adapt.FallbackBudget): the executor
+// records it with the policy, and removing the policy removes it.
+func TestLocalPolicyCeilingBoundsTheFallbackBudget(t *testing.T) {
+	e := NewDefaultCommandExecutor(nil)
+	t.Cleanup(func() { adapt.SetSensorHostCeiling(adapt.BudgetCeiling{}); adapt.SetSensorPacing(adapt.DefaultPacing) })
+	if err := e.SetPacingLevel(adapt.PacingFast.Name); err != nil {
+		t.Fatal(err)
+	}
+	e.SetLocalPolicy(mustPolicy(t, policyHead+"rate: {max_host_rps: 4, max_host_inflight: 2}\n"))
+	if b := adapt.FallbackBudget(); b.RPS != 4 || b.Inflight != 2 {
+		t.Fatalf("fallback under a 4/s, 2 ceiling: %+v", b)
+	}
+	e.SetLocalPolicy(nil)
+	std := adapt.DefaultBudget()
+	if b := adapt.FallbackBudget(); b.RPS != std.RPS || b.Inflight != std.Inflight {
+		t.Fatalf("fallback without a policy: %+v, want Standard", b)
+	}
+}

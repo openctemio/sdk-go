@@ -152,14 +152,18 @@ type Limits struct {
 	// PerHostConns is how many connections to one host, and to one
 	// address, may be open at once (0: no bound besides MaxConns): the host
 	// budget's requests in flight (adapt.HostBudget.Inflight). A connection
-	// over it waits for one to end, at most DialTimeout, and is then
-	// refused, and the host is reported as a coverage gap. A kept-alive
-	// connection counts while a request is in flight on it (SlotIdle).
+	// holds its slots for as long as it is open. A connection over the
+	// bound closes the oldest idle connection of the host (or address)
+	// whose slots it needs and takes them (SlotIdle); when none is idle it
+	// waits for one to end, at most DialTimeout, and is then refused, and
+	// the host is reported as a coverage gap (adapt.GapSlotsFull).
 	PerHostConns int
 	// SlotIdle is how long a kept-alive connection may be quiet after the
-	// host's answer before it gives its connection slots back until its
-	// next request (0: DefaultSlotIdle; negative: it keeps them until it
-	// closes).
+	// host's answer before it counts as idle: a connection that waits for
+	// its slots may then close it (0: DefaultSlotIdle; negative: no
+	// connection is ever closed for another, it waits until one ends). A
+	// tunnel whose answer the forwarder cannot be sure ended counts as idle
+	// only after UnsureSlotIdle.
 	SlotIdle time.Duration
 	// MaxConns is how many connections may be open at once (0: 256).
 	MaxConns int
@@ -221,6 +225,8 @@ type Forwarder struct {
 	// name reaches.
 	pinned map[netip.Addr][]string
 	limits Limits
+	// unsureIdle is UnsureSlotIdle (shorter in tests).
+	unsureIdle time.Duration
 
 	// Dial opens an upstream connection (default: a net.Dialer). The
 	// address is always an IP and a port the scope allowed.
@@ -257,9 +263,11 @@ type Forwarder struct {
 	dropped     int
 	tally       Tally
 	conns       chan struct{}
-	// hostConns are the per-host connection slots (Limits.PerHostConns).
+	// hostConns are the per-host connection slots (Limits.PerHostConns);
+	// hostMu also guards the waiters and idle connections of every pool
+	// and the state of every connSlots.
 	hostMu    sync.Mutex
-	hostConns map[string]chan struct{}
+	hostConns map[string]*slotPool
 }
 
 // ProtocolCanary is the Record protocol of the runtime's own canary request
@@ -267,43 +275,78 @@ type Forwarder struct {
 const ProtocolCanary = "canary"
 
 // ErrHostBusy is the error of a connection that found every slot of its
-// host taken for DialTimeout (Limits.PerHostConns).
+// host taken for DialTimeout by connections that were not idle
+// (Limits.PerHostConns).
 var ErrHostBusy = errors.New("egress: the host's connections in flight are at the budget")
 
-// hostSlot takes one of host's connection slots, waiting at most
-// DialTimeout for one. The returned func frees it (once). Without a
-// per-host bound it returns at once.
-func (f *Forwarder) hostSlot(ctx context.Context, host string) (func(), error) {
+// hostSlot takes one of host's connection slots for a new connection,
+// waiting at most DialTimeout for one. When every slot is taken it closes
+// the oldest idle connection that holds one (slotPool.idle), at once and
+// whenever another one goes idle while it waits, so the connections open
+// to a host never exceed its slots and idle ones never keep a request
+// waiting. A tunnel that is quiet but unsure (UnsureSlotIdle) is not idle
+// yet: while one holds a slot of the pool when DialTimeout ends, the
+// connection keeps waiting, at most UnsureSlotIdle longer, for it to count
+// as idle and be closed. The returned func frees the slot (once). Without a
+// per-host bound it returns at once with no pool.
+func (f *Forwarder) hostSlot(ctx context.Context, host string) (func(), *slotPool, error) {
 	if f.limits.PerHostConns <= 0 {
-		return func() {}, nil
+		return func() {}, nil, nil
 	}
 	f.hostMu.Lock()
 	if f.hostConns == nil {
-		f.hostConns = map[string]chan struct{}{}
+		f.hostConns = map[string]*slotPool{}
 	}
-	slots, ok := f.hostConns[host]
+	pool, ok := f.hostConns[host]
 	if !ok {
 		if len(f.hostConns) >= adapt.TargetRate.MaxHosts {
 			// Past the bound every further host shares one set of slots.
 			host = "*"
-			slots, ok = f.hostConns[host]
+			pool, ok = f.hostConns[host]
 		}
 		if !ok {
-			slots = make(chan struct{}, f.limits.PerHostConns)
-			f.hostConns[host] = slots
+			pool = &slotPool{ch: make(chan struct{}, f.limits.PerHostConns)}
+			f.hostConns[host] = pool
 		}
 	}
+	select {
+	case pool.ch <- struct{}{}:
+		f.hostMu.Unlock()
+		return pool.release(), pool, nil
+	default:
+	}
+	pool.waiters++
+	victim := f.evictLocked(pool)
 	f.hostMu.Unlock()
+	defer func() {
+		f.hostMu.Lock()
+		pool.waiters--
+		f.hostMu.Unlock()
+	}()
+	victim.close()
 	t := time.NewTimer(f.limits.DialTimeout)
 	defer t.Stop()
-	select {
-	case slots <- struct{}{}:
-		var once sync.Once
-		return func() { once.Do(func() { <-slots }) }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-t.C:
-		return nil, ErrHostBusy
+	last := time.Now().Add(f.limits.DialTimeout + f.unsureIdle)
+	for {
+		select {
+		case pool.ch <- struct{}{}:
+			return pool.release(), pool, nil
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-t.C:
+		}
+		f.hostMu.Lock()
+		pending := pool.pending > 0
+		f.hostMu.Unlock()
+		left := time.Until(last)
+		if !pending || left <= 0 {
+			return nil, nil, ErrHostBusy
+		}
+		// An unsure tunnel holds a slot and is quiet: it counts as idle
+		// within UnsureSlotIdle, and is then closed for this connection
+		// (connSlots.park). Look again soon in case it carries a request
+		// meanwhile instead.
+		t.Reset(min(left, max(f.limits.SlotIdle, 10*time.Millisecond)))
 	}
 }
 
@@ -342,7 +385,7 @@ func (f *Forwarder) Opaque(host string, port int) bool {
 // no trailing dot); their pinned addresses join the admitted prefixes.
 func New(scope Scope, limits Limits) *Forwarder {
 	limits = limits.withDefaults()
-	f := &Forwarder{scope: scope, limits: limits, names: map[string][]netip.Addr{}, pinned: map[netip.Addr][]string{},
+	f := &Forwarder{scope: scope, limits: limits, unsureIdle: UnsureSlotIdle, names: map[string][]netip.Addr{}, pinned: map[netip.Addr][]string{},
 		tally:    Tally{Targets: map[string]TargetTally{}},
 		rate:     rate.NewLimiter(rate.Limit(limits.Rate), max(1, int(limits.Rate))),
 		hostRate: adapt.NewHostRate(limits.PerHostRate),
@@ -546,8 +589,9 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 	// every slot taken, which is when its answer matters most.
 	key := hostKey(host)
 	release := func() {}
+	var hostPool *slotPool
 	if !canary {
-		if release, err = f.hostSlot(ctx, key); err == nil {
+		if release, hostPool, err = f.hostSlot(ctx, key); err == nil {
 			if err = f.allowRate(ctx, key); err != nil {
 				release()
 			}
@@ -580,10 +624,10 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 		// that is this address they are the host's, taken above. The
 		// address only paces and bounds: it has no breaker to refuse with.
 		releaseAddr := func() {}
-		slotAddr := ""
+		var addrPool *slotPool
 		if ak := addrKey(a); !canary && ak != key {
 			var aerr error
-			if releaseAddr, aerr = f.hostSlot(ctx, ak); aerr == nil {
+			if releaseAddr, addrPool, aerr = f.hostSlot(ctx, ak); aerr == nil {
 				if aerr = f.hostRate.AcquireAddr(ctx, ak); aerr != nil {
 					releaseAddr()
 				}
@@ -592,7 +636,6 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 				lastErr, targetErr, pathErr, rateErr = aerr, false, nil, true
 				continue
 			}
-			slotAddr = ak
 		}
 		rateErr = false
 		dctx, cancel := context.WithTimeout(dctxBase, f.limits.DialTimeout)
@@ -628,9 +671,10 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 			if canary {
 				return bound(ctx, c, f.limits.UpstreamIdle), rec, nil
 			}
-			sl := &connSlots{f: f, host: key, addr: slotAddr, held: true, relHost: release, relAddr: releaseAddr}
+			sl := &connSlots{f: f, hostPool: hostPool, addrPool: addrPool, relHost: release, relAddr: releaseAddr}
 			bc := boundRelease(ctx, c, f.limits.UpstreamIdle, sl.drop)
 			bc.slots = sl
+			sl.up = bc
 			return bc, rec, nil
 		}
 		releaseAddr()

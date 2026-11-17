@@ -146,6 +146,11 @@ func gapOutcome(target string, g adapt.Gap) (outcome.Target, bool) {
 		// path failed, nothing is known about the target.
 		return outcome.Target{Target: target, State: outcome.Failed, Class: outcome.SensorNetworkFault, Cause: outcome.CauseSensor, Reason: adapt.GapProxyUnavailable}, true
 	}
+	// GapSlotsFull (the sensor's own per-host bound refused a connection)
+	// changes no outcome: the target keeps the one the tool gave it. The gap
+	// alone marks the host not covered and the run partial. An unfinished
+	// outcome would hand the whole host out again at once as a follow-up,
+	// and scan the host the budget spares a second time.
 	return outcome.Target{}, false
 }
 

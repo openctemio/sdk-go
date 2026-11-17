@@ -66,11 +66,116 @@ func TestToolThatConnectsToItsTargetsNeedsABudget(t *testing.T) {
 		t.Fatalf("with a budget: %v %+v, %d connection(s)", err, out.Err, hits.Load())
 	}
 	// A tool that sends nothing to its targets needs none.
-	for _, n := range []tool.Network{tool.NetNone, tool.NetResolver, tool.NetVendor, tool.NetEgressProxy} {
+	for _, n := range []tool.Network{tool.NetNone, tool.NetResolver, tool.NetVendor} {
 		m := tool.Manifest{Name: "other", Permissions: tool.Permissions{Network: n}}
-		if e := requireBudget(m, RunOptions{}); e != nil {
+		if e := requireBudget(m, task, RunOptions{}); e != nil {
 			t.Fatalf("network %s: %+v", n, e)
 		}
+	}
+	// A tool that reaches the internet through the sensor's egress reaches
+	// its targets too: it needs one like a tool of network targets.
+	proxied := tool.Manifest{Name: "proxied", Permissions: tool.Permissions{Network: tool.NetEgressProxy}}
+	if e := requireBudget(proxied, task, RunOptions{}); e == nil || e.Class != tool.RefusedByPolicy {
+		t.Fatalf("an egress-proxy tool without a budget: %+v", e)
+	}
+}
+
+// SECURITY: a target-scan tool that declares network egress-proxy (it may
+// reach any public host, its targets included) is refused without a
+// per-host budget, whatever path starts it, and with one its forwarder
+// holds each host to the budget like a tool of network targets: no process
+// starts without one, and the budget's slots and rate reach the forwarder.
+func TestEgressProxyToolNeedsABudget(t *testing.T) {
+	exe, _ := os.Executable()
+	m := tool.Manifest{
+		Name: "proxied-cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
+		Consumes: []string{"web_origin"}, Produces: []string{"finding:misconfiguration"},
+		Permissions: tool.Permissions{Network: tool.NetEgressProxy},
+		Run: &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe, "-rate=1"},
+			Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
+	}
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	srv, hits := recorder(t)
+	task := tool.Task{Targets: []tool.Target{{Ref: "t0", Type: "web_origin", Value: srv.URL}}}
+	env := map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}
+	for name, o := range map[string]RunOptions{
+		"no budget":                {Trusted: true, Env: env},
+		"a budget without numbers": {Trusted: true, Env: env, HostBudget: &adapt.HostBudget{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := offHost(t).RunManifest(context.Background(), m, task, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.Status != tool.StatusFailed || out.Err == nil || out.Err.Class != tool.RefusedByPolicy || !strings.Contains(out.Err.Detail, ErrNoHostBudget.Error()) {
+				t.Fatalf("outcome %s %+v", out.Status, out.Err)
+			}
+			if out.ExitCode != -1 {
+				t.Fatalf("a process ran: exit code %d", out.ExitCode)
+			}
+		})
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("the target was contacted %d time(s)", hits.Load())
+	}
+	gentle := adapt.ResolveBudget(adapt.DefaultPacing, &adapt.JobBudget{Level: "gentle"}, adapt.BudgetCeiling{})
+	b := budgetOf(m, task, RunOptions{HostBudget: &gentle})
+	if b == nil || b.RPS != gentle.RPS || b.Inflight != gentle.Inflight {
+		t.Fatalf("budget of an egress-proxy tool %+v", b)
+	}
+	confined := statusBackend{st: executor.Status{NetworkEnforced: true}}
+	h := &Host{Backend: confined}
+	eg, err := h.startEgress(context.Background(), confined, &prepared{m: m, task: task, targetRate: 160, budget: b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eg.stop()
+	if rate, conns := eg.fw.PerHostLimits(); rate != float64(gentle.RPS) || conns != gentle.Inflight {
+		t.Fatalf("an egress-proxy task's forwarder holds each host to %v/s and %d connections, want %d and %d", rate, conns, gentle.RPS, gentle.Inflight)
+	}
+	if s := eg.fw.TargetRate().Summary(); s.Budget == nil || s.Budget.Level != "gentle" {
+		t.Fatalf("summary budget %+v", s.Budget)
+	}
+}
+
+// SECURITY: a vendor tool whose vendor hosts (read from the task's
+// configuration) name one of its targets reaches that target: it needs a
+// budget and is held to it like a tool of network targets. A signed
+// configuration cannot name a target as a vendor host to take the
+// connections to it out of the budget. Vendor hosts that are no target
+// change nothing.
+func TestVendorHostThatIsATargetNeedsABudget(t *testing.T) {
+	m := tool.Manifest{Name: "lookup", Permissions: tool.Permissions{Network: tool.NetVendor, VendorHosts: []string{"api.vendor.example", "${config.server}"}}}
+	cases := []struct {
+		name    string
+		targets []tool.Target
+		config  string
+		want    bool
+	}{
+		{"vendor hosts only", []tool.Target{{Value: "https://a.example.com/"}}, `{"server":"https://intel.example.org/v1"}`, false},
+		{"no configuration", []tool.Target{{Value: "a.example.com"}}, ``, false},
+		{"the configuration names a target", []tool.Target{{Value: "https://a.example.com/"}}, `{"server":"https://A.Example.COM./v1"}`, true},
+		{"a target with a port", []tool.Target{{Value: "a.example.com:8443"}}, `{"server":"a.example.com:8443"}`, true},
+		{"an address in a target range", []tool.Target{{Value: "192.0.2.0/24"}}, `{"server":"https://192.0.2.7/"}`, true},
+		{"an address outside it", []tool.Target{{Value: "192.0.2.0/24"}}, `{"server":"https://198.51.100.7/"}`, false},
+		{"the manifest's own host is a target", []tool.Target{{Value: "https://api.vendor.example/"}}, `{}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			task := tool.Task{Targets: tc.targets, Config: json.RawMessage(tc.config)}
+			refused := requireBudget(m, task, RunOptions{}) != nil
+			if refused != tc.want {
+				t.Fatalf("refused without a budget: %t, want %t", refused, tc.want)
+			}
+			if got := budgetOf(m, task, RunOptions{HostBudget: testBudget()}) != nil; got != tc.want {
+				t.Fatalf("held to the budget: %t, want %t", got, tc.want)
+			}
+			if requireBudget(m, task, RunOptions{HostBudget: testBudget()}) != nil {
+				t.Fatal("refused with a budget")
+			}
+		})
 	}
 }
 
@@ -132,13 +237,13 @@ func TestAdapterToolRunsUnderTheBudget(t *testing.T) {
 // requests per second.
 func TestPortProberKeepsTheTaskRate(t *testing.T) {
 	m := tool.Manifest{Name: "prober", Permissions: tool.Permissions{Network: tool.NetTargets}}
-	if e := requireBudget(m, RunOptions{PortProbes: true, HostBudget: testBudget()}); e != nil {
+	if e := requireBudget(m, tool.Task{}, RunOptions{PortProbes: true, HostBudget: testBudget()}); e != nil {
 		t.Fatalf("%+v", e)
 	}
-	if b := budgetOf(m, RunOptions{PortProbes: true, HostBudget: testBudget()}); b != nil {
+	if b := budgetOf(m, tool.Task{}, RunOptions{PortProbes: true, HostBudget: testBudget()}); b != nil {
 		t.Fatalf("a port prober's forwarder is held to requests per second: %+v", b)
 	}
-	if b := budgetOf(m, RunOptions{HostBudget: testBudget()}); b == nil {
+	if b := budgetOf(m, tool.Task{}, RunOptions{HostBudget: testBudget()}); b == nil {
 		t.Fatal("a tool that connects to its targets has no budget")
 	}
 }

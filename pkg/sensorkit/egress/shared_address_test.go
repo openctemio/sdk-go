@@ -160,13 +160,18 @@ func fetchOK(c *http.Client, target string) error {
 
 // Idle kept-alive tunnels of one name do not starve the other names of
 // its address: a.example.com keeps as many HTTPS tunnels open and idle as
-// the address has slots, and b.example.com, reached at the same address,
-// still gets every request, with no coverage gap. The idle tunnels then
-// carry further requests.
+// the address has slots, each after a further request (ordinary keep-alive
+// reuse, so the forwarder is sure each answer ended), and b.example.com,
+// reached at the same address, still gets every request, at once and with
+// no coverage gap: its connection closes the oldest idle tunnel of a and
+// takes its slot. a's requests then still succeed (on its tunnel left
+// open, or a new one), no host is a gap, and the target never has more
+// connections open than the address has slots.
 func TestIdleTunnelsOfOneNameDoNotStarveAnother(t *testing.T) {
 	m := newMeter(t, true)
 	m.delay = 150 * time.Millisecond // two requests at once open two tunnels
-	f, proxy := slotForwarder(t, 2, 3*time.Second, 100*time.Millisecond, "a.example.com", "b.example.com")
+	pool := &dialCounter{}
+	f, proxy := slotForwarderDial(t, 2, 3*time.Second, 100*time.Millisecond, pool.dial, "a.example.com", "b.example.com")
 	a := keepAliveClient(proxy)
 	var wg sync.WaitGroup
 	for range 2 {
@@ -179,44 +184,59 @@ func TestIdleTunnelsOfOneNameDoNotStarveAnother(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	m.mu.Lock()
-	conns := m.connsN
-	m.mu.Unlock()
-	if conns != 2 {
-		t.Fatalf("a holds %d tunnels, want 2 (every slot of the address)", conns)
+	if _, total := pool.counts(); total != 2 {
+		t.Fatalf("a holds %d tunnels, want 2 (every slot of the address)", total)
 	}
+	// A further request on each kept-alive tunnel: client and host took
+	// turns, so the forwarder is sure where each answer ended.
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := fetchOK(a, m.url("a.example.com")); err != nil {
+				t.Errorf("a: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if _, total := pool.counts(); total != 2 {
+		t.Fatalf("a opened %d tunnels, want its 2 tunnels reused", total)
+	}
+	time.Sleep(300 * time.Millisecond) // a's tunnels are idle
 	b := keepAliveClient(proxy)
+	start := time.Now()
 	for i := range 3 {
 		if err := fetchOK(b, m.url("b.example.com")); err != nil {
 			t.Fatalf("request %d of b was refused behind a's idle tunnels: %v", i+1, err)
 		}
 	}
-	// The idle tunnels of a still work: they take a slot again for a request.
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("b waited %s behind a's idle tunnels", d)
+	}
 	b.CloseIdleConnections()
 	for i := range 2 {
 		if err := fetchOK(a, m.url("a.example.com")); err != nil {
-			t.Fatalf("request %d on a's kept-alive tunnel: %v", i+1, err)
+			t.Fatalf("request %d of a after one of its tunnels was closed: %v", i+1, err)
 		}
 	}
-	m.mu.Lock()
-	after := m.connsN
-	m.mu.Unlock()
-	if after != 3 {
-		t.Fatalf("the target saw %d connections, want 3 (a's two tunnels were reused, b opened one)", after)
-	}
+	// Closing a tunnel whose answer surely ended says nothing about the
+	// host: no gap, on a or on b.
 	if s := f.TargetRate().Summary(); s.GapsTotal != 0 {
-		t.Fatalf("gaps %+v", s.Gaps)
+		t.Fatalf("ordinary keep-alive reuse made gaps %+v", s.Gaps)
+	}
+	if peak, _ := pool.counts(); peak > 2 {
+		t.Fatalf("%d connections open at once at an address with 2 slots", peak)
 	}
 	if _, _, _, _, maxIn := m.counts(time.Time{}); maxIn > 2 {
 		t.Fatalf("%d requests in flight at the address, 2 slots", maxIn)
 	}
 }
 
-// A tunnel with a request in flight keeps its slot: giving slots back is
-// for tunnels the host answered and that are quiet, never for one that
-// waits for an answer, however long the host takes. (A kept-alive tunnel
-// past its first request: there the host's bytes after a request are its
-// answer.)
+// A tunnel with a request in flight keeps its slot and is never closed for
+// another connection: closing is for tunnels the host answered and that
+// are quiet, never for one that waits for an answer, however long the
+// host takes. The connection that waited is refused, and its host is a
+// coverage gap of the sensor's own bound (slots_full), not of the host.
 func TestTunnelWithARequestInFlightKeepsItsSlot(t *testing.T) {
 	m := newMeter(t, true)
 	m.delay = 1500 * time.Millisecond // the host takes its time over every answer
@@ -225,7 +245,7 @@ func TestTunnelWithARequestInFlightKeepsItsSlot(t *testing.T) {
 	if err := fetchOK(tool, m.url("a.example.com")); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(400 * time.Millisecond) // the tunnel is idle: its slot is given back
+	time.Sleep(400 * time.Millisecond) // the tunnel is idle
 	done := make(chan error, 1)
 	go func() { done <- fetchOK(tool, m.url("a.example.com")) }()
 	// Wait until the second request is in flight at the target.
@@ -258,16 +278,17 @@ func TestTunnelWithARequestInFlightKeepsItsSlot(t *testing.T) {
 	if _, _, _, _, maxIn := m.counts(time.Time{}); maxIn != 1 {
 		t.Fatalf("%d requests in flight, 1 slot", maxIn)
 	}
-	// The refused connection is a coverage gap of the host.
 	g, n := f.TargetRate().Gaps()
-	if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapRateFloor || g[0].Detail != adapt.GapDetailHostBusy {
+	if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapSlotsFull || g[0].Detail != adapt.GapDetailSlotsFull {
 		t.Fatalf("gaps %+v", g)
 	}
 }
 
 // A connection refused for lack of a slot is a coverage gap of the host it
-// was for: the host's own slots, or the slots of the address it shares
-// with another name. The name that holds the slot is no gap.
+// was for, with the reason of the sensor's own bound (slots_full): the
+// host's own slots, or the slots of the address it shares with another
+// name. The name that holds the slot is no gap, and no gap says the host
+// pushed back.
 func TestConnectionRefusedForLackOfASlotIsACoverageGap(t *testing.T) {
 	_, port := echoServer(t)
 	t.Run("the host's own slots", func(t *testing.T) {
@@ -284,7 +305,7 @@ func TestConnectionRefusedForLackOfASlotIsACoverageGap(t *testing.T) {
 			t.Fatalf("second connection: %v", err)
 		}
 		g, n := f.TargetRate().Gaps()
-		if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapRateFloor || g[0].Detail != adapt.GapDetailHostBusy {
+		if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapSlotsFull || g[0].Detail != adapt.GapDetailSlotsFull {
 			t.Fatalf("gaps %+v", g)
 		}
 	})
@@ -299,14 +320,14 @@ func TestConnectionRefusedForLackOfASlotIsACoverageGap(t *testing.T) {
 			t.Fatalf("b beside a: %v", err)
 		}
 		g, n := f.TargetRate().Gaps()
-		if n != 1 || g[0].Host != "b.example.com" || g[0].Reason != adapt.GapRateFloor {
+		if n != 1 || g[0].Host != "b.example.com" || g[0].Reason != adapt.GapSlotsFull {
 			t.Fatalf("gaps %+v", g)
 		}
 	})
 }
 
-// The slots of one connection: given back while it is parked, taken again
-// on resume (waiting like a new connection), and never given back twice.
+// The slots of one connection: held while it is open, idle ones closed
+// for a connection that waits for them, a busy one never, and freed once.
 func TestConnSlotsParkAndResume(t *testing.T) {
 	f, _ := slotForwarder(t, 1, 100*time.Millisecond, -1, "a.example.com", "b.example.com")
 	_, port := echoServer(t)
@@ -320,30 +341,37 @@ func TestConnSlotsParkAndResume(t *testing.T) {
 	}
 	sl.park(func() bool { return false })
 	if _, _, err := f.dial(t.Context(), "connect", "b.example.com", port); !errors.Is(err, ErrHostBusy) {
-		t.Fatalf("a connection that is not quiet gave its slots back: %v", err)
+		t.Fatalf("a connection that is not quiet was closed for another: %v", err)
 	}
 	sl.park(nil)
+	sl.park(nil)
+	if err := sl.resume(); err != nil {
+		t.Fatalf("resume of an idle connection: %v", err)
+	}
+	if _, _, err := f.dial(t.Context(), "connect", "b.example.com", port); !errors.Is(err, ErrHostBusy) {
+		t.Fatalf("a resumed connection was closed for another: %v", err)
+	}
 	sl.park(nil)
 	c2, _, err := f.dial(t.Context(), "connect", "b.example.com", port)
 	if err != nil {
-		t.Fatalf("b after a was parked: %v", err)
+		t.Fatalf("b beside a's idle connection: %v", err)
 	}
-	// The address's one slot is b's now: a cannot resume until b ends.
-	if err := sl.resume(t.Context()); !errors.Is(err, ErrHostBusy) {
-		t.Fatalf("resume beside b: %v", err)
+	if !sl.wasEvicted() {
+		t.Fatal("a's idle connection stayed open beside b: two connections on one slot")
 	}
-	_ = c2.Close()
-	if err := sl.resume(t.Context()); err != nil {
-		t.Fatalf("resume after b closed: %v", err)
+	if _, err := c.Write([]byte("x")); err == nil {
+		t.Fatal("the closed connection still writes")
 	}
-	if _, _, err := f.dial(t.Context(), "connect", "b.example.com", port); !errors.Is(err, ErrHostBusy) {
-		t.Fatalf("a resumed connection holds no slot: %v", err)
-	}
-	_ = c.Close()
-	_ = c.Close()
-	if err := sl.resume(t.Context()); err != nil {
+	if err := sl.resume(); !errors.Is(err, errSlotEvicted) {
 		t.Fatalf("resume of a closed connection: %v", err)
 	}
+	_ = c.Close()
+	_ = c.Close()
+	// b holds the one slot: a closed connection freed it once.
+	if _, _, err := f.dial(t.Context(), "connect", "a.example.com", port); !errors.Is(err, ErrHostBusy) {
+		t.Fatalf("a closed connection freed its slot twice: %v", err)
+	}
+	_ = c2.Close()
 	c3, _, err := f.dial(t.Context(), "connect", "b.example.com", port)
 	if err != nil {
 		t.Fatalf("a closed connection kept its slots: %v", err)
@@ -361,16 +389,58 @@ func TestConnSlotsParkAndResume(t *testing.T) {
 	var nilSlots *connSlots
 	nilSlots.park(nil)
 	nilSlots.drop()
-	if err := nilSlots.resume(context.Background()); err != nil {
+	nilSlots.attach(nil)
+	if err := nilSlots.resume(); err != nil || nilSlots.wasEvicted() {
 		t.Fatal(err)
 	}
 }
 
+// Two resumes of one connection at once (and a close for another
+// connection racing them) leave it holding its slots once: closing it
+// frees exactly its slots, never twice.
+func TestConcurrentResumesHoldTheSlotsOnce(t *testing.T) {
+	_, port := echoServer(t)
+	f, _ := slotForwarder(t, 1, 50*time.Millisecond, -1, "a.example.com", "b.example.com")
+	for i := range 200 {
+		c, _, err := f.dial(t.Context(), "connect", "a.example.com", port)
+		if err != nil {
+			t.Fatalf("round %d: %v", i, err)
+		}
+		sl := slotsOf(c)
+		sl.park(nil)
+		var wg sync.WaitGroup
+		for range 2 {
+			wg.Add(1)
+			go func() { defer wg.Done(); _ = sl.resume() }()
+		}
+		if i%2 == 1 {
+			// A waiting connection may close it while it is idle.
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				f.hostMu.Lock()
+				v := f.evictLocked(sl.hostPool)
+				f.hostMu.Unlock()
+				v.close()
+			}()
+		}
+		wg.Wait()
+		_ = c.Close()
+		f.hostMu.Lock()
+		held := len(f.hostConns["a.example.com"].ch) + len(f.hostConns["127.0.0.1"].ch)
+		f.hostMu.Unlock()
+		if held != 0 {
+			t.Fatalf("round %d: %d slot(s) still held after the connection closed", i, held)
+		}
+	}
+}
+
 // On a kept-alive connection the forwarder reads (a guarded destination),
-// the slots are held from a request to its answer and given back between
-// requests: an idle guarded connection of one name leaves the address's
-// slot to another name, and takes it again for its own next request.
-func TestGuardedKeepAliveConnectionGivesItsSlotBackBetweenRequests(t *testing.T) {
+// the connection holds its slot while open and is idle between requests:
+// another name of its address closes it then and takes the slot. The tool
+// sees its idle connection closed (no answer that reads as the host
+// refusing it, no coverage gap), and its next connection works again.
+func TestGuardedKeepAliveConnectionIsClosedForAnotherWhileIdle(t *testing.T) {
 	s := &site{}
 	srv := httptest.NewServer(s.handler())
 	defer srv.Close()
@@ -386,17 +456,16 @@ func TestGuardedKeepAliveConnectionGivesItsSlotBackBetweenRequests(t *testing.T)
 	defer func() { _ = c.Close() }()
 	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 	br := bufio.NewReader(c)
-	status := func() string {
+	status := func() (string, error) {
 		t.Helper()
 		resp, err := http.ReadResponse(br, nil)
 		if err != nil {
-			t.Fatal(err)
+			return "", err
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
-		return resp.Status
+		return resp.Status, nil
 	}
-	// connect opens the tunnel: the answer is a status line and a blank line.
 	connect := func() {
 		t.Helper()
 		fmt.Fprintf(c, "CONNECT app.test:%d HTTP/1.1\r\nHost: app.test\r\n\r\n", port)
@@ -410,29 +479,26 @@ func TestGuardedKeepAliveConnectionGivesItsSlotBackBetweenRequests(t *testing.T)
 			}
 		}
 	}
-	request := func() string {
+	request := func() (string, error) {
 		t.Helper()
 		fmt.Fprintf(c, "GET /api/a HTTP/1.1\r\nHost: app.test:%d\r\n\r\n", port)
 		return status()
 	}
 	connect()
-	if got := request(); !strings.HasPrefix(got, "200") {
-		t.Fatalf("first request: %s", got)
+	if got, err := request(); err != nil || !strings.HasPrefix(got, "200") {
+		t.Fatalf("first request: %s %v", got, err)
 	}
-	// The guarded connection is open and idle: the address's one slot is
-	// free for another name.
+	// The guarded connection is open and idle: another name takes the
+	// address's one slot, closing it.
 	other, _, err := f.dial(t.Context(), "connect", "free.test", port)
 	if err != nil {
 		t.Fatalf("another name behind an idle guarded connection: %v", err)
 	}
-	// While the other name holds it, the guarded connection's next request
-	// finds no slot: it is answered 503 and its host is a coverage gap.
-	if got := request(); !strings.HasPrefix(got, "503") {
-		t.Fatalf("a request without a slot: %s", got)
+	if got, err := request(); err == nil {
+		t.Fatalf("the closed guarded connection answered %s", got)
 	}
-	g, n := f.TargetRate().Gaps()
-	if n != 1 || g[0].Host != "app.test" || g[0].Reason != adapt.GapRateFloor || g[0].Detail != adapt.GapDetailHostBusy {
-		t.Fatalf("gaps %+v", g)
+	if g, n := f.TargetRate().Gaps(); n != 0 {
+		t.Fatalf("closing an idle connection made a gap: %+v", g)
 	}
 	_ = other.Close()
 	// A new guarded connection works again, request after request.
@@ -445,8 +511,356 @@ func TestGuardedKeepAliveConnectionGivesItsSlotBackBetweenRequests(t *testing.T)
 	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 	connect()
 	for i := range 3 {
-		if got := request(); !strings.HasPrefix(got, "200") {
-			t.Fatalf("request %d on a kept-alive guarded connection: %s", i+1, got)
+		if got, err := request(); err != nil || !strings.HasPrefix(got, "200") {
+			t.Fatalf("request %d on a kept-alive guarded connection: %s %v", i+1, got, err)
 		}
+	}
+}
+
+// dialCounter is a forwarder's Dial that counts the connections it opened
+// to the target and how many were open at once.
+type dialCounter struct {
+	mu                sync.Mutex
+	open, peak, total int
+}
+
+func (d *dialCounter) dial(ctx context.Context, network, address string) (net.Conn, error) {
+	c, err := (&net.Dialer{}).DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	d.open++
+	d.total++
+	d.peak = max(d.peak, d.open)
+	d.mu.Unlock()
+	return &countedConn{Conn: c, d: d}, nil
+}
+
+func (d *dialCounter) counts() (peak, total int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.peak, d.total
+}
+
+type countedConn struct {
+	net.Conn
+	d    *dialCounter
+	once sync.Once
+}
+
+func (c *countedConn) Close() error {
+	c.once.Do(func() {
+		c.d.mu.Lock()
+		c.d.open--
+		c.d.mu.Unlock()
+	})
+	return c.Conn.Close()
+}
+
+// slotForwarderDial is slotForwarder with the forwarder's Dial set before
+// it serves.
+func slotForwarderDial(t *testing.T, slots int, wait, idle time.Duration, dial func(context.Context, string, string) (net.Conn, error), names ...string) (*Forwarder, string) {
+	t.Helper()
+	return slotForwarderUnsure(t, slots, wait, idle, UnsureSlotIdle, dial, names...)
+}
+
+// slotForwarderUnsure is slotForwarderDial with the time an unsure tunnel
+// must be quiet before it counts as idle (UnsureSlotIdle) set to unsure; a
+// nil dial keeps the forwarder's own.
+func slotForwarderUnsure(t *testing.T, slots int, wait, idle, unsure time.Duration, dial func(context.Context, string, string) (net.Conn, error), names ...string) (*Forwarder, string) {
+	t.Helper()
+	scope := Scope{Names: map[string][]netip.Addr{}}
+	for _, n := range names {
+		scope.Names[n] = []netip.Addr{addr("127.0.0.1")}
+	}
+	f := New(scope, Limits{Rate: 1000, PerHostRate: 1000, PerHostConns: slots, DialTimeout: wait, SlotIdle: idle})
+	if dial != nil {
+		f.Dial = dial
+	}
+	f.unsureIdle = unsure
+	return f, serve(t, f)
+}
+
+// SECURITY: the connections open to a host never exceed its slots. Ten
+// tools keep HTTPS tunnels alive to one host whose budget allows one
+// connection, each sending a request now and then: the forwarder never has
+// more than one connection open to the host (an idle tunnel is closed when
+// another one needs the slot), every request is served, and no coverage
+// gap is made.
+func TestOpenConnectionsNeverExceedTheSlots(t *testing.T) {
+	m := newMeter(t, true)
+	pool := &dialCounter{}
+	f, proxy := slotForwarderDial(t, 1, 5*time.Second, 50*time.Millisecond, pool.dial, "a.example.com")
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var failed []error
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c := keepAliveClient(proxy)
+			defer c.CloseIdleConnections()
+			for range 4 {
+				if err := fetchOK(c, m.url("a.example.com")); err != nil {
+					mu.Lock()
+					failed = append(failed, err)
+					mu.Unlock()
+				}
+				time.Sleep(150 * time.Millisecond) // the tunnel goes idle, and stays open
+			}
+		}()
+	}
+	wg.Wait()
+	peak, total := pool.counts()
+	m.mu.Lock()
+	served := len(m.served)
+	m.mu.Unlock()
+	t.Logf("MEASURED ten keep-alive tools, one slot: %d requests served, %d connections opened, at most %d open at once", served, total, peak)
+	if peak > 1 {
+		t.Fatalf("%d connections open at once to a host with one slot", peak)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("%d request(s) failed: %v", len(failed), failed[0])
+	}
+	if s := f.TargetRate().Summary(); s.GapsTotal != 0 {
+		t.Fatalf("gaps %+v", s.Gaps)
+	}
+	// A waiting request is served once an idle connection is closed: a's
+	// tunnel carried two requests (its answers surely ended) and is idle,
+	// b's request takes its slot at once (well before the wait for a slot
+	// ends).
+	a, b := keepAliveClient(proxy), keepAliveClient(proxy)
+	for range 2 {
+		if err := fetchOK(a, m.url("a.example.com")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	start := time.Now()
+	if err := fetchOK(b, m.url("a.example.com")); err != nil {
+		t.Fatalf("a request behind an idle connection: %v", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("the request waited %s behind an idle connection", d)
+	}
+	if peak, _ := pool.counts(); peak > 1 {
+		t.Fatalf("%d connections open at once to a host with one slot", peak)
+	}
+}
+
+// SECURITY: a name that answers slowly on a shared address cannot make
+// coverage gaps that blame its neighbors. slow.example.com holds the
+// address's one slot with a request in flight; the connection of
+// other.example.com that finds no slot is refused with a gap of the
+// sensor's own bound (slots_full), never one that says the host pushed back
+// (rate_floor), and the slow name gets none.
+func TestSlowNameOnASharedAddressBlamesNoNeighbor(t *testing.T) {
+	inflight := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.Host, "slow.example.com") {
+			inflight <- struct{}{}
+			time.Sleep(time.Second)
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer srv.Close()
+	port := portOf(t, srv.URL)
+	f, proxy := slotForwarder(t, 1, 200*time.Millisecond, 50*time.Millisecond, "slow.example.com", "other.example.com")
+	at := func(name string) string { return "http://" + name + ":" + strconv.Itoa(port) + "/" }
+	done := make(chan error, 1)
+	go func() {
+		status, err := proxyGet(t, proxy, at("slow.example.com"))
+		if err == nil && status != http.StatusOK {
+			err = fmt.Errorf("status %d", status)
+		}
+		done <- err
+	}()
+	<-inflight
+	if status, err := proxyGet(t, proxy, at("other.example.com")); err == nil && status == http.StatusOK {
+		t.Fatal("other.example.com got the slot of a request in flight")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("the slow name's request: %v", err)
+	}
+	g, n := f.TargetRate().Gaps()
+	if n != 1 || g[0].Host != "other.example.com" || g[0].Reason != adapt.GapSlotsFull {
+		t.Fatalf("gaps %+v", g)
+	}
+	for _, x := range g {
+		if x.Reason == adapt.GapRateFloor {
+			t.Fatalf("a slot refusal reads as the host pushing back: %+v", x)
+		}
+	}
+}
+
+// An answer that pauses after its first bytes, on a tunnel's first request,
+// longer than an unsure tunnel is given (UnsureSlotIdle) looks idle to the
+// forwarder, and a connection that waits for the slot then closes the
+// tunnel: the tool sees the answer cut short. The waiting connection waited
+// for that time (past its DialTimeout), not less. The forwarder could not
+// tell, so the host is a coverage gap of the sensor's own bound
+// (slots_full): the cut answer is never read as a host fully scanned.
+func TestCutAnswerOnAnUnsureTunnelLeavesAGap(t *testing.T) {
+	firstBytes := make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/slow" {
+			_, _ = io.WriteString(w, "ok")
+			return
+		}
+		w.Header().Set("Content-Length", "10")
+		_, _ = io.WriteString(w, "01234")
+		w.(http.Flusher).Flush()
+		once.Do(func() { close(firstBytes) })
+		select {
+		case <-time.After(3 * time.Second):
+		case <-r.Context().Done():
+			return
+		}
+		_, _ = io.WriteString(w, "56789")
+	}))
+	t.Cleanup(srv.Close)
+	su, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := func(path string) string { return "https://a.example.com:" + su.Port() + path }
+	// 1 slot, 200ms wait for a slot; a tunnel quiet for 40ms after a sure
+	// answer counts as idle, after 600ms on its first request.
+	const unsure = 600 * time.Millisecond
+	f, proxy := slotForwarderUnsure(t, 1, 200*time.Millisecond, 40*time.Millisecond, unsure, nil, "a.example.com")
+
+	cut := make(chan error, 1)
+	go func() {
+		resp, err := keepAliveClient(proxy).Get(target("/slow"))
+		if err != nil {
+			cut <- err
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		_, err = io.ReadAll(resp.Body) // fetchOK ignores a body cut short
+		cut <- err
+	}()
+	select { // the slow answer's first bytes are on their way, the tunnel holds the slot
+	case <-firstBytes:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the slow request never reached the server")
+	}
+	time.Sleep(20 * time.Millisecond)
+	start := time.Now()
+	if err := fetchOK(keepAliveClient(proxy), target("/fast")); err != nil {
+		t.Fatalf("the waiting connection: %v", err)
+	}
+	if d := time.Since(start); d < unsure/2 {
+		t.Fatalf("the unsure tunnel was closed after %s, before it had been quiet for %s", d, unsure)
+	}
+	if err := <-cut; err == nil {
+		t.Fatal("the slow answer arrived whole: the tunnel was not closed for the waiting connection")
+	}
+	g, n := f.TargetRate().Gaps()
+	if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapSlotsFull || g[0].Detail != adapt.GapDetailSlotsFull {
+		t.Fatalf("a cut answer left gaps %+v (%d), want one slots_full gap on a.example.com", g, n)
+	}
+}
+
+// A connection that waits behind an unsure tunnel (one request carried, so
+// the forwarder cannot be sure its answer ended) is served once that tunnel
+// has been quiet for UnsureSlotIdle, though that is longer than the wait for
+// a slot (DialTimeout): it is neither refused nor served earlier by cutting
+// the tunnel, and the connections open to the host never exceed its one
+// slot meanwhile. The closed tunnel's host is a slots_full gap (its answer
+// may have been cut); nothing else is.
+func TestWaiterBehindAnUnsureTunnelIsServedAfterItsIdleTime(t *testing.T) {
+	m := newMeter(t, true)
+	pool := &dialCounter{}
+	const unsure = 800 * time.Millisecond
+	f, proxy := slotForwarderUnsure(t, 1, 200*time.Millisecond, 40*time.Millisecond, unsure, pool.dial, "a.example.com")
+	a := keepAliveClient(proxy)
+	defer a.CloseIdleConnections()
+	if err := fetchOK(a, m.url("a.example.com")); err != nil {
+		t.Fatal(err)
+	}
+	quietFrom := time.Now() // a's tunnel holds the slot, quiet and unsure
+	stop := make(chan struct{})
+	peakDuring := make(chan int, 1)
+	go func() { // the open connections, sampled while b waits
+		peak := 0
+		tk := time.NewTicker(5 * time.Millisecond)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				peakDuring <- peak
+				return
+			case <-tk.C:
+				pool.mu.Lock()
+				peak = max(peak, pool.open)
+				pool.mu.Unlock()
+			}
+		}
+	}()
+	b := keepAliveClient(proxy)
+	defer b.CloseIdleConnections()
+	err := fetchOK(b, m.url("a.example.com"))
+	waited := time.Since(quietFrom)
+	close(stop)
+	if err != nil {
+		t.Fatalf("the connection behind an unsure tunnel was refused: %v", err)
+	}
+	t.Logf("MEASURED served %s after the unsure tunnel went quiet (unsure idle %s, wait for a slot 200ms)", waited, unsure)
+	if waited < unsure-100*time.Millisecond {
+		t.Fatalf("served after %s: the unsure tunnel was closed before it had been quiet for %s", waited, unsure)
+	}
+	if waited > unsure+time.Second {
+		t.Fatalf("served after %s, want within %s and a small margin", waited, unsure)
+	}
+	if p := <-peakDuring; p > 1 {
+		t.Fatalf("%d connections open at once while b waited, 1 slot", p)
+	}
+	if peak, total := pool.counts(); peak > 1 || total != 2 {
+		t.Fatalf("peak %d, total %d connections; want at most 1 open, 2 opened", peak, total)
+	}
+	g, n := f.TargetRate().Gaps()
+	if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapSlotsFull {
+		t.Fatalf("gaps %+v (%d), want one slots_full gap for the closed unsure tunnel", g, n)
+	}
+}
+
+// A connection that waits while the only slot is held by a tunnel with a
+// request in flight is still refused after DialTimeout: the longer wait is
+// only for a quiet unsure tunnel.
+func TestWaiterBehindABusyTunnelIsRefusedAtTheDialTimeout(t *testing.T) {
+	m := newMeter(t, true)
+	m.delay = 1500 * time.Millisecond
+	f, proxy := slotForwarderUnsure(t, 1, 200*time.Millisecond, 40*time.Millisecond, 5*time.Second, nil, "a.example.com")
+	done := make(chan error, 1)
+	go func() { done <- fetchOK(keepAliveClient(proxy), m.url("a.example.com")) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		m.mu.Lock()
+		in := m.inflight
+		m.mu.Unlock()
+		if in == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the request never reached the target")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	start := time.Now()
+	if err := fetchOK(keepAliveClient(proxy), m.url("a.example.com")); err == nil {
+		t.Fatal("a second connection got the slot of a tunnel whose request is in flight")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("refused after %s, want about the 200ms wait for a slot", d)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("the request in flight: %v", err)
+	}
+	g, n := f.TargetRate().Gaps()
+	if n != 1 || g[0].Reason != adapt.GapSlotsFull {
+		t.Fatalf("gaps %+v", g)
 	}
 }

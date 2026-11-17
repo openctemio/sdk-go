@@ -258,10 +258,10 @@ func TestBudgetReachesTheForwarder(t *testing.T) {
 	}
 	// A tool that does not connect to its targets has no budget.
 	vendor := tool.Manifest{Name: "lookup", Permissions: tool.Permissions{Network: tool.NetVendor}}
-	if b := budgetOf(vendor, RunOptions{HostBudget: ptr(adapt.DefaultBudget())}); b != nil {
+	if b := budgetOf(vendor, tool.Task{}, RunOptions{HostBudget: ptr(adapt.DefaultBudget())}); b != nil {
 		t.Fatalf("a vendor tool got a budget: %+v", b)
 	}
-	if b := budgetOf(m, RunOptions{HostBudget: &adapt.HostBudget{}}); b != nil {
+	if b := budgetOf(m, tool.Task{}, RunOptions{HostBudget: &adapt.HostBudget{}}); b != nil {
 		t.Fatalf("a zero budget was read: %+v", b)
 	}
 }
@@ -327,7 +327,7 @@ func TestCapBudgetRate(t *testing.T) {
 	}
 	// The caller's budget is never written to: the task works on a copy.
 	mine := adapt.DefaultBudget()
-	got := budgetOf(m, RunOptions{HostBudget: &mine})
+	got := budgetOf(m, tool.Task{}, RunOptions{HostBudget: &mine})
 	got.Clamp("rate", 500, 20)
 	if len(mine.Clamped) != 0 {
 		t.Fatalf("the caller's budget was changed: %+v", mine.Clamped)

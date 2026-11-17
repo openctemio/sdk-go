@@ -768,26 +768,26 @@ func TestCanaryGoesThroughTheTasksDialPath(t *testing.T) {
 // over the host's slots waits, then is refused.
 func TestPerHostConnectionSlots(t *testing.T) {
 	f := New(Scope{Prefixes: []netip.Prefix{pfx("127.0.0.1/32")}}, Limits{Rate: 1000, PerHostRate: 1000, PerHostConns: 2, DialTimeout: 200 * time.Millisecond})
-	r1, err := f.hostSlot(t.Context(), "h")
+	r1, _, err := f.hostSlot(t.Context(), "h")
 	if err != nil {
 		t.Fatal(err)
 	}
-	r2, _ := f.hostSlot(t.Context(), "h")
-	if _, err := f.hostSlot(t.Context(), "h"); !errors.Is(err, ErrHostBusy) {
+	r2, _, _ := f.hostSlot(t.Context(), "h")
+	if _, _, err := f.hostSlot(t.Context(), "h"); !errors.Is(err, ErrHostBusy) {
 		t.Fatalf("a third connection got a slot: %v", err)
 	}
-	if r, err := f.hostSlot(t.Context(), "other"); err != nil {
+	if r, _, err := f.hostSlot(t.Context(), "other"); err != nil {
 		t.Fatalf("another host shares the slots: %v", err)
 	} else {
 		r()
 	}
 	r1()
 	r1() // freeing twice frees once
-	r3, err := f.hostSlot(t.Context(), "h")
+	r3, _, err := f.hostSlot(t.Context(), "h")
 	if err != nil {
 		t.Fatalf("no slot after one was freed: %v", err)
 	}
-	if _, err := f.hostSlot(t.Context(), "h"); !errors.Is(err, ErrHostBusy) {
+	if _, _, err := f.hostSlot(t.Context(), "h"); !errors.Is(err, ErrHostBusy) {
 		t.Fatalf("freeing one slot twice freed two: %v", err)
 	}
 	r2()

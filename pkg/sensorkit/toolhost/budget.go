@@ -5,13 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/openctemio/sdk-go/internal/toolrt"
 	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -45,18 +49,76 @@ type taskCanary struct {
 	once   sync.Once
 }
 
-// ErrNoHostBudget is the refusal of a tool that connects to its targets
+// ErrNoHostBudget is the refusal of a tool that can connect to its targets
 // and was started without a per-host budget.
 var ErrNoHostBudget = errors.New("the tool connects to its targets and was started without a per-host budget")
 
-// requireBudget refuses a task of a tool whose manifest says it connects
-// to its targets (network targets) when the caller gave no valid budget.
-// It is checked for every tool the host starts, whatever path started it:
-// a tool compiled into the sensor, an adapter the operator installed, a
-// retest. A tool of another network class sends nothing to the hosts of
-// its targets and needs none.
-func requireBudget(m tool.Manifest, o RunOptions) *tool.Error {
-	if m.Permissions.Network != tool.NetTargets {
+// reachesTargets reports whether a tool of manifest m can connect to the
+// hosts of its targets: network targets; network egress-proxy, whose scope
+// is every public host and so the task's targets too; and a vendor tool
+// whose vendor hosts (config is the task's effective configuration, where
+// ${config.<key>} entries are read) name one of the task's targets. All
+// three are held to the per-host budget the same way.
+func reachesTargets(m tool.Manifest, targets []tool.Target, config json.RawMessage) bool {
+	switch m.Permissions.Network {
+	case tool.NetTargets, tool.NetEgressProxy:
+		return true
+	case tool.NetVendor:
+		return len(vendorTargets(m, targets, config)) > 0
+	}
+	return false
+}
+
+// vendorTargets are the keys (adapt.CanonicalHost) of the vendor hosts of a
+// vendor tool that are also its task's targets: a host a target names, or an
+// address in a target's range. A configuration that names a target as a
+// vendor host does not take the tool's connections to it out of the
+// budget.
+func vendorTargets(m tool.Manifest, targets []tool.Target, config json.RawMessage) map[string]bool {
+	if m.Permissions.Network != tool.NetVendor {
+		return nil
+	}
+	hosts := map[string]bool{}
+	var prefixes []netip.Prefix
+	for _, t := range targets {
+		if pfx, err := netip.ParsePrefix(strings.TrimSpace(t.Value)); err == nil {
+			prefixes = append(prefixes, pfx.Masked())
+			continue
+		}
+		if h := t.Host(); h != "" {
+			hosts[adapt.CanonicalHost(h)] = true
+		}
+	}
+	var out map[string]bool
+	for _, v := range toolrt.VendorHosts(m, config) {
+		h := strings.TrimSpace(v)
+		if hh, _, err := net.SplitHostPort(h); err == nil {
+			h = hh
+		}
+		k := adapt.CanonicalHost(h)
+		hit := hosts[k]
+		if a, err := netip.ParseAddr(strings.Trim(k, "[]")); err == nil && !hit {
+			a = a.Unmap()
+			hit = slices.ContainsFunc(prefixes, func(p netip.Prefix) bool { return p.Contains(a) })
+		}
+		if hit {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// requireBudget refuses a task of a tool that can connect to its targets
+// (reachesTargets) when the caller gave no valid budget. It is checked for
+// every tool the host starts, whatever path started it: a tool compiled
+// into the sensor, an adapter the operator installed, a retest. A tool of
+// another network class sends nothing to the hosts of its targets and
+// needs none.
+func requireBudget(m tool.Manifest, task tool.Task, o RunOptions) *tool.Error {
+	if !reachesTargets(m, task.Targets, task.Config) {
 		return nil
 	}
 	if o.HostBudget == nil || !o.HostBudget.Valid() {
@@ -67,9 +129,13 @@ func requireBudget(m tool.Manifest, o RunOptions) *tool.Error {
 
 // budgetOf is the budget the task's forwarder, canary and rate key are
 // held to (nil: the tool does not connect to its targets, or it probes
-// ports and is paced in packets per second, RunOptions.PortProbes).
-func budgetOf(m tool.Manifest, o RunOptions) *adapt.HostBudget {
-	if o.HostBudget == nil || !o.HostBudget.Valid() || m.Permissions.Network != tool.NetTargets || o.PortProbes {
+// ports and is paced in packets per second, RunOptions.PortProbes). The
+// forwarder of an egress-proxy tool, or of a vendor tool one of whose
+// vendor hosts is a target, holds every host it admits to the budget: for
+// an egress-proxy tool any public host may be one of the task's targets,
+// or share a target's address.
+func budgetOf(m tool.Manifest, task tool.Task, o RunOptions) *adapt.HostBudget {
+	if o.HostBudget == nil || !o.HostBudget.Valid() || !reachesTargets(m, task.Targets, task.Config) || o.PortProbes {
 		return nil
 	}
 	// The task's own copy: what the tool host lowers is recorded on it
@@ -104,9 +170,13 @@ func (h *Host) startCanary(ctx context.Context, p *prepared, eg *taskEgress) *ta
 	// the canary's to send.
 	kept := targets[:0]
 	watched := map[string]bool{}
+	// A vendor tool reaches only its vendor hosts: the canary watches the
+	// targets among them, never a target its scope does not admit.
+	vendor := p.m.Permissions.Network == tool.NetVendor
+	vt := vendorTargets(p.m, p.task.Targets, p.task.Config)
 	for _, t := range targets {
 		host, port, ok := originOf(t.URL)
-		if !ok || !eg.fw.Opaque(host, port) {
+		if !ok || !eg.fw.Opaque(host, port) || (vendor && !vt[adapt.CanonicalHost(host)]) {
 			unwatched++
 			continue
 		}

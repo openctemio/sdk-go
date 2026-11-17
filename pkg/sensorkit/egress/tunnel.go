@@ -364,9 +364,9 @@ func (s spokeReader) Read(p []byte) (int, error) {
 }
 
 // slotReader reads what the client sends on a tunnel: it marks the
-// tunnel's activity and, before the bytes are passed on, takes the
-// tunnel's connection slots again when they were given back while it was
-// quiet (connSlots). An error of resume ends the tunnel with the bytes
+// tunnel's activity and, before the bytes are passed on, ends the tunnel's
+// idle time (connSlots.resume). An error of resume (the tunnel was closed
+// for another connection while idle) ends the tunnel with the bytes
 // unsent.
 type slotReader struct {
 	r      io.Reader

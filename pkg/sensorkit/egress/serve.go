@@ -329,11 +329,12 @@ func containsByte(b []byte, v byte) bool {
 func (f *Forwarder) pipe(ctx context.Context, c net.Conn, br *bufio.Reader, up net.Conn, rec *Record) {
 	var out, in int64
 	pr := peerOfRecord(rec)
-	// The tunnel's connection slots count a request in flight: they are
-	// given back while the tunnel is quiet after the host's answer and
-	// taken again before the next bytes of the client are passed on
-	// (hostbudget.go).
+	// The tunnel holds its connection slots while it is open. It is idle
+	// while it is quiet after the host's answer, and busy again with the
+	// next bytes of the client; while idle, another connection to the host
+	// may close it for its slots (hostbudget.go).
 	sl, act := slotsOf(up), &tunnelActivity{}
+	sl.attach(c)
 	act.touch(false)
 	meter := newTunnelMeter(up, func(answered bool) error {
 		if answered {
@@ -352,16 +353,11 @@ func (f *Forwarder) pipe(ctx context.Context, c net.Conn, br *bufio.Reader, up n
 	var meterErr error
 	go func() {
 		defer close(done)
-		out, meterErr = io.Copy(meter, slotReader{r: br, act: act, resume: func() error { return sl.resume(ctx) }})
+		out, meterErr = io.Copy(meter, slotReader{r: br, act: act, resume: sl.resume})
 		if meterErr == nil {
 			meterErr = meter.Flush()
 		}
-		if errors.Is(meterErr, ErrHostBusy) {
-			// No slot came free for the tunnel's next request: it is not
-			// sent, and that part of the host is not scanned.
-			f.busyGap(pr.host)
-		}
-		if errors.Is(meterErr, errTunnelLifetime) || errors.Is(meterErr, ErrHostBusy) || errors.Is(meterErr, adapt.ErrHostUnavailable) || errors.Is(meterErr, context.Canceled) || errors.Is(meterErr, context.DeadlineExceeded) {
+		if errors.Is(meterErr, errTunnelLifetime) || errors.Is(meterErr, errSlotEvicted) || errors.Is(meterErr, adapt.ErrHostUnavailable) || errors.Is(meterErr, context.Canceled) || errors.Is(meterErr, context.DeadlineExceeded) {
 			// The tunnel carries no further request: both sides end, before
 			// a byte of that request reached the host.
 			_ = c.Close()
@@ -384,6 +380,21 @@ func (f *Forwarder) pipe(ctx context.Context, c net.Conn, br *bufio.Reader, up n
 	<-done
 	_ = up.Close()
 	rec.BytesOut, rec.BytesIn = out, in
+	evicted := sl.wasEvicted()
+	if meterErr == nil && evicted {
+		// The forwarder closed the idle tunnel for another connection to
+		// the host: how it ended says nothing about the host.
+		meterErr = errSlotEvicted
+	}
+	if evicted && meter.started && !meter.turned.Load() {
+		// The tunnel was closed, after UnsureSlotIdle of quiet, while the
+		// forwarder could not be sure the host's last bytes were the end of
+		// the answer (its first request, or a client that offered HTTP/2):
+		// the answer may have been cut, so part of the host may not have
+		// been scanned. The sensor's own bound did it: the gap is
+		// GapSlotsFull. A sure tunnel (its answer ended) leaves none.
+		f.busyGap(pr.host)
+	}
 	if meterErr != nil {
 		// The forwarder ended the tunnel itself: that says nothing about
 		// the host.
