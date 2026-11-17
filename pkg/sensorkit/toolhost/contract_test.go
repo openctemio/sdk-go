@@ -62,7 +62,7 @@ func runContract(t *testing.T, h *Host, task tool.Task) *Outcome {
 	if task.Targets == nil {
 		task.Targets = oneTarget
 	}
-	out, err := h.RunBuiltin(context.Background(), contractTool, task, RunOptions{})
+	out, err := h.RunBuiltin(context.Background(), contractTool, task, RunOptions{HostBudget: testBudget()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -25,7 +25,7 @@ func TestBrowserToolNeedsAFullSandbox(t *testing.T) {
 		{Mode: executor.ModeRequired, NetworkEnforced: true, Sandboxed: true, Seccomp: true, NoNewPrivs: true, Rlimits: true},
 	} {
 		h := &Host{Backend: statusBackend{st: st}}
-		_, ierr, err := h.prepare(context.Background(), m, task, RunOptions{})
+		_, ierr, err := h.prepare(context.Background(), m, task, RunOptions{HostBudget: testBudget()})
 		// The browser's own check, or the general refusal of a tool that
 		// contacts its targets on a host whose sandbox is not fully
 		// enforced (it runs first): either way the tool does not run.
@@ -35,7 +35,7 @@ func TestBrowserToolNeedsAFullSandbox(t *testing.T) {
 		}
 	}
 	h := &Host{Backend: statusBackend{st: full}}
-	if _, ierr, _ := h.prepare(context.Background(), m, task, RunOptions{}); ierr != nil && strings.Contains(ierr.Detail, "web browser") {
+	if _, ierr, _ := h.prepare(context.Background(), m, task, RunOptions{HostBudget: testBudget()}); ierr != nil && strings.Contains(ierr.Detail, "web browser") {
 		t.Errorf("a full sandbox refused the browser tool: %+v", ierr)
 	}
 }

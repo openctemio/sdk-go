@@ -117,7 +117,7 @@ func TestConfinedTaskReachesItsTargetThroughThePool(t *testing.T) {
 	h := testHost(t)
 	h.Backend = be
 	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "service", Value: target.Addr().String()}}, Egress: pool}
-	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,
+	out, err := h.RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true,
 		Env: map[string]string{"TOOLHOST_HOSTILE": "egress-pool-probe", "TOOLHOST_TARGET": target.Addr().String()}})
 	if err != nil {
 		t.Fatal(err)

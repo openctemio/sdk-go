@@ -242,6 +242,7 @@ func (g *JobGuard) Check(ctx context.Context, cmd *Command) error {
 	// they are the payload's): the executor trusts them through it.
 	cmd.jobVerified, cmd.signedTemplates, cmd.signedLimits = true, st.Templates, st.Limits
 	cmd.signedContent = st.Content
+	cmd.signedPacing = st.Pacing
 	if g.shared {
 		cmd.jobTenant = st.TenantID
 		// The zone's private ranges come only from the verified statement.

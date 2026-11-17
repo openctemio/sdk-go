@@ -227,7 +227,7 @@ func TestRequiredIdentificationCarriedByTheForwarder(t *testing.T) {
 	org := &core.OrgHTTPPolicy{IdentificationRequired: true, Headers: map[string]string{"X-Pentest-Id": "pt-1"},
 		Query: &core.HTTPQuery{Name: "pentest_id", Value: "pt-1"}, UserAgent: "a/0", UserAgents: uaList("a", 4), UserAgentKey: "run-1"}
 	h := &Host{Backend: statusBackend{st: executor.Status{NetworkEnforced: true}}}
-	p, ierr, err := h.prepare(context.Background(), m, webTask(org, "www.example.com", "api.example.com"), RunOptions{})
+	p, ierr, err := h.prepare(context.Background(), m, webTask(org, "www.example.com", "api.example.com"), RunOptions{HostBudget: testBudget()})
 	if err != nil || ierr != nil {
 		t.Fatal(err, ierr)
 	}
@@ -243,7 +243,7 @@ func TestRequiredIdentificationCarriedByTheForwarder(t *testing.T) {
 	// The same task on a sandbox that does not confine the network is
 	// refused.
 	open := &Host{Backend: statusBackend{st: executor.Status{}}}
-	if _, ierr, _ := open.prepare(context.Background(), m, webTask(org, "www.example.com"), RunOptions{}); ierr == nil {
+	if _, ierr, _ := open.prepare(context.Background(), m, webTask(org, "www.example.com"), RunOptions{HostBudget: testBudget()}); ierr == nil {
 		t.Fatal("an unconfined sandbox ran a task whose identification only the forwarder could add")
 	}
 	// startEgress never runs an injected task without its forwarder.
@@ -290,7 +290,7 @@ func TestRequiredIdentificationZeroRequestsLeave(t *testing.T) {
 	q := &core.HTTPQuery{Name: "pentest_id", Value: "pt-1"}
 	task := tool.Task{ID: "req-1", Targets: []tool.Target{{Ref: "t", Type: "web_origin", Value: srv.URL}},
 		OrgHTTP: &core.OrgHTTPPolicy{IdentificationRequired: true, Headers: map[string]string{"X-Pentest-Id": "pt-1"}, Query: q}}
-	out, err := h.RunBuiltin(context.Background(), identDialTool, task, RunOptions{})
+	out, err := h.RunBuiltin(context.Background(), identDialTool, task, RunOptions{HostBudget: testBudget()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestRequiredIdentificationZeroRequestsLeave(t *testing.T) {
 	h.Backend = nil // the host's own sandbox: a real run
 	task.ID = "req-2"
 	task.OrgHTTP = &core.OrgHTTPPolicy{Headers: map[string]string{"X-Pentest-Id": "pt-1"}, Query: q}
-	out, err = h.RunBuiltin(context.Background(), identDialTool, task, RunOptions{})
+	out, err = h.RunBuiltin(context.Background(), identDialTool, task, RunOptions{HostBudget: testBudget()})
 	if err != nil {
 		t.Fatal(err)
 	}

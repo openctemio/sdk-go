@@ -31,7 +31,7 @@ func TestOrgHTTPPolicyNarrowsAfterTheLocalPolicy(t *testing.T) {
 
 	task := httpTask
 	task.OrgHTTP = &core.OrgHTTPPolicy{UserAgent: "org-scan"}
-	p, ierr, err := (&Host{}).prepare(ctx, m, task, RunOptions{})
+	p, ierr, err := (&Host{}).prepare(ctx, m, task, RunOptions{HostBudget: testBudget()})
 	if err != nil || ierr != nil {
 		t.Fatal(err, ierr)
 	}
@@ -40,7 +40,7 @@ func TestOrgHTTPPolicyNarrowsAfterTheLocalPolicy(t *testing.T) {
 	}
 
 	// The local policy's User-Agent wins over the organization's.
-	p, ierr, err = (&Host{Policy: &httpPolicy{ua: "local-scan", allowInsecure: true}}).prepare(ctx, m, task, RunOptions{})
+	p, ierr, err = (&Host{Policy: &httpPolicy{ua: "local-scan", allowInsecure: true}}).prepare(ctx, m, task, RunOptions{HostBudget: testBudget()})
 	if err != nil || ierr != nil || p.task.HTTP.UserAgent != "local-scan" {
 		t.Fatalf("local wins: %+v %v %v", p, err, ierr)
 	}
@@ -52,15 +52,15 @@ func TestOrgHTTPPolicyNarrowsAfterTheLocalPolicy(t *testing.T) {
 	insecure.HTTP = &tool.HTTPSpec{TLS: &tool.TLSSpec{InsecureSkipVerify: true}}
 	forbid := httpTask
 	forbid.OrgHTTP = &core.OrgHTTPPolicy{AllowInsecureTLS: ptr(false)}
-	if _, ierr, _ := (&Host{Policy: &httpPolicy{allowInsecure: true}}).prepare(ctx, insecure, forbid, RunOptions{}); ierr == nil || ierr.Class != tool.RefusedByPolicy {
+	if _, ierr, _ := (&Host{Policy: &httpPolicy{allowInsecure: true}}).prepare(ctx, insecure, forbid, RunOptions{HostBudget: testBudget()}); ierr == nil || ierr.Class != tool.RefusedByPolicy {
 		t.Fatalf("organization forbids insecure TLS: %v", ierr)
 	}
 	allow := httpTask
 	allow.OrgHTTP = &core.OrgHTTPPolicy{AllowInsecureTLS: ptr(true)}
-	if _, ierr, _ := (&Host{Policy: &httpPolicy{allowInsecure: false}}).prepare(ctx, insecure, allow, RunOptions{}); ierr == nil || ierr.Class != tool.RefusedByPolicy {
+	if _, ierr, _ := (&Host{Policy: &httpPolicy{allowInsecure: false}}).prepare(ctx, insecure, allow, RunOptions{HostBudget: testBudget()}); ierr == nil || ierr.Class != tool.RefusedByPolicy {
 		t.Fatalf("the organization widened the local policy: %v", ierr)
 	}
-	if _, ierr, _ := (&Host{}).prepare(ctx, insecure, allow, RunOptions{}); ierr != nil {
+	if _, ierr, _ := (&Host{}).prepare(ctx, insecure, allow, RunOptions{HostBudget: testBudget()}); ierr != nil {
 		t.Fatalf("both allow: %v", ierr)
 	}
 }
@@ -74,7 +74,7 @@ func TestOrgHTTPPolicyHeaders(t *testing.T) {
 	m.HTTP = &tool.HTTPSpec{Headers: map[string]string{"x-bug-bounty": "tool", "Accept": "*/*"}}
 	task := httpTask
 	task.OrgHTTP = &core.OrgHTTPPolicy{Headers: map[string]string{"X-Bug-Bounty": "jdoe"}}
-	p, ierr, err := (&Host{}).prepare(ctx, m, task, RunOptions{})
+	p, ierr, err := (&Host{}).prepare(ctx, m, task, RunOptions{HostBudget: testBudget()})
 	if err != nil || ierr != nil {
 		t.Fatal(err, ierr)
 	}
@@ -89,7 +89,7 @@ func TestOrgHTTPPolicyHeaders(t *testing.T) {
 	// A tool without http settings still gets them.
 	bare := targetHTTPManifest()
 	bare.HTTP = nil
-	p, ierr, err = (&Host{}).prepare(ctx, bare, task, RunOptions{})
+	p, ierr, err = (&Host{}).prepare(ctx, bare, task, RunOptions{HostBudget: testBudget()})
 	if err != nil || ierr != nil || p.task.HTTP == nil || p.task.HTTP.Headers["X-Bug-Bounty"] != "jdoe" {
 		t.Fatalf("bare tool: %+v %v %v", p, err, ierr)
 	}

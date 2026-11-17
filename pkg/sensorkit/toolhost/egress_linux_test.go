@@ -60,7 +60,7 @@ func TestConfinedTaskReachesOnlyItsTargets(t *testing.T) {
 	h := testHost(t)
 	h.Backend = be
 	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "service", Value: target}}}
-	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,
+	out, err := h.RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true,
 		Env: map[string]string{"TOOLHOST_HOSTILE": "egress-probe", "TOOLHOST_TARGET": target}})
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestConfinedPortScannerDialsPinnedAddress(t *testing.T) {
 	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "domain_name", Value: "localhost"}}}
 	run := func(env map[string]string) *Outcome {
 		env["TOOLHOST_HOSTILE"], env["TOOLHOST_NAME"], env["TOOLHOST_PORT"] = "socks-probe", "localhost", port
-		out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: env})
+		out, err := h.RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Env: env})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -242,7 +242,7 @@ func TestConfinedTaskKeepsToScopeLimits(t *testing.T) {
 	h.Backend = be
 	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "web_origin", Value: target + "/api/"}},
 		Limits: []scopelimit.Limit{{Host: "localhost", Ports: strconv.Itoa(port), PathPrefix: "/api"}}}
-	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,
+	out, err := h.RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true,
 		Env: map[string]string{"TOOLHOST_HOSTILE": "limits-probe", "TOOLHOST_TARGET": target, "TOOLHOST_OTHER_PORT": strconv.Itoa(otherPort)}})
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +308,7 @@ func TestConfinedTaskKeepsToWebScope(t *testing.T) {
 	h.Backend = be
 	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "web_origin", Value: target}},
 		WebScope: &webscope.Scope{DenyPaths: []string{"/admin"}}}
-	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,
+	out, err := h.RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true,
 		Env: map[string]string{"TOOLHOST_HOSTILE": "webscope-probe", "TOOLHOST_TARGET": target}})
 	if err != nil {
 		t.Fatal(err)
@@ -384,7 +384,7 @@ func TestConfinedTaskEndsAfterASilentHost(t *testing.T) {
 	task := tool.Task{Targets: []tool.Target{{Ref: "a", Type: "service", Value: target}}}
 	done := make(chan *Outcome, 1)
 	go func() {
-		out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true,
+		out, err := h.RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true,
 			Env: map[string]string{"TOOLHOST_HOSTILE": "egress-silent", "TOOLHOST_TARGET": target}})
 		if err != nil {
 			t.Error(err)

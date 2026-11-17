@@ -90,3 +90,17 @@ func checkRuleSources(raw string, customTemplates int) (RuleSources, error) {
 	}
 	return rs, nil
 }
+
+// CapabilityHostBudget is the capability of a sensor that reads the budget
+// of a job's signed statement (jobsig.Statement.Pacing) and runs the job's
+// tools that send requests to its targets under the resulting per-host
+// budget (adapt.ResolveBudget: the lowest of the sensor's level, the job's
+// budget and the operator's ceiling). Which tools those are, and what the
+// budget holds on each path, is the reporting sensor's to document
+// (docs/host-budget.md). A signer sends the member only to a sensor that
+// reports the capability, because an older sensor refuses a statement with
+// a member it does not know. The budget is read only from a verified
+// statement: a sensor that does not verify job signatures (no job-signing
+// key is pinned; sensorkit Kit.VerifiesJobs) runs every job at its own
+// level and must not report the capability.
+const CapabilityHostBudget = "pacing.budget@1"

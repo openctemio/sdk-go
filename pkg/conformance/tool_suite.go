@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/testkit"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -398,7 +399,7 @@ func runFixture(t T, host *toolhost.Host, m tool.Manifest, dir string, opts Tool
 		task.ID = "selftest-" + f.Name
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
-	out, err := host.RunManifest(ctx, m, task, toolhost.RunOptions{Trusted: true, Dir: dir, Credentials: opts.Credentials, Env: map[string]string{"PYTHONDONTWRITEBYTECODE": "1"}})
+	out, err := host.RunManifest(ctx, m, task, toolhost.RunOptions{HostBudget: suiteBudget(), Trusted: true, Dir: dir, Credentials: opts.Credentials, Env: map[string]string{"PYTHONDONTWRITEBYTECODE": "1"}})
 	cancel()
 	if err != nil {
 		t.Errorf("Fixtures/%s: %v", f.Name, err)
@@ -434,4 +435,12 @@ func runFixture(t T, host *toolhost.Host, m tool.Manifest, dir string, opts Tool
 	if !bytes.Equal(bytes.TrimSpace(got), bytes.TrimSpace(want)) {
 		t.Errorf("Fixtures/%s: the report differs from %s\n--- got\n%s", f.Name, f.Expect, got)
 	}
+}
+
+// suiteBudget is the per-host budget the suites run a tool under: the
+// default one. The tool host refuses to start a tool that connects to its
+// targets without a budget; the suites' targets are local fixtures.
+func suiteBudget() *adapt.HostBudget {
+	b := adapt.DefaultBudget()
+	return &b
 }

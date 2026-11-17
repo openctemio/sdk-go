@@ -71,7 +71,7 @@ func verdictsOf(out *Outcome) map[string]tool.Verdict {
 func TestRetestBuiltinWithPolicy(t *testing.T) {
 	h := testHost(t)
 	h.Policy = &fakePolicy{deny: map[string]bool{"b.example": true}}
-	out, err := h.RunBuiltin(context.Background(), retestTool, retestTask(), RunOptions{})
+	out, err := h.RunBuiltin(context.Background(), retestTool, retestTask(), RunOptions{HostBudget: testBudget()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestRetestEvidenceFromAHostileAdapter(t *testing.T) {
 func TestRetestRefusedBeforeStart(t *testing.T) {
 	h := testHost(t)
 	// A tool that does not declare retest.
-	out, err := h.RunBuiltin(context.Background(), echoTool, retestTask(), RunOptions{})
+	out, err := h.RunBuiltin(context.Background(), echoTool, retestTask(), RunOptions{HostBudget: testBudget()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestRetestRefusedBeforeStart(t *testing.T) {
 	// An item on a target that is not in the task.
 	task := retestTask()
 	task.Retest[0].Target = "t9"
-	if out, _ := h.RunBuiltin(context.Background(), retestTool, task, RunOptions{}); out.Err == nil || out.Err.Class != tool.InvalidInput {
+	if out, _ := h.RunBuiltin(context.Background(), retestTool, task, RunOptions{HostBudget: testBudget()}); out.Err == nil || out.Err.Class != tool.InvalidInput {
 		t.Fatalf("item on an unknown target: %+v", out.Err)
 	}
 	// The exec profile has no verdict channel.
@@ -170,7 +170,7 @@ func TestRetestRefusedBeforeStart(t *testing.T) {
 	defer cancel()
 	exe, _ := os.Executable()
 	m.Run.Argv = []string{exe}
-	if out, err := h.RunManifest(ctx, m, retestTask(), RunOptions{Trusted: true}); err != nil || out.Err == nil || out.Err.Class != tool.InvalidInput {
+	if out, err := h.RunManifest(ctx, m, retestTask(), RunOptions{HostBudget: testBudget(), Trusted: true}); err != nil || out.Err == nil || out.Err.Class != tool.InvalidInput {
 		t.Fatalf("exec profile retest: %v %+v", err, out)
 	}
 }

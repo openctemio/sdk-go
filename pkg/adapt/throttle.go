@@ -8,9 +8,10 @@ import (
 )
 
 // GapThrottled: the host answered with rate limits (429 Too Many Requests,
-// 503 Service Unavailable, or a Retry-After) in a tool's own output; what it
-// answered there is the limit, not the application. The same reason string
-// as pkg/webdiff's origin gap.
+// 503 Service Unavailable, or a Retry-After), in a tool's own output
+// (ThrottleTally) or to the task's forwarder and canary until its breaker
+// opened (HostRate); what it answered there is the limit, not the
+// application. The same reason string as pkg/webdiff's origin gap.
 const GapThrottled = "throttled"
 
 // ThrottleTally counts the push-back answers a tool's own output shows per

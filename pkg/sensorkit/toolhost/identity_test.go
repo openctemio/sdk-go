@@ -62,7 +62,7 @@ func TestIdentityReachesTheToolOrTheTaskIsRefused(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			p, ierr, err := h.prepare(ctx, c.m, identityTask(), RunOptions{})
+			p, ierr, err := h.prepare(ctx, c.m, identityTask(), RunOptions{HostBudget: testBudget()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -88,7 +88,7 @@ func TestIdentityReachesTheToolOrTheTaskIsRefused(t *testing.T) {
 func TestIdentityOnTheExecArgv(t *testing.T) {
 	m := netManifest("-ua", "{{http.user_agent}}", "{{http.headers:-H}}", "{{target.value}}")
 	m.HTTP = &tool.HTTPSpec{Headers: map[string]string{"Accept": "*/*"}}
-	p, ierr, err := (&Host{}).prepare(context.Background(), m, identityTask(), RunOptions{})
+	p, ierr, err := (&Host{}).prepare(context.Background(), m, identityTask(), RunOptions{HostBudget: testBudget()})
 	if err != nil || ierr != nil {
 		t.Fatal(err, ierr)
 	}
@@ -106,11 +106,11 @@ func TestIdentityOnTheExecArgv(t *testing.T) {
 // without a network is never refused.
 func TestNoIdentityNoRefusal(t *testing.T) {
 	ctx := context.Background()
-	if _, ierr, err := (&Host{}).prepare(ctx, netManifest("-u", "{{target.value}}"), httpTask, RunOptions{}); err != nil || ierr != nil {
+	if _, ierr, err := (&Host{}).prepare(ctx, netManifest("-u", "{{target.value}}"), httpTask, RunOptions{HostBudget: testBudget()}); err != nil || ierr != nil {
 		t.Fatalf("no identification: %v %v", err, ierr)
 	}
 	offline := httpManifest // network none
-	if _, ierr, err := (&Host{}).prepare(ctx, offline, identityTask(), RunOptions{}); err != nil || ierr != nil {
+	if _, ierr, err := (&Host{}).prepare(ctx, offline, identityTask(), RunOptions{HostBudget: testBudget()}); err != nil || ierr != nil {
 		t.Fatalf("offline tool: %v %v", err, ierr)
 	}
 }
@@ -214,7 +214,7 @@ func TestIdentityIsValidatedAtTheBoundary(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			task := httpTask
 			task.OrgHTTP = pol
-			_, ierr, err := (&Host{}).prepare(context.Background(), m, task, RunOptions{})
+			_, ierr, err := (&Host{}).prepare(context.Background(), m, task, RunOptions{HostBudget: testBudget()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -295,7 +295,7 @@ func TestIdentityClearedForTasksWithoutHTTPToTargets(t *testing.T) {
 			task := identityTask()
 			task.Targets = []tool.Target{{Ref: "d", Type: "domain_name", Value: "example.com"}}
 			task.Capability = c.capab
-			p, ierr, err := (&Host{}).prepare(ctx, c.m, task, RunOptions{})
+			p, ierr, err := (&Host{}).prepare(ctx, c.m, task, RunOptions{HostBudget: testBudget()})
 			if err != nil || ierr != nil {
 				t.Fatalf("refused: %v %v", err, ierr)
 			}
@@ -329,7 +329,7 @@ func TestNoIdentificationSentToThirdParties(t *testing.T) {
 		// network permission lets it dial here.
 		task.Targets = []tool.Target{{Ref: "d", Type: "domain_name", Value: "127.0.0.1"}}
 		task.Capability = capab
-		p, ierr, err := (&Host{}).prepare(context.Background(), m, task, RunOptions{})
+		p, ierr, err := (&Host{}).prepare(context.Background(), m, task, RunOptions{HostBudget: testBudget()})
 		if err != nil || ierr != nil {
 			t.Fatalf("refused: %v %v", err, ierr)
 		}
@@ -377,7 +377,7 @@ func TestNoIdentificationSentToThirdParties(t *testing.T) {
 	m := netManifest("-ua", "{{http.user_agent}}", "{{http.headers:-H}}", "{{target.value}}")
 	m.Permissions = tool.Permissions{Network: tool.NetEgressProxy}
 	m.HTTP = &tool.HTTPSpec{Headers: map[string]string{"Accept": "*/*"}}
-	p, ierr, err := (&Host{}).prepare(context.Background(), m, identityTask(), RunOptions{})
+	p, ierr, err := (&Host{}).prepare(context.Background(), m, identityTask(), RunOptions{HostBudget: testBudget()})
 	if err != nil || ierr != nil {
 		t.Fatal(err, ierr)
 	}
@@ -406,7 +406,7 @@ func TestOrgTLSRuleKeptWithoutIdentification(t *testing.T) {
 	task := identityTask()
 	no := false
 	task.OrgHTTP.AllowInsecureTLS = &no
-	if _, ierr, err := (&Host{}).prepare(context.Background(), m, task, RunOptions{}); err != nil || ierr == nil || ierr.Class != tool.RefusedByPolicy {
+	if _, ierr, err := (&Host{}).prepare(context.Background(), m, task, RunOptions{HostBudget: testBudget()}); err != nil || ierr == nil || ierr.Class != tool.RefusedByPolicy {
 		t.Fatalf("want refused_by_policy, got %v %v", err, ierr)
 	}
 }

@@ -70,7 +70,7 @@ func TestPooledTaskRefusedOnUnconfinedSandbox(t *testing.T) {
 		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{h.Self}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
 	}
 	task := tool.Task{Targets: oneTarget, Egress: nopDialer{}}
-	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
+	out, err := h.RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
 	if err != nil {
 		t.Fatal(err)
 	}

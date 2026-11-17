@@ -201,7 +201,7 @@ func (r *contractRun) runEnv(task tool.Task, extra map[string]string) (*toolhost
 	ctx, cancel := context.WithTimeout(context.Background(), r.opts.Timeout)
 	defer cancel()
 	host := &toolhost.Host{Sensor: "conformance", RuntimeName: conformanceRuntime}
-	return host.RunManifest(ctx, r.m, task, toolhost.RunOptions{Trusted: true, Dir: r.dir, Credentials: r.opts.Credentials, Env: env})
+	return host.RunManifest(ctx, r.m, task, toolhost.RunOptions{HostBudget: suiteBudget(), Trusted: true, Dir: r.dir, Credentials: r.opts.Credentials, Env: env})
 }
 
 func (r *contractRun) fixtureContract() {

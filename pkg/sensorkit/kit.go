@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/internal/sensorstate"
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctlog"
@@ -199,6 +200,16 @@ type Options struct {
 	// Content is the sensor's scanner content, when it manages any (see
 	// Content).
 	Content Content
+	// PacingLevel is the sensor's pacing level, the most one target host
+	// gets from a job on this sensor: "gentle", "standard" or "fast" (""
+	// reads SENSOR_PACING_LEVEL, then Standard). It is the sensor's own
+	// operator's choice, never the platform's: a job's signed budget and
+	// the local policy's rate.max_host_rps and rate.max_host_inflight can
+	// only lower it (core.DefaultCommandExecutor.HostBudget, the lowest
+	// limit wins). An unknown name is reported at start and the sensor
+	// then runs at gentle: a mistyped level never runs faster than its
+	// operator meant.
+	PacingLevel string
 	// ScanTargetPolicy restricts the targets of dispatched scans (nil: the
 	// SDK default, core.DefaultScanTargetPolicy). Its AllowedRoots are
 	// logged as the scan workspace.
@@ -1374,6 +1385,7 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// (through the scan target policy), templates, callbacks, rate and
 	// run time.
 	executor.SetLocalPolicy(k.LocalPolicy())
+	k.applyPacingLevel(executor)
 	// Code-scan jobs ask the platform for their source's credential.
 	if sc, ok := any(k.client).(core.SourceCredentials); ok {
 		executor.SetSourceCredentials(sc)
@@ -1602,6 +1614,18 @@ type commandRouter struct {
 	fallback core.CommandExecutor
 }
 
+// HostBudget is the per-host budget of cmd as the SDK's executor resolves
+// it (core.DefaultCommandExecutor.HostBudget), for a command middleware
+// that runs a tool itself: it sees the router, not the executor behind it.
+func (r *commandRouter) HostBudget(cmd *core.Command) adapt.HostBudget {
+	if b, ok := r.fallback.(interface {
+		HostBudget(*core.Command) adapt.HostBudget
+	}); ok {
+		return b.HostBudget(cmd)
+	}
+	return adapt.ResolveBudget(adapt.PacingGentle, nil, adapt.BudgetCeiling{})
+}
+
 func (r *commandRouter) Execute(ctx context.Context, cmd *core.Command) (*core.CommandExecutionResult, error) {
 	if cmd != nil {
 		if h, ok := r.handlers[cmd.Type]; ok {
@@ -1656,5 +1680,17 @@ func (k *Kit) startTransport(ctx context.Context, doorbell *core.Doorbell) {
 	if k.s.signer != nil {
 		st := k.client.TransportStatus()
 		_, _ = fmt.Fprintf(k.out, "  Transport: %s%s\n", st.Binding, reasonSuffix(st.FallbackReason))
+	}
+}
+
+// applyPacingLevel sets the operator's pacing level on the executor
+// (Options.PacingLevel, else SENSOR_PACING_LEVEL, else Standard). A name
+// that is not a level is reported and the sensor runs at gentle, the lowest
+// level: a mistyped level never runs faster than its operator meant.
+func (k *Kit) applyPacingLevel(executor *core.DefaultCommandExecutor) {
+	level := strings.ToLower(strings.TrimSpace(envOr(k.opts.PacingLevel, EnvPacingLevel)))
+	if err := executor.SetPacingLevel(level); err != nil {
+		_, _ = fmt.Fprintf(k.errw, "Warning: %s=%q: %v; running at %s\n", EnvPacingLevel, level, err, adapt.PacingGentle.Name)
+		_ = executor.SetPacingLevel(adapt.PacingGentle.Name)
 	}
 }

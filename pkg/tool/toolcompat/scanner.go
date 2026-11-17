@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/openctemio/contract/capability"
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -134,19 +135,36 @@ func (s *toolScanner) Capabilities() []string {
 // Retests reports whether the tool can retest (its manifest declares it).
 func (s *toolScanner) Retests() bool { return s.m.RetestFeature() }
 
-// RunRetest runs one retest task (tool.Task.Retest set) out of process.
+// RunRetest runs one retest task (tool.Task.Retest set) out of process,
+// under the per-host budget of the retest's command (adapt.WithHostBudget
+// on ctx, which the kit's retest command sets), else the default one.
 func (s *toolScanner) RunRetest(ctx context.Context, task tool.Task) (*toolhost.Outcome, error) {
 	if !s.m.RetestFeature() || !task.IsRetest() {
 		return nil, fmt.Errorf("%s: not a retest", s.m.Name)
 	}
-	return s.run(ctx, task)
+	b, ok := adapt.HostBudgetFrom(ctx)
+	if !ok {
+		b = adapt.DefaultBudget()
+	}
+	return s.run(ctx, task, b)
+}
+
+// scanBudget is the per-host budget of a scan: the one its options carry
+// (the command's, core.DefaultCommandExecutor.HostBudget), else the
+// default one. A scan never runs without one.
+func scanBudget(opts *core.ScanOptions) adapt.HostBudget {
+	if opts != nil && opts.HostBudget.Valid() {
+		return opts.HostBudget
+	}
+	return adapt.DefaultBudget()
 }
 
 // run runs one task through the host: a tool with a run section as its own
 // program (installed by the operator), else re-executed as a compiled-in
-// tool.
-func (s *toolScanner) run(ctx context.Context, task tool.Task) (*toolhost.Outcome, error) {
-	o := toolhost.RunOptions{Mode: s.cfg.Mode, Dir: s.cfg.Dir}
+// tool. Every task carries the per-host budget b: the host holds a tool
+// that connects to its targets to it (and refuses to start one without).
+func (s *toolScanner) run(ctx context.Context, task tool.Task, b adapt.HostBudget) (*toolhost.Outcome, error) {
+	o := toolhost.RunOptions{Mode: s.cfg.Mode, Dir: s.cfg.Dir, HostBudget: &b}
 	if s.cfg.Credentials != nil {
 		o.Credentials = s.cfg.Credentials()
 	}
@@ -277,7 +295,7 @@ func (s *toolScanner) ScanTargets(ctx context.Context, targets []string, opts *c
 		}
 		task.Local = local
 	}
-	out, err := s.run(ctx, task)
+	out, err := s.run(ctx, task, scanBudget(opts))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", s.m.Name, err)
 	}

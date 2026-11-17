@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/egress/upstream"
@@ -229,6 +230,14 @@ func (x *retestExecutor) Execute(ctx context.Context, cmd *core.Command) (*core.
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	task.Deadline = time.Now().Add(timeout)
+	// The retest runs under its command's per-host budget, as a scan does:
+	// the lowest of the sensor's level, the budget of the command's
+	// verified statement and the operator's ceiling.
+	if hb, ok := x.egress.(interface {
+		HostBudget(*core.Command) adapt.HostBudget
+	}); ok {
+		ctx = adapt.WithHostBudget(ctx, hb.HostBudget(cmd))
+	}
 	out, err := r(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("retest: %w", err)

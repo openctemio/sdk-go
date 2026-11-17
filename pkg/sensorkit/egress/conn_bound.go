@@ -35,13 +35,35 @@ type boundedConn struct {
 	// deadline is a read deadline the caller set (unix nanoseconds, 0:
 	// none); a read waits until the earlier of it and the idle bound.
 	deadline atomic.Int64
+	// onClose, when set, runs once when the connection is closed or its
+	// context ends (the forwarder frees the host's connection slot).
+	onClose func()
+	closed  sync.Once
+	// slots are the host's connection slots the connection holds (nil:
+	// none): onClose drops them.
+	slots *connSlots
+}
+
+// release runs onClose once.
+func (b *boundedConn) release() {
+	b.closed.Do(func() {
+		if b.onClose != nil {
+			b.onClose()
+		}
+	})
 }
 
 // bound wraps c (an upstream connection the forwarder dialed): reads wait
 // at most idle for the host, and ctx ending closes it.
 func bound(ctx context.Context, c net.Conn, idle time.Duration) *boundedConn {
-	b := &boundedConn{Conn: c, idle: idle}
-	b.stop = context.AfterFunc(ctx, func() { _ = c.Close() })
+	return boundRelease(ctx, c, idle, nil)
+}
+
+// boundRelease is bound with a function that runs once when the connection
+// is closed or ctx ends (nil: none).
+func boundRelease(ctx context.Context, c net.Conn, idle time.Duration, onClose func()) *boundedConn {
+	b := &boundedConn{Conn: c, idle: idle, onClose: onClose}
+	b.stop = context.AfterFunc(ctx, func() { _ = c.Close(); b.release() })
 	return b
 }
 
@@ -85,6 +107,7 @@ func (b *boundedConn) Close() error {
 		b.stop()
 		err = b.Conn.Close()
 	})
+	b.release()
 	return err
 }
 

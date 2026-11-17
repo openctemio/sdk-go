@@ -20,7 +20,11 @@
 //     adaptive rate per destination host (adapt.HostRate) that backs off
 //     on 429/503 (honoring Retry-After), resets, timeouts, failed TLS
 //     handshakes and blocks, and never goes above the task's ceiling;
-//     a host it cannot cover is a coverage gap (Forwarder.TargetRate);
+//     a host it cannot cover is a coverage gap (Forwarder.TargetRate).
+//     A host is counted under its canonical form and also under the
+//     address it is dialed at (hostbudget.go); a request on a connection
+//     the forwarder reads, and each further request it can tell apart on a
+//     tunnel it passes through, waits for the rate too (tunnel.go);
 //   - records the destination, the verdict and the bytes (Record).
 //
 // Forwarder.Dial may send the connections through an organization's proxy
@@ -139,10 +143,24 @@ var ErrRefused = errors.New("egress: destination refused")
 type Limits struct {
 	// Rate is connections per second for the task (0: 100).
 	Rate float64
-	// PerHostRate is the ceiling of the adaptive rate to one host:
-	// connections, and requests on a connection the forwarder reads, per
-	// second (0: Rate). The rate starts below it and never exceeds it.
+	// PerHostRate is the ceiling of the adaptive rate to one host and to
+	// one address: connections, requests on a connection the forwarder
+	// reads, and the further requests it counts on a tunnel it passes
+	// through (tunnel.go), per second (0: Rate). The rate starts below it
+	// and never exceeds it.
 	PerHostRate float64
+	// PerHostConns is how many connections to one host, and to one
+	// address, may be open at once (0: no bound besides MaxConns): the host
+	// budget's requests in flight (adapt.HostBudget.Inflight). A connection
+	// over it waits for one to end, at most DialTimeout, and is then
+	// refused, and the host is reported as a coverage gap. A kept-alive
+	// connection counts while a request is in flight on it (SlotIdle).
+	PerHostConns int
+	// SlotIdle is how long a kept-alive connection may be quiet after the
+	// host's answer before it gives its connection slots back until its
+	// next request (0: DefaultSlotIdle; negative: it keeps them until it
+	// closes).
+	SlotIdle time.Duration
 	// MaxConns is how many connections may be open at once (0: 256).
 	MaxConns int
 	// DialTimeout bounds one upstream dial (0: 15s).
@@ -179,6 +197,12 @@ func (l Limits) withDefaults() Limits {
 		l.UpstreamIdle = DefaultUpstreamIdle
 	case l.UpstreamIdle < 0:
 		l.UpstreamIdle = 0
+	}
+	switch {
+	case l.SlotIdle == 0:
+		l.SlotIdle = DefaultSlotIdle
+	case l.SlotIdle < 0:
+		l.SlotIdle = 0
 	}
 	if l.MaxRecords <= 0 {
 		l.MaxRecords = 10000
@@ -233,6 +257,85 @@ type Forwarder struct {
 	dropped     int
 	tally       Tally
 	conns       chan struct{}
+	// hostConns are the per-host connection slots (Limits.PerHostConns).
+	hostMu    sync.Mutex
+	hostConns map[string]chan struct{}
+}
+
+// ProtocolCanary is the Record protocol of the runtime's own canary request
+// toward a target (DialTarget).
+const ProtocolCanary = "canary"
+
+// ErrHostBusy is the error of a connection that found every slot of its
+// host taken for DialTimeout (Limits.PerHostConns).
+var ErrHostBusy = errors.New("egress: the host's connections in flight are at the budget")
+
+// hostSlot takes one of host's connection slots, waiting at most
+// DialTimeout for one. The returned func frees it (once). Without a
+// per-host bound it returns at once.
+func (f *Forwarder) hostSlot(ctx context.Context, host string) (func(), error) {
+	if f.limits.PerHostConns <= 0 {
+		return func() {}, nil
+	}
+	f.hostMu.Lock()
+	if f.hostConns == nil {
+		f.hostConns = map[string]chan struct{}{}
+	}
+	slots, ok := f.hostConns[host]
+	if !ok {
+		if len(f.hostConns) >= adapt.TargetRate.MaxHosts {
+			// Past the bound every further host shares one set of slots.
+			host = "*"
+			slots, ok = f.hostConns[host]
+		}
+		if !ok {
+			slots = make(chan struct{}, f.limits.PerHostConns)
+			f.hostConns[host] = slots
+		}
+	}
+	f.hostMu.Unlock()
+	t := time.NewTimer(f.limits.DialTimeout)
+	defer t.Stop()
+	select {
+	case slots <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-slots }) }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-t.C:
+		return nil, ErrHostBusy
+	}
+}
+
+// DialTarget opens a connection to host:port for the runtime's own canary
+// request (adapt.Canary) on the path a tool's connection takes: the same
+// scope check (an address literal included), the addresses pinned at
+// admission (no name is resolved again) and the same upstream (the job's
+// proxy pool), recorded with protocol "canary". The caller asked the host's
+// rate controller itself (adapt.HostRate.AcquireProbe); the connection
+// takes none of the host's connection slots and is not counted as the
+// tool's in the tally or the reach summary.
+func (f *Forwarder) DialTarget(ctx context.Context, host string, port int) (net.Conn, error) {
+	c, rec, err := f.dial(ctx, ProtocolCanary, host, port)
+	if err != nil {
+		return nil, err
+	}
+	f.record(*rec)
+	return c, nil
+}
+
+// PerHostLimits are the bounds one host is held to: the ceiling of its
+// adaptive rate and the connections open at once (0: only MaxConns).
+func (f *Forwarder) PerHostLimits() (rate float64, conns int) {
+	return f.limits.PerHostRate, f.limits.PerHostConns
+}
+
+// Opaque reports whether the forwarder passes a connection to host:port
+// through without reading it (no path limit, web scope or identification
+// applies): the answers on it are invisible to the rate controller, which
+// is what a canary is for.
+func (f *Forwarder) Opaque(host string, port int) bool {
+	return f.guardFor(host, port) == nil
 }
 
 // New returns the forwarder of one task. Names are normalized (lower case,
@@ -416,8 +519,9 @@ func (f *Forwarder) allowRate(ctx context.Context, host string) error {
 // dial checks, rate-limits and dials host:port; it records the attempt.
 func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (net.Conn, *Record, error) {
 	rec := &Record{Time: time.Now().UTC(), Protocol: protocol, Host: host, Port: port}
+	canary := protocol == ProtocolCanary
 	target := f.Reach
-	if f.isVendor(normName(host)) {
+	if f.isVendor(normName(host)) || canary {
 		target = nil
 	}
 	addrs, err := f.Resolve(ctx, host, port)
@@ -425,15 +529,34 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 		if reach.Classify(err) == reach.DNSFailure {
 			target.RecordErr(host, netip.Addr{}, port, err)
 		}
-		if errors.Is(err, ErrRefused) {
+		if errors.Is(err, ErrRefused) && !canary {
 			f.count(host, false)
 		}
 		rec.Verdict, rec.Reason = Refused, err.Error()
 		f.record(*rec)
 		return nil, nil, err
 	}
-	f.count(host, true)
-	if err := f.allowRate(ctx, normName(host)); err != nil {
+	if !canary {
+		f.count(host, true)
+	}
+	// The host's connections in flight first (a wait there spends no rate),
+	// then the task's and the host's rate. The canary waited for the
+	// host's rate before it dialed and takes no slot: it is one connection
+	// every few seconds, and it must not wait behind a tool that keeps
+	// every slot taken, which is when its answer matters most.
+	key := hostKey(host)
+	release := func() {}
+	if !canary {
+		if release, err = f.hostSlot(ctx, key); err == nil {
+			if err = f.allowRate(ctx, key); err != nil {
+				release()
+			}
+		}
+	}
+	if err != nil {
+		if errors.Is(err, ErrHostBusy) {
+			f.busyGap(key)
+		}
 		rec.Verdict, rec.Reason = Refused, "rate: "+err.Error()
 		f.record(*rec)
 		return nil, nil, err
@@ -445,12 +568,33 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 	}
 	var lastErr error
 	targetErr := false // lastErr is about the target, not about an upstream proxy
+	rateErr := false   // lastErr is the address's slots refusing the connection, or the wait for its rate ending
 	dctxBase := WithTargetHost(ctx, host)
 	if _, ok := f.names[normName(host)]; ok {
 		dctxBase = WithScopedName(dctxBase)
 	}
 	var pathErr *UpstreamError // the last failure was the path's (UpstreamError.PathFault)
 	for _, a := range addrs {
+		// The address's own slot and rate: every name of the task that is
+		// dialed at this address shares them (hostbudget.go). For a host
+		// that is this address they are the host's, taken above. The
+		// address only paces and bounds: it has no breaker to refuse with.
+		releaseAddr := func() {}
+		slotAddr := ""
+		if ak := addrKey(a); !canary && ak != key {
+			var aerr error
+			if releaseAddr, aerr = f.hostSlot(ctx, ak); aerr == nil {
+				if aerr = f.hostRate.AcquireAddr(ctx, ak); aerr != nil {
+					releaseAddr()
+				}
+			}
+			if aerr != nil {
+				lastErr, targetErr, pathErr, rateErr = aerr, false, nil, true
+				continue
+			}
+			slotAddr = ak
+		}
+		rateErr = false
 		dctx, cancel := context.WithTimeout(dctxBase, f.limits.DialTimeout)
 		c, err := dial(dctx, "tcp", net.JoinHostPort(a.String(), strconv.Itoa(port)))
 		cancel()
@@ -471,15 +615,25 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 			target.RecordErr(host, a, port, err)
 		}
 		if err == nil {
-			f.hostRate.ReportDial(normName(host), port, nil)
+			f.hostRate.ReportDial(key, port, nil)
+			if ak := addrKey(a); ak != key {
+				f.hostRate.ReportAddr(ak, adapt.Event{Signal: adapt.Connected})
+			}
 			rec.Verdict, rec.Addr = Allowed, a.String()
 			if ec, ok := c.(EndpointConn); ok {
 				rec.Endpoint = ec.UpstreamEndpoint()
 			}
 			// The connection never outlives the forwarder's context, and a
 			// silent host cannot hold it open (conn_bound.go).
-			return bound(ctx, c, f.limits.UpstreamIdle), rec, nil
+			if canary {
+				return bound(ctx, c, f.limits.UpstreamIdle), rec, nil
+			}
+			sl := &connSlots{f: f, host: key, addr: slotAddr, held: true, relHost: release, relAddr: releaseAddr}
+			bc := boundRelease(ctx, c, f.limits.UpstreamIdle, sl.drop)
+			bc.slots = sl
+			return bc, rec, nil
 		}
+		releaseAddr()
 		lastErr, targetErr, pathErr = err, !pathFault, nil
 		if pathFault {
 			pathErr = ue
@@ -490,14 +644,23 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 	}
 	// A path that failed says nothing about the target: the target's rate
 	// is paced on what the target did only.
+	release()
+	if rateErr {
+		if errors.Is(lastErr, ErrHostBusy) {
+			f.busyGap(key)
+		}
+		rec.Verdict, rec.Reason = Refused, "rate: "+lastErr.Error()
+		f.record(*rec)
+		return nil, nil, lastErr
+	}
 	if ctx.Err() == nil && targetErr {
-		f.hostRate.ReportDial(normName(host), port, lastErr)
+		f.hostRate.ReportDial(key, port, lastErr)
 	}
 	if ctx.Err() == nil && pathErr != nil {
 		// The connection never left through the pool: that part of the
 		// host is not scanned, and the result must not read as "nothing
 		// found" (the scan ends partial with the host as a gap).
-		f.hostRate.MarkGap(normName(host), adapt.GapProxyUnavailable,
+		f.hostRate.MarkGap(key, adapt.GapProxyUnavailable,
 			"the proxy pool could not carry a connection to port "+strconv.Itoa(port)+" ("+pathErr.Class+")")
 	}
 	rec.Verdict, rec.Reason = Allowed, "dial failed: "+lastErr.Error()

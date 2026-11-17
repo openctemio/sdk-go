@@ -33,7 +33,7 @@ func TestExecContentPlaceholders(t *testing.T) {
 	h.ContentRoot = root
 	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "github.com/acme/x"}},
 		Content: []tool.TaskContent{{Slot: "templates", Packs: []tool.ContentPack{{Digest: packDigest, Path: a}, {Digest: packDigest, Path: b}}}}}
-	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
+	out, err := h.RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestExecContentPlaceholders(t *testing.T) {
 
 	// SECURITY: a job cannot point a task at a path outside the cache.
 	task.Content[0].Packs[0].Path = "/etc"
-	out, _ = h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
+	out, _ = h.RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
 	if out.Status != tool.StatusFailed || out.Err == nil || out.Err.Class != tool.InvalidInput {
 		t.Fatalf("a pack outside the content cache ran: %s %v", out.Status, out.Err)
 	}

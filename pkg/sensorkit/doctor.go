@@ -268,6 +268,8 @@ func RegisterSDKSettings(r *settingsreg.Registry) {
 			Description: "Local state: the paired identity and signing key (identity/), the renewed API key and the tool cost history. Mount a persistent volume."},
 		settingsreg.Setting{Name: EnvKeyAutoRenew, Type: settingsreg.Bool, Default: "auto", Group: "identity",
 			Description: "API key auto-renewal: true, false, or unset (on when the state directory persists)."},
+		settingsreg.Setting{Name: EnvPacingLevel, Type: settingsreg.Enum, Enum: []string{"gentle", "standard", "fast"}, Default: "standard", Group: "runtime",
+			Description: "The sensor's pacing level, the most one target host gets from a job here: gentle (5 requests per second, 2 in flight), standard (20, 8) or fast (100, 25). A job's signed budget and the local policy rate.max_host_rps and rate.max_host_inflight can only lower it; no job raises it."},
 		settingsreg.Setting{Name: EnvMaxJobs, Type: settingsreg.Int, Group: "runtime",
 			Description: "Cap on concurrent jobs, 1-100. Unset: the slots follow CPU, memory and tool costs."},
 		settingsreg.Setting{Name: EnvDrainGrace, Type: settingsreg.Duration, Default: "30s", Group: "runtime",

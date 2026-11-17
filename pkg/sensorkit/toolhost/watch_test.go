@@ -17,7 +17,7 @@ func hostileRunWatch(t *testing.T, ctx context.Context, mode string, w core.RunW
 	m := hostileManifest
 	m.Run = &tool.RunSpec{Argv: []string{exe}}
 	start := time.Now()
-	out, err := testHost(t).RunManifest(ctx, m, tool.Task{Targets: twoTargets}, RunOptions{Trusted: true, Watch: w,
+	out, err := testHost(t).RunManifest(ctx, m, tool.Task{Targets: twoTargets}, RunOptions{HostBudget: testBudget(), Trusted: true, Watch: w,
 		Env: map[string]string{"TOOLHOST_HOSTILE": mode}, Credentials: map[string]string{"api_key": "sk-declared-123"}})
 	if err != nil {
 		t.Fatal(err)

@@ -35,7 +35,7 @@ func prepareWith(t *testing.T, m tool.Manifest, pol Policy, org *core.OrgHTTPPol
 	t.Helper()
 	task := httpTask
 	task.OrgHTTP = org
-	p, ierr, err := (&Host{Policy: pol}).prepare(context.Background(), m, task, RunOptions{})
+	p, ierr, err := (&Host{Policy: pol}).prepare(context.Background(), m, task, RunOptions{HostBudget: testBudget()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func prepareWith(t *testing.T, m tool.Manifest, pol Policy, org *core.OrgHTTPPol
 
 func prepareWithTask(t *testing.T, m tool.Manifest, pol Policy, task tool.Task) (*prepared, *tool.Error) {
 	t.Helper()
-	p, ierr, err := (&Host{Policy: pol}).prepare(context.Background(), m, task, RunOptions{})
+	p, ierr, err := (&Host{Policy: pol}).prepare(context.Background(), m, task, RunOptions{HostBudget: testBudget()})
 	if err != nil {
 		t.Fatal(err)
 	}

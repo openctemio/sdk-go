@@ -179,6 +179,33 @@ type RunOptions struct {
 	// forwarder's per-host adaptive rate stays under the lowest of this,
 	// the tool's rate param and the local policy's rate.max_rps.
 	TargetRate float64
+	// HostBudget is the per-host budget of the task's job
+	// (adapt.ResolveBudget; nil: none, the task runs under TargetRate
+	// alone). For a tool that connects to its targets, a confined task's
+	// forwarder then holds each host and each address to it (rate and
+	// connections in flight; what it holds on a tunnel it passes through is
+	// in egress/tunnel.go), a canary request per host reads what the host
+	// answers where the forwarder cannot, and the outcome's TargetRate
+	// states the budget, the limit that set it, the values that were asked
+	// for and did not apply, and the back-off and breaker counts. Without
+	// a forwarder the tool's own flags are the enforcement and the outcome
+	// says the pacing is limited (budget.go). The tool host works on a
+	// copy: what it lowers itself is in the outcome's budget, not here.
+	//
+	// A tool whose manifest says it connects to its targets (network
+	// targets) is refused without a valid budget (ErrNoHostBudget): no
+	// path may start such a tool unpaced because its caller forgot the
+	// budget.
+	HostBudget *adapt.HostBudget
+	// PortProbes says the tool probes ports and its caller paces it in
+	// packets per second from the budget's level (adapt.Pacing.ProbePPS),
+	// through the tool's own rate setting: a port probe is not a request,
+	// so the forwarder does not hold the task's hosts to the budget's
+	// requests per second and connections in flight (the task's rate
+	// bounds it, as without a budget), and no canary runs. HostBudget is
+	// still required. For a port scanner compiled into the sensor; a tool
+	// described only by its manifest never gets it.
+	PortProbes bool
 	// Watch bounds the run (watch.go): a zero field takes the job's
 	// (core.RunWatchFrom of the task's context), then the default; a
 	// negative one turns that check off.
@@ -410,6 +437,10 @@ type prepared struct {
 	credLines []LogLine
 	// targetRate is RunOptions.TargetRate.
 	targetRate float64
+	// budget is the task's per-host budget (budgetOf; nil: none);
+	// budgetLine says it changed the tool's rate key (nil: it did not).
+	budget     *adapt.HostBudget
+	budgetLine *LogLine
 	// oob is RunOptions.OOB.
 	oob *egress.OOBServer
 	// mapping turns an exec tool's json or jsonl output into CTIS.
@@ -451,7 +482,9 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if ierr := h.checkLimits(m, task); ierr != nil {
 		return nil, ierr, nil
 	}
-	if ierr := h.checkUnconfined(m); ierr != nil {
+	// An unconfined active tool is refused, and so is a tool that connects
+	// to its targets without a per-host budget (budget.go).
+	if ierr := cmp.Or(h.checkUnconfined(m), requireBudget(m, o)); ierr != nil {
 		return nil, ierr, nil
 	}
 	egressDialer := taskEgressDialer(ctx, task)
@@ -467,6 +500,11 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, ierr, nil
 	}
 	cfg, rateLine, err := capRate(m, cfg, h.Policy)
+	if err != nil {
+		return nil, tool.AsError(tool.Invalid("%v", err)), nil
+	}
+	budget := budgetOf(m, o)
+	cfg, budgetLine, err := capBudgetRate(m, cfg, budget, task.Targets, confines(h.backend(), m))
 	if err != nil {
 		return nil, tool.AsError(tool.Invalid("%v", err)), nil
 	}
@@ -536,7 +574,7 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	}
 	task.Egress = nil // kept in prepared only: it never travels with the task
 	p := &prepared{secretKey: h.SecretFingerprintKey, m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine, contentPaths: contentPaths,
-		targetRate: o.TargetRate, egress: egressDialer, applied: applied, oob: o.OOB, inject: injected}
+		targetRate: o.TargetRate, budget: budget, budgetLine: budgetLine, egress: egressDialer, applied: applied, oob: o.OOB, inject: injected}
 	if task.IsRetest() && len(adm.Refused) > 0 {
 		// A retest never reaches a target the policy refused: its items
 		// are not sent and end unverifiable.
@@ -812,6 +850,8 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 		return nil, err
 	}
 	defer eg.stop()
+	canary := h.startCanary(ctx, p, eg)
+	defer canary.end()
 	cpu := &core.ProcessCPU{}
 	t, err := be.Prepare(executor.TaskSpec{
 		ID: m.Name, Argv: argv, Env: h.taskEnv(m, o.Env), SetEnv: h.taskSetEnv(o.Env), Dir: p.workdir,
@@ -891,7 +931,10 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 		}
 	}
 	s.finish(res, stopReason, stopClass, stderr, start, execution)
-	for _, l := range eg.finish(s.out, p.task.Targets) {
+	// The canary ends first: its counts are part of the rate outcome.
+	canary.end()
+	lines := unconfinedBudget(p, eg, s.out)
+	for _, l := range append(lines, eg.finish(s.out, p.task.Targets)...) {
 		s.log(l.Level, l.Msg, l.Fields)
 	}
 	egressRefusedVerdicts(s.out, p.asked)
@@ -1340,6 +1383,9 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 	p.addRefused(out)
 	markOutcomes(out)
 	out.Verdicts = p.verdicts(runErr)
+	if p.budgetLine != nil {
+		out.Logs = append(out.Logs, *p.budgetLine)
+	}
 	if p.rateLine != nil {
 		out.Logs = append(out.Logs, *p.rateLine)
 	}

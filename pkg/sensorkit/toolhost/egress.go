@@ -57,6 +57,8 @@ type taskEgress struct {
 	// passive: the tool's network is vendor; it never connects to its
 	// targets, so a refused connection says nothing about a target.
 	passive bool
+	// canary is the task's canary when the forwarder ends it (watch).
+	canary *taskCanary
 
 	// changes are the first rate changes (adapt.TargetRate.MaxChanges);
 	// moreChanges counts the rest.
@@ -99,8 +101,19 @@ func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared
 		return nil, err
 	}
 	ceiling := h.rateCeiling(p)
+	limits := egress.Limits{Rate: ceiling, PerHostRate: ceiling}
+	if p.budget != nil {
+		// The host's ceiling is the job's budget, not the task's rate over
+		// all its hosts. What the forwarder holds to it, and what only the
+		// tool's own flags hold, is in docs/host-budget.md.
+		limits.PerHostRate = math.Min(ceiling, float64(p.budget.RPS))
+		limits.PerHostConns = p.budget.Inflight
+	}
 	e := &taskEgress{dir: dir, proxy: filepath.Join(dir, "proxy.sock"), dns: filepath.Join(dir, "dns.sock"),
-		fw: egress.New(scope, egress.Limits{Rate: ceiling, PerHostRate: ceiling}), passive: p.m.Permissions.Network == tool.NetVendor}
+		fw: egress.New(scope, limits), passive: p.m.Permissions.Network == tool.NetVendor}
+	if p.budget != nil {
+		e.fw.TargetRate().SetBudget(*p.budget)
+	}
 	if h.lookupVendor != nil {
 		e.fw.LookupVendor = h.lookupVendor
 	}
@@ -161,11 +174,22 @@ func (e *taskEgress) dnsPath() string {
 
 // stop ends the forwarder (once; later calls only read) and returns what
 // it recorded.
+// watch makes the forwarder end the task's canary c just before it stops
+// (nil: the task has none).
+func (e *taskEgress) watch(c *taskCanary) {
+	if e != nil {
+		e.canary = c
+	}
+}
+
 func (e *taskEgress) stop() ([]egress.Record, int) {
 	if e == nil {
 		return nil, 0
 	}
 	e.once.Do(func() {
+		// The canary ends first: it dials through the forwarder, and its
+		// counts are part of the rate outcome.
+		e.canary.end()
 		e.cancel()
 		// The forwarder closes every connection when its context ends, so
 		// this wait is short; it is bounded anyway: a forwarder that does
@@ -222,8 +246,7 @@ func (e *taskEgress) finish(out *Outcome, targets []tool.Target) []LogLine {
 	}
 	e.chMu.Lock()
 	for _, c := range e.changes {
-		lines = append(lines, LogLine{Level: "info", Msg: fmt.Sprintf("target rate %s: %.3g/s -> %.3g/s (%s)", c.Host, c.From, c.To, c.Reason),
-			Fields: map[string]any{"target_rate": c.To, "host": c.Host, "reason": c.Reason}})
+		lines = append(lines, rateChangeLine(c))
 	}
 	if e.moreChanges > 0 {
 		lines = append(lines, LogLine{Level: "info", Msg: fmt.Sprintf("target rate changed %d more times", e.moreChanges)})
@@ -236,6 +259,8 @@ func (e *taskEgress) finish(out *Outcome, targets []tool.Target) []LogLine {
 			Fields: map[string]any{"target_rate_ceiling": s.Ceiling, "target_rate_min": s.Min, "hosts": s.Hosts,
 				"hosts_throttled": s.Throttled, "hosts_unreachable": s.Unreachable, "coverage_gaps": s.GapsTotal}})
 	}
+	recordPacing(&s)
+	lines = append(lines, budgetLines(&s)...)
 	for i, g := range s.Gaps {
 		if i == maxEgressLogLines {
 			break
