@@ -10,7 +10,10 @@ func TestCanonicalHostAliasForms(t *testing.T) {
 		"xn--bcher-kva.example": {"bücher.example", "BÜCHER.example", "xn--bcher-kva.example", "XN--BCHER-KVA.EXAMPLE", "bücher.example."},
 		"192.0.2.1": {"192.0.2.1", "::ffff:192.0.2.1", "[::ffff:192.0.2.1]", "::ffff:c000:201", "0xc0000201", "3221225985",
 			"0300.0.2.1", "192.0.513", "0xC0.0.2.1"},
-		"127.0.0.1":   {"127.0.0.1", "2130706433", "0x7f000001", "0177.0.0.1", "127.1", "0x7f.1"},
+		"127.0.0.1": {"127.0.0.1", "2130706433", "0x7f000001", "0177.0.0.1", "127.1", "0x7f.1",
+			// Full-width digits, letters and dots, which a resolver maps to
+			// their ASCII forms before it reads the address.
+			"0x7f．0．0．1", "１２７．０．０．１", "127。0。0。1", "２１３０７０６４３３"},
 		"2001:db8::1": {"2001:db8::1", "2001:DB8::1", "2001:0db8:0000:0000:0000:0000:0000:0001", "[2001:db8::1]", "2001:db8:0:0::1", "2001:db8::1%eth0"},
 	}
 	for want, forms := range groups {

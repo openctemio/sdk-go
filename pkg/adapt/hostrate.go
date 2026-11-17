@@ -51,6 +51,16 @@ import (
 // it, it kept pushing back at the floor, or it blocked the scan) is a
 // coverage gap: the task completes and reports it (Gaps), it is not read
 // as "no findings".
+//
+// The address names are reached at (AcquireAddr, ReportAddr) has a rate and
+// nothing else. One address commonly serves many unrelated sites (a CDN
+// edge, shared hosting, an ingress), and what one of them answers says
+// nothing about the others: push-back, a block or challenge page, a
+// Retry-After and failed connections reported for an address lower that
+// address's rate (never below the floor, and it recovers on clean windows
+// like any rate) and do nothing more. They open no breaker, start no
+// cooldown, hold no request and make no gap. Breakers, cooldowns and
+// Retry-After holds exist per host name only.
 type HostRate struct {
 	b       TargetRateBounds
 	ceiling float64
@@ -193,6 +203,12 @@ const (
 	GapProxyUnavailable = "proxy_unavailable"
 )
 
+// GapDetailHostBusy is the detail of the GapRateFloor gap of a host one of
+// whose connections was refused because every connection slot of the host
+// (or of the address it is reached at) stayed in use for the whole wait: a
+// request of the tool never left, so the host's coverage is incomplete.
+const GapDetailHostBusy = "a connection was refused: every connection slot of the host's budget stayed in use"
+
 // Evidence that opened a host's breaker (HostStat.OpenedBy).
 const (
 	// EvidenceToolHTTP: push-back or a block the forwarder read on the
@@ -224,6 +240,12 @@ type Gap struct {
 	// Reason "breaker_open".
 	Cause string `json:"cause,omitempty"`
 	Cert  string `json:"cert,omitempty"`
+	// Observed marks a throttled gap that is an observation only: the
+	// task's canary was answered with rate limits (429, 503) on a host
+	// whose connections nobody reads, the host's breaker stayed closed and
+	// the scan went on at a lower rate. What the tool was answered there
+	// may have been the limit, not the application. Additive.
+	Observed bool `json:"observed,omitempty"`
 }
 
 // Gap causes: what a recheck of a host the breaker gave up found.
@@ -329,6 +351,9 @@ type HostStat struct {
 	Resets            int `json:"resets,omitempty"`
 	Timeouts          int `json:"timeouts,omitempty"`
 	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
+	// CanaryPushback counts the rate-limit answers (429, 503, a vendor's
+	// rate-limit page) the task's canary got from the host.
+	CanaryPushback int `json:"canary_pushback,omitempty"`
 	// OpenedBy is the evidence that last opened the host's breaker (an
 	// Evidence value; "": it never opened).
 	OpenedBy string `json:"opened_by,omitempty"`
@@ -395,9 +420,8 @@ type hostState struct {
 	congRun  int
 	lastCong time.Time
 	// alias: the state is the address some of the task's names are reached
-	// at, and no target names it as a host (AcquireAddr, ReportAddr). Its
-	// rate and breaker hold every name that is dialed there; its gaps are
-	// reported on those names.
+	// at, and no target names it as a host (AcquireAddr, ReportAddr). Only
+	// its rate is used (addrSignal): it has no breaker, hold or gap.
 	alias bool
 	// probeRun counts the canary's push-back signals with no ordinary
 	// answer to the canary between them; lastProbePush is when the last one
@@ -407,6 +431,11 @@ type hostState struct {
 	lastProbePush time.Time
 	probeGap      string
 	probeServed   bool
+	// probeLimits counts the canary's rate-limit answers (429, 503) and
+	// limitRun those in a row with no ordinary answer between them;
+	// observed: such a run made the host a throttled gap (observeThrottle).
+	probeLimits, limitRun int
+	observed              bool
 	// connFails counts failures of the tool's own connections no further
 	// apart than CorroborateWindow; lastConnFail is when the last one came.
 	connFails    int
@@ -447,6 +476,7 @@ func (h *hostState) throttleDetail() string {
 	add("503", h.n503)
 	add("resets", h.nReset)
 	add("timeouts", h.nTimeout)
+	add("canary_pushback", h.probeLimits)
 	if h.maxRetryAfter > 0 {
 		parts = append(parts, "retry_after="+h.maxRetryAfter.Round(time.Second).String())
 	}
@@ -519,16 +549,39 @@ func (c *HostRate) newState(host string, now time.Time) *hostState {
 // by ctx. It returns ErrHostUnavailable when the host's breaker is open or
 // the host asked to wait longer than TargetRate.HoldMax.
 func (c *HostRate) Acquire(ctx context.Context, host string) error {
-	return c.acquire(ctx, host, false)
+	return c.acquire(ctx, host)
 }
 
-// AcquireAddr is Acquire for the address a host is dialed at (addr: the
-// address in canonical form, CanonicalHost): every name of the task that is
-// reached at one address shares that address's rate and breaker, besides
-// its own. A caller acquires the name first, then the address; for a host
-// that is itself that address the two are one state and one call is enough.
+// AcquireAddr waits for the rate of the address a host is dialed at (addr:
+// the address in canonical form, CanonicalHost): every name of the task
+// that is reached at one address shares that address's rate, besides its
+// own. Only the rate: it never refuses a connection. An address has no
+// breaker, no Retry-After hold and no cooldown, also when a target names
+// that address as a host and that host's own breaker is open (the names
+// reached there are other sites). A caller acquires the name first, then
+// the address; for a host that is itself that address the two are one
+// state and one call is enough. The error is the context's.
 func (c *HostRate) AcquireAddr(ctx context.Context, addr string) error {
-	return c.acquire(ctx, addr, true)
+	c.mu.Lock()
+	now := c.now()
+	h := c.stateOf(addr, now, true)
+	var ch []Change
+	c.advance(h, now, &ch)
+	lim := h.lim
+	shared, tenant := c.shared, c.tenant
+	c.mu.Unlock()
+	c.emit(ch)
+	if err := lim.Wait(ctx); err != nil {
+		return err
+	}
+	if shared != nil {
+		// The tenant joins the address's sensor-wide rate. A cooldown or a
+		// Retry-After a host of that name set is that host's, not the
+		// address's: neither is read here.
+		shared.admit(tenant, addr, c.ceiling)
+		return shared.wait(ctx, tenant, addr)
+	}
+	return nil
 }
 
 // AcquireProbe asks whether the task's canary request to host may go now.
@@ -565,10 +618,10 @@ func (c *HostRate) AcquireProbe(_ context.Context, host string) error {
 	return nil
 }
 
-func (c *HostRate) acquire(ctx context.Context, host string, alias bool) error {
+func (c *HostRate) acquire(ctx context.Context, host string) error {
 	c.mu.Lock()
 	now := c.now()
-	h := c.stateOf(host, now, alias)
+	h := c.state(host, now)
 	var ch []Change
 	c.advance(h, now, &ch)
 	switch h.brk {
@@ -647,8 +700,57 @@ func (c *HostRate) Report(host string, e Event) { c.report(host, e, false) }
 
 // ReportAddr feeds one signal to the state of the address a host was
 // dialed at (AcquireAddr): what a host answered on one of its names slows
-// every name of the task that is reached at the same address.
+// every name of the task that is reached at the same address, and does
+// nothing else to them (addrSignal).
 func (c *HostRate) ReportAddr(addr string, e Event) { c.report(addr, e, true) }
+
+// addrSignal handles a signal reported for an address (ReportAddr), from
+// the tool's connections or from the canary. Health counts toward the
+// address's clean window; push-back (429, 503, a vendor's page, a
+// Retry-After), a block and a failed connection lower the address's rate,
+// at most once per window and never below the floor. A reset of one of the
+// tool's connections at an address that accepted connections refuses one
+// request, as it does for a host (resetRefusal): it is counted and does
+// not lower the rate. Nothing here opens a breaker, sets a hold, starts a
+// cooldown or makes a gap: the names of one address are separate sites,
+// and one of them must not be able to stop the others. Called with c.mu
+// held.
+func (c *HostRate) addrSignal(h *hostState, now time.Time, e Event, ch *[]Change) {
+	slow := func(reason string) {
+		h.bad++
+		c.lower(h, now, reason, ch)
+		if c.shared != nil {
+			c.shared.congested(c.tenant, h.name, 0)
+		}
+	}
+	switch e.Signal {
+	case Connected:
+		h.oks++
+		h.connected = true
+	case Answered:
+		h.oks++
+		h.answered = true
+		if c.shared != nil {
+			c.shared.healthy(c.tenant, h.name)
+		}
+	case Congested:
+		h.count(e.Reason, min(e.RetryAfter, c.b.RetryAfterMax))
+		slow(e.Reason)
+	case Forbidden:
+		// A bare 403 of the tool's is an ordinary answer about one path; a
+		// vendor's block or challenge page, and a 403 to the canary, slow
+		// the address.
+		if e.Edge.State.Stops() || e.Probe {
+			slow(ReasonBlocked)
+		}
+	case Failed:
+		h.count(e.Reason, 0)
+		if e.Reason == ReasonReset && !e.Probe && (h.answered || h.connected) {
+			return
+		}
+		slow(e.Reason)
+	}
+}
 
 func (c *HostRate) report(host string, e Event, alias bool) {
 	c.mu.Lock()
@@ -656,6 +758,12 @@ func (c *HostRate) report(host string, e Event, alias bool) {
 	h := c.stateOf(host, now, alias)
 	var ch []Change
 	c.advance(h, now, &ch)
+	if alias {
+		c.addrSignal(h, now, e, &ch)
+		c.mu.Unlock()
+		c.emit(ch)
+		return
+	}
 	if e.Probe {
 		c.probeSignal(h, now, e, &ch)
 		c.mu.Unlock()
@@ -780,7 +888,7 @@ func (c *HostRate) probeSignal(h *hostState, now time.Time, e Event, ch *[]Chang
 	switch e.Signal {
 	case Answered:
 		h.oks++
-		h.probeRun, h.probeServed = 0, true
+		h.probeRun, h.limitRun, h.probeServed = 0, 0, true
 		if h.brk == halfOpen || (h.brk == open && !now.Before(h.openUntil)) {
 			// The open time is over and the host answers: the breaker
 			// closes, as it does on an answer to the tool's own probe.
@@ -790,6 +898,7 @@ func (c *HostRate) probeSignal(h *hostState, now time.Time, e Event, ch *[]Chang
 	case Congested:
 		h.count(e.Reason, min(e.RetryAfter, c.b.RetryAfterMax))
 		push(GapThrottled, e.Reason)
+		c.observeThrottle(h)
 	case Forbidden:
 		// A vendor's challenge or block page, or a 403 to a request the
 		// host served before.
@@ -805,6 +914,25 @@ func (c *HostRate) probeSignal(h *hostState, now time.Time, e Event, ch *[]Chang
 		}
 		push(GapThrottled, e.Reason)
 	}
+}
+
+// observeThrottle counts one rate-limit answer (429, 503, a vendor's
+// rate-limit page) to the canary. ObservedRun of them with no ordinary
+// answer to the canary between them make the host a throttled gap that is
+// an observation (Gap.Observed): the host limits requests on connections
+// nobody reads, so what the tool was answered there may be the limit and
+// not the application, and the result must say so. Nothing else follows
+// from it: the breaker stays as it is, no connection is refused or held,
+// and the scan of the host goes on at its lowered rate. Called with c.mu
+// held.
+func (c *HostRate) observeThrottle(h *hostState) {
+	h.probeLimits++
+	h.limitRun++
+	if h.limitRun < c.b.ObservedRun || h.observed {
+		return
+	}
+	h.observed = true
+	c.setGap(h, GapThrottled, "")
 }
 
 // corroborate opens the host's breaker when the canary's push-back and
@@ -1220,7 +1348,7 @@ func (c *HostRate) Summary() Summary {
 				s.HostStats = append(s.HostStats, HostStat{Host: h.name, Rate: h.rate, Min: h.min,
 					Backoffs: h.backoffs, CircuitOpens: h.circuitOpens, HTTP429: h.n429, HTTP503: h.n503,
 					Resets: h.nReset, Timeouts: h.nTimeout, RetryAfterSeconds: int(h.maxRetryAfter / time.Second),
-					OpenedBy: h.openedBy, Address: h.alias})
+					CanaryPushback: h.probeLimits, OpenedBy: h.openedBy, Address: h.alias})
 			}
 		}
 		if h.gap != "" && !h.alias {
@@ -1231,7 +1359,8 @@ func (c *HostRate) Summary() Summary {
 					// The counts as they stand when the task ends.
 					detail = h.throttleDetail()
 				}
-				s.Gaps = append(s.Gaps, Gap{Host: h.name, Reason: h.gap, Detail: detail, Edge: h.gapEdge, Vendor: h.gapVendor, Cause: h.gapCause})
+				s.Gaps = append(s.Gaps, Gap{Host: h.name, Reason: h.gap, Detail: detail, Edge: h.gapEdge, Vendor: h.gapVendor, Cause: h.gapCause,
+					Observed: h.gap == GapThrottled && h.observed && h.circuitOpens == 0})
 			}
 		}
 	}

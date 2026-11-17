@@ -122,8 +122,12 @@ func TestCanaryPushbackSlowsAndNeverOpensTheBreaker(t *testing.T) {
 	s := &scripted{answers: []canaryAnswer{{status: 200}, {status: 429, header: map[string]string{"Retry-After": "300"}}}}
 	runCanary(t, rate, s, func() bool { return s.count() >= 1+6*TargetRate.ThrottleRun })
 	sum := rate.Summary()
-	if sum.CircuitOpens != 0 || sum.GapsTotal != 0 {
-		t.Fatalf("the canary alone opened the breaker or made a gap: %+v", sum)
+	if sum.CircuitOpens != 0 {
+		t.Fatalf("the canary alone opened the breaker: %+v", sum)
+	}
+	// Its rate limits are reported as an observation that stops nothing.
+	if sum.GapsTotal != 1 || sum.Gaps[0].Reason != GapThrottled || !sum.Gaps[0].Observed {
+		t.Fatalf("the canary's rate limits are not an observed throttle: %+v", sum.Gaps)
 	}
 	if sum.Backoffs == 0 || sum.Min >= 50 {
 		t.Fatalf("the rate was not lowered: %+v", sum)

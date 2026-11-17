@@ -329,6 +329,12 @@ func containsByte(b []byte, v byte) bool {
 func (f *Forwarder) pipe(ctx context.Context, c net.Conn, br *bufio.Reader, up net.Conn, rec *Record) {
 	var out, in int64
 	pr := peerOfRecord(rec)
+	// The tunnel's connection slots count a request in flight: they are
+	// given back while the tunnel is quiet after the host's answer and
+	// taken again before the next bytes of the client are passed on
+	// (hostbudget.go).
+	sl, act := slotsOf(up), &tunnelActivity{}
+	act.touch(false)
 	meter := newTunnelMeter(up, func(answered bool) error {
 		if answered {
 			// Bytes came back since the request before: the host is alive
@@ -337,15 +343,25 @@ func (f *Forwarder) pipe(ctx context.Context, c net.Conn, br *bufio.Reader, up n
 		}
 		return f.acquire(ctx, pr)
 	})
+	if sl != nil && f.limits.PerHostConns > 0 && f.limits.SlotIdle > 0 {
+		stopIdle := make(chan struct{})
+		defer close(stopIdle)
+		go sl.watchIdle(act, f.limits.SlotIdle/2, func() time.Duration { return f.slotIdleFor(meter) }, stopIdle)
+	}
 	done := make(chan struct{})
 	var meterErr error
 	go func() {
 		defer close(done)
-		out, meterErr = io.Copy(meter, br)
+		out, meterErr = io.Copy(meter, slotReader{r: br, act: act, resume: func() error { return sl.resume(ctx) }})
 		if meterErr == nil {
 			meterErr = meter.Flush()
 		}
-		if errors.Is(meterErr, errTunnelLifetime) || errors.Is(meterErr, adapt.ErrHostUnavailable) || errors.Is(meterErr, context.Canceled) || errors.Is(meterErr, context.DeadlineExceeded) {
+		if errors.Is(meterErr, ErrHostBusy) {
+			// No slot came free for the tunnel's next request: it is not
+			// sent, and that part of the host is not scanned.
+			f.busyGap(pr.host)
+		}
+		if errors.Is(meterErr, errTunnelLifetime) || errors.Is(meterErr, ErrHostBusy) || errors.Is(meterErr, adapt.ErrHostUnavailable) || errors.Is(meterErr, context.Canceled) || errors.Is(meterErr, context.DeadlineExceeded) {
 			// The tunnel carries no further request: both sides end, before
 			// a byte of that request reached the host.
 			_ = c.Close()
@@ -356,7 +372,7 @@ func (f *Forwarder) pipe(ctx context.Context, c net.Conn, br *bufio.Reader, up n
 		closeWrite(up)
 	}()
 	ur := &errReader{r: up}
-	in, _ = io.Copy(c, spokeReader{r: ur, m: meter})
+	in, _ = io.Copy(c, spokeReader{r: ur, m: meter, act: act})
 	if ur.err != nil {
 		// The host side broke (reset, or cut on the idle bound): nothing
 		// the client sends can reach it any more, so the client side is

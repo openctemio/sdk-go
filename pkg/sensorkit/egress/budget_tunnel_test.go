@@ -303,7 +303,8 @@ func TestCanaryPushbackOnAnAliasFormSlowsTheToolsConnections(t *testing.T) {
 // SECURITY: a target that answers only the recognizable canary with 429
 // (and a long Retry-After) and serves the tool's requests does not end its
 // own scan: the scan is slowed, every request of the tool arrives, no
-// connection is refused, no breaker opens and the host is no coverage gap.
+// connection is refused and no breaker opens. The rate limits the canary
+// was answered with are reported as an observed throttle of the host.
 func TestCanaryOnlyPushbackSlowsAndTheScanCompletes(t *testing.T) {
 	quick(t)
 	b := adapt.DefaultBudget()
@@ -344,8 +345,11 @@ func TestCanaryOnlyPushbackSlowsAndTheScanCompletes(t *testing.T) {
 	if total != requests || failed.Load() != 0 {
 		t.Fatalf("the scan did not complete: %d of %d requests arrived, %d failed", total, requests, failed.Load())
 	}
-	if s.CircuitOpens != 0 || s.GapsTotal != 0 || s.Unreachable != 0 {
-		t.Fatalf("the canary alone opened a breaker or made a gap: %+v", s)
+	if s.CircuitOpens != 0 || s.Unreachable != 0 {
+		t.Fatalf("the canary alone opened a breaker: %+v", s)
+	}
+	if s.GapsTotal != 1 || s.Gaps[0].Reason != adapt.GapThrottled || !s.Gaps[0].Observed {
+		t.Fatalf("the canary's rate limits are not an observed throttle: %+v", s.Gaps)
 	}
 	for _, r := range f.Refusals() {
 		t.Fatalf("a connection was refused: %+v", r)

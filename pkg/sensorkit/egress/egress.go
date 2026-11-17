@@ -153,8 +153,14 @@ type Limits struct {
 	// address, may be open at once (0: no bound besides MaxConns): the host
 	// budget's requests in flight (adapt.HostBudget.Inflight). A connection
 	// over it waits for one to end, at most DialTimeout, and is then
-	// refused.
+	// refused, and the host is reported as a coverage gap. A kept-alive
+	// connection counts while a request is in flight on it (SlotIdle).
 	PerHostConns int
+	// SlotIdle is how long a kept-alive connection may be quiet after the
+	// host's answer before it gives its connection slots back until its
+	// next request (0: DefaultSlotIdle; negative: it keeps them until it
+	// closes).
+	SlotIdle time.Duration
 	// MaxConns is how many connections may be open at once (0: 256).
 	MaxConns int
 	// DialTimeout bounds one upstream dial (0: 15s).
@@ -191,6 +197,12 @@ func (l Limits) withDefaults() Limits {
 		l.UpstreamIdle = DefaultUpstreamIdle
 	case l.UpstreamIdle < 0:
 		l.UpstreamIdle = 0
+	}
+	switch {
+	case l.SlotIdle == 0:
+		l.SlotIdle = DefaultSlotIdle
+	case l.SlotIdle < 0:
+		l.SlotIdle = 0
 	}
 	if l.MaxRecords <= 0 {
 		l.MaxRecords = 10000
@@ -542,6 +554,9 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 		}
 	}
 	if err != nil {
+		if errors.Is(err, ErrHostBusy) {
+			f.busyGap(key)
+		}
 		rec.Verdict, rec.Reason = Refused, "rate: "+err.Error()
 		f.record(*rec)
 		return nil, nil, err
@@ -553,7 +568,7 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 	}
 	var lastErr error
 	targetErr := false // lastErr is about the target, not about an upstream proxy
-	rateErr := false   // lastErr is the address's rate or slots refusing the connection
+	rateErr := false   // lastErr is the address's slots refusing the connection, or the wait for its rate ending
 	dctxBase := WithTargetHost(ctx, host)
 	if _, ok := f.names[normName(host)]; ok {
 		dctxBase = WithScopedName(dctxBase)
@@ -562,8 +577,10 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 	for _, a := range addrs {
 		// The address's own slot and rate: every name of the task that is
 		// dialed at this address shares them (hostbudget.go). For a host
-		// that is this address they are the host's, taken above.
+		// that is this address they are the host's, taken above. The
+		// address only paces and bounds: it has no breaker to refuse with.
 		releaseAddr := func() {}
+		slotAddr := ""
 		if ak := addrKey(a); !canary && ak != key {
 			var aerr error
 			if releaseAddr, aerr = f.hostSlot(ctx, ak); aerr == nil {
@@ -572,12 +589,10 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 				}
 			}
 			if aerr != nil {
-				if errors.Is(aerr, adapt.ErrHostUnavailable) {
-					f.addrGap(peer{host: key, addr: ak})
-				}
 				lastErr, targetErr, pathErr, rateErr = aerr, false, nil, true
 				continue
 			}
+			slotAddr = ak
 		}
 		rateErr = false
 		dctx, cancel := context.WithTimeout(dctxBase, f.limits.DialTimeout)
@@ -610,7 +625,13 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 			}
 			// The connection never outlives the forwarder's context, and a
 			// silent host cannot hold it open (conn_bound.go).
-			return boundRelease(ctx, c, f.limits.UpstreamIdle, func() { releaseAddr(); release() }), rec, nil
+			if canary {
+				return bound(ctx, c, f.limits.UpstreamIdle), rec, nil
+			}
+			sl := &connSlots{f: f, host: key, addr: slotAddr, held: true, relHost: release, relAddr: releaseAddr}
+			bc := boundRelease(ctx, c, f.limits.UpstreamIdle, sl.drop)
+			bc.slots = sl
+			return bc, rec, nil
 		}
 		releaseAddr()
 		lastErr, targetErr, pathErr = err, !pathFault, nil
@@ -625,6 +646,9 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 	// is paced on what the target did only.
 	release()
 	if rateErr {
+		if errors.Is(lastErr, ErrHostBusy) {
+			f.busyGap(key)
+		}
 		rec.Verdict, rec.Reason = Refused, "rate: "+lastErr.Error()
 		f.record(*rec)
 		return nil, nil, lastErr

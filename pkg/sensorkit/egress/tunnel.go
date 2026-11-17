@@ -40,7 +40,15 @@ import (
 //     and nuclei, httpx and katana are built on it) is then counted once
 //     per request or more (a window update or a request body is a record
 //     too); the connection's first record, with the client's settings, is
-//     the connection's own.
+//     the connection's own. A window update cannot be told from a request
+//     by the record's size: a window update frame is 13 bytes, and so is
+//     the frame of a request whose header fields are all in the
+//     connection's compression table (every request after the first to
+//     the same path), so a size under which records were free would let
+//     such requests through uncounted. Window updates are therefore
+//     charged: a long HTTP/2 download takes more tokens than its one
+//     request (it is slower, never faster), and past the tunnel's lifetime
+//     its next window update ends the tunnel and cuts the download.
 //   - On a tunnel that is not TLS, bytes from the client that follow bytes
 //     from the host start a new request, counted the same way.
 //   - Bytes: a token also covers at most tunnelTurnBytes of client data;
@@ -152,6 +160,11 @@ type tunnelMeter struct {
 	bytes   int
 	// charged counts the tokens taken (tests).
 	charged int
+	// turned: a further request followed bytes from the host on a tunnel
+	// whose client does not multiplex, so the client and the host take
+	// turns (HTTP/1.1): from then on, bytes from the host after a request
+	// are its answer (slotIdleFor).
+	turned atomic.Bool
 }
 
 // tinyRecord is the longest application-data record that cannot hold a
@@ -179,6 +192,9 @@ func (m *tunnelMeter) request(n int) error {
 	if !m.started {
 		m.started, m.bytes = true, n
 		return nil
+	}
+	if spoke && !m.h2 {
+		m.turned.Store(true)
 	}
 	tokens := 1
 	if m.h2 {
@@ -328,16 +344,43 @@ func (m *tunnelMeter) flushHeader() error {
 // of the client's side).
 func (m *tunnelMeter) Flush() error { return m.flushHeader() }
 
-// spokeReader marks on the meter that the host sent bytes.
+// spokeReader marks on the meter (and on the tunnel's activity, when set)
+// that the host sent bytes.
 type spokeReader struct {
-	r io.Reader
-	m *tunnelMeter
+	r   io.Reader
+	m   *tunnelMeter
+	act *tunnelActivity
 }
 
 func (s spokeReader) Read(p []byte) (int, error) {
 	n, err := s.r.Read(p)
 	if n > 0 {
 		s.m.hostSpoke.Store(true)
+		if s.act != nil {
+			s.act.touch(true)
+		}
+	}
+	return n, err
+}
+
+// slotReader reads what the client sends on a tunnel: it marks the
+// tunnel's activity and, before the bytes are passed on, takes the
+// tunnel's connection slots again when they were given back while it was
+// quiet (connSlots). An error of resume ends the tunnel with the bytes
+// unsent.
+type slotReader struct {
+	r      io.Reader
+	act    *tunnelActivity
+	resume func() error
+}
+
+func (s slotReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if n > 0 {
+		s.act.touch(false)
+		if rerr := s.resume(); rerr != nil {
+			return 0, rerr
+		}
 	}
 	return n, err
 }

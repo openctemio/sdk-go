@@ -290,6 +290,10 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 		return resp, nil
 	}
 	host := peerOfRecord(rec)
+	// The connection's slots count its requests in flight: they are given
+	// back when an answer was passed on and taken again for the next
+	// request (hostbudget.go).
+	sl := slotsOf(up)
 	for n := 0; ; n++ {
 		lr.N = maxHeaderBytes
 		_ = c.SetReadDeadline(time.Now().Add(f.limits.HandshakeTimeout))
@@ -315,7 +319,7 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 		// The connection's first request was paced when it was dialed;
 		// each further one on it waits for the host's rate too.
 		if n > 0 {
-			if err := f.acquire(ctx, host); err != nil {
+			if err := f.nextRequest(ctx, sl, host); err != nil {
 				writeHTTPStatus(cw, http.StatusServiceUnavailable, err)
 				return
 			}
@@ -342,6 +346,7 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 		if werr != nil || resp.Close || req.Close {
 			return
 		}
+		f.answered(sl)
 	}
 }
 

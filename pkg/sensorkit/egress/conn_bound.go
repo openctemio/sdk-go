@@ -39,6 +39,9 @@ type boundedConn struct {
 	// context ends (the forwarder frees the host's connection slot).
 	onClose func()
 	closed  sync.Once
+	// slots are the host's connection slots the connection holds (nil:
+	// none): onClose drops them.
+	slots *connSlots
 }
 
 // release runs onClose once.

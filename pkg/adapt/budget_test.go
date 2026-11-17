@@ -363,8 +363,9 @@ func TestThrottleBreakerHonorsRetryAfterAndRecovers(t *testing.T) {
 // SECURITY: a host that answers only the canary with push-back is slowed
 // and never stopped: whatever the canary is answered (429 with a long
 // Retry-After, 503, a refusal, resets), the breaker stays closed, the
-// tool's connections are never refused or held, the host is no coverage
-// gap and no cooldown starts.
+// tool's connections are never refused or held and no cooldown starts.
+// Rate limits (429, 503) are reported as an observed throttle (a gap that
+// stops nothing); a refusal or resets of the canary alone are no gap.
 func TestCanaryPushbackAloneNeverOpensTheBreaker(t *testing.T) {
 	signals := map[string]Event{
 		"429 with a long Retry-After": {Signal: Congested, Reason: ReasonHTTP429, RetryAfter: 5 * time.Minute, Probe: true},
@@ -387,8 +388,15 @@ func TestCanaryPushbackAloneNeverOpensTheBreaker(t *testing.T) {
 				c.Report(host, e)
 			}
 			s := c.Summary()
-			if s.CircuitOpens != 0 || s.GapsTotal != 0 || s.Unreachable != 0 {
-				t.Fatalf("canary push-back alone opened the breaker or made a gap: %+v", s)
+			if s.CircuitOpens != 0 || s.Unreachable != 0 {
+				t.Fatalf("canary push-back alone opened the breaker: %+v", s)
+			}
+			if e.Signal == Congested {
+				if s.GapsTotal != 1 || s.Gaps[0].Reason != GapThrottled || !s.Gaps[0].Observed {
+					t.Fatalf("the canary's rate limits are not an observed throttle: %+v", s.Gaps)
+				}
+			} else if s.GapsTotal != 0 {
+				t.Fatalf("canary push-back alone made a gap: %+v", s.Gaps)
 			}
 			if s.Backoffs == 0 || c.Rate(host) >= before || c.Rate(host) != s.Floor {
 				t.Fatalf("the rate was not lowered to the floor: before %.3g, now %.3g, %+v", before, c.Rate(host), s)
@@ -507,10 +515,11 @@ func TestToolEvidenceIsRecorded(t *testing.T) {
 	}
 }
 
-// Names that are reached at one address share that address's state: what
-// one name is answered slows the other, an open breaker of the address
-// refuses both, and the address is not listed as a host or a gap of its
-// own.
+// Names that are reached at one address share that address's rate: what
+// one name is answered slows the address for both, and only slows it. The
+// name that was pushed back opens its own breaker; the other name and the
+// address stay reachable, and the address is not listed as a host or a gap
+// of its own.
 func TestAddressStateIsSharedByItsNames(t *testing.T) {
 	c, clk := testCtl(t, 20)
 	addr := "192.0.2.10"
@@ -522,32 +531,41 @@ func TestAddressStateIsSharedByItsNames(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	before := c.Rate(addr)
 	for range TargetRate.ThrottleRun {
-		*clk = clk.Add(TargetRate.ThrottleSpacing)
+		*clk = clk.Add(TargetRate.Window)
 		c.ReportHTTP("a.example.com", 429, "")
 		c.ReportAddrResponse(addr, 429, "", edgeprotect.Verdict{})
 	}
-	if err := c.AcquireAddr(t.Context(), addr); !errors.Is(err, ErrHostUnavailable) {
-		t.Fatalf("the address's breaker is not open: %v", err)
+	if err := c.Acquire(t.Context(), "a.example.com"); !errors.Is(err, ErrHostUnavailable) {
+		t.Fatalf("the breaker of the name that was pushed back is not open: %v", err)
 	}
-	if err := c.Acquire(t.Context(), "b.example.com"); err != nil {
+	if got := c.Rate(addr); got >= before {
+		t.Fatalf("the address was not slowed: %.3g, before %.3g", got, before)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	if err := c.AcquireAddr(ctx, addr); err != nil {
+		t.Fatalf("the address refused a connection: %v", err)
+	}
+	if err := c.Acquire(ctx, "b.example.com"); err != nil {
 		t.Fatalf("b's own state should be healthy: %v", err)
 	}
 	s := c.Summary()
 	if s.Hosts != 2 || s.GapsTotal != 1 || s.Gaps[0].Host != "a.example.com" {
 		t.Fatalf("the address shows as a host or a gap: %+v", s)
 	}
-	var stat *HostStat
+	stat := (*HostStat)(nil)
 	for i := range s.HostStats {
 		if s.HostStats[i].Host == addr {
 			stat = &s.HostStats[i]
 		}
 	}
-	if stat == nil || !stat.Address || stat.CircuitOpens != 1 {
+	if stat == nil || !stat.Address || stat.CircuitOpens != 0 || stat.Backoffs == 0 {
 		t.Fatalf("host stats %+v", s.HostStats)
 	}
 	// A target that names the address is a host.
-	if err := c.Acquire(t.Context(), addr); !errors.Is(err, ErrHostUnavailable) {
+	if err := c.Acquire(ctx, addr); err != nil {
 		t.Fatal(err)
 	}
 	if s := c.Summary(); s.Hosts != 3 {

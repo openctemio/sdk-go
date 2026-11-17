@@ -265,6 +265,20 @@ func (s *SensorRate) answered(tenant, host string) {
 	}
 }
 
+// healthy counts a healthy answer toward the clean window of host's rate
+// and touches nothing else (an address's signal: HostRate.addrSignal).
+func (s *SensorRate) healthy(tenant, host string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	h, _ := s.share(tenant, host, now, false)
+	if h == nil {
+		return
+	}
+	s.advance(h, now)
+	h.oks++
+}
+
 // congested records a 429 or 503 of host (with its Retry-After, zero when
 // none): the host's rate comes down for every tenant, the Retry-After holds
 // every task of this tenant.

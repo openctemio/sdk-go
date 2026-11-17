@@ -572,9 +572,14 @@ func TestHTTPSPushbackThroughTheCanarySlowsTheHost(t *testing.T) {
 	if s.Backoffs < 2 || s.Min > float64(b.RPS)/4 {
 		t.Fatalf("no back-off through the canary: %+v", s)
 	}
-	// SECURITY: the canary alone opens no breaker and makes no gap.
-	if s.CircuitOpens != 0 || s.GapsTotal != 0 {
-		t.Fatalf("canary push-back alone opened a breaker or made a gap: %+v", s)
+	// SECURITY: the canary alone opens no breaker. The rate limits it was
+	// answered with are reported as an observed throttle, which stops
+	// nothing.
+	if s.CircuitOpens != 0 {
+		t.Fatalf("canary push-back alone opened a breaker: %+v", s)
+	}
+	if s.GapsTotal != 1 || s.Gaps[0].Host != "example.com" || s.Gaps[0].Reason != adapt.GapThrottled || !s.Gaps[0].Observed {
+		t.Fatalf("the throttling seen through the canary is not reported as an observed throttle: %+v", s.Gaps)
 	}
 	for _, r := range f.Refusals() {
 		if strings.HasPrefix(r.Reason, "rate:") {

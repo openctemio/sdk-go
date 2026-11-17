@@ -72,6 +72,11 @@ type TargetRateBounds struct {
 	// canary's push-back alone never does.
 	CorroborateFailures int
 	CorroborateWindow   time.Duration
+	// ObservedRun rate-limit answers (429, 503, a vendor's rate-limit page)
+	// to the task's canary with no ordinary answer between them make the
+	// host a throttled gap that is an observation (Gap.Observed): reported,
+	// while the breaker stays closed and the scan of the host goes on.
+	ObservedRun int
 	// MaxHosts bounds the hosts one task tracks; further hosts share one
 	// conservative state.
 	MaxHosts int
@@ -119,6 +124,9 @@ type TargetRateBounds struct {
 //     that open a breaker without the canary; half a minute covers ten of
 //     the canary's requests after push-back (one every three seconds), so
 //     the two kinds of evidence are about the same stretch of the scan.
+//   - ObservedRun 2: one rate-limit answer may be a blip; two canary
+//     requests in a row (three seconds apart) answered with a limit say the
+//     host is limiting the scan while its findings are collected.
 //   - ToolHostErrors 30: a tool's own breaker counts every failed request
 //     of every concurrent check (not consecutive failures), so it needs a
 //     larger budget than BreakerFailures × BreakerMaxTrips (15); 30 lets a
@@ -144,6 +152,7 @@ var TargetRate = TargetRateBounds{
 	ThrottleSpacing:     time.Second,
 	CorroborateFailures: 3,
 	CorroborateWindow:   30 * time.Second,
+	ObservedRun:         2,
 	MaxHosts:            65536,
 	MaxOpenPorts:        64,
 	MaxGaps:             100,

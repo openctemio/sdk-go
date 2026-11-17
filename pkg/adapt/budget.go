@@ -1,6 +1,9 @@
 package adapt
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // HostBudget is what one target host may get from one job, whatever tool
 // runs and however many of the job's targets name that host: requests per
@@ -244,6 +247,25 @@ func levelOf(rps, inflight int) string {
 // DefaultBudget is the budget of a job that carries none on a sensor whose
 // operator set nothing: Standard.
 func DefaultBudget() HostBudget { return ResolveBudget(DefaultPacing, nil, BudgetCeiling{}) }
+
+type budgetCtxKey struct{}
+
+// WithHostBudget returns ctx carrying the per-host budget of the command a
+// task runs for (core.DefaultCommandExecutor.HostBudget), for a path whose
+// function signature carries no scan options (a retest task). An invalid
+// budget is not put on it.
+func WithHostBudget(ctx context.Context, b HostBudget) context.Context {
+	if !b.Valid() {
+		return ctx
+	}
+	return context.WithValue(ctx, budgetCtxKey{}, b)
+}
+
+// HostBudgetFrom is the budget WithHostBudget put on ctx (false: none).
+func HostBudgetFrom(ctx context.Context) (HostBudget, bool) {
+	b, ok := ctx.Value(budgetCtxKey{}).(HostBudget)
+	return b, ok && b.Valid()
+}
 
 // Valid reports whether b names a budget (a zero HostBudget does not).
 func (b HostBudget) Valid() bool { return b.RPS > 0 && b.Inflight > 0 }

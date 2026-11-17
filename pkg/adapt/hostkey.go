@@ -59,7 +59,17 @@ func CanonicalHost(host string) string {
 		return a.String()
 	}
 	if ascii, err := idna.Lookup.ToASCII(h); err == nil && ascii != "" {
-		return strings.TrimSuffix(ascii, ".")
+		// The mapping turns full-width digits, letters and dots into their
+		// ASCII forms, as a resolver's does: what it yields may be an
+		// address (0x7f．0．0．1 is 127.0.0.1).
+		ascii = strings.TrimSuffix(ascii, ".")
+		if a, err := netip.ParseAddr(ascii); err == nil {
+			return a.Unmap().WithZone("").String()
+		}
+		if a, ok := atonAddr(ascii); ok {
+			return a.String()
+		}
+		return ascii
 	}
 	return h
 }
