@@ -165,6 +165,21 @@ type tunnelMeter struct {
 	// turns (HTTP/1.1): from then on, bytes from the host after a request
 	// are its answer (slotIdleFor).
 	turned atomic.Bool
+	// replied: a further request followed bytes from the host, whether or
+	// not the client multiplexes: the host has answered on this tunnel
+	// (answerSeen).
+	replied atomic.Bool
+}
+
+// answerSeen reports whether the forwarder can tell that the bytes the
+// host sent after the client's last request were an answer, and not only
+// the end of its TLS handshake: a TLS 1.3 server may send its session
+// tickets after the client's Finished, which travels with the tunnel's
+// first request. It can once a further request followed bytes from the
+// host (replied), and on a tunnel that is not TLS. It is read after the
+// client's side ended (pipe).
+func (m *tunnelMeter) answerSeen() bool {
+	return m.replied.Load() || m.mode == tunnelRaw
 }
 
 // tinyRecord is the longest application-data record that cannot hold a
@@ -193,8 +208,11 @@ func (m *tunnelMeter) request(n int) error {
 		m.started, m.bytes = true, n
 		return nil
 	}
-	if spoke && !m.h2 {
-		m.turned.Store(true)
+	if spoke {
+		m.replied.Store(true)
+		if !m.h2 {
+			m.turned.Store(true)
+		}
 	}
 	tokens := 1
 	if m.h2 {

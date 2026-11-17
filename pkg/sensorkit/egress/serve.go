@@ -86,6 +86,43 @@ func (f *Forwarder) ServeConn(ctx context.Context, c net.Conn) {
 	f.serveHTTP(ctx, c, br, lift)
 }
 
+// errClientLeft ends the wait of a connection whose client closed its side
+// before the forwarder answered its request.
+var errClientLeft = errors.New("egress: the client left while its connection waited")
+
+// dialFor dials host:port for the client c of a tunnel (CONNECT or SOCKS5),
+// whose request has been read from br: while the connection waits for its
+// slots and its rate, a watcher reads ahead on c, and the wait ends as soon
+// as the client closes its side (a tool gives up on a connection it waited
+// too long for, or drops one it dialed ahead once a kept-alive connection
+// came free). A tunnel's client sends nothing before the forwarder answers,
+// so the read ending in an error means it left. A connection whose client
+// left takes no slot, closes no other connection for one, opens no
+// connection to the target and makes no coverage gap: nobody is waiting for
+// it. Bytes the client sends early stop the watcher and stay in br for the
+// tunnel. A plain HTTP request is not watched: its client may close its
+// sending side once the request is sent and still wait for the answer.
+func (f *Forwarder) dialFor(ctx context.Context, c net.Conn, br *bufio.Reader, protocol, host string, port int) (net.Conn, *Record, error) {
+	wait, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	// The handshake bound does not apply to the wait: the read below only
+	// watches, and the wait is bounded by itself.
+	_ = c.SetReadDeadline(time.Time{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := br.Peek(1); err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
+			cancel(errClientLeft)
+		}
+	}()
+	up, rec, err := f.dialWait(ctx, wait, protocol, host, port)
+	// Stop the watcher (a read deadline in the past wakes it) before
+	// anything else reads from br; the caller lifts the deadline.
+	_ = c.SetReadDeadline(time.Unix(1, 0))
+	<-done
+	return up, rec, err
+}
+
 func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader, lift func()) {
 	req, err := http.ReadRequest(br)
 	if err != nil {
@@ -99,7 +136,7 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 			writeHTTPError(c, http.StatusBadRequest, "CONNECT needs host:port")
 			return
 		}
-		up, rec, err := f.dial(ctx, "connect", host, port)
+		up, rec, err := f.dialFor(ctx, c, br, "connect", host, port)
 		if err != nil {
 			writeHTTPError(c, statusOf(err), err.Error())
 			return
@@ -290,7 +327,7 @@ func (f *Forwarder) serveSOCKS5(ctx context.Context, c net.Conn, br *bufio.Reade
 		socksReply(c, repCmdUnsupp)
 		return
 	}
-	up, rec, err := f.dial(ctx, "socks5", host, port)
+	up, rec, err := f.dialFor(ctx, c, br, "socks5", host, port)
 	if err != nil {
 		if errors.Is(err, ErrRefused) {
 			socksReply(c, repNotAllowed)
@@ -386,13 +423,15 @@ func (f *Forwarder) pipe(ctx context.Context, c net.Conn, br *bufio.Reader, up n
 		// the host: how it ended says nothing about the host.
 		meterErr = errSlotEvicted
 	}
-	if evicted && meter.started && !meter.turned.Load() {
-		// The tunnel was closed, after UnsureSlotIdle of quiet, while the
-		// forwarder could not be sure the host's last bytes were the end of
-		// the answer (its first request, or a client that offered HTTP/2):
-		// the answer may have been cut, so part of the host may not have
-		// been scanned. The sensor's own bound did it: the gap is
-		// GapSlotsFull. A sure tunnel (its answer ended) leaves none.
+	if evicted && meter.started && !meter.answerSeen() {
+		// The tunnel was closed for another connection while a request may
+		// still have been outstanding: the host's bytes after the client's
+		// request may have been only the end of its TLS handshake (a TLS 1.3
+		// session ticket after the tunnel's first request), so the answer may
+		// not have started, and part of the host may not have been scanned.
+		// The sensor's own bound did it: the gap is GapSlotsFull. A tunnel
+		// whose last traffic was the host's answer leaves none, whether or
+		// not its client offered HTTP/2 (ordinary keep-alive reuse).
 		f.busyGap(pr.host)
 	}
 	if meterErr != nil {

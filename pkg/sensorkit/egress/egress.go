@@ -287,8 +287,10 @@ var ErrHostBusy = errors.New("egress: the host's connections in flight are at th
 // waiting. A tunnel that is quiet but unsure (UnsureSlotIdle) is not idle
 // yet: while one holds a slot of the pool when DialTimeout ends, the
 // connection keeps waiting, at most UnsureSlotIdle longer, for it to count
-// as idle and be closed. The returned func frees the slot (once). Without a
-// per-host bound it returns at once with no pool.
+// as idle and be closed; it also keeps waiting, briefly, while a
+// connection closed for a waiter is freeing its slot. The wait ends with
+// ctx (dialFor ends it when the client leaves). The returned func frees the
+// slot (once). Without a per-host bound it returns at once with no pool.
 func (f *Forwarder) hostSlot(ctx context.Context, host string) (func(), *slotPool, error) {
 	if f.limits.PerHostConns <= 0 {
 		return func() {}, nil, nil
@@ -318,14 +320,18 @@ func (f *Forwarder) hostSlot(ctx context.Context, host string) (func(), *slotPoo
 	pool.waiters++
 	victim := f.evictLocked(pool)
 	f.hostMu.Unlock()
+	waiting := true // under hostMu: this connection is counted in pool.waiters
 	defer func() {
 		f.hostMu.Lock()
-		pool.waiters--
+		if waiting {
+			pool.waiters--
+		}
 		f.hostMu.Unlock()
 	}()
 	victim.close()
 	t := time.NewTimer(f.limits.DialTimeout)
 	defer t.Stop()
+	poll := max(f.limits.SlotIdle, 10*time.Millisecond)
 	last := time.Now().Add(f.limits.DialTimeout + f.unsureIdle)
 	for {
 		select {
@@ -335,18 +341,37 @@ func (f *Forwarder) hostSlot(ctx context.Context, host string) (func(), *slotPoo
 			return nil, nil, ctx.Err()
 		case <-t.C:
 		}
-		f.hostMu.Lock()
-		pending := pool.pending > 0
-		f.hostMu.Unlock()
 		left := time.Until(last)
-		if !pending || left <= 0 {
-			return nil, nil, ErrHostBusy
+		f.hostMu.Lock()
+		switch {
+		case pool.closing > 0 && left > -poll:
+			// A connection was closed for a waiter and its slot is being
+			// freed: wait for it rather than refuse with a slot coming free.
+			f.hostMu.Unlock()
+			t.Reset(poll)
+			continue
+		case pool.pending > 0 && left > 0:
+			// An unsure tunnel holds a slot and is quiet: it counts as idle
+			// within UnsureSlotIdle, and is then closed for this connection
+			// (connSlots.park). Look again soon in case it carries a request
+			// meanwhile instead.
+			f.hostMu.Unlock()
+			t.Reset(min(left, poll))
+			continue
 		}
-		// An unsure tunnel holds a slot and is quiet: it counts as idle
-		// within UnsureSlotIdle, and is then closed for this connection
-		// (connSlots.park). Look again soon in case it carries a request
-		// meanwhile instead.
-		t.Reset(min(left, max(f.limits.SlotIdle, 10*time.Millisecond)))
+		// Refused, unless a slot came free just now. The waiter count drops
+		// in the same locked section, so no connection is closed later for
+		// a connection that is no longer waiting.
+		select {
+		case pool.ch <- struct{}{}:
+			f.hostMu.Unlock()
+			return pool.release(), pool, nil
+		default:
+		}
+		pool.waiters--
+		waiting = false
+		f.hostMu.Unlock()
+		return nil, nil, ErrHostBusy
 	}
 }
 
@@ -561,6 +586,14 @@ func (f *Forwarder) allowRate(ctx context.Context, host string) error {
 
 // dial checks, rate-limits and dials host:port; it records the attempt.
 func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (net.Conn, *Record, error) {
+	return f.dialWait(ctx, ctx, protocol, host, port)
+}
+
+// dialWait is dial whose waits for a connection slot and for the rate end
+// with wait as well as with ctx (dialFor: the client left). A wait that
+// wait ended opens no connection to the target and makes no coverage gap.
+// The connection itself lives on ctx.
+func (f *Forwarder) dialWait(ctx, wait context.Context, protocol, host string, port int) (net.Conn, *Record, error) {
 	rec := &Record{Time: time.Now().UTC(), Protocol: protocol, Host: host, Port: port}
 	canary := protocol == ProtocolCanary
 	target := f.Reach
@@ -591,19 +624,14 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 	release := func() {}
 	var hostPool *slotPool
 	if !canary {
-		if release, hostPool, err = f.hostSlot(ctx, key); err == nil {
-			if err = f.allowRate(ctx, key); err != nil {
+		if release, hostPool, err = f.hostSlot(wait, key); err == nil {
+			if err = f.allowRate(wait, key); err != nil {
 				release()
 			}
 		}
 	}
 	if err != nil {
-		if errors.Is(err, ErrHostBusy) {
-			f.busyGap(key)
-		}
-		rec.Verdict, rec.Reason = Refused, "rate: "+err.Error()
-		f.record(*rec)
-		return nil, nil, err
+		return nil, nil, f.waitEnded(wait, rec, key, err)
 	}
 	dial := f.Dial
 	if dial == nil {
@@ -627,15 +655,25 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 		var addrPool *slotPool
 		if ak := addrKey(a); !canary && ak != key {
 			var aerr error
-			if releaseAddr, addrPool, aerr = f.hostSlot(ctx, ak); aerr == nil {
-				if aerr = f.hostRate.AcquireAddr(ctx, ak); aerr != nil {
+			if releaseAddr, addrPool, aerr = f.hostSlot(wait, ak); aerr == nil {
+				if aerr = f.hostRate.AcquireAddr(wait, ak); aerr != nil {
 					releaseAddr()
 				}
 			}
 			if aerr != nil {
 				lastErr, targetErr, pathErr, rateErr = aerr, false, nil, true
+				if wait.Err() != nil {
+					break
+				}
 				continue
 			}
+		}
+		if wait.Err() != nil {
+			// The client left while this connection waited: nobody would
+			// use the connection, so none is opened.
+			releaseAddr()
+			lastErr, targetErr, pathErr, rateErr = context.Cause(wait), false, nil, true
+			break
 		}
 		rateErr = false
 		dctx, cancel := context.WithTimeout(dctxBase, f.limits.DialTimeout)
@@ -690,12 +728,7 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 	// is paced on what the target did only.
 	release()
 	if rateErr {
-		if errors.Is(lastErr, ErrHostBusy) {
-			f.busyGap(key)
-		}
-		rec.Verdict, rec.Reason = Refused, "rate: "+lastErr.Error()
-		f.record(*rec)
-		return nil, nil, lastErr
+		return nil, nil, f.waitEnded(wait, rec, key, lastErr)
 	}
 	if ctx.Err() == nil && targetErr {
 		f.hostRate.ReportDial(key, port, lastErr)
@@ -710,6 +743,23 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 	rec.Verdict, rec.Reason = Allowed, "dial failed: "+lastErr.Error()
 	f.record(*rec)
 	return nil, nil, lastErr
+}
+
+// waitEnded records a connection to host key that ended while it waited
+// for a slot or the rate, with err, and returns the error to give the
+// client. A connection refused for lack of a slot is a coverage gap of the
+// host; one whose client left (wait ended, ctx not) is none: nobody was
+// waiting for it.
+func (f *Forwarder) waitEnded(wait context.Context, rec *Record, key string, err error) error {
+	rec.Verdict, rec.Reason = Refused, "rate: "+err.Error()
+	if cause := context.Cause(wait); wait.Err() != nil && errors.Is(cause, errClientLeft) {
+		err = cause
+		rec.Reason = err.Error()
+	} else if errors.Is(err, ErrHostBusy) {
+		f.busyGap(key)
+	}
+	f.record(*rec)
+	return err
 }
 
 func (f *Forwarder) record(r Record) {
