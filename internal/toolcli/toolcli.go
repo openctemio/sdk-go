@@ -19,6 +19,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/conformance"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/toolhost"
 	"github.com/openctemio/sdk-go/pkg/tool"
@@ -232,7 +233,11 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	host := &toolhost.Host{Sensor: "openctem-cli", RuntimeName: "openctem-cli", ContentRoot: contentRoot}
-	out, err := host.RunManifest(ctx, m, task, toolhost.RunOptions{Trusted: true, Dir: filepath.Dir(path)})
+	// A tool that connects to its targets runs under the default per-host
+	// budget here, as on a sensor whose job carries none (the tool host
+	// refuses to start one without a budget).
+	budget := adapt.DefaultBudget()
+	out, err := host.RunManifest(ctx, m, task, toolhost.RunOptions{Trusted: true, Dir: filepath.Dir(path), HostBudget: &budget})
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return ExitFail

@@ -369,7 +369,7 @@ func TestInstalledToolGetsNoVendorEnvironment(t *testing.T) {
 		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}},
 	}
 	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "github.com/acme/app"}}}
-	out, err := testHost(t).RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "env-cli"}})
+	out, err := testHost(t).RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "env-cli"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func hostileRun(t *testing.T, mode string, m tool.Manifest, task tool.Task) *Out
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	out, err := testHost(t).RunManifest(ctx, m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": mode},
+	out, err := testHost(t).RunManifest(ctx, m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": mode},
 		Credentials: map[string]string{"api_key": "sk-declared-123", "db_password": "never-delivered"}})
 	if err != nil {
 		t.Fatal(err)
@@ -408,7 +408,7 @@ func hostileRun(t *testing.T, mode string, m tool.Manifest, task tool.Task) *Out
 
 func TestBuiltinRunsOutOfProcess(t *testing.T) {
 	task := tool.Task{ID: "task-1", Targets: []tool.Target{{Ref: "t1", Type: "domain_name", Value: "a.example"}, {Ref: "t2", Type: "domain_name", Value: "b.example"}}}
-	out, err := testHost(t).RunBuiltin(context.Background(), echoTool, task, RunOptions{
+	out, err := testHost(t).RunBuiltin(context.Background(), echoTool, task, RunOptions{HostBudget: testBudget(),
 		Credentials: map[string]string{"api_key": "sk-live-abcdef", "db_password": "hunter2"}})
 	if err != nil {
 		t.Fatal(err)
@@ -462,7 +462,7 @@ func TestBuiltinRunsInTheSandbox(t *testing.T) {
 	}
 	h := testHost(t)
 	h.Backend = be
-	out, err := h.RunBuiltin(context.Background(), echoTool, tool.Task{Targets: oneTarget}, RunOptions{Env: map[string]string{"TOOLHOST_READ": key}})
+	out, err := h.RunBuiltin(context.Background(), echoTool, tool.Task{Targets: oneTarget}, RunOptions{HostBudget: testBudget(), Env: map[string]string{"TOOLHOST_READ": key}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +476,7 @@ func TestRequiredCredentialMissingFailsBeforeStart(t *testing.T) {
 	m.Permissions.Credentials = []tool.CredentialReq{{Name: "token", Kind: "token", Required: true}}
 	exe, _ := os.Executable()
 	m.Run = &tool.RunSpec{Argv: []string{exe}}
-	out, err := testHost(t).RunManifest(context.Background(), m, tool.Task{Targets: oneTarget}, RunOptions{Trusted: true})
+	out, err := testHost(t).RunManifest(context.Background(), m, tool.Task{Targets: oneTarget}, RunOptions{HostBudget: testBudget(), Trusted: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func TestRequiredCredentialMissingFailsBeforeStart(t *testing.T) {
 func TestUntrustedAdapterNeedsNetworkEnforcement(t *testing.T) {
 	m := hostileManifest
 	m.Run = &tool.RunSpec{Argv: []string{"/bin/true"}}
-	_, err := testHost(t).RunManifest(context.Background(), m, tool.Task{Targets: oneTarget}, RunOptions{})
+	_, err := testHost(t).RunManifest(context.Background(), m, tool.Task{Targets: oneTarget}, RunOptions{HostBudget: testBudget()})
 	if tool.ClassOf(err) != tool.RefusedByPolicy {
 		t.Fatalf("untrusted adapter on the process backend: %v", err)
 	}
@@ -572,7 +572,7 @@ func TestCancelStopsTheTool(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(500 * time.Millisecond); cancel() }()
 	start := time.Now()
-	out, err := testHost(t).RunBuiltin(ctx, echoTool, tool.Task{Targets: oneTarget}, RunOptions{Env: map[string]string{"TOOLHOST_SLEEP": "1"}})
+	out, err := testHost(t).RunBuiltin(ctx, echoTool, tool.Task{Targets: oneTarget}, RunOptions{HostBudget: testBudget(), Env: map[string]string{"TOOLHOST_SLEEP": "1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +591,7 @@ func TestExecProfile(t *testing.T) {
 		Run:         &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe, "{{config.mode}}", "{{target.value}}"}, Output: &tool.OutputSpec{Format: tool.OutputSARIF, From: "stdout"}},
 	}
 	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "github.com/acme/app"}}}
-	out, err := testHost(t).RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "sarif-cli"}})
+	out, err := testHost(t).RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "sarif-cli"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +600,7 @@ func TestExecProfile(t *testing.T) {
 	}
 	// A config value that would be a flag never reaches argv.
 	task.Config = json.RawMessage(`{"mode":"--output=/etc/x"}`)
-	out, _ = testHost(t).RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "sarif-cli"}})
+	out, _ = testHost(t).RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "sarif-cli"}})
 	if out.Status != tool.StatusFailed || out.Err.Class != tool.InvalidInput {
 		t.Fatalf("flag injection: %s %v", out.Status, out.Err)
 	}
@@ -608,7 +608,7 @@ func TestExecProfile(t *testing.T) {
 	m.Run = &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{exe}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}, ExitCodes: map[string]string{"2": "ok"}}
 	m.Config = nil
 	task.Config = nil
-	out, _ = testHost(t).RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "ctis-cli"}})
+	out, _ = testHost(t).RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "ctis-cli"}})
 	if out.Status != tool.StatusPartial || len(out.Report.Findings) != 1 || out.Stats.Quarantined["finding:secret"] != 1 {
 		t.Fatalf("ctis exec: %s %v %+v", out.Status, out.Err, out.Stats)
 	}
@@ -648,7 +648,7 @@ func TestSettledTargetsCountAsProgress(t *testing.T) {
 	task := tool.Task{ID: "task-p", Targets: []tool.Target{{Ref: "t1", Type: "domain_name", Value: "a.example"}, {Ref: "t2", Type: "domain_name", Value: "b.example"}}}
 	prog := core.NewProgress(2)
 	ctx := core.WithProgress(context.Background(), prog)
-	out, err := testHost(t).RunBuiltin(ctx, echoTool, task, RunOptions{
+	out, err := testHost(t).RunBuiltin(ctx, echoTool, task, RunOptions{HostBudget: testBudget(),
 		Credentials: map[string]string{"api_key": "k", "db_password": "p"}})
 	if err != nil || out.Status != tool.StatusOK {
 		t.Fatalf("run: %v %+v", err, out)
@@ -669,7 +669,7 @@ func hostileRunCtx(t *testing.T, ctx context.Context, mode string) *Outcome {
 	exe, _ := os.Executable()
 	m := hostileManifest
 	m.Run = &tool.RunSpec{Argv: []string{exe}}
-	out, err := testHost(t).RunManifest(ctx, m, tool.Task{Targets: twoTargets}, RunOptions{Trusted: true,
+	out, err := testHost(t).RunManifest(ctx, m, tool.Task{Targets: twoTargets}, RunOptions{HostBudget: testBudget(), Trusted: true,
 		Env: map[string]string{"TOOLHOST_HOSTILE": mode}, Credentials: map[string]string{"api_key": "sk-declared-123"}})
 	if err != nil {
 		t.Fatal(err)

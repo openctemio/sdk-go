@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/sensorkit/executor"
@@ -92,6 +93,10 @@ var (
 
 	multi = FromScanner(withName(legacyManifest, "legacy-multi"), &multiScanner{legacyScanner{Rule: "m", Severity: "low"}})
 
+	// netTool connects to its targets, as an adapter an operator installs
+	// or a tool given to the kit does.
+	netTool = FromScanner(withNetwork(withName(legacyManifest, "legacy-net"), tool.NetTargets), &legacyScanner{Rule: "net", Severity: "low"})
+
 	coll = FromCollector(tool.Manifest{
 		Name: "legacy-collector", Version: "1.0.0", Class: tool.Connector, Tier: tool.T0,
 		Produces:    []string{"asset:repository"},
@@ -100,6 +105,11 @@ var (
 )
 
 func withName(m tool.Manifest, name string) tool.Manifest { m.Name = name; return m }
+
+func withNetwork(m tool.Manifest, n tool.Network) tool.Manifest {
+	m.Permissions.Network = n
+	return m
+}
 
 func withConfig(m tool.Manifest) tool.Manifest {
 	m.Config = json.RawMessage(`{"type":"object","additionalProperties":false,"x-octm-schema-version":1,"properties":{"depth":{"type":"integer","minimum":1,"maximum":5,"default":2}}}`)
@@ -144,7 +154,7 @@ func (legacyCollector) Collect(_ context.Context, o *core.CollectOptions) (*core
 
 func TestMain(m *testing.M) {
 	executor.RunLauncherIfRequested()
-	adapter.Dispatch(plain, stateful, configured, multi, coll, capTool, insecureTool, oddPortsTool, bareScanPortsTool)
+	adapter.Dispatch(plain, stateful, configured, multi, netTool, coll, capTool, insecureTool, oddPortsTool, bareScanPortsTool)
 	os.Exit(m.Run())
 }
 
@@ -201,7 +211,7 @@ func TestBridgedScannerParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := run(t, plain, tool.Task{Targets: targets("a.example")}, toolhost.RunOptions{})
+	out := run(t, plain, tool.Task{Targets: targets("a.example")}, toolhost.RunOptions{HostBudget: testBudget()})
 	if out.Status != tool.StatusOK || out.Err != nil {
 		t.Fatalf("outcome %s %+v (stderr %s)", out.Status, out.Err, out.Stderr)
 	}
@@ -216,7 +226,7 @@ func TestBridgedScannerParity(t *testing.T) {
 // TestBridgeTargetsAndFailures: each target is scanned; a failed scan fails
 // its target only.
 func TestBridgeTargetsAndFailures(t *testing.T) {
-	out := run(t, plain, tool.Task{Targets: targets("a.example", "down.example", "b.example")}, toolhost.RunOptions{})
+	out := run(t, plain, tool.Task{Targets: targets("a.example", "down.example", "b.example")}, toolhost.RunOptions{HostBudget: testBudget()})
 	if out.Status != tool.StatusPartial {
 		t.Fatalf("status %s", out.Status)
 	}
@@ -234,7 +244,7 @@ func TestBridgeTargetsAndFailures(t *testing.T) {
 
 // TestBridgeMultiTarget: a MultiTargetScanner gets every target at once.
 func TestBridgeMultiTarget(t *testing.T) {
-	out := run(t, multi, tool.Task{Targets: targets("a.example", "b.example")}, toolhost.RunOptions{})
+	out := run(t, multi, tool.Task{Targets: targets("a.example", "b.example")}, toolhost.RunOptions{HostBudget: testBudget()})
 	if out.Status != tool.StatusOK || len(out.Report.Findings) != 1 || !strings.Contains(out.Report.Findings[0].Title, "a.example+b.example") {
 		t.Fatalf("outcome %s %+v", out.Status, out.Report.Findings)
 	}
@@ -253,7 +263,7 @@ func TestBridgeStateAndCredentials(t *testing.T) {
 	if bytes.Contains(local, []byte("tok-in-parent-only")) {
 		t.Fatalf("a secret field crossed into Task.Local: %s", local)
 	}
-	out := run(t, stateful, tool.Task{Targets: targets("a.example"), Local: local}, toolhost.RunOptions{})
+	out := run(t, stateful, tool.Task{Targets: targets("a.example"), Local: local}, toolhost.RunOptions{HostBudget: testBudget()})
 	if out.Err != nil || len(out.Report.Findings) != 1 {
 		t.Fatalf("outcome %+v %+v (stderr %s)", out.Err, out.Report.Findings, out.Stderr)
 	}
@@ -262,7 +272,7 @@ func TestBridgeStateAndCredentials(t *testing.T) {
 		t.Fatalf("finding %+v", f)
 	}
 	// With the declared credential stored by the operator.
-	out = run(t, stateful, tool.Task{Targets: targets("a.example"), Local: local}, toolhost.RunOptions{
+	out = run(t, stateful, tool.Task{Targets: targets("a.example"), Local: local}, toolhost.RunOptions{HostBudget: testBudget(),
 		Credentials: map[string]string{"token": "declared-token-1", "other": "never-delivered"}})
 	if out.Err != nil || !strings.Contains(out.Report.Findings[0].Title, "authenticated") {
 		t.Fatalf("outcome %+v %+v", out.Err, out.Report.Findings)
@@ -277,15 +287,15 @@ func TestBridgeStateAndCredentials(t *testing.T) {
 // TestBridgeConfig: the task's configuration, validated against the
 // manifest's schema, reaches the scanner as its settings.
 func TestBridgeConfig(t *testing.T) {
-	out := run(t, configured, tool.Task{Targets: targets("a.example"), Config: json.RawMessage(`{"depth":4}`)}, toolhost.RunOptions{})
+	out := run(t, configured, tool.Task{Targets: targets("a.example"), Config: json.RawMessage(`{"depth":4}`)}, toolhost.RunOptions{HostBudget: testBudget()})
 	if out.Err != nil || !strings.Contains(out.Report.Findings[0].Title, "depth 4") {
 		t.Fatalf("outcome %+v %+v", out.Err, out.Report.Findings)
 	}
-	out = run(t, configured, tool.Task{Targets: targets("a.example"), Config: json.RawMessage(`{"depth":9}`)}, toolhost.RunOptions{})
+	out = run(t, configured, tool.Task{Targets: targets("a.example"), Config: json.RawMessage(`{"depth":9}`)}, toolhost.RunOptions{HostBudget: testBudget()})
 	if out.Err == nil || out.Err.Class != tool.InvalidInput {
 		t.Fatalf("an out-of-range setting ran: %+v", out.Err)
 	}
-	out = run(t, configured, tool.Task{Targets: targets("a.example"), Config: json.RawMessage(`{"extra_args":["--evil"]}`)}, toolhost.RunOptions{})
+	out = run(t, configured, tool.Task{Targets: targets("a.example"), Config: json.RawMessage(`{"extra_args":["--evil"]}`)}, toolhost.RunOptions{HostBudget: testBudget()})
 	if out.Err == nil || out.Err.Class != tool.InvalidInput {
 		t.Fatalf("an unknown setting ran: %+v", out.Err)
 	}
@@ -298,7 +308,7 @@ func TestBridgeUndeclaredOutputQuarantined(t *testing.T) {
 	stateScanner.Undeclared = true
 	t.Cleanup(func() { stateScanner.Undeclared = false })
 	local, _ := stateful.Local(nil)
-	out := run(t, stateful, tool.Task{Targets: targets("a.example"), Local: local}, toolhost.RunOptions{})
+	out := run(t, stateful, tool.Task{Targets: targets("a.example"), Local: local}, toolhost.RunOptions{HostBudget: testBudget()})
 	for _, f := range out.Report.Findings {
 		if f.Type == "secret" {
 			t.Fatal("an undeclared finding type was delivered")
@@ -312,7 +322,7 @@ func TestBridgeUndeclaredOutputQuarantined(t *testing.T) {
 // TestBridgeHostileLocal: an unreadable Task.Local fails the task as
 // invalid input; nothing is scanned.
 func TestBridgeHostileLocal(t *testing.T) {
-	out := run(t, stateful, tool.Task{Targets: targets("a.example"), Local: json.RawMessage(`{"state":"not an object"}`)}, toolhost.RunOptions{})
+	out := run(t, stateful, tool.Task{Targets: targets("a.example"), Local: json.RawMessage(`{"state":"not an object"}`)}, toolhost.RunOptions{HostBudget: testBudget()})
 	if out.Err == nil || out.Err.Class != tool.InvalidInput || len(out.Report.Findings) != 0 {
 		t.Fatalf("outcome %+v", out.Err)
 	}
@@ -328,11 +338,11 @@ func TestBridgedCollector(t *testing.T) {
 	if bytes.Contains(local, []byte("sensor-side-key")) {
 		t.Fatalf("the API key crossed into Task.Local: %s", local)
 	}
-	out := run(t, coll, tool.Task{Local: local}, toolhost.RunOptions{Credentials: map[string]string{"api_key": "vendor-key-123"}})
+	out := run(t, coll, tool.Task{Local: local}, toolhost.RunOptions{HostBudget: testBudget(), Credentials: map[string]string{"api_key": "vendor-key-123"}})
 	if out.Err != nil || len(out.Report.Assets) != 1 || out.Report.Assets[0].Value != "github.com/acme/web" {
 		t.Fatalf("outcome %+v %+v (stderr %s)", out.Err, out.Report.Assets, out.Stderr)
 	}
-	out = run(t, coll, tool.Task{Local: local}, toolhost.RunOptions{})
+	out = run(t, coll, tool.Task{Local: local}, toolhost.RunOptions{HostBudget: testBudget()})
 	if out.Err == nil || out.Err.Class != tool.InvalidInput {
 		t.Fatalf("a required credential missing ran: %+v", out.Err)
 	}
@@ -370,3 +380,52 @@ func (scannerValue) IsInstalled(context.Context) (bool, string, error) { return 
 func valueScannerOf() core.Scanner { return scannerValue{} }
 
 func mustTime() time.Time { return time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC) }
+
+// SECURITY: a tool that connects to its targets and runs through the
+// compat scanner (an adapter the operator installed, a tool given to the
+// kit) always runs under a per-host budget: the scan's when its options
+// carry one, else the default. The tool host itself refuses the same tool
+// without one, so no other path can start it unpaced.
+func TestCompatScannerRunsUnderTheHostBudget(t *testing.T) {
+	h := host(t)
+	off, err := executor.NewProcessBackend(executor.Config{Mode: executor.ModeOff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Backend = off
+	s := AsScanner(netTool, ScannerConfig{Host: h})
+	gentle := adapt.ResolveBudget(adapt.DefaultPacing, &adapt.JobBudget{Level: "gentle"}, adapt.BudgetCeiling{})
+	for name, tc := range map[string]struct {
+		opts      *core.ScanOptions
+		level     string
+		rps, conn int
+	}{
+		"no options":             {nil, "standard", 20, 8},
+		"options without budget": {&core.ScanOptions{}, "standard", 20, 8},
+		"the scan's budget":      {&core.ScanOptions{HostBudget: gentle}, "gentle", 5, 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, err := s.Scan(context.Background(), "a.example", tc.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := (*adapt.HostBudget)(nil)
+			if res.TargetRate != nil {
+				b = res.TargetRate.Budget
+			}
+			if b == nil || b.Level != tc.level || b.RPS != tc.rps || b.Inflight != tc.conn {
+				t.Fatalf("the scan ran under %+v, want %s (%d/s, %d in flight)", b, tc.level, tc.rps, tc.conn)
+			}
+		})
+	}
+	out, err := h.RunBuiltin(context.Background(), netTool, tool.Task{Targets: targets("a.example")}, toolhost.RunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Err == nil || out.Err.Class != tool.RefusedByPolicy || !strings.Contains(out.Err.Detail, toolhost.ErrNoHostBudget.Error()) {
+		t.Fatalf("the tool host started the tool without a budget: %s %+v", out.Status, out.Err)
+	}
+	if out.Report != nil && len(out.Report.Findings) != 0 {
+		t.Fatalf("the tool ran without a budget: %+v", out.Report.Findings)
+	}
+}

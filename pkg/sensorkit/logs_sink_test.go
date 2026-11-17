@@ -60,7 +60,7 @@ func TestKit_ToolLogSinkForAnOwnHost(t *testing.T) {
 	own := &toolhost.Host{Sensor: "own", RuntimeName: "own-host", LogSink: k.ToolLogSink()}
 	k.HandleCommand("own_scan", commandExecFunc(func(ctx context.Context, cmd *core.Command) (*core.CommandExecutionResult, error) {
 		task := tool.Task{ID: cmd.ID, Targets: []tool.Target{{Ref: "t1", Type: "ip_address", Value: "1.1.1.1"}}}
-		if _, err := own.RunBuiltin(ctx, loggingTool, task, toolhost.RunOptions{}); err != nil {
+		if _, err := own.RunBuiltin(ctx, loggingTool, task, toolhost.RunOptions{HostBudget: testBudget()}); err != nil {
 			return nil, err
 		}
 		return &core.CommandExecutionResult{}, nil

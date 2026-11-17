@@ -3,6 +3,7 @@ package toolhost
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -44,10 +45,31 @@ type taskCanary struct {
 	once   sync.Once
 }
 
-// budgetOf is the task's budget (nil: the caller set none, or the tool does
-// not connect to its targets).
+// ErrNoHostBudget is the refusal of a tool that connects to its targets
+// and was started without a per-host budget.
+var ErrNoHostBudget = errors.New("the tool connects to its targets and was started without a per-host budget")
+
+// requireBudget refuses a task of a tool whose manifest says it connects
+// to its targets (network targets) when the caller gave no valid budget.
+// It is checked for every tool the host starts, whatever path started it:
+// a tool compiled into the sensor, an adapter the operator installed, a
+// retest. A tool of another network class sends nothing to the hosts of
+// its targets and needs none.
+func requireBudget(m tool.Manifest, o RunOptions) *tool.Error {
+	if m.Permissions.Network != tool.NetTargets {
+		return nil
+	}
+	if o.HostBudget == nil || !o.HostBudget.Valid() {
+		return refusedErr("%s: %v", m.Name, ErrNoHostBudget)
+	}
+	return nil
+}
+
+// budgetOf is the budget the task's forwarder, canary and rate key are
+// held to (nil: the tool does not connect to its targets, or it probes
+// ports and is paced in packets per second, RunOptions.PortProbes).
 func budgetOf(m tool.Manifest, o RunOptions) *adapt.HostBudget {
-	if o.HostBudget == nil || !o.HostBudget.Valid() || m.Permissions.Network != tool.NetTargets {
+	if o.HostBudget == nil || !o.HostBudget.Valid() || m.Permissions.Network != tool.NetTargets || o.PortProbes {
 		return nil
 	}
 	// The task's own copy: what the tool host lowers is recorded on it
@@ -219,6 +241,19 @@ func budgetLines(s *adapt.Summary) []LogLine {
 	return lines
 }
 
+// paceLines are the log lines that say the task's rate setting was changed:
+// by the per-host budget, by the local policy.
+func (p *prepared) paceLines() []LogLine {
+	var out []LogLine
+	if p.budgetLine != nil {
+		out = append(out, *p.budgetLine)
+	}
+	if p.rateLine != nil {
+		out = append(out, *p.rateLine)
+	}
+	return out
+}
+
 // capBudgetRate lowers the tool's rate key (safety.rate_param) to the
 // budget of the task's hosts, and sets it when the task left it unset, so a
 // tool described only by its manifest runs under the budget too. enforced
@@ -238,10 +273,17 @@ func capBudgetRate(m tool.Manifest, cfg json.RawMessage, b *adapt.HostBudget, ta
 		}
 	}
 	key := m.Safety.RateParam
+	// A rate of at least one request a second is a rate. Anything else
+	// under the key (zero, a negative number, a fraction under one, a
+	// string, null) is not: many tools read such a value as "no limit", so
+	// it never stays in the configuration. It is replaced like an unset
+	// key, by the tool's default or the budget, whichever is lower.
 	asked := 0
-	if f, ok := values[key].(float64); ok && f > 0 {
-		asked = int(f)
+	raw, present := values[key]
+	if f, ok := raw.(float64); ok && f >= 1 {
+		asked = int(min(f, 1e9))
 	}
+	unusable := present && asked == 0
 	requested := asked
 	if requested == 0 {
 		requested = toolDefaultRate(m, key)
@@ -251,16 +293,22 @@ func capBudgetRate(m tool.Manifest, cfg json.RawMessage, b *adapt.HostBudget, ta
 		list = append(list, t.Value)
 	}
 	hosts, _ := adapt.CountHosts(list)
-	limit := b.ToolPace(hosts, enforced).Rate
-	if requested > 0 && requested <= limit {
+	limit := max(b.ToolPace(hosts, enforced).Rate, 1)
+	if requested > 0 && requested <= limit && !unusable {
 		return cfg, nil, nil
 	}
-	b.Clamp(key, asked, limit)
-	values[key] = limit
+	to := limit
+	if requested > 0 && requested <= limit {
+		to = requested // the tool's default, written out in place of the unusable value
+	} else {
+		b.Clamp(key, asked, limit)
+	}
+	values[key] = to
 	out, err := json.Marshal(values)
 	if err != nil {
 		return nil, nil, err
 	}
+	limit = to
 	line := &LogLine{Level: "info", Msg: fmt.Sprintf("the host budget set %s to %d (asked %d)", key, limit, requested),
 		Fields: map[string]any{"source": "runtime", "rate_param": key, "requested": requested, "capped": limit, "host_budget_level": b.Level}}
 	return out, line, nil

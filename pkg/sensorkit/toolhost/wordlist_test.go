@@ -124,7 +124,7 @@ func TestRunManifestWordlist(t *testing.T) {
 	h.ContentRoot = root
 	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "github.com/acme/x"}},
 		Content: []tool.TaskContent{{Slot: "labels", Packs: []tool.ContentPack{{Digest: packDigest, Path: pack}}, Files: map[string][]string{packDigest: {"s.txt"}}}}}
-	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
+	out, err := h.RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestRunManifestWordlist(t *testing.T) {
 		t.Fatalf("tool argv %q", arg)
 	}
 	task.Content[0].Files = map[string][]string{packDigest: {"../../etc/passwd"}}
-	out, _ = h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
+	out, _ = h.RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
 	if out.Status != tool.StatusFailed || out.Err == nil || out.Err.Class != tool.InvalidInput {
 		t.Fatalf("a file outside the pack ran: %s %v", out.Status, out.Err)
 	}
@@ -150,7 +150,7 @@ func TestRunManifestInlineWordlist(t *testing.T) {
 	h.ContentRoot = t.TempDir()
 	task := tool.Task{Targets: []tool.Target{{Ref: "r", Type: "repository", Value: "github.com/acme/x"}},
 		Content: []tool.TaskContent{{Slot: "labels", Inline: []tool.InlineList{{Purpose: "dns-labels", Data: []byte("staging\nvpn\ninternal-db-7\n")}}}}}
-	out, err := h.RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
+	out, err := h.RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Env: map[string]string{"TOOLHOST_HOSTILE": "argv-cli"}})
 	if err != nil {
 		t.Fatal(err)
 	}

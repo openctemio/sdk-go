@@ -57,7 +57,7 @@ func TestPythonHelperCancel(t *testing.T) {
 	start := time.Now()
 	out, err := (&toolhost.Host{Sensor: "test"}).RunManifest(ctx, m,
 		tool.Task{Targets: []tool.Target{{Ref: "a", Type: "web_origin", Value: "https://a.example"}}},
-		toolhost.RunOptions{Trusted: true, Dir: dir})
+		toolhost.RunOptions{HostBudget: testBudget(), Trusted: true, Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestPythonHelperConnectsThroughTheForwarder(t *testing.T) {
     ctx.done(task.targets[0])`)
 	out, err := (&toolhost.Host{Sensor: "test"}).RunManifest(context.Background(), m,
 		tool.Task{Targets: []tool.Target{{Ref: "a", Type: "web_origin", Value: "http://" + ln.Addr().String()}}},
-		toolhost.RunOptions{Trusted: true, Dir: dir, Env: map[string]string{"OPENCTEM_EGRESS_PROXY": "http://" + pl.Addr().String()}})
+		toolhost.RunOptions{HostBudget: testBudget(), Trusted: true, Dir: dir, Env: map[string]string{"OPENCTEM_EGRESS_PROXY": "http://" + pl.Addr().String()}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -126,7 +126,7 @@ func pressureRun(t *testing.T, h *Host, mode string, env map[string]string) *Out
 	env["TOOLHOST_HOSTILE"] = mode
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	out, err := h.RunManifest(ctx, m, tool.Task{Targets: oneTarget}, RunOptions{Trusted: true, Env: env,
+	out, err := h.RunManifest(ctx, m, tool.Task{Targets: oneTarget}, RunOptions{HostBudget: testBudget(), Trusted: true, Env: env,
 		Credentials: map[string]string{"api_key": "sk-declared-123"}})
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +281,7 @@ func TestLaunchWaitsForTheGovernor(t *testing.T) {
 	m.Run = &tool.RunSpec{Argv: []string{exe}}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	_, err := h.RunManifest(ctx, m, tool.Task{Targets: oneTarget}, RunOptions{Trusted: true,
+	_, err := h.RunManifest(ctx, m, tool.Task{Targets: oneTarget}, RunOptions{HostBudget: testBudget(), Trusted: true,
 		Env: map[string]string{"TOOLHOST_HOSTILE": "claims-ok"}, Credentials: map[string]string{"api_key": "k"}})
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) || g2.admitted != 0 {
 		t.Fatalf("held launch: err %v admitted %d", err, g2.admitted)

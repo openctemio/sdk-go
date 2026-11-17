@@ -384,7 +384,7 @@ func TestTaskSecretsEndToEnd(t *testing.T) {
 		st := h.backend().Status()
 		st.NetworkEnforced = true
 		h.Backend = statusBackend{Backend: h.backend(), st: st}
-		out, err := h.RunBuiltin(secretCtx(set, false, f), secretTool, tool.Task{Targets: oneTarget}, RunOptions{Credentials: local})
+		out, err := h.RunBuiltin(secretCtx(set, false, f), secretTool, tool.Task{Targets: oneTarget}, RunOptions{HostBudget: testBudget(), Credentials: local})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -437,7 +437,7 @@ func secretFileOf(t *testing.T, out *Outcome) (string, string) {
 func TestSecretFileRemovedOnFailureAndCancel(t *testing.T) {
 	local := map[string]string{"alpha": locAlpha}
 	out, err := testHost(t).RunBuiltin(context.Background(), secretTool,
-		tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "domain_name", Value: "fail.example"}}}, RunOptions{Credentials: local})
+		tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "domain_name", Value: "fail.example"}}}, RunOptions{HostBudget: testBudget(), Credentials: local})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +452,7 @@ func TestSecretFileRemovedOnFailureAndCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	out, err = testHost(t).RunBuiltin(ctx, secretTool,
-		tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "domain_name", Value: "hang.example"}}}, RunOptions{Credentials: local})
+		tool.Task{Targets: []tool.Target{{Ref: "t1", Type: "domain_name", Value: "hang.example"}}}, RunOptions{HostBudget: testBudget(), Credentials: local})
 	if err != nil {
 		t.Fatal(err)
 	}

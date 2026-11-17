@@ -237,7 +237,7 @@ func TestRefusedTargetIsNeverTouched(t *testing.T) {
 	h := testHost(t)
 	h.Policy = &fakePolicy{deny: map[string]bool{refused.URL: true}}
 	task := tool.Task{ID: "adm-1", Targets: []tool.Target{{Ref: "ok", Type: "web_origin", Value: allowed.URL}, {Ref: "no", Type: "web_origin", Value: refused.URL}}}
-	out, err := h.RunBuiltin(context.Background(), dialTool, task, RunOptions{})
+	out, err := h.RunBuiltin(context.Background(), dialTool, task, RunOptions{HostBudget: testBudget()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestFullyRefusedTaskNeverStarts(t *testing.T) {
 	refused, hits := recorder(t)
 	h := testHost(t)
 	h.Policy = &fakePolicy{deny: map[string]bool{refused.URL: true}}
-	out, err := h.RunBuiltin(context.Background(), dialTool, tool.Task{Targets: []tool.Target{{Ref: "no", Value: refused.URL}}}, RunOptions{})
+	out, err := h.RunBuiltin(context.Background(), dialTool, tool.Task{Targets: []tool.Target{{Ref: "no", Value: refused.URL}}}, RunOptions{HostBudget: testBudget()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestFullyRefusedTaskNeverStarts(t *testing.T) {
 		t.Fatal("a refused target was contacted")
 	}
 	h.Policy = &fakePolicy{tools: []string{"something-else"}}
-	out, err = h.RunBuiltin(context.Background(), echoTool, tool.Task{Targets: oneTarget}, RunOptions{
+	out, err = h.RunBuiltin(context.Background(), echoTool, tool.Task{Targets: oneTarget}, RunOptions{HostBudget: testBudget(),
 		Credentials: map[string]string{"api_key": "sk-never-read"}})
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +298,7 @@ func TestPolicyCapsTheRunTime(t *testing.T) {
 	h := testHost(t)
 	h.Policy = &fakePolicy{maxRun: 2 * time.Second}
 	start := time.Now()
-	out, err := h.RunBuiltin(context.Background(), echoTool, tool.Task{Targets: oneTarget}, RunOptions{Env: map[string]string{"TOOLHOST_SLEEP": "1"}})
+	out, err := h.RunBuiltin(context.Background(), echoTool, tool.Task{Targets: oneTarget}, RunOptions{HostBudget: testBudget(), Env: map[string]string{"TOOLHOST_SLEEP": "1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestExecProfileAdmission(t *testing.T) {
 	m := tool.Manifest{Name: "cli", Version: "1.0.0", Class: tool.TargetScan, Tier: tool.T1,
 		Produces: []string{"finding:misconfiguration"}, Permissions: tool.Permissions{Network: tool.NetTargets},
 		Run: &tool.RunSpec{Profile: tool.ProfileExec, Argv: []string{"/bin/true"}, Output: &tool.OutputSpec{Format: tool.OutputCTIS, From: "stdout"}}}
-	out, err := h.RunManifest(context.Background(), m, tool.Task{Targets: []tool.Target{{Ref: "no", Value: refused.URL}}}, RunOptions{Trusted: true})
+	out, err := h.RunManifest(context.Background(), m, tool.Task{Targets: []tool.Target{{Ref: "no", Value: refused.URL}}}, RunOptions{HostBudget: testBudget(), Trusted: true})
 	if err != nil {
 		t.Fatal(err)
 	}

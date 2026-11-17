@@ -57,6 +57,8 @@ type taskEgress struct {
 	// passive: the tool's network is vendor; it never connects to its
 	// targets, so a refused connection says nothing about a target.
 	passive bool
+	// canary is the task's canary when the forwarder ends it (watch).
+	canary *taskCanary
 
 	// changes are the first rate changes (adapt.TargetRate.MaxChanges);
 	// moreChanges counts the rest.
@@ -172,11 +174,22 @@ func (e *taskEgress) dnsPath() string {
 
 // stop ends the forwarder (once; later calls only read) and returns what
 // it recorded.
+// watch makes the forwarder end the task's canary c just before it stops
+// (nil: the task has none).
+func (e *taskEgress) watch(c *taskCanary) {
+	if e != nil {
+		e.canary = c
+	}
+}
+
 func (e *taskEgress) stop() ([]egress.Record, int) {
 	if e == nil {
 		return nil, 0
 	}
 	e.once.Do(func() {
+		// The canary ends first: it dials through the forwarder, and its
+		// counts are part of the rate outcome.
+		e.canary.end()
 		e.cancel()
 		// The forwarder closes every connection when its context ends, so
 		// this wait is short; it is bounded anyway: a forwarder that does

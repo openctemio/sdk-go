@@ -191,7 +191,21 @@ type RunOptions struct {
 	// a forwarder the tool's own flags are the enforcement and the outcome
 	// says the pacing is limited (budget.go). The tool host works on a
 	// copy: what it lowers itself is in the outcome's budget, not here.
+	//
+	// A tool whose manifest says it connects to its targets (network
+	// targets) is refused without a valid budget (ErrNoHostBudget): no
+	// path may start such a tool unpaced because its caller forgot the
+	// budget.
 	HostBudget *adapt.HostBudget
+	// PortProbes says the tool probes ports and its caller paces it in
+	// packets per second from the budget's level (adapt.Pacing.ProbePPS),
+	// through the tool's own rate setting: a port probe is not a request,
+	// so the forwarder does not hold the task's hosts to the budget's
+	// requests per second and connections in flight (the task's rate
+	// bounds it, as without a budget), and no canary runs. HostBudget is
+	// still required. For a port scanner compiled into the sensor; a tool
+	// described only by its manifest never gets it.
+	PortProbes bool
 	// Watch bounds the run (watch.go): a zero field takes the job's
 	// (core.RunWatchFrom of the task's context), then the default; a
 	// negative one turns that check off.
@@ -468,7 +482,9 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	if ierr := h.checkLimits(m, task); ierr != nil {
 		return nil, ierr, nil
 	}
-	if ierr := h.checkUnconfined(m); ierr != nil {
+	// An unconfined active tool is refused, and so is a tool that connects
+	// to its targets without a per-host budget (budget.go).
+	if ierr := cmp.Or(h.checkUnconfined(m), requireBudget(m, o)); ierr != nil {
 		return nil, ierr, nil
 	}
 	egressDialer := taskEgressDialer(ctx, task)

@@ -33,7 +33,7 @@ func TestLocalPolicyForcesTheUserAgent(t *testing.T) {
 	m := httpManifest
 	m.HTTP = &tool.HTTPSpec{UserAgent: "acme-cli/1.0", Headers: map[string]string{"X-Scan": "1"}}
 	h := &Host{Policy: &httpPolicy{ua: "corp-security-scan", allowInsecure: true}}
-	p, ierr, err := h.prepare(context.Background(), m, httpTask, RunOptions{})
+	p, ierr, err := h.prepare(context.Background(), m, httpTask, RunOptions{HostBudget: testBudget()})
 	if err != nil || ierr != nil {
 		t.Fatal(err, ierr)
 	}
@@ -55,13 +55,13 @@ func TestLocalPolicyForbidsInsecureTLS(t *testing.T) {
 	m := httpManifest
 	m.HTTP = &tool.HTTPSpec{TLS: &tool.TLSSpec{InsecureSkipVerify: true}}
 	h := &Host{Policy: &httpPolicy{allowInsecure: false}}
-	if _, ierr, err := h.prepare(context.Background(), m, httpTask, RunOptions{}); err != nil || ierr == nil || ierr.Class != tool.RefusedByPolicy {
+	if _, ierr, err := h.prepare(context.Background(), m, httpTask, RunOptions{HostBudget: testBudget()}); err != nil || ierr == nil || ierr.Class != tool.RefusedByPolicy {
 		t.Fatalf("insecure TLS under a forbidding policy: %v %v", err, ierr)
 	}
 
 	task := httpTask
 	task.HTTP = &tool.HTTPSpec{UserAgent: "from-the-job", TLS: &tool.TLSSpec{InsecureSkipVerify: true}}
-	p, ierr, err := (&Host{}).prepare(context.Background(), httpManifest, task, RunOptions{})
+	p, ierr, err := (&Host{}).prepare(context.Background(), httpManifest, task, RunOptions{HostBudget: testBudget()})
 	if err != nil || ierr != nil {
 		t.Fatal(err, ierr)
 	}

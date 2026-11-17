@@ -103,6 +103,11 @@ func TestNew_JobSigningPosture(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(k.closeClient)
+			// A sensor honors what a signed statement carries only when
+			// it verifies signatures.
+			if got := k.VerifiesJobs(); got != (tc.want != core.JobsSignedOff) {
+				t.Errorf("VerifiesJobs %t at posture %s", got, tc.want)
+			}
 			if got := k.s.jobs.Posture(); got != tc.want {
 				t.Fatalf("posture %s, want %s", got, tc.want)
 			}

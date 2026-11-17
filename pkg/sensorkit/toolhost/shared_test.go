@@ -23,7 +23,7 @@ func TestSharedHostRefusesUnconfinedBackend(t *testing.T) {
 		{Mode: executor.ModeRequired},
 	} {
 		h := &Host{Shared: true, Backend: statusBackend{st: st}}
-		_, ierr, err := h.prepare(context.Background(), targetsTool, tool.Task{Targets: []tool.Target{{Ref: "t0", Value: "203.0.113.5"}}}, RunOptions{})
+		_, ierr, err := h.prepare(context.Background(), targetsTool, tool.Task{Targets: []tool.Target{{Ref: "t0", Value: "203.0.113.5"}}}, RunOptions{HostBudget: testBudget()})
 		if err == nil && (ierr == nil || ierr.Class != tool.RefusedByPolicy || !strings.Contains(ierr.Detail, "shared sensor")) {
 			t.Errorf("status %+v: ierr %+v err %v", st, ierr, err)
 		}

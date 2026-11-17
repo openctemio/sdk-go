@@ -81,6 +81,11 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, err
 	}
 	defer eg.stop()
+	// A CLI that connects to its targets runs under the task's per-host
+	// budget like a tool that speaks the protocol: the forwarder holds it,
+	// and the canary reads what the hosts answer on HTTPS (it ends with
+	// the forwarder).
+	eg.watch(h.startCanary(ctx, p, eg))
 	t, err := be.Prepare(executor.TaskSpec{
 		ID: m.Name, Argv: argv, Env: h.taskEnv(m, o.Env), SetEnv: h.taskSetEnv(o.Env), Dir: p.workdir,
 		WritePaths: append([]string{p.workdir}, o.WritePaths...), ReadPaths: append(executor.ReadPathsFrom(ctx), p.contentPaths...), Limits: o.Limits,
@@ -169,11 +174,8 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	}
 	p.checkContract(out)
 	p.addRefused(out)
-	if p.rateLine != nil {
-		out.Logs = append(out.Logs, *p.rateLine)
-	}
-	out.Logs = append(out.Logs, p.notes...)
-	lines := eg.finish(out, p.task.Targets)
+	out.Logs = append(append(out.Logs, p.paceLines()...), p.notes...)
+	lines := append(unconfinedBudget(p, eg, out), eg.finish(out, p.task.Targets)...)
 	out.Logs = append(out.Logs, lines...)
 	if h.LogSink != nil {
 		for _, l := range lines {

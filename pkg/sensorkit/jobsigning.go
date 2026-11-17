@@ -252,6 +252,17 @@ func (k *Kit) resolveJobSigning() error {
 	return nil
 }
 
+// VerifiesJobs reports whether the sensor verifies the signature of its
+// jobs: a job-signing key or root is pinned (the posture is not
+// core.JobsSignedOff). What a job's signed statement carries beyond the
+// command (its per-host budget, jobsig.Statement.Pacing) is read only from
+// a verified statement, so a sensor reports a capability that promises to
+// honor such a member (core.CapabilityHostBudget) only when this is true.
+// It is decided by New and does not change while the sensor runs.
+func (k *Kit) VerifiesJobs() bool {
+	return k.s.jobs != nil && k.s.jobs.Posture() != core.JobsSignedOff
+}
+
 // selfBoundSignerTimeout bounds the hello read of pinSelfBoundSigner: the
 // most an unpinned self-bound sensor's start waits for it.
 const selfBoundSignerTimeout = 30 * time.Second

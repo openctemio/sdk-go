@@ -75,7 +75,7 @@ func runExecTool(t *testing.T, m tool.Manifest, dir, mode string, task tool.Task
 	if task.Targets == nil {
 		task.Targets = []tool.Target{{Ref: "t1", Type: "ip_address", Value: "192.0.2.10"}}
 	}
-	out, err := testHost(t).RunManifest(context.Background(), m, task, RunOptions{Trusted: true, Dir: dir, Env: map[string]string{"TOOLHOST_HOSTILE": mode}})
+	out, err := testHost(t).RunManifest(context.Background(), m, task, RunOptions{HostBudget: testBudget(), Trusted: true, Dir: dir, Env: map[string]string{"TOOLHOST_HOSTILE": mode}})
 	if err != nil {
 		t.Fatal(err)
 	}
