@@ -118,9 +118,9 @@ func (f *Forwarder) answered(sl *connSlots) {
 }
 
 // busyGap records on host that one of its connections was refused for lack
-// of a connection slot (ErrHostBusy), or that a tunnel whose answer may
-// still have been arriving was closed for a connection that waited for its
-// slot: part of the host was not scanned.
+// of a connection slot (ErrHostBusy), or that a tunnel whose request may
+// still have been outstanding was closed for a connection that waited for
+// its slot: part of the host was not scanned.
 // The forwarder's own bound refused it, so the gap is GapSlotsFull, never a
 // reason that says the host pushed back.
 func (f *Forwarder) busyGap(host string) {
@@ -137,13 +137,16 @@ const DefaultSlotIdle = time.Second
 
 // UnsureSlotIdle is how long a tunnel must be quiet before it counts as
 // idle while the forwarder cannot be sure that what the host sent last was
-// the end of the answer: on the tunnel's first request (a TLS 1.3 server
-// sends its session tickets after the handshake, which can arrive after
-// the request left) and on a tunnel whose client offered HTTP/2 (the host
-// sends settings, window updates and pings between answers). Such a
-// tunnel is unsure; one whose client and host took turns (HTTP/1.1, a
-// further request after the host's answer) is sure and counts as idle
-// after Limits.SlotIdle.
+// the end of the answer, nor that the answer started: on the tunnel's
+// first request (a TLS 1.3 server sends its session tickets after the
+// handshake, which can arrive after the request left). Such a tunnel is
+// unsure. Once a further request followed the host's bytes, the host has
+// answered on it: a tunnel whose client and host took turns (HTTP/1.1) is
+// sure and counts as idle after Limits.SlotIdle; one whose client offered
+// HTTP/2 (the host sends settings, window updates and pings of its own,
+// also while an answer has not started) stays unsure and counts as idle
+// after the unsure time, as before the host answered. Having answered
+// only decides the gap: closing such a tunnel records none.
 //
 // An unsure tunnel is never closed for another connection before it has
 // been quiet this long: a connection that waits for its slot keeps waiting,
@@ -151,14 +154,20 @@ const DefaultSlotIdle = time.Second
 // an answer that may still be arriving, and the connections open to the
 // host still never exceed its slots. An unsure tunnel that is closed for
 // another connection after that time leaves a coverage gap of its host
-// (busyGap): its answer may still have been cut. Thirty seconds is far
-// longer than an answer ordinarily pauses once it has started.
+// (busyGap) when its request may still have been outstanding: on TLS, what
+// the host sent after it may have been only the end of its handshake
+// (tunnelMeter.answerSeen). A tunnel whose last traffic was the host's
+// answer leaves none, whatever its client offered (ordinary keep-alive
+// reuse).
+// Thirty seconds is far longer than an answer ordinarily pauses once it
+// has started.
 const UnsureSlotIdle = 30 * time.Second
 
 // slotIdleFor is how long the tunnel behind m may be quiet before it
 // counts as idle.
 func (f *Forwarder) slotIdleFor(m *tunnelMeter) time.Duration {
-	if m.turned.Load() {
+	switch {
+	case m.turned.Load():
 		return f.limits.SlotIdle
 	}
 	return f.unsureIdle
@@ -174,12 +183,15 @@ var errSlotEvicted = errors.New("egress: the idle connection was closed for anot
 // connections that hold one and are idle, oldest first. pending counts
 // the unsure tunnels that hold one and are quiet but do not count as idle
 // yet (UnsureSlotIdle): a connection that waits for a slot keeps waiting
-// past Limits.DialTimeout while one is pending.
+// past Limits.DialTimeout while one is pending. closing counts the
+// connections closed for a waiter whose slots are not free yet: a waiter
+// whose wait ends meanwhile waits for them rather than be refused.
 type slotPool struct {
 	ch      chan struct{}
 	waiters int
 	idle    []*connSlots
 	pending int
+	closing int
 }
 
 // release returns a func that frees one slot of the pool, once.
@@ -207,7 +219,7 @@ func (f *Forwarder) evictLocked(pool *slotPool) *connSlots {
 	}
 	v := pool.idle[0]
 	v.unparkLocked()
-	v.evicted = true
+	v.evictLocked()
 	return v
 }
 
@@ -252,6 +264,18 @@ func (s *connSlots) unparkLocked() {
 	s.parked = false
 	s.hostPool.remove(s)
 	s.addrPool.remove(s)
+}
+
+// evictLocked marks the connection closed for a connection that waits for
+// one of its slots; its pools count it as closing until drop frees them.
+func (s *connSlots) evictLocked() {
+	s.evicted = true
+	if s.hostPool != nil {
+		s.hostPool.closing++
+	}
+	if s.addrPool != nil {
+		s.addrPool.closing++
+	}
 }
 
 // setPendingLocked sets whether the connection is a pending unsure tunnel
@@ -299,7 +323,7 @@ func (s *connSlots) park(idle func() bool) {
 	}
 	s.setPendingLocked(false)
 	if (s.hostPool != nil && s.hostPool.waiters > 0) || (s.addrPool != nil && s.addrPool.waiters > 0) {
-		s.evicted = true
+		s.evictLocked()
 		f.hostMu.Unlock()
 		s.close()
 		return
@@ -375,9 +399,21 @@ func (s *connSlots) drop() {
 	s.done = true
 	s.setPendingLocked(false)
 	s.unparkLocked()
+	evicted := s.evicted
 	s.f.hostMu.Unlock()
 	s.relAddr()
 	s.relHost()
+	if evicted {
+		// The slots are free: the pools no longer count them as closing.
+		s.f.hostMu.Lock()
+		if s.hostPool != nil {
+			s.hostPool.closing--
+		}
+		if s.addrPool != nil {
+			s.addrPool.closing--
+		}
+		s.f.hostMu.Unlock()
+	}
 }
 
 // slotsOf are the slots the upstream connection c holds (nil: none).

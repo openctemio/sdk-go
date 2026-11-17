@@ -128,19 +128,27 @@ flight over HTTP/1.1.
   connections of one name therefore never keep the other names of its address, or the name's own next
   connection, waiting. The tool sees its idle connection closed, as when a server closes an idle
   kept-alive connection, and opens a new one for its next request; nothing is reported about the host;
-- on a tunnel's first request, and on a tunnel whose client offered HTTP/2, the host's last bytes need
-  not be the end of the answer (a TLS 1.3 session ticket arrives after the handshake; HTTP/2 control
-  frames arrive between answers), and the forwarder cannot tell an answer that pauses from a tunnel that
-  is idle after its answer. Such an **unsure** tunnel is not closed for another connection until it has
-  been quiet for **30 seconds** (`egress.UnsureSlotIdle`); until then a connection that waits for its slot
-  keeps waiting (past the 15 seconds below, at most 30 seconds longer), and the connections open to the
-  host still never exceed its slots. A tunnel whose client and host took turns (HTTP/1.1, a further
-  request after an answer) is **sure** and is closed at once once idle, with nothing reported. **Limit:**
-  an answer on an unsure tunnel that pauses longer than 30 seconds after other bytes from the host while a
-  connection waits for its slot is cut (the tool sees it cut short). Because the forwarder cannot tell such
-  a cut from an idle tunnel, closing an unsure tunnel makes its host a coverage gap `slots_full` (below),
-  so a cut answer is never read as a host fully scanned. Closing a sure tunnel never does, so ordinary
-  keep-alive reuse makes no gap;
+- on a tunnel's first request the forwarder cannot tell an answer that has not started, or pauses, from
+  a tunnel that is idle after its answer: on TLS, the host's last bytes may be its session tickets (a
+  TLS 1.3 server may send them after the client's Finished, which travels with that request). Such an
+  **unsure** tunnel is not closed for another connection until it has been quiet for
+  **30 seconds** (`egress.UnsureSlotIdle`); until then a connection that waits for its slot keeps waiting
+  (past the 15 seconds below, at most 30 seconds longer), and the connections open to the host still
+  never exceed its slots. Once a further request followed the host's bytes, the host has answered on the
+  tunnel: a tunnel whose client and host take turns (HTTP/1.1) is idle one second after the host's
+  answer; one whose client offered HTTP/2 only after the same 30 seconds, because the host's own
+  control frames (window updates, pings) are host bytes that cannot be told from an answer.
+  **Limit:** an answer, also one that has not started, that pauses longer than that while a connection
+  waits for its slot is cut (the tool sees it cut short). Closing an unsure TLS tunnel, whose request may still have been
+  outstanding, makes its host a coverage gap `slots_full` (below), so an answer that may never have
+  arrived is never read as a host fully scanned. Closing a tunnel whose last traffic was the host's
+  answer never makes a gap, whatever its client offered, so ordinary keep-alive reuse makes no gap;
+- a tunnel (CONNECT or SOCKS5) whose client leaves while it waits for its slot (a tool gives up on a connection it
+  waited too long for, or drops one it dialed ahead once a kept-alive connection came free) stops
+  waiting at once: it closes no other connection, opens no connection to the target and makes no gap;
+- a connection whose wait ends just as a connection closed for a waiter frees its slot takes that slot
+  instead of being refused, and once a connection has been refused, no other connection is closed for
+  it;
 - a connection that finds no slot for 15 seconds (`Limits.DialTimeout`), every slot being held by a
   connection with a request in flight (and no unsure tunnel quiet, above), is refused, and **its host is a coverage gap** `slots_full` (detail
   "a connection was refused: every connection slot of the host's budget stayed in use"): the request
@@ -441,9 +449,16 @@ read. That is deliberate: a limit a sensor cannot read must never be dropped sil
 - A connection the budget's slots refused is reported as a coverage gap of its host (`slots_full`), never
   as a host with nothing found and never as the host pushing back.
 - What is not held is stated above and is not hidden: the requests of a client that packs several into
-  one TLS record (bounded in bytes), the streams in flight on one HTTP/2 connection, an answer on an
-  unsure tunnel that pauses more than 30 seconds while a connection waits for its slot (cut, and its host
-  reported as a `slots_full` gap), and every bound but the tool's own flags when no forwarder is in the
-  path.
+  one TLS record (bounded in bytes), the streams in flight on one HTTP/2 connection, an answer that
+  pauses while a connection waits for its slot (on a tunnel's first request after 30 seconds, cut and
+  its host reported as a `slots_full` gap; on a tunnel the host has already answered on after one
+  second, or 30 seconds when its client offered HTTP/2, cut with no gap), a target that keeps a connection
+  busy by sending a byte now and then (below), and every bound but the tool's own flags when no
+  forwarder is in the path.
+- A target that sends a byte at least every second (or every 30 seconds on an unsure tunnel) is never
+  quiet, so its connection keeps its slot until the tool or the task ends it. Only a host in the scan's
+  own scope can do this, and only to the names that share its address in the same task: each
+  connection that waits behind it waits at most 45 seconds (one of the task's connections, one timer)
+  and is then refused, and every refusal is a visible `slots_full` gap, never a silent miss.
 - Nothing rotates addresses or changes the identification to get past a block. The only reactions are to
   slow down, to stop sending to a host whose breaker opened, and to report.
