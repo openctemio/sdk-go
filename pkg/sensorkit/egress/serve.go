@@ -380,10 +380,19 @@ func (f *Forwarder) pipe(ctx context.Context, c net.Conn, br *bufio.Reader, up n
 	<-done
 	_ = up.Close()
 	rec.BytesOut, rec.BytesIn = out, in
-	if meterErr == nil && sl.wasEvicted() {
+	evicted := sl.wasEvicted()
+	if meterErr == nil && evicted {
 		// The forwarder closed the idle tunnel for another connection to
 		// the host: how it ended says nothing about the host.
 		meterErr = errSlotEvicted
+	}
+	if evicted && meter.started && !meter.turned.Load() {
+		// The tunnel was closed while the forwarder could not be sure the
+		// host's last bytes were the end of the answer (its first request,
+		// or a client that offered HTTP/2): the answer may have been cut, so
+		// part of the host may not have been scanned. The sensor's own
+		// bound did it: the gap is GapSlotsFull.
+		f.busyGap(pr.host)
 	}
 	if meterErr != nil {
 		// The forwarder ended the tunnel itself: that says nothing about

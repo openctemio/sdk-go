@@ -43,7 +43,7 @@ import (
 // the name's own next connection) waiting. A connection that finds no slot
 // within Limits.DialTimeout, every slot being held by a connection that is
 // not idle, is refused, and its host is reported as a coverage gap
-// (adapt.GapHostBusy): the request never left, and the result must not
+// (adapt.GapSlotsFull): the request never left, and the result must not
 // read as "nothing found" for that host. The forwarder's own bound caused
 // it, not the host: it is never reported as the host pushing back.
 
@@ -118,11 +118,13 @@ func (f *Forwarder) answered(sl *connSlots) {
 }
 
 // busyGap records on host that one of its connections was refused for lack
-// of a connection slot (ErrHostBusy): part of the host was not scanned.
-// The forwarder's own bound refused it, so the gap is GapHostBusy, never a
+// of a connection slot (ErrHostBusy), or that a tunnel whose answer may
+// still have been arriving was closed for a connection that waited for its
+// slot: part of the host was not scanned.
+// The forwarder's own bound refused it, so the gap is GapSlotsFull, never a
 // reason that says the host pushed back.
 func (f *Forwarder) busyGap(host string) {
-	f.hostRate.MarkGap(host, adapt.GapHostBusy, adapt.GapDetailHostBusy)
+	f.hostRate.MarkGap(host, adapt.GapSlotsFull, adapt.GapDetailSlotsFull)
 }
 
 // DefaultSlotIdle is how long a kept-alive connection may be quiet after
@@ -143,7 +145,8 @@ const DefaultSlotIdle = time.Second
 // An answer to such a request that pauses longer than this after other
 // bytes from the host counts as idle while it is still in flight: a
 // connection that waits for a slot may then close it, and the tool sees
-// that answer cut short.
+// that answer cut short; the host is then a coverage gap (busyGap), since
+// the forwarder cannot tell the cut from an idle tunnel.
 const slotIdleUnsure = 5
 
 // slotIdleFor is how long the tunnel behind m may be quiet before it

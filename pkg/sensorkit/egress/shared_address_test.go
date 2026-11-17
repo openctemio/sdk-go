@@ -198,8 +198,14 @@ func TestIdleTunnelsOfOneNameDoNotStarveAnother(t *testing.T) {
 			t.Fatalf("request %d of a after one of its tunnels was closed: %v", i+1, err)
 		}
 	}
-	if s := f.TargetRate().Summary(); s.GapsTotal != 0 {
-		t.Fatalf("gaps %+v", s.Gaps)
+	// b is never a gap. a's tunnels were closed after their first answer,
+	// which the forwarder cannot tell from an answer cut short: a may be a
+	// gap of the sensor's own bound (slots_full), never of anything else.
+	g, _ := f.TargetRate().Gaps()
+	for _, x := range g {
+		if x.Host != "a.example.com" || x.Reason != adapt.GapSlotsFull {
+			t.Fatalf("gaps %+v", g)
+		}
 	}
 	if peak, _ := pool.counts(); peak > 2 {
 		t.Fatalf("%d connections open at once at an address with 2 slots", peak)
@@ -213,7 +219,7 @@ func TestIdleTunnelsOfOneNameDoNotStarveAnother(t *testing.T) {
 // another connection: closing is for tunnels the host answered and that
 // are quiet, never for one that waits for an answer, however long the
 // host takes. The connection that waited is refused, and its host is a
-// coverage gap of the sensor's own bound (host_busy), not of the host.
+// coverage gap of the sensor's own bound (slots_full), not of the host.
 func TestTunnelWithARequestInFlightKeepsItsSlot(t *testing.T) {
 	m := newMeter(t, true)
 	m.delay = 1500 * time.Millisecond // the host takes its time over every answer
@@ -256,13 +262,13 @@ func TestTunnelWithARequestInFlightKeepsItsSlot(t *testing.T) {
 		t.Fatalf("%d requests in flight, 1 slot", maxIn)
 	}
 	g, n := f.TargetRate().Gaps()
-	if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapHostBusy || g[0].Detail != adapt.GapDetailHostBusy {
+	if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapSlotsFull || g[0].Detail != adapt.GapDetailSlotsFull {
 		t.Fatalf("gaps %+v", g)
 	}
 }
 
 // A connection refused for lack of a slot is a coverage gap of the host it
-// was for, with the reason of the sensor's own bound (host_busy): the
+// was for, with the reason of the sensor's own bound (slots_full): the
 // host's own slots, or the slots of the address it shares with another
 // name. The name that holds the slot is no gap, and no gap says the host
 // pushed back.
@@ -282,7 +288,7 @@ func TestConnectionRefusedForLackOfASlotIsACoverageGap(t *testing.T) {
 			t.Fatalf("second connection: %v", err)
 		}
 		g, n := f.TargetRate().Gaps()
-		if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapHostBusy || g[0].Detail != adapt.GapDetailHostBusy {
+		if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapSlotsFull || g[0].Detail != adapt.GapDetailSlotsFull {
 			t.Fatalf("gaps %+v", g)
 		}
 	})
@@ -297,7 +303,7 @@ func TestConnectionRefusedForLackOfASlotIsACoverageGap(t *testing.T) {
 			t.Fatalf("b beside a: %v", err)
 		}
 		g, n := f.TargetRate().Gaps()
-		if n != 1 || g[0].Host != "b.example.com" || g[0].Reason != adapt.GapHostBusy {
+		if n != 1 || g[0].Host != "b.example.com" || g[0].Reason != adapt.GapSlotsFull {
 			t.Fatalf("gaps %+v", g)
 		}
 	})
@@ -616,7 +622,7 @@ func TestOpenConnectionsNeverExceedTheSlots(t *testing.T) {
 // coverage gaps that blame its neighbors. slow.example.com holds the
 // address's one slot with a request in flight; the connection of
 // other.example.com that finds no slot is refused with a gap of the
-// sensor's own bound (host_busy), never one that says the host pushed back
+// sensor's own bound (slots_full), never one that says the host pushed back
 // (rate_floor), and the slow name gets none.
 func TestSlowNameOnASharedAddressBlamesNoNeighbor(t *testing.T) {
 	inflight := make(chan struct{}, 1)
@@ -647,12 +653,74 @@ func TestSlowNameOnASharedAddressBlamesNoNeighbor(t *testing.T) {
 		t.Fatalf("the slow name's request: %v", err)
 	}
 	g, n := f.TargetRate().Gaps()
-	if n != 1 || g[0].Host != "other.example.com" || g[0].Reason != adapt.GapHostBusy {
+	if n != 1 || g[0].Host != "other.example.com" || g[0].Reason != adapt.GapSlotsFull {
 		t.Fatalf("gaps %+v", g)
 	}
 	for _, x := range g {
 		if x.Reason == adapt.GapRateFloor {
 			t.Fatalf("a slot refusal reads as the host pushing back: %+v", x)
 		}
+	}
+}
+
+// An answer that pauses after its first bytes, on a tunnel's first request,
+// looks idle to the forwarder, and a connection that waits for the slot
+// closes the tunnel: the tool sees the answer cut short. The forwarder could
+// not tell, so the host is a coverage gap of the sensor's own bound
+// (slots_full): the cut answer is never read as a host fully scanned.
+func TestCutAnswerOnAnUnsureTunnelLeavesAGap(t *testing.T) {
+	firstBytes := make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/slow" {
+			_, _ = io.WriteString(w, "ok")
+			return
+		}
+		w.Header().Set("Content-Length", "10")
+		_, _ = io.WriteString(w, "01234")
+		w.(http.Flusher).Flush()
+		once.Do(func() { close(firstBytes) })
+		select {
+		case <-time.After(800 * time.Millisecond):
+		case <-r.Context().Done():
+			return
+		}
+		_, _ = io.WriteString(w, "56789")
+	}))
+	t.Cleanup(srv.Close)
+	su, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := func(path string) string { return "https://a.example.com:" + su.Port() + path }
+	// 1 slot; a tunnel quiet for 5 x 40ms on its first request counts as idle.
+	f, proxy := slotForwarder(t, 1, 3*time.Second, 40*time.Millisecond, "a.example.com")
+
+	cut := make(chan error, 1)
+	go func() {
+		resp, err := keepAliveClient(proxy).Get(target("/slow"))
+		if err != nil {
+			cut <- err
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		_, err = io.ReadAll(resp.Body) // fetchOK ignores a body cut short
+		cut <- err
+	}()
+	select { // the slow answer's first bytes are on their way, the tunnel holds the slot
+	case <-firstBytes:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the slow request never reached the server")
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := fetchOK(keepAliveClient(proxy), target("/fast")); err != nil {
+		t.Fatalf("the waiting connection: %v", err)
+	}
+	if err := <-cut; err == nil {
+		t.Fatal("the slow answer arrived whole: the tunnel was not closed for the waiting connection")
+	}
+	g, n := f.TargetRate().Gaps()
+	if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapSlotsFull || g[0].Detail != adapt.GapDetailSlotsFull {
+		t.Fatalf("a cut answer left gaps %+v (%d), want one slots_full gap on a.example.com", g, n)
 	}
 }

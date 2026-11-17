@@ -133,13 +133,17 @@ flight over HTTP/1.1.
   between answers), so such a tunnel is given five seconds before it counts as idle. **Limit:** an answer
   to such a request that pauses longer than five seconds after other bytes from the host counts as idle
   while it is still in flight, and a connection that waits for its slot may then close it (the tool
-  sees that answer cut short);
+  sees that answer cut short). Because the forwarder cannot tell such a cut from a tunnel that was
+  only idle, closing a tunnel in that state makes its host a coverage gap `slots_full` (below), so a
+  cut answer is never read as a host fully scanned;
 - a connection that finds no slot for 15 seconds (`Limits.DialTimeout`), every slot being held by a
-  connection with a request in flight, is refused, and **its host is a coverage gap** `host_busy` (detail
+  connection with a request in flight, is refused, and **its host is a coverage gap** `slots_full` (detail
   "a connection was refused: every connection slot of the host's budget stayed in use"): the request
   never left, so the result must not read as "nothing found" for that host. The sensor's own bound
-  caused it, not the host: the target's outcome is `unfinished` (no class, no cause on the target), the
-  gap is never reported as the host pushing back, and it is not a reason to hold the host's findings.
+  caused it, not the host: the target keeps the outcome the tool gave it, and the gap alone makes the
+  host not covered and the run partial (no follow-up command scans the host again at once; the next run
+  does). The gap is never reported as the host pushing back, and it is not a reason to hold the host's
+  findings.
   It is the weakest gap reason: anything the host did itself (`rate_floor`, `blocked`, ...) replaces it.
 
 **Requests on a tunnel the forwarder does not read** (`egress/tunnel.go`). The forwarder does not
@@ -221,15 +225,32 @@ what was asked and what applies) and in the run's log.
 admits to the budget, with the same slots, rate and canary); and a `vendor` tool whose vendor hosts, as
 read from the task's configuration, name one of the task's targets (a host a target names, or an address
 in a target's range), so a configuration cannot name a target as a vendor host to reach it outside the
-budget. The tool host refuses to start such a tool without a valid budget (`toolhost.ErrNoHostBudget`, a refusal before
+budget.
+**Limit:** the vendor hosts are compared with the targets by name, literal address and range, not by
+what they resolve to: a vendor host that is a DNS alias of a target (another name for the target's
+address) is not caught, and the vendor tool reaches that address without the per-host limits. Only a
+configuration of the scan's own settings can name it.
+
+The tool host refuses to start such a tool without a valid budget (`toolhost.ErrNoHostBudget`, a refusal before
 any process starts), whatever started it: a tool compiled into the sensor, an adapter the operator
 installed in an adapter directory, a tool given to `Kit.AddTool`, a retest. A caller cannot forget it.
+
+**Cost for `egress-proxy` tools that send nothing to their targets.** Tools that fetch from public
+services (vulnerability databases and image registries, rule and pack hosts, RDAP and ASN services) and
+never connect to their targets declare `egress-proxy`. Their forwarder cannot tell such a host from a
+target, so every host they reach gets the per-host budget: on Gentle 5 requests per second and **two
+open connections per host and per address**. A transfer that holds a connection longer than the slot
+wait (15 seconds) keeps its slot, so a third parallel connection to the same host (long image layer
+downloads in parallel, for example) may be refused with `slots_full`, and a vendor's 429 makes the
+run partial like a target's. Standard and Fast are rarely affected; a sensor that pulls large images
+on Gentle may see such gaps.
 
 - Call `toolhost.RunOptions{HostBudget: &budget}`.
 - Tools that run through the compat scanner (`toolcompat.AsScanner`: adapter directories and
   `Kit.AddTool`) get the scan's budget (`core.ScanOptions.HostBudget`); when the scan carries none, the
-  lowest of the sensor's pacing level and Standard (`adapt.FallbackBudget`), never above the sensor's
-  level. A tool described only by its manifest is held by the forwarder like any other and has
+  lowest of the sensor's pacing level, Standard and the local policy's per-host ceiling
+  (`rate.max_host_rps`, `rate.max_host_inflight`) (`adapt.FallbackBudget`), never above the sensor's
+  level or the operator's ceiling. A tool described only by its manifest is held by the forwarder like any other and has
   its rate key (`safety.rate_param`) lowered to the budget.
 - A retest runs under its command's budget (`adapt.WithHostBudget` on the context the kit's retest
   command passes), resolved like a scan's: the lowest limit wins. Without one it falls back like a scan.
@@ -348,7 +369,7 @@ What the canary covers, and what it does not:
 ```
 
 - A gap with `"observed": true` is the canary's observation of rate limits on a host whose breaker never
-  opened: the host was scanned to the end, at a lowered rate. A gap `host_busy` is a host one of whose
+  opened: the host was scanned to the end, at a lowered rate. A gap `slots_full` is a host one of whose
   connections found no connection slot (the sensor's own bound, above).
 
 - `budget.won_by` names the limit that set each number. `budget.clamped` lists what was asked for and did
@@ -412,7 +433,7 @@ read. That is deliberate: a limit a sensor cannot read must never be dropped sil
   among its vendor hosts) starts without a budget: the tool host refuses it, on every path.
 - The connections open to a host never exceed its slots; an idle one is closed for a connection that
   needs its slot.
-- A connection the budget's slots refused is reported as a coverage gap of its host (`host_busy`), never
+- A connection the budget's slots refused is reported as a coverage gap of its host (`slots_full`), never
   as a host with nothing found and never as the host pushing back.
 - What is not held is stated above and is not hidden: the requests of a client that packs several into
   one TLS record (bounded in bytes), the streams in flight on one HTTP/2 connection, a slow first answer

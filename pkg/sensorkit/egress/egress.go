@@ -156,7 +156,7 @@ type Limits struct {
 	// bound closes the oldest idle connection of the host (or address)
 	// whose slots it needs and takes them (SlotIdle); when none is idle it
 	// waits for one to end, at most DialTimeout, and is then refused, and
-	// the host is reported as a coverage gap (adapt.GapHostBusy).
+	// the host is reported as a coverage gap (adapt.GapSlotsFull).
 	PerHostConns int
 	// SlotIdle is how long a kept-alive connection may be quiet after the
 	// host's answer before it counts as idle: a connection that waits for

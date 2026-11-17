@@ -201,19 +201,20 @@ const (
 	// credentials, or the proxy's rules refused the destination), so part
 	// of the host was never scanned. It says nothing about the host.
 	GapProxyUnavailable = "proxy_unavailable"
-	// GapHostBusy: the sensor's own per-host bound refused a connection:
+	// GapSlotsFull: the sensor's own per-host bound refused a connection:
 	// every connection slot of the host's budget (or of the address it is
 	// reached at, which other names of the task may share) stayed held by
 	// connections with a request in flight for the whole wait, so a
 	// request of the tool never left and part of the host was not scanned.
 	// It says nothing about the host: it is the sensor's limit, never the
 	// host pushing back, and it does not hold the host's findings. The run
-	// is partial and the target is left unfinished.
-	GapHostBusy = "host_busy"
+	// is partial; the target keeps the outcome the tool gave it, and the
+	// gap alone marks the host not covered.
+	GapSlotsFull = "slots_full"
 )
 
-// GapDetailHostBusy is the detail of the GapHostBusy gap.
-const GapDetailHostBusy = "a connection was refused: every connection slot of the host's budget stayed in use"
+// GapDetailSlotsFull is the detail of the GapSlotsFull gap.
+const GapDetailSlotsFull = "a connection was refused: every connection slot of the host's budget stayed in use"
 
 // Evidence that opened a host's breaker (HostStat.OpenedBy).
 const (
@@ -1250,7 +1251,7 @@ func gapRank(r string) int {
 		return 3
 	case GapRateFloor:
 		return 2
-	case GapHostBusy:
+	case GapSlotsFull:
 		// The weakest: anything the host itself did says more.
 		return 1
 	}

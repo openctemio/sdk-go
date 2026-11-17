@@ -253,21 +253,42 @@ func DefaultBudget() HostBudget { return ResolveBudget(DefaultPacing, nil, Budge
 // (SetSensorPacing; nil: DefaultPacing).
 var sensorPacing atomic.Pointer[Pacing]
 
+// sensorCeiling is the operator's per-host ceiling in this process
+// (SetSensorHostCeiling; nil: not set).
+var sensorCeiling atomic.Pointer[BudgetCeiling]
+
 // SetSensorPacing records the sensor's pacing level for FallbackBudget. The
 // command executor records its own (core.DefaultCommandExecutor.SetPacingLevel).
 func SetSensorPacing(p Pacing) { sensorPacing.Store(&p) }
 
+// SetSensorHostCeiling records the operator's per-host ceiling (the local
+// policy's rate.max_host_rps and rate.max_host_inflight) for FallbackBudget.
+// The command executor records it with the local policy
+// (core.DefaultCommandExecutor.SetLocalPolicy); a zero ceiling is "not set".
+func SetSensorHostCeiling(c BudgetCeiling) { sensorCeiling.Store(&c) }
+
 // FallbackBudget is the budget a scan or retest runs under when its caller
 // handed it none: for each number the lowest of the sensor's pacing level
-// (SetSensorPacing) and Standard. It is never above the sensor's level, nor
-// above Standard on a sensor whose operator raised it.
+// (SetSensorPacing), Standard and the operator's per-host ceiling
+// (SetSensorHostCeiling). It is never above the sensor's level, nor above
+// Standard on a sensor whose operator raised it, nor above the operator's
+// ceiling.
 func FallbackBudget() HostBudget {
 	level := DefaultPacing
 	if p := sensorPacing.Load(); p != nil {
 		level = *p
 	}
 	std := DefaultBudget()
-	return ResolveBudget(level, nil, BudgetCeiling{RPS: std.RPS, Inflight: std.Inflight})
+	ceiling := BudgetCeiling{RPS: std.RPS, Inflight: std.Inflight}
+	if c := sensorCeiling.Load(); c != nil {
+		if c.RPS > 0 {
+			ceiling.RPS = min(ceiling.RPS, c.RPS)
+		}
+		if c.Inflight > 0 {
+			ceiling.Inflight = min(ceiling.Inflight, c.Inflight)
+		}
+	}
+	return ResolveBudget(level, nil, ceiling)
 }
 
 type budgetCtxKey struct{}
