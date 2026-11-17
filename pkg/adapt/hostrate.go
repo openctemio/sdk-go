@@ -453,15 +453,17 @@ func (c *HostRate) acquire(ctx context.Context, host string, probe bool) error {
 	switch h.brk {
 	case down:
 		c.lose(h, GapBreakerOpen, "the host stopped answering")
+		trips := h.trips // read under the lock: another request may trip the breaker
 		c.mu.Unlock()
 		c.emit(ch)
-		return fmt.Errorf("%w: %s gave up after %d breaker trips", ErrHostUnavailable, host, h.trips)
+		return fmt.Errorf("%w: %s gave up after %d breaker trips", ErrHostUnavailable, host, trips)
 	case open:
 		if now.Before(h.openUntil) {
 			c.lose(h, GapBreakerOpen, "the host stopped answering")
+			left := h.openUntil.Sub(now).Round(time.Second)
 			c.mu.Unlock()
 			c.emit(ch)
-			return fmt.Errorf("%w: %s breaker open for %s", ErrHostUnavailable, host, h.openUntil.Sub(now).Round(time.Second))
+			return fmt.Errorf("%w: %s breaker open for %s", ErrHostUnavailable, host, left)
 		}
 		h.brk, h.probing, h.probeAt = halfOpen, true, now
 		ch = append(ch, Change{Host: h.name, From: h.rate, To: h.rate, Reason: ReasonHalfOpen})
