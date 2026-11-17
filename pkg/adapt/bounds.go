@@ -59,6 +59,12 @@ type TargetRateBounds struct {
 	// BlockRun consecutive 403 answers, from a host that answered otherwise
 	// before, read as a block.
 	BlockRun int
+	// ThrottleRun push-back answers (429, 503, a vendor's rate-limit page)
+	// with no ordinary HTTP answer between them open a host's breaker and
+	// make the host a coverage gap (GapThrottled); answers closer together
+	// than ThrottleSpacing count once.
+	ThrottleRun     int
+	ThrottleSpacing time.Duration
 	// MaxHosts bounds the hosts one task tracks; further hosts share one
 	// conservative state.
 	MaxHosts int
@@ -97,6 +103,10 @@ type TargetRateBounds struct {
 //     refused instead of hanging the tool.
 //   - FloorStrikes 3, BlockRun 20: enough repetitions that one refusal or
 //     a handful of forbidden paths do not count as a block.
+//   - ThrottleRun 5, ThrottleSpacing 1s: five seconds of nothing but
+//     "slow down" from a host, after its rate was halved at least twice,
+//     say that slowing further will not help within the task; the answers
+//     to one burst already in flight count once.
 //   - ToolHostErrors 30: a tool's own breaker counts every failed request
 //     of every concurrent check (not consecutive failures), so it needs a
 //     larger budget than BreakerFailures × BreakerMaxTrips (15); 30 lets a
@@ -118,6 +128,8 @@ var TargetRate = TargetRateBounds{
 	HoldMax:          10 * time.Second,
 	FloorStrikes:     3,
 	BlockRun:         20,
+	ThrottleRun:      5,
+	ThrottleSpacing:  time.Second,
 	MaxHosts:         65536,
 	MaxOpenPorts:     64,
 	MaxGaps:          100,

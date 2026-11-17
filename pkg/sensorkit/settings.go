@@ -26,12 +26,15 @@ import (
 // SENSOR_ALLOW_PRIVATE_TARGETS, SENSOR_SCAN_ROOTS and SENSOR_REGION). Every
 // one is SENSOR_-prefixed; RemovedEnv lists the names they replaced.
 const (
-	EnvAPIURL     = "SENSOR_API_URL"
-	EnvAPIKey     = "SENSOR_API_KEY"
-	EnvRegion     = "SENSOR_REGION"
-	EnvSensorID   = "SENSOR_ID"
-	EnvSensorName = "SENSOR_NAME"
-	EnvProtocol   = "SENSOR_PROTOCOL" // auto (default) | v1 | v2
+	EnvAPIURL   = "SENSOR_API_URL"
+	EnvAPIKey   = "SENSOR_API_KEY"
+	EnvRegion   = "SENSOR_REGION"
+	EnvSensorID = "SENSOR_ID"
+	// EnvPacingLevel is the pacing level of jobs that carry no signed
+	// budget: gentle, standard (the default) or fast (Options.PacingLevel).
+	EnvPacingLevel = "SENSOR_PACING_LEVEL"
+	EnvSensorName  = "SENSOR_NAME"
+	EnvProtocol    = "SENSOR_PROTOCOL" // auto (default) | v1 | v2
 	// EnvTransport picks the transport of sensor protocol v3 (api
 	// RFC-059): auto (default: gRPC, then HTTPS, then v2) | grpc | https | v2.
 	EnvTransport  = "SENSOR_TRANSPORT"

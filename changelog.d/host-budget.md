@@ -1,0 +1,15 @@
+### Behaviour change: every scan job runs under a per-host budget
+
+- A job now has a per-host budget (`adapt.HostBudget`): the most requests per second and requests in flight one target host gets, whatever tool runs and however many of the job's targets name that host. The default is Standard: 20 requests per second and 8 in flight per host. See `docs/host-budget.md`.
+- A confined task's forwarder enforces it: the per-host rate ceiling is the budget (before, it was the job's rate over all its hosts, so one host of an eight-host job could get 160 requests per second), and at most the budget's connections to a host are open at once (`egress.Limits.PerHostConns`). A tool with a `safety.rate_param` has that key lowered to the budget of the task's hosts.
+- A host that answers nothing but 429 or 503 for five counted answers in a row now has its breaker opened and is reported as the coverage gap `throttled` with counts in the detail (before: it was slowed to the floor and reported as `rate_floor`). A host that pushes back and also answers is slowed as before.
+- An unconfined task whose every host throttles the scan is stopped; what it delivered is kept, the run is partial and its error class is `rate_limited`.
+
+### Added: the signed budget of a job, the operator's per-host ceiling and a canary for HTTPS
+
+- `jobsig.Statement.Pacing` (`adapt.JobBudget`): the per-host budget of a signed job, a level or explicit numbers. It replaces the sensor's level and is never above the operator's ceiling (`adapt.ResolveBudget`). A malformed budget is refused at verification (`jobsig.ReasonPacing`). A signer sends the member only to a sensor that reports `core.CapabilityHostBudget` (`pacing.budget@1`): an older sensor refuses a statement with a member it does not know.
+- Local policy keys `rate.max_host_rps` (1 to 200) and `rate.max_host_inflight` (1 to 50): the operator's per-host ceiling (`LocalPolicy.HostCeiling`). Without them the built-in hard ceiling of 200 requests per second and 50 in flight applies.
+- `sensorkit.Options.PacingLevel` and `SENSOR_PACING_LEVEL`: the level of jobs that carry no signed budget (gentle, standard or fast).
+- `core.ScanOptions.HostBudget`, `core.DefaultCommandExecutor.HostBudget` and `SetPacingLevel`; `toolhost.RunOptions.HostBudget`.
+- `adapt.Canary`: a plain `GET /` per target origin every 10 seconds, through the task's own way out, whose answer feeds the host's rate controller (at most one extra request every 3 seconds, outside the tool's queue for the rate and its connection slots). It makes 429, 503, `Retry-After` and block pages visible on HTTPS connections the forwarder passes through unread, and in unconfined runs. The forwarder dials it with `Forwarder.DialTarget` (same scope check; recorded with protocol `canary`).
+- `adapt.Summary` (a result's `metadata.target_rate`) carries the budget, the back-off and breaker counts, the hosts that pushed back (`host_stats`) and the canary's counts. `toolhost.Pacing()` and `toolhost.NewPacingCollector()` give the process totals.

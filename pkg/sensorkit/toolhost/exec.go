@@ -81,6 +81,10 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, err
 	}
 	defer eg.stop()
+	// A manifest-only tool is observed, not stopped: its output is one
+	// document read when it exits.
+	canary := h.startCanary(ctx, p, eg)
+	defer canary.end()
 	t, err := be.Prepare(executor.TaskSpec{
 		ID: m.Name, Argv: argv, Env: h.taskEnv(m, o.Env), SetEnv: h.taskSetEnv(o.Env), Dir: p.workdir,
 		WritePaths: append([]string{p.workdir}, o.WritePaths...), ReadPaths: append(executor.ReadPathsFrom(ctx), p.contentPaths...), Limits: o.Limits,
@@ -169,11 +173,14 @@ func (h *Host) runExec(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	}
 	p.checkContract(out)
 	p.addRefused(out)
+	if p.budgetLine != nil {
+		out.Logs = append(out.Logs, *p.budgetLine)
+	}
 	if p.rateLine != nil {
 		out.Logs = append(out.Logs, *p.rateLine)
 	}
 	out.Logs = append(out.Logs, p.notes...)
-	lines := eg.finish(out, p.task.Targets)
+	lines := append(canary.finish(out), eg.finish(out, p.task.Targets)...)
 	out.Logs = append(out.Logs, lines...)
 	if h.LogSink != nil {
 		for _, l := range lines {

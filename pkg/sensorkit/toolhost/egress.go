@@ -99,8 +99,18 @@ func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared
 		return nil, err
 	}
 	ceiling := h.rateCeiling(p)
+	limits := egress.Limits{Rate: ceiling, PerHostRate: ceiling}
+	if p.budget != nil {
+		// One host never gets more than the job's budget, whatever the
+		// task's rate over all its hosts is and whatever the tool sends.
+		limits.PerHostRate = math.Min(ceiling, float64(p.budget.RPS))
+		limits.PerHostConns = p.budget.Inflight
+	}
 	e := &taskEgress{dir: dir, proxy: filepath.Join(dir, "proxy.sock"), dns: filepath.Join(dir, "dns.sock"),
-		fw: egress.New(scope, egress.Limits{Rate: ceiling, PerHostRate: ceiling}), passive: p.m.Permissions.Network == tool.NetVendor}
+		fw: egress.New(scope, limits), passive: p.m.Permissions.Network == tool.NetVendor}
+	if p.budget != nil {
+		e.fw.TargetRate().SetBudget(*p.budget)
+	}
 	if h.lookupVendor != nil {
 		e.fw.LookupVendor = h.lookupVendor
 	}
@@ -222,8 +232,7 @@ func (e *taskEgress) finish(out *Outcome, targets []tool.Target) []LogLine {
 	}
 	e.chMu.Lock()
 	for _, c := range e.changes {
-		lines = append(lines, LogLine{Level: "info", Msg: fmt.Sprintf("target rate %s: %.3g/s -> %.3g/s (%s)", c.Host, c.From, c.To, c.Reason),
-			Fields: map[string]any{"target_rate": c.To, "host": c.Host, "reason": c.Reason}})
+		lines = append(lines, rateChangeLine(c))
 	}
 	if e.moreChanges > 0 {
 		lines = append(lines, LogLine{Level: "info", Msg: fmt.Sprintf("target rate changed %d more times", e.moreChanges)})
@@ -236,6 +245,8 @@ func (e *taskEgress) finish(out *Outcome, targets []tool.Target) []LogLine {
 			Fields: map[string]any{"target_rate_ceiling": s.Ceiling, "target_rate_min": s.Min, "hosts": s.Hosts,
 				"hosts_throttled": s.Throttled, "hosts_unreachable": s.Unreachable, "coverage_gaps": s.GapsTotal}})
 	}
+	recordPacing(&s)
+	lines = append(lines, budgetLines(&s)...)
 	for i, g := range s.Gaps {
 		if i == maxEgressLogLines {
 			break

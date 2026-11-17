@@ -354,7 +354,9 @@ func (f *Forwarder) pipe(c net.Conn, br *bufio.Reader, up net.Conn, rec *Record)
 	if ur.err != nil && (in == 0 || !idledConn(up)) && !unused {
 		f.observeErr(rec.Host, ur.err)
 	} else if in > 0 {
-		f.hostRate.Report(normName(rec.Host), adapt.Event{Signal: adapt.Answered})
+		// Bytes came back on a tunnel the forwarder did not read: the host
+		// is alive, what it answered is not known (Opaque).
+		f.hostRate.Report(normName(rec.Host), adapt.Event{Signal: adapt.Answered, Opaque: true})
 	}
 	rec.BytesOut, rec.BytesIn = out, in
 	f.record(*rec)

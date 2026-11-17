@@ -34,6 +34,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/scopelimit"
 )
 
@@ -136,10 +137,19 @@ type Statement struct {
 	// tool (egress forwarder, HTTP path guard). Absent when no target is
 	// limited. A verifier that predates the field refuses the statement
 	// (unknown field), so a limited job never runs unlimited.
-	Limits     []scopelimit.Limit `json:"limits,omitempty"`
-	LeaseEpoch int                `json:"lease_epoch"`
-	IssuedAt   time.Time          `json:"issued_at"`
-	ExpiresAt  time.Time          `json:"expires_at"`
+	Limits []scopelimit.Limit `json:"limits,omitempty"`
+	// Pacing is the job's per-host budget: a pacing level and, optionally,
+	// the requests per second and the requests in flight one target host
+	// may get (adapt.JobBudget). A sensor runs the job under it, never above
+	// its operator's own ceiling (adapt.ResolveBudget). Absent: the sensor's
+	// own level (Standard). Only this signed member can set a budget: no
+	// unsigned command field does. A verifier that predates the field
+	// refuses the statement (unknown field), so a signer sends it only to a
+	// sensor that reports the capability core.CapabilityHostBudget.
+	Pacing     *adapt.JobBudget `json:"pacing,omitempty"`
+	LeaseEpoch int              `json:"lease_epoch"`
+	IssuedAt   time.Time        `json:"issued_at"`
+	ExpiresAt  time.Time        `json:"expires_at"`
 	// Seq is per sensor and strictly increasing (gaps are possible).
 	Seq uint64 `json:"seq"`
 	// Nonce is 16 random bytes, base64url without padding.

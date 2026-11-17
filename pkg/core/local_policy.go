@@ -43,6 +43,8 @@ import (
 	"github.com/openctemio/contract/identity"
 	"golang.org/x/net/idna"
 	"gopkg.in/yaml.v3"
+
+	"github.com/openctemio/sdk-go/pkg/adapt"
 )
 
 // Local policy settings and limits.
@@ -212,6 +214,10 @@ type LocalPolicy struct {
 
 	maxRPS        int
 	maxJobSeconds int
+	// maxHostRPS and maxHostInflight are rate.max_host_rps and
+	// rate.max_host_inflight: the operator's per-host ceiling (0: not set).
+	maxHostRPS      int
+	maxHostInflight int
 
 	killSwitch      bool
 	killSwitchFiles []string
@@ -244,8 +250,10 @@ type policyFile struct {
 	AllowCustomTemplates *bool `yaml:"allow_custom_templates"`
 	AllowInteractsh      *bool `yaml:"allow_interactsh"`
 	Rate                 *struct {
-		MaxRPS        *int `yaml:"max_rps"`
-		MaxJobSeconds *int `yaml:"max_job_seconds"`
+		MaxRPS          *int `yaml:"max_rps"`
+		MaxJobSeconds   *int `yaml:"max_job_seconds"`
+		MaxHostRPS      *int `yaml:"max_host_rps"`
+		MaxHostInflight *int `yaml:"max_host_inflight"`
 	} `yaml:"rate"`
 	KillSwitch     bool   `yaml:"kill_switch"`
 	KillSwitchFile string `yaml:"kill_switch_file"`
@@ -552,6 +560,18 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 				return nil, fmt.Errorf("rate.max_job_seconds must be from 1 to %d", int(MaxScanTimeout/time.Second))
 			}
 			lp.maxJobSeconds = *r.MaxJobSeconds
+		}
+		if r.MaxHostRPS != nil {
+			if *r.MaxHostRPS < 1 || *r.MaxHostRPS > adapt.HardBudgetCeiling.RPS {
+				return nil, fmt.Errorf("rate.max_host_rps must be from 1 to %d", adapt.HardBudgetCeiling.RPS)
+			}
+			lp.maxHostRPS = *r.MaxHostRPS
+		}
+		if r.MaxHostInflight != nil {
+			if *r.MaxHostInflight < 1 || *r.MaxHostInflight > adapt.HardBudgetCeiling.Inflight {
+				return nil, fmt.Errorf("rate.max_host_inflight must be from 1 to %d", adapt.HardBudgetCeiling.Inflight)
+			}
+			lp.maxHostInflight = *r.MaxHostInflight
 		}
 	}
 	lp.killSwitch = doc.KillSwitch
@@ -1045,6 +1065,16 @@ func (lp *LocalPolicy) CapRate(requested int) int {
 	return CapScanLimit(requested, 0, lp.maxRPS)
 }
 
+// HostCeiling is the operator's per-host ceiling: rate.max_host_rps and
+// rate.max_host_inflight (a zero field: not set, the built-in hard ceiling
+// applies, adapt.HardBudgetCeiling). No job's budget passes it.
+func (lp *LocalPolicy) HostCeiling() adapt.BudgetCeiling {
+	if !lp.Present() {
+		return adapt.BudgetCeiling{}
+	}
+	return adapt.BudgetCeiling{RPS: lp.maxHostRPS, Inflight: lp.maxHostInflight}
+}
+
 // CapTimeout returns how long a job may run: requested (0: no limit asked)
 // capped at MaxScanTimeout and at the policy's rate.max_job_seconds.
 func (lp *LocalPolicy) CapTimeout(requested time.Duration) time.Duration {
@@ -1182,6 +1212,10 @@ type LocalPolicySummary struct {
 	// (0 = not set).
 	MaxRPS        int `json:"max_rps,omitempty"`
 	MaxJobSeconds int `json:"max_job_seconds,omitempty"`
+	// MaxHostRPS and MaxHostInflight are rate.max_host_rps and
+	// rate.max_host_inflight (0 = not set).
+	MaxHostRPS      int `json:"max_host_rps,omitempty"`
+	MaxHostInflight int `json:"max_host_inflight,omitempty"`
 	// ManagedAccept is managed.accept (v2): false when the sensor owner
 	// refuses platform-managed policy documents.
 	ManagedAccept bool `json:"managed_accept"`
@@ -1216,6 +1250,8 @@ func (lp *LocalPolicy) Report() *LocalPolicyReport {
 		AllowInteractsh:      lp.allowInteractsh,
 		MaxRPS:               lp.maxRPS,
 		MaxJobSeconds:        lp.maxJobSeconds,
+		MaxHostRPS:           lp.maxHostRPS,
+		MaxHostInflight:      lp.maxHostInflight,
 		ManagedAccept:        lp.managedAccept,
 		HTTPUserAgent:        lp.httpUserAgent,
 		AllowInsecureTLS:     lp.allowInsecureTLS,

@@ -23,6 +23,7 @@ import (
 	"github.com/openctemio/contract/outcome"
 	ctissource "github.com/openctemio/contract/source"
 
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/ctis"
 	"github.com/openctemio/sdk-go/pkg/jobsig"
 	"github.com/openctemio/sdk-go/pkg/reach"
@@ -90,6 +91,9 @@ type Command struct {
 	signedTemplates []string
 	// signedLimits are the scope limits of the verified statement.
 	signedLimits []scopelimit.Limit
+	// signedPacing is the per-host budget of the verified statement (nil:
+	// the job carries none).
+	signedPacing *adapt.JobBudget
 	// signedContent are the content packs of the verified statement: the
 	// only packs the job may mount (content_job.go).
 	signedContent []jobsig.ContentRef
@@ -1762,6 +1766,8 @@ type DefaultCommandExecutor struct {
 	sensorID atomic.Pointer[string]
 	// local is the sensor-local policy (SetLocalPolicy); nil: none.
 	local atomic.Pointer[LocalPolicy]
+	// pacing is the sensor's pacing level (SetPacingLevel; nil: Standard).
+	pacing atomic.Pointer[adapt.Pacing]
 	// sourceCreds fetches the credential of a code-scan job's source
 	// (SetSourceCredentials); nil refuses jobs whose source names one.
 	sourceCreds atomic.Pointer[sourceCredentialsBox]
@@ -1774,6 +1780,36 @@ type DefaultCommandExecutor struct {
 // it. nil removes it (the MaxScanTimeout cap stays).
 func (e *DefaultCommandExecutor) SetLocalPolicy(lp *LocalPolicy) {
 	e.local.Store(lp)
+}
+
+// SetPacingLevel sets the pacing level a job without a signed budget runs
+// at on this sensor (adapt.PacingFor; the sensor's own operator chooses it,
+// never the platform). Without it the level is adapt.DefaultPacing
+// (Standard). A name that is not a level is refused.
+func (e *DefaultCommandExecutor) SetPacingLevel(name string) error {
+	p, ok := adapt.PacingFor(name)
+	if !ok {
+		return fmt.Errorf("unknown pacing level %q (gentle, standard or fast)", name)
+	}
+	e.pacing.Store(&p)
+	return nil
+}
+
+// HostBudget is the per-host budget cmd runs under (adapt.ResolveBudget):
+// the sensor's pacing level, replaced by the budget of the job's verified
+// statement when it carries one, and never above the local policy's
+// rate.max_host_rps and rate.max_host_inflight (or the built-in hard
+// ceiling). cmd may be nil (the sensor's own budget).
+func (e *DefaultCommandExecutor) HostBudget(cmd *Command) adapt.HostBudget {
+	level := adapt.DefaultPacing
+	if p := e.pacing.Load(); p != nil {
+		level = *p
+	}
+	var job *adapt.JobBudget
+	if cmd != nil && cmd.jobVerified {
+		job = cmd.signedPacing
+	}
+	return adapt.ResolveBudget(level, job, e.local.Load().HostCeiling())
 }
 
 // SetTemplateVerifier sets the pinned keys custom templates must be signed
@@ -2119,6 +2155,10 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	if err := applyJobConfig(opts, payload.Config, local); err != nil {
 		return nil, err
 	}
+	// The per-host budget: the sensor's level, the job's signed budget
+	// when it carries one, never above the operator's ceiling. Nothing in
+	// the unsigned payload reaches it.
+	opts.HostBudget = e.HostBudget(cmd)
 
 	// The rest of the config reaches the scanner only as typed settings its
 	// own schema declares (api RFC-038); an invalid value fails the command.

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/internal/sensorstate"
+	"github.com/openctemio/sdk-go/pkg/adapt"
 	"github.com/openctemio/sdk-go/pkg/client"
 	"github.com/openctemio/sdk-go/pkg/core"
 	"github.com/openctemio/sdk-go/pkg/ctlog"
@@ -199,6 +200,13 @@ type Options struct {
 	// Content is the sensor's scanner content, when it manages any (see
 	// Content).
 	Content Content
+	// PacingLevel is the pacing level a job without a signed budget runs at
+	// on this sensor: "gentle", "standard" or "fast" ("" reads
+	// SENSOR_PACING_LEVEL, then Standard). It is the sensor's own
+	// operator's choice, never the platform's; the local policy's
+	// rate.max_host_rps and rate.max_host_inflight cap it like any budget
+	// (core.DefaultCommandExecutor.HostBudget). New refuses an unknown name.
+	PacingLevel string
 	// ScanTargetPolicy restricts the targets of dispatched scans (nil: the
 	// SDK default, core.DefaultScanTargetPolicy). Its AllowedRoots are
 	// logged as the scan workspace.
@@ -303,6 +311,9 @@ type settings struct {
 	name, apiURL, apiKey, sensorID, protocol string
 	commands                                 bool
 	shared                                   bool
+	// pacingLevel is the pacing level of jobs without a signed budget
+	// (Options.PacingLevel; "": Standard).
+	pacingLevel string
 	// serveOnly are the only command types accepted (Options.CommandTypes);
 	// nil: the served types.
 	serveOnly []string
@@ -464,6 +475,10 @@ func New(opts Options) (*Kit, error) {
 	s.apiURL = envOr(opts.APIURL, EnvAPIURL)
 	s.apiKey = envOr(opts.APIKey, EnvAPIKey)
 	s.sensorID = envOr(opts.SensorID, EnvSensorID)
+	s.pacingLevel = strings.ToLower(strings.TrimSpace(envOr(opts.PacingLevel, EnvPacingLevel)))
+	if _, ok := adapt.PacingFor(s.pacingLevel); !ok {
+		return nil, fmt.Errorf("%s=%q: want gentle, standard or fast", EnvPacingLevel, s.pacingLevel)
+	}
 	s.commands = !opts.DisableCommands
 	s.verbose = opts.Verbose
 
@@ -1374,6 +1389,8 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// (through the scan target policy), templates, callbacks, rate and
 	// run time.
 	executor.SetLocalPolicy(k.LocalPolicy())
+	// The operator's pacing level (checked in New).
+	_ = executor.SetPacingLevel(k.s.pacingLevel)
 	// Code-scan jobs ask the platform for their source's credential.
 	if sc, ok := any(k.client).(core.SourceCredentials); ok {
 		executor.SetSourceCredentials(sc)

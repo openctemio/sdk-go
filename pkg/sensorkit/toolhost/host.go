@@ -179,6 +179,14 @@ type RunOptions struct {
 	// forwarder's per-host adaptive rate stays under the lowest of this,
 	// the tool's rate param and the local policy's rate.max_rps.
 	TargetRate float64
+	// HostBudget is the per-host budget of the task's job
+	// (adapt.ResolveBudget; nil: none, the task runs under TargetRate
+	// alone). For a tool that connects to its targets, a confined task's
+	// forwarder then holds each host to it (rate and connections in
+	// flight), a canary request per host reads what the host answers where
+	// the forwarder cannot, and the outcome's TargetRate states the budget
+	// with the back-off and breaker counts (budget.go).
+	HostBudget *adapt.HostBudget
 	// Watch bounds the run (watch.go): a zero field takes the job's
 	// (core.RunWatchFrom of the task's context), then the default; a
 	// negative one turns that check off.
@@ -410,6 +418,10 @@ type prepared struct {
 	credLines []LogLine
 	// targetRate is RunOptions.TargetRate.
 	targetRate float64
+	// budget is the task's per-host budget (budgetOf; nil: none);
+	// budgetLine says it changed the tool's rate key (nil: it did not).
+	budget     *adapt.HostBudget
+	budgetLine *LogLine
 	// oob is RunOptions.OOB.
 	oob *egress.OOBServer
 	// mapping turns an exec tool's json or jsonl output into CTIS.
@@ -467,6 +479,11 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 		return nil, ierr, nil
 	}
 	cfg, rateLine, err := capRate(m, cfg, h.Policy)
+	if err != nil {
+		return nil, tool.AsError(tool.Invalid("%v", err)), nil
+	}
+	budget := budgetOf(m, o)
+	cfg, budgetLine, err := capBudgetRate(m, cfg, budget, task.Targets, confines(h.backend(), m))
 	if err != nil {
 		return nil, tool.AsError(tool.Invalid("%v", err)), nil
 	}
@@ -536,7 +553,7 @@ func (h *Host) prepare(ctx context.Context, m tool.Manifest, task tool.Task, o R
 	}
 	task.Egress = nil // kept in prepared only: it never travels with the task
 	p := &prepared{secretKey: h.SecretFingerprintKey, m: m, task: task, refused: adm.Refused, timeout: adm.Timeout, asked: task.Retest, rateLine: rateLine, contentPaths: contentPaths,
-		targetRate: o.TargetRate, egress: egressDialer, applied: applied, oob: o.OOB, inject: injected}
+		targetRate: o.TargetRate, budget: budget, budgetLine: budgetLine, egress: egressDialer, applied: applied, oob: o.OOB, inject: injected}
 	if task.IsRetest() && len(adm.Refused) > 0 {
 		// A retest never reaches a target the policy refused: its items
 		// are not sent and end unverifiable.
@@ -772,6 +789,11 @@ type session struct {
 	settledAt  time.Time
 	// watchStop is why the watch stopped the tool ("": it did not).
 	watchStop string
+	// throttle says the task's targets throttle the scan and the tool must
+	// stop (budget.go; nil: never); throttleStop is why it was stopped
+	// ("": it was not).
+	throttle     <-chan string
+	throttleStop string
 	// handshake is the start handshake timeout of this task.
 	handshake time.Duration
 	// oom is set when the kernel killed the tool for memory: "oom_kill"
@@ -812,6 +834,8 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 		return nil, err
 	}
 	defer eg.stop()
+	canary := h.startCanary(ctx, p, eg)
+	defer canary.end()
 	cpu := &core.ProcessCPU{}
 	t, err := be.Prepare(executor.TaskSpec{
 		ID: m.Name, Argv: argv, Env: h.taskEnv(m, o.Env), SetEnv: h.taskSetEnv(o.Env), Dir: p.workdir,
@@ -868,7 +892,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	_ = outW.Close()
 
 	s := &session{h: h, p: p, o: o, out: &Outcome{Sandbox: be.Status()}, ctx: ctx,
-		watch: watchFor(o.Watch, core.RunWatchFrom(ctx)), cpu: cpu, handshake: handshake}
+		watch: watchFor(o.Watch, core.RunWatchFrom(ctx)), cpu: cpu, handshake: handshake, throttle: canary.stopC()}
 	_, _, maxBytes, _ := m.Resources.Limits()
 	stopReason, stopClass := s.drive(runCtx, ctx, t, toolwire.NewWriter(inW), outR, idle, maxRecords, maxBytes)
 	_ = inW.Close()
@@ -891,7 +915,9 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 		}
 	}
 	s.finish(res, stopReason, stopClass, stderr, start, execution)
-	for _, l := range eg.finish(s.out, p.task.Targets) {
+	// The canary ends first: its counts are part of the rate outcome.
+	lines := canary.finish(s.out)
+	for _, l := range append(lines, eg.finish(s.out, p.task.Targets)...) {
 		s.log(l.Level, l.Msg, l.Fields)
 	}
 	egressRefusedVerdicts(s.out, p.asked)
@@ -973,6 +999,12 @@ func (s *session) drive(runCtx, parent context.Context, t executor.Task, w *tool
 		watchTick = tk.C
 	}
 	for {
+		// The stop for throttling is read only while the tool runs, so it
+		// is never consumed before the run started.
+		var throttle <-chan string
+		if state == stRunning && !canceled {
+			throttle = s.throttle
+		}
 		select {
 		case now := <-watchTick:
 			if state != stRunning || canceled {
@@ -986,6 +1018,13 @@ func (s *session) drive(runCtx, parent context.Context, t executor.Task, w *tool
 				_ = w.Write(toolwire.Cancel{Envelope: toolwire.Env(toolwire.TypeCancel), Reason: "stopped by the sensor: " + why})
 				cancelAt = time.After(cancelGrace)
 			}
+		case why := <-throttle:
+			// Every host of the task has its breaker open: a protocol
+			// cancel (the tool keeps what it settled), then a kill.
+			s.throttleStop = why
+			canceled = true
+			_ = w.Write(toolwire.Cancel{Envelope: toolwire.Env(toolwire.TypeCancel), Reason: "stopped by the sensor: " + why})
+			cancelAt = time.After(cancelGrace)
 		case <-runCtx.Done():
 			if parent.Err() != nil {
 				if !canceled && (errors.Is(parent.Err(), context.DeadlineExceeded) || errors.Is(context.Cause(parent), core.ErrStoppedByPlatform)) {
@@ -1300,8 +1339,20 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 	if !s.budgetStop && s.watchStop != "" && runErr != nil && runErr.Class == tool.Canceled {
 		runErr = s.watchOutcome()
 	}
+	throttleStopped := false
+	if !s.budgetStop && s.throttleStop != "" && runErr != nil && runErr.Class == tool.Canceled {
+		// Stopped because its targets throttle the scan: nothing the tool
+		// obtained is discarded, the rest is unfinished.
+		runErr = &tool.Error{Class: tool.RateLimited, Retryable: true, Detail: "stopped by the sensor: " + s.throttleStop}
+		s.log("warn", runErr.Detail, map[string]any{"host_budget": "throttle_stop"})
+		pacingTotals.stops.Add(1)
+		throttleStopped = !p.task.IsRetest()
+	}
 	stoppedPartway := false
 	switch {
+	case throttleStopped:
+		out.Status = tool.StatusPartial
+		stoppedPartway = true
 	case runErr != nil && runErr.Class == tool.ResourceExhausted:
 		// Stopped at the output limit: what was accepted is delivered.
 		out.Status = tool.StatusPartial
@@ -1340,6 +1391,9 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 	p.addRefused(out)
 	markOutcomes(out)
 	out.Verdicts = p.verdicts(runErr)
+	if p.budgetLine != nil {
+		out.Logs = append(out.Logs, *p.budgetLine)
+	}
 	if p.rateLine != nil {
 		out.Logs = append(out.Logs, *p.rateLine)
 	}

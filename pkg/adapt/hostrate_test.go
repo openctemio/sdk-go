@@ -194,7 +194,11 @@ func TestBreakerJitterSpreadsTheOpenTime(t *testing.T) {
 func TestNeverBelowTheFloorAndAFloorGap(t *testing.T) {
 	c, clk := testCtl(t, 4)
 	for range 10 {
+		// A host that pushes back and also answers: its breaker stays
+		// closed (a run of nothing but push-back opens it, see
+		// TestThrottleRunOpensTheBreakerAndCountsTheSignals).
 		c.ReportHTTP("h", 429, "")
+		c.ReportHTTP("h", 200, "")
 		window(clk)
 		if r := c.Rate("h"); r < TargetRate.Floor {
 			t.Fatalf("rate %v below the floor", r)

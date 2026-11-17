@@ -106,6 +106,15 @@ type ScanOptions struct {
 	// its pacing level (adapt.Pacing); a chosen value it keeps.
 	ChosenSettings []string `yaml:"-" json:"-"`
 
+	// HostBudget is the per-host budget the scan runs under
+	// (DefaultCommandExecutor.HostBudget): the most requests per second and
+	// requests in flight one target host gets, whatever the scan's other
+	// limits and settings say. A scanner maps it to its tool's flags
+	// (adapt.HostBudget.ToolPace) and hands it to the tool host
+	// (toolhost.RunOptions.HostBudget). The zero value (a caller that is
+	// not the command executor) reads as adapt.DefaultBudget.
+	HostBudget adapt.HostBudget `yaml:"-" json:"-"`
+
 	// Capability, Params and MaxTier are a capability job's (see
 	// ScanCommandPayload); only a CapabilityScanner receives them.
 	Capability string                     `yaml:"-" json:"-"`

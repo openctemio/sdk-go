@@ -143,6 +143,11 @@ type Limits struct {
 	// connections, and requests on a connection the forwarder reads, per
 	// second (0: Rate). The rate starts below it and never exceeds it.
 	PerHostRate float64
+	// PerHostConns is how many connections to one host may be open at once
+	// (0: no bound besides MaxConns): the host budget's requests in flight
+	// (adapt.HostBudget.Inflight). A connection over it waits for one to
+	// end, at most DialTimeout, and is then refused.
+	PerHostConns int
 	// MaxConns is how many connections may be open at once (0: 256).
 	MaxConns int
 	// DialTimeout bounds one upstream dial (0: 15s).
@@ -233,6 +238,83 @@ type Forwarder struct {
 	dropped     int
 	tally       Tally
 	conns       chan struct{}
+	// hostConns are the per-host connection slots (Limits.PerHostConns).
+	hostMu    sync.Mutex
+	hostConns map[string]chan struct{}
+}
+
+// ProtocolCanary is the Record protocol of the runtime's own canary request
+// toward a target (DialTarget).
+const ProtocolCanary = "canary"
+
+// ErrHostBusy is the error of a connection that found every slot of its
+// host taken for DialTimeout (Limits.PerHostConns).
+var ErrHostBusy = errors.New("egress: the host's connections in flight are at the budget")
+
+// hostSlot takes one of host's connection slots, waiting at most
+// DialTimeout for one. The returned func frees it (once). Without a
+// per-host bound it returns at once.
+func (f *Forwarder) hostSlot(ctx context.Context, host string) (func(), error) {
+	if f.limits.PerHostConns <= 0 {
+		return func() {}, nil
+	}
+	f.hostMu.Lock()
+	if f.hostConns == nil {
+		f.hostConns = map[string]chan struct{}{}
+	}
+	slots, ok := f.hostConns[host]
+	if !ok {
+		if len(f.hostConns) >= adapt.TargetRate.MaxHosts {
+			// Past the bound every further host shares one set of slots.
+			host = "*"
+			slots, ok = f.hostConns[host]
+		}
+		if !ok {
+			slots = make(chan struct{}, f.limits.PerHostConns)
+			f.hostConns[host] = slots
+		}
+	}
+	f.hostMu.Unlock()
+	t := time.NewTimer(f.limits.DialTimeout)
+	defer t.Stop()
+	select {
+	case slots <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-slots }) }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-t.C:
+		return nil, ErrHostBusy
+	}
+}
+
+// DialTarget opens a connection to host:port for the runtime's own canary
+// request (adapt.Canary): the same scope check, pinned addresses and
+// upstream as a tool's connection, recorded with protocol "canary". The
+// caller asked the host's rate controller itself (adapt.HostRate.AcquireProbe); the
+// connection takes none of the host's connection slots and is not counted
+// as the tool's in the tally or the reach summary.
+func (f *Forwarder) DialTarget(ctx context.Context, host string, port int) (net.Conn, error) {
+	c, rec, err := f.dial(ctx, ProtocolCanary, host, port)
+	if err != nil {
+		return nil, err
+	}
+	f.record(*rec)
+	return c, nil
+}
+
+// PerHostLimits are the bounds one host is held to: the ceiling of its
+// adaptive rate and the connections open at once (0: only MaxConns).
+func (f *Forwarder) PerHostLimits() (rate float64, conns int) {
+	return f.limits.PerHostRate, f.limits.PerHostConns
+}
+
+// Opaque reports whether the forwarder passes a connection to host:port
+// through without reading it (no path limit, web scope or identification
+// applies): the answers on it are invisible to the rate controller, which
+// is what a canary is for.
+func (f *Forwarder) Opaque(host string, port int) bool {
+	return f.guardFor(host, port) == nil
 }
 
 // New returns the forwarder of one task. Names are normalized (lower case,
@@ -416,8 +498,9 @@ func (f *Forwarder) allowRate(ctx context.Context, host string) error {
 // dial checks, rate-limits and dials host:port; it records the attempt.
 func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (net.Conn, *Record, error) {
 	rec := &Record{Time: time.Now().UTC(), Protocol: protocol, Host: host, Port: port}
+	canary := protocol == ProtocolCanary
 	target := f.Reach
-	if f.isVendor(normName(host)) {
+	if f.isVendor(normName(host)) || canary {
 		target = nil
 	}
 	addrs, err := f.Resolve(ctx, host, port)
@@ -425,15 +508,30 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 		if reach.Classify(err) == reach.DNSFailure {
 			target.RecordErr(host, netip.Addr{}, port, err)
 		}
-		if errors.Is(err, ErrRefused) {
+		if errors.Is(err, ErrRefused) && !canary {
 			f.count(host, false)
 		}
 		rec.Verdict, rec.Reason = Refused, err.Error()
 		f.record(*rec)
 		return nil, nil, err
 	}
-	f.count(host, true)
-	if err := f.allowRate(ctx, normName(host)); err != nil {
+	if !canary {
+		f.count(host, true)
+	}
+	// The host's connections in flight first (a wait there spends no rate),
+	// then the task's and the host's rate. The canary waited for the
+	// host's rate before it dialed and takes no slot: it is one connection
+	// every few seconds, and it must not wait behind a tool that keeps
+	// every slot taken, which is when its answer matters most.
+	release := func() {}
+	if !canary {
+		if release, err = f.hostSlot(ctx, normName(host)); err == nil {
+			if err = f.allowRate(ctx, normName(host)); err != nil {
+				release()
+			}
+		}
+	}
+	if err != nil {
 		rec.Verdict, rec.Reason = Refused, "rate: "+err.Error()
 		f.record(*rec)
 		return nil, nil, err
@@ -478,7 +576,7 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 			}
 			// The connection never outlives the forwarder's context, and a
 			// silent host cannot hold it open (conn_bound.go).
-			return bound(ctx, c, f.limits.UpstreamIdle), rec, nil
+			return boundRelease(ctx, c, f.limits.UpstreamIdle, release), rec, nil
 		}
 		lastErr, targetErr, pathErr = err, !pathFault, nil
 		if pathFault {
@@ -490,6 +588,7 @@ func (f *Forwarder) dial(ctx context.Context, protocol, host string, port int) (
 	}
 	// A path that failed says nothing about the target: the target's rate
 	// is paced on what the target did only.
+	release()
 	if ctx.Err() == nil && targetErr {
 		f.hostRate.ReportDial(normName(host), port, lastErr)
 	}

@@ -59,6 +59,25 @@ type HostRate struct {
 	// task paces itself alone), tenant the organization of its job.
 	shared *SensorRate
 	tenant string
+	// budget is the per-host budget the ceiling came from (SetBudget), for
+	// the summary; canary what the task's canary saw (SetCanary).
+	budget *HostBudget
+	canary *CanarySummary
+}
+
+// SetBudget records the per-host budget the controller's ceiling came from,
+// so the task's Summary states it. It does not move the ceiling.
+func (c *HostRate) SetBudget(b HostBudget) {
+	c.mu.Lock()
+	c.budget = &b
+	c.mu.Unlock()
+}
+
+// SetCanary records what the task's canary saw, for the Summary.
+func (c *HostRate) SetCanary(s CanarySummary) {
+	c.mu.Lock()
+	c.canary = &s
+	c.mu.Unlock()
 }
 
 // Share makes the task share target state with every other task of the
@@ -100,6 +119,16 @@ type Event struct {
 	// vendor challenge or block page) the host is a block from its first
 	// answer: the vendor marker is evidence a bare 403 is not.
 	Edge edgeprotect.Verdict
+	// Opaque marks an Answered signal that only says bytes came back on a
+	// tunnel the sender could not read (HTTPS passed through): the host is
+	// alive, but what it answered is unknown, so it does not end a run of
+	// push-back answers.
+	Opaque bool
+	// Probe marks a signal from the task's own canary request (Canary): a
+	// plain GET of the origin. A reset or a timeout of that request is
+	// push-back from a host that served it before, never the refusal of
+	// one tool request (resetRefusal).
+	Probe bool
 }
 
 // Reasons of an Event and of a Change.
@@ -118,6 +147,9 @@ const (
 	ReasonClosed     = "breaker_closed"
 	ReasonGaveUp     = "breaker_gave_up"
 	ReasonRetryAfter = "retry_after"
+	// ReasonThrottled: a run of push-back answers with no ordinary answer
+	// between them opened the host's breaker.
+	ReasonThrottled = "throttled"
 )
 
 // Gap reasons: why a host's coverage is incomplete.
@@ -212,6 +244,41 @@ type Summary struct {
 	// Gaps lists at most TargetRate.MaxGaps hosts; GapsTotal counts all.
 	Gaps      []Gap `json:"gaps,omitempty"`
 	GapsTotal int   `json:"gaps_total,omitempty"`
+	// Budget is the per-host budget the task ran under (nil: the caller
+	// gave only a ceiling). Additive, as every member below: an older
+	// receiver ignores them.
+	Budget *HostBudget `json:"budget,omitempty"`
+	// Backoffs counts the times a host's rate was lowered, CircuitOpens the
+	// times a host's breaker opened (or gave the host up), over all hosts.
+	Backoffs     int `json:"backoffs,omitempty"`
+	CircuitOpens int `json:"circuit_opens,omitempty"`
+	// HostStats lists the hosts that were slowed or whose breaker opened
+	// (at most TargetRate.MaxGaps, by name); HostStatsTotal counts all.
+	HostStats      []HostStat `json:"host_stats,omitempty"`
+	HostStatsTotal int        `json:"host_stats_total,omitempty"`
+	// Canary is what the task's canary requests saw (nil: none ran).
+	Canary *CanarySummary `json:"canary,omitempty"`
+}
+
+// HostStat is one host's pacing outcome: where its rate ended, how often it
+// was lowered and its breaker opened, and the push-back signals counted. It
+// holds numbers only, never anything the host sent.
+type HostStat struct {
+	Host string `json:"host"`
+	// Rate is the rate the host ended at, Min the lowest it reached.
+	Rate float64 `json:"rate"`
+	Min  float64 `json:"min"`
+	// Backoffs and CircuitOpens are as in Summary, for this host.
+	Backoffs     int `json:"backoffs,omitempty"`
+	CircuitOpens int `json:"circuit_opens,omitempty"`
+	// HTTP429 and HTTP503 count those answers; Resets and Timeouts the
+	// connections the host reset or left unanswered; RetryAfterSeconds is
+	// the longest Retry-After it asked for.
+	HTTP429           int `json:"http_429,omitempty"`
+	HTTP503           int `json:"http_503,omitempty"`
+	Resets            int `json:"resets,omitempty"`
+	Timeouts          int `json:"timeouts,omitempty"`
+	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
 }
 
 // ErrHostUnavailable is the error of a connection the breaker refused.
@@ -265,6 +332,56 @@ type hostState struct {
 	gapCause  string
 	// tripReason is the failure reason of the breaker's last trip.
 	tripReason string
+
+	// answeredHTTP: an HTTP answer of the host was read in this task (not
+	// only bytes on an opaque tunnel).
+	answeredHTTP bool
+	// congRun counts push-back answers with no ordinary HTTP answer
+	// between them, at most one per TargetRate.ThrottleSpacing;
+	// lastCong is when the last one was counted.
+	congRun  int
+	lastCong time.Time
+	// probe403 counts 403 answers in a row to the canary request.
+	probe403 int
+	// Counters of the host's pacing outcome (HostStat).
+	backoffs, circuitOpens int
+	n429, n503             int
+	nReset, nTimeout       int
+	maxRetryAfter          time.Duration
+}
+
+// count adds one push-back or failure signal to the host's counters.
+func (h *hostState) count(reason string, retryAfter time.Duration) {
+	switch reason {
+	case ReasonHTTP429:
+		h.n429++
+	case ReasonHTTP503:
+		h.n503++
+	case ReasonReset:
+		h.nReset++
+	case ReasonTimeout:
+		h.nTimeout++
+	}
+	h.maxRetryAfter = max(h.maxRetryAfter, retryAfter)
+}
+
+// throttleDetail is the detail of a throttled gap: counts only.
+func (h *hostState) throttleDetail() string {
+	parts := []string{"throttled by target:"}
+	add := func(k string, n int) {
+		if n > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", k, n))
+		}
+	}
+	add("429", h.n429)
+	add("503", h.n503)
+	add("resets", h.nReset)
+	add("timeouts", h.nTimeout)
+	if h.maxRetryAfter > 0 {
+		parts = append(parts, "retry_after="+h.maxRetryAfter.Round(time.Second).String())
+	}
+	parts = append(parts, fmt.Sprintf("backoffs=%d", h.backoffs), fmt.Sprintf("circuit_opens=%d", h.circuitOpens))
+	return strings.Join(parts, " ")
 }
 
 // NewHostRate returns the controller of one task with the given ceiling
@@ -312,6 +429,22 @@ func (c *HostRate) newState(host string, now time.Time) *hostState {
 // by ctx. It returns ErrHostUnavailable when the host's breaker is open or
 // the host asked to wait longer than TargetRate.HoldMax.
 func (c *HostRate) Acquire(ctx context.Context, host string) error {
+	return c.acquire(ctx, host, false)
+}
+
+// AcquireProbe is Acquire for the task's canary request: the breaker, the
+// host's Retry-After and its cooldowns apply as to any request, but it does
+// not queue for the host's rate behind the tool's requests. It takes a
+// token when one is free and goes out either way: a tool that keeps the
+// rate's queue full (when the host was slowed to a request a second, a
+// queue of eight is eight seconds) would otherwise silence the one request
+// that reads what the host answers. The canary sends at most one request
+// every CanaryPace.FailInterval, so that is the most it adds to the rate.
+func (c *HostRate) AcquireProbe(ctx context.Context, host string) error {
+	return c.acquire(ctx, host, true)
+}
+
+func (c *HostRate) acquire(ctx context.Context, host string, probe bool) error {
 	c.mu.Lock()
 	now := c.now()
 	h := c.state(host, now)
@@ -377,6 +510,10 @@ func (c *HostRate) Acquire(ctx context.Context, host string) error {
 		case <-t.C:
 		}
 	}
+	if probe {
+		_ = lim.Allow()
+		return nil
+	}
 	if err := lim.Wait(ctx); err != nil {
 		return err
 	}
@@ -405,6 +542,11 @@ func (c *HostRate) Report(host string, e Event) {
 	case Answered:
 		h.oks++
 		h.fails, h.run403, h.runReset, h.answered = 0, 0, 0, true
+		if !e.Opaque {
+			// An ordinary HTTP answer ends a run of push-back; bytes on a
+			// tunnel nobody read may have been more push-back.
+			h.congRun, h.probe403, h.answeredHTTP = 0, 0, true
+		}
 		c.close(h, &ch)
 		if c.shared != nil {
 			c.shared.answered(c.tenant, host)
@@ -414,6 +556,8 @@ func (c *HostRate) Report(host string, e Event) {
 		// breaker, and the rate comes down.
 		h.bad++
 		h.fails = 0
+		h.answeredHTTP = true
+		h.count(e.Reason, min(e.RetryAfter, c.b.RetryAfterMax))
 		c.close(h, &ch)
 		if e.RetryAfter > 0 {
 			nb := now.Add(min(e.RetryAfter, c.b.RetryAfterMax))
@@ -422,6 +566,7 @@ func (c *HostRate) Report(host string, e Event) {
 			}
 		}
 		c.decrease(h, now, e.Reason, &ch)
+		c.throttled(h, now, &ch)
 		if c.shared != nil {
 			c.shared.congested(c.tenant, host, e.RetryAfter)
 		}
@@ -442,6 +587,24 @@ func (c *HostRate) Report(host string, e Event) {
 			}
 			break
 		}
+		if e.Probe {
+			// The canary's request, which the host served before, is
+			// forbidden now: the host turned the scan away. ThrottleRun of
+			// them in a row are a block.
+			h.bad++
+			c.decrease(h, now, ReasonBlocked, &ch)
+			h.probe403++
+			if h.probe403 >= c.b.ThrottleRun {
+				h.probe403 = 0
+				detail := fmt.Sprintf("%d consecutive 403 answers to a request the host served before", c.b.ThrottleRun)
+				c.setGap(h, GapBlocked, detail)
+				c.trip(h, now, ReasonBlocked, &ch)
+				if c.shared != nil {
+					c.shared.block(c.tenant, host, edgeprotect.Verdict{}, detail)
+				}
+			}
+			break
+		}
 		if !h.answered {
 			break
 		}
@@ -458,7 +621,8 @@ func (c *HostRate) Report(host string, e Event) {
 			}
 		}
 	case Failed:
-		if e.Reason == ReasonReset && (h.answered || h.connected) {
+		h.count(e.Reason, 0)
+		if e.Reason == ReasonReset && (h.answered || h.connected) && !e.Probe {
 			c.resetRefusal(h, now, &ch)
 			break
 		}
@@ -466,11 +630,41 @@ func (c *HostRate) Report(host string, e Event) {
 		h.fails++
 		c.decrease(h, now, e.Reason, &ch)
 		if h.brk == halfOpen || (h.brk == closed && h.fails >= c.b.BreakerFailures) {
+			if e.Probe && h.answeredHTTP {
+				// The host served the canary before and now resets it or
+				// leaves it unanswered: it throttles the scan, it did not
+				// go away.
+				c.setGap(h, GapThrottled, "")
+			}
 			c.trip(h, now, e.Reason, &ch)
 		}
 	}
 	c.mu.Unlock()
 	c.emit(ch)
+}
+
+// throttled counts one push-back answer toward the host's run of them (at
+// most one per ThrottleSpacing, so the answers to one burst count once).
+// ThrottleRun of them with no ordinary HTTP answer between open the
+// breaker: the host answers nothing but "slow down", so it is left alone
+// for the breaker's open time, and at least as long as it asked
+// (Retry-After, capped), and it is a coverage gap (GapThrottled) whose
+// detail counts the signals. Called with c.mu held.
+func (c *HostRate) throttled(h *hostState, now time.Time, ch *[]Change) {
+	if h.congRun > 0 && now.Sub(h.lastCong) < c.b.ThrottleSpacing {
+		return
+	}
+	h.congRun++
+	h.lastCong = now
+	if h.congRun < c.b.ThrottleRun {
+		return
+	}
+	h.congRun = 0
+	c.setGap(h, GapThrottled, "")
+	c.trip(h, now, ReasonThrottled, ch)
+	if h.brk == open && h.notBefore.After(h.openUntil) {
+		h.openUntil = h.notBefore
+	}
 }
 
 // resetRefusal handles a connection reset from a host that accepted
@@ -613,6 +807,7 @@ func (c *HostRate) decrease(h *hostState, now time.Time, reason string, ch *[]Ch
 	}
 	h.lastDecrease = now
 	h.throttled = true
+	h.backoffs++
 	h.slowStart = false
 	if h.rate <= c.floor {
 		h.floorStrike++
@@ -646,6 +841,7 @@ func (c *HostRate) trip(h *hostState, now time.Time, reason string, ch *[]Change
 		return
 	}
 	h.trips++
+	h.circuitOpens++
 	h.fails, h.probing = 0, false
 	h.tripReason = reason
 	if h.trips >= c.b.BreakerMaxTrips {
@@ -688,6 +884,8 @@ func (c *HostRate) lose(h *hostState, reason, detail string) {
 func gapRank(r string) int {
 	switch r {
 	case GapBlocked:
+		return 5
+	case GapThrottled:
 		return 4
 	case GapBreakerOpen:
 		return 3
@@ -764,7 +962,7 @@ func (c *HostRate) Rate(host string) float64 {
 func (c *HostRate) Summary() Summary {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := Summary{Ceiling: c.ceiling, Floor: c.floor, Start: c.start(), Min: c.start(), Final: c.start()}
+	s := Summary{Ceiling: c.ceiling, Floor: c.floor, Start: c.start(), Min: c.start(), Final: c.start(), Budget: c.budget, Canary: c.canary}
 	states := make([]*hostState, 0, len(c.hosts)+1)
 	for _, h := range c.hosts {
 		states = append(states, h)
@@ -789,10 +987,25 @@ func (c *HostRate) Summary() Summary {
 		if h.brk == down {
 			s.Unreachable++
 		}
+		s.Backoffs += h.backoffs
+		s.CircuitOpens += h.circuitOpens
+		if h.backoffs > 0 || h.circuitOpens > 0 {
+			s.HostStatsTotal++
+			if len(s.HostStats) < c.b.MaxGaps {
+				s.HostStats = append(s.HostStats, HostStat{Host: h.name, Rate: h.rate, Min: h.min,
+					Backoffs: h.backoffs, CircuitOpens: h.circuitOpens, HTTP429: h.n429, HTTP503: h.n503,
+					Resets: h.nReset, Timeouts: h.nTimeout, RetryAfterSeconds: int(h.maxRetryAfter / time.Second)})
+			}
+		}
 		if h.gap != "" {
 			s.GapsTotal++
 			if len(s.Gaps) < c.b.MaxGaps {
-				s.Gaps = append(s.Gaps, Gap{Host: h.name, Reason: h.gap, Detail: h.gapDetail, Edge: h.gapEdge, Vendor: h.gapVendor, Cause: h.gapCause})
+				detail := h.gapDetail
+				if h.gap == GapThrottled {
+					// The counts as they stand when the task ends.
+					detail = h.throttleDetail()
+				}
+				s.Gaps = append(s.Gaps, Gap{Host: h.name, Reason: h.gap, Detail: detail, Edge: h.gapEdge, Vendor: h.gapVendor, Cause: h.gapCause})
 			}
 		}
 	}

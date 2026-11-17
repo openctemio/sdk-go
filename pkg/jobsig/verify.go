@@ -40,6 +40,7 @@ const (
 	ReasonTargets       = "targets"
 	ReasonTemplates     = "templates"
 	ReasonLimits        = "limits"
+	ReasonPacing        = "pacing"
 	ReasonContent       = "content"
 	ReasonNonce         = "nonce"
 	ReasonReplay        = "replay"
@@ -405,6 +406,13 @@ func (v *Verifier) checkStatement(st *Statement, keyID string, b Binding) error 
 	// a limit the sensor cannot read is refused, never dropped.
 	if err := scopelimit.Validate(st.Limits, st.Targets); err != nil {
 		return refusef(ReasonLimits, "%v", err)
+	}
+	// A budget the sensor cannot read is refused, never dropped: a job
+	// signed to run gently never runs at the sensor's default instead.
+	if st.Pacing != nil {
+		if err := st.Pacing.Validate(); err != nil {
+			return refusef(ReasonPacing, "%v", err)
+		}
 	}
 	if raw, err := base64.RawURLEncoding.DecodeString(st.Nonce); err != nil || len(raw) != NonceBytes {
 		return refusef(ReasonNonce, "nonce is not %d bytes of base64url", NonceBytes)
