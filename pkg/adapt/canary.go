@@ -3,6 +3,7 @@ package adapt
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
@@ -96,6 +97,9 @@ type CanarySummary struct {
 	Pushback int `json:"pushback,omitempty"`
 	Failed   int `json:"failed,omitempty"`
 	Held     int `json:"held,omitempty"`
+	// Unverified is how many requests ended on a certificate that did not
+	// verify: the canary reads nothing from such a host.
+	Unverified int `json:"unverified,omitempty"`
 }
 
 // Canary watches the hosts of one task from outside the tool: a plain GET
@@ -119,8 +123,8 @@ type CanarySummary struct {
 // no redirect.
 //
 // What it does not see: a limit that applies to the tool's requests only
-// (a path, a payload or a session the canary does not use), and a host no
-// target names by URL.
+// (a path, a payload or a session the canary does not use), a host no
+// target names by URL, and a host whose certificate does not verify.
 type Canary struct {
 	rate   *HostRate
 	do     func(*http.Request) (*http.Response, error)
@@ -207,6 +211,11 @@ func (c *Canary) probe(ctx context.Context, t CanaryTarget, base *int) time.Dura
 		if ctx.Err() != nil {
 			return c.b.Interval
 		}
+		if certUnverified(err) {
+			// Not a host the canary reads: no signal, and no hurry.
+			c.add(func(s *CanarySummary) { s.Unverified++ })
+			return c.b.Interval
+		}
 		reason := FailureReason(err)
 		if reason == "" && rctx.Err() != nil {
 			reason = ReasonTimeout
@@ -246,16 +255,20 @@ func (c *Canary) probe(ctx context.Context, t CanaryTarget, base *int) time.Dura
 // opened by dial (the task's way out: its forwarder, or a dialer bound to
 // the addresses the task's targets were admitted at), and a function that
 // releases it. A request uses one connection and closes it, follows no
-// redirect and goes through no proxy of the environment. The target's
-// certificate is not verified, as the scan tools do not verify it (targets
-// serve self-signed and expired certificates): the canary sends no secret
-// and only classifies the status and the first bytes of the answer.
-func CanaryDo(dial func(ctx context.Context, host string, port int) (net.Conn, error)) (do func(*http.Request) (*http.Response, error), release func()) {
+// redirect and goes through no proxy of the environment.
+//
+// The target's certificate is verified against roots (nil: the system's).
+// A host whose certificate does not verify (self-signed, expired, another
+// name) is not read: what an unauthenticated peer answers must not steer
+// the scan's rate, and a sensor whose policy forbids unverified TLS stays
+// inside it. Such a probe is counted (CanarySummary.Unverified) and says
+// nothing about the host.
+func CanaryDo(dial func(ctx context.Context, host string, port int) (net.Conn, error), roots *x509.CertPool) (do func(*http.Request) (*http.Response, error), release func()) {
 	tr := &http.Transport{
 		Proxy:                 nil,
 		DisableKeepAlives:     true,
 		ForceAttemptHTTP2:     false,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, //nolint:gosec // G402: scan targets, see above
+		TLSClientConfig:       &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout:   CanaryPace.Timeout,
 		ResponseHeaderTimeout: CanaryPace.Timeout,
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
@@ -273,4 +286,10 @@ func CanaryDo(dial func(ctx context.Context, host string, port int) (net.Conn, e
 	client := &http.Client{Transport: tr, Timeout: CanaryPace.Timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	return client.Do, tr.CloseIdleConnections
+}
+
+// certUnverified reports whether err is a certificate that did not verify.
+func certUnverified(err error) bool {
+	var cv *tls.CertificateVerificationError
+	return errors.As(err, &cv)
 }

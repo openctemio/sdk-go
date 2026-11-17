@@ -9,6 +9,7 @@ package egress
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
@@ -122,6 +123,16 @@ func (l *resetListener) Accept() (net.Conn, error) {
 	}
 }
 
+// roots are the authorities of the target's test certificate (it names
+// example.com), for a canary that verifies it.
+func (m *meter) roots() *x509.CertPool {
+	pool := x509.NewCertPool()
+	if c := m.srv.Certificate(); c != nil {
+		pool.AddCert(c)
+	}
+	return pool
+}
+
 func (m *meter) port() int { return m.srv.Listener.Addr().(*net.TCPAddr).Port }
 
 // url is the target's URL under name (a name the forwarder pins to
@@ -217,9 +228,9 @@ func hammer(ctx context.Context, wg *sync.WaitGroup, proxyAddr, target string, w
 
 // canary starts a canary on the forwarder for the given target URLs, wired
 // as the tool host wires it, and returns its stop function.
-func canary(t *testing.T, f *Forwarder, urls ...string) func() {
+func canary(t *testing.T, f *Forwarder, roots *x509.CertPool, urls ...string) func() {
 	t.Helper()
-	do, release := adapt.CanaryDo(f.DialTarget)
+	do, release := adapt.CanaryDo(f.DialTarget, roots)
 	targets, unwatched := adapt.CanaryTargets(urls)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -436,9 +447,9 @@ func TestHTTPSWithoutInterceptionNeedsTheCanary(t *testing.T) {
 	blind := newMeter(t, true)
 	blind.limit.Store(1)
 	blind.retryAfter = ""
-	fb, proxyB := budgetForwarder(t, b, "a.example.com")
+	fb, proxyB := budgetForwarder(t, b, "example.com")
 	run(t, 3*time.Second, func(ctx context.Context, wg *sync.WaitGroup) {
-		hammer(ctx, wg, proxyB, blind.url("a.example.com"), 32)
+		hammer(ctx, wg, proxyB, blind.url("example.com"), 32)
 	})
 	blindTotal, _, _, blindRefused, _ := blind.counts(time.Time{})
 	if s := fb.TargetRate().Summary(); s.Backoffs != 0 || s.CircuitOpens != 0 || len(s.Gaps) != 0 {
@@ -448,9 +459,9 @@ func TestHTTPSWithoutInterceptionNeedsTheCanary(t *testing.T) {
 	m := newMeter(t, true)
 	m.limit.Store(1)
 	m.retryAfter = ""
-	f, proxy := budgetForwarder(t, b, "a.example.com")
-	target := m.url("a.example.com")
-	stop := canary(t, f, target)
+	f, proxy := budgetForwarder(t, b, "example.com")
+	target := m.url("example.com")
+	stop := canary(t, f, m.roots(), target)
 	var lifted time.Time
 	run(t, 12*time.Second, func(ctx context.Context, wg *sync.WaitGroup) {
 		hammer(ctx, wg, proxy, target, 32)
@@ -480,7 +491,7 @@ func TestHTTPSWithoutInterceptionNeedsTheCanary(t *testing.T) {
 	}
 	var gap *adapt.Gap
 	for i := range s.Gaps {
-		if s.Gaps[i].Host == "a.example.com" {
+		if s.Gaps[i].Host == "example.com" {
 			gap = &s.Gaps[i]
 		}
 	}
@@ -506,9 +517,9 @@ func TestBackoffOn503Bursts(t *testing.T) {
 	quick(t)
 	b := adapt.DefaultBudget()
 	m := newMeter(t, true)
-	f, proxy := budgetForwarder(t, b, "a.example.com")
-	target := m.url("a.example.com")
-	stop := canary(t, f, target)
+	f, proxy := budgetForwarder(t, b, "example.com")
+	target := m.url("example.com")
+	stop := canary(t, f, m.roots(), target)
 	start := time.Now()
 	run(t, 9*time.Second, func(ctx context.Context, wg *sync.WaitGroup) {
 		hammer(ctx, wg, proxy, target, 32)
@@ -551,9 +562,9 @@ func TestResetsOpenTheBreaker(t *testing.T) {
 	quick(t)
 	b := adapt.DefaultBudget()
 	m := newMeter(t, true)
-	f, proxy := budgetForwarder(t, b, "a.example.com")
-	target := m.url("a.example.com")
-	stop := canary(t, f, target)
+	f, proxy := budgetForwarder(t, b, "example.com")
+	target := m.url("example.com")
+	stop := canary(t, f, m.roots(), target)
 	run(t, 5*time.Second, func(ctx context.Context, wg *sync.WaitGroup) {
 		hammer(ctx, wg, proxy, target, 16)
 		wg.Add(1)
@@ -648,16 +659,16 @@ func TestScanTimeOnAWellBehavedHost(t *testing.T) {
 	measure := func(withBudget bool, delay time.Duration) time.Duration {
 		m := newMeter(t, true)
 		m.delay = delay
-		scope := Scope{Names: map[string][]netip.Addr{"a.example.com": {addr("127.0.0.1")}}}
+		scope := Scope{Names: map[string][]netip.Addr{"example.com": {addr("127.0.0.1")}}}
 		limits := Limits{Rate: float64(b.RPS), PerHostRate: float64(b.RPS)}
 		if withBudget {
 			limits.PerHostConns = b.Inflight
 		}
 		f := New(scope, limits)
 		proxy := serve(t, f)
-		target := m.url("a.example.com")
+		target := m.url("example.com")
 		if withBudget {
-			defer canary(t, f, target)()
+			defer canary(t, f, m.roots(), target)()
 		}
 		pu, _ := url.Parse("http://" + proxy)
 		var next atomic.Int64
@@ -697,5 +708,27 @@ func TestScanTimeOnAWellBehavedHost(t *testing.T) {
 		if delay <= 300*time.Millisecond && factor > 1.15 {
 			t.Errorf("a well-behaved host scans %.2f times slower under the budget", factor)
 		}
+	}
+}
+
+// The canary verifies the target's certificate. A host whose certificate
+// does not verify is not read: its 429 answers lower nothing, and the
+// summary counts the unverified requests.
+func TestCanaryDoesNotReadAnUnverifiedHost(t *testing.T) {
+	quick(t)
+	m := newMeter(t, true)
+	m.limit.Store(1)
+	m.retryAfter = ""
+	f, _ := budgetForwarder(t, adapt.DefaultBudget(), "example.com")
+	// nil roots: the system's, which do not know the test certificate.
+	stop := canary(t, f, nil, m.url("example.com"))
+	time.Sleep(1500 * time.Millisecond)
+	stop()
+	s := f.TargetRate().Summary()
+	if s.Canary == nil || s.Canary.Unverified == 0 || s.Canary.Pushback != 0 || s.Backoffs != 0 || s.CircuitOpens != 0 {
+		t.Fatalf("summary %+v canary %+v", s, s.Canary)
+	}
+	if total, _, _, _, _ := m.counts(time.Time{}); total != 0 {
+		t.Fatalf("%d requests reached a host whose certificate did not verify", total)
 	}
 }

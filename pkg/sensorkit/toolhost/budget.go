@@ -125,7 +125,7 @@ func (h *Host) startCanary(ctx context.Context, p *prepared, eg *taskEgress) *ta
 		}
 		return c
 	}
-	send, release := adapt.CanaryDo(dial)
+	send, release := adapt.CanaryDo(dial, nil)
 	id := p.task.Identity
 	do := func(req *http.Request) (*http.Response, error) {
 		req.Header.Set("User-Agent", useragent.String())

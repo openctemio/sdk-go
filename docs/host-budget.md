@@ -113,6 +113,7 @@ What the canary covers, and what it does not:
 | a 403 from an origin that answered the same request before (a block after five in a row) | an origin whose root is forbidden from the first request on (read as an ordinary answer) |
 | unconfined: stopping the tool when all of its hosts are open | unconfined: slowing one host of a run over several (the gap is recorded; the tool goes on) |
 | | a tool described only by a manifest (the exec profile) is held by the forwarder and has its rate key lowered, but gets no canary |
+| | a host whose certificate does not verify (self-signed, expired, another name): the canary verifies certificates and reads nothing from such a host, so what an unauthenticated peer answers never steers the rate |
 | | latency growth as a congestion signal (not implemented) |
 
 ## What the result says
