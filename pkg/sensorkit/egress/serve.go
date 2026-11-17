@@ -387,11 +387,12 @@ func (f *Forwarder) pipe(ctx context.Context, c net.Conn, br *bufio.Reader, up n
 		meterErr = errSlotEvicted
 	}
 	if evicted && meter.started && !meter.turned.Load() {
-		// The tunnel was closed while the forwarder could not be sure the
-		// host's last bytes were the end of the answer (its first request,
-		// or a client that offered HTTP/2): the answer may have been cut, so
-		// part of the host may not have been scanned. The sensor's own
-		// bound did it: the gap is GapSlotsFull.
+		// The tunnel was closed, after UnsureSlotIdle of quiet, while the
+		// forwarder could not be sure the host's last bytes were the end of
+		// the answer (its first request, or a client that offered HTTP/2):
+		// the answer may have been cut, so part of the host may not have
+		// been scanned. The sensor's own bound did it: the gap is
+		// GapSlotsFull. A sure tunnel (its answer ended) leaves none.
 		f.busyGap(pr.host)
 	}
 	if meterErr != nil {

@@ -129,15 +129,20 @@ flight over HTTP/1.1.
   connection, waiting. The tool sees its idle connection closed, as when a server closes an idle
   kept-alive connection, and opens a new one for its next request; nothing is reported about the host;
 - on a tunnel's first request, and on a tunnel whose client offered HTTP/2, the host's last bytes need
-  not be the answer (a TLS 1.3 session ticket arrives after the handshake; HTTP/2 control frames arrive
-  between answers), so such a tunnel is given five seconds before it counts as idle. **Limit:** an answer
-  to such a request that pauses longer than five seconds after other bytes from the host counts as idle
-  while it is still in flight, and a connection that waits for its slot may then close it (the tool
-  sees that answer cut short). Because the forwarder cannot tell such a cut from a tunnel that was
-  only idle, closing a tunnel in that state makes its host a coverage gap `slots_full` (below), so a
-  cut answer is never read as a host fully scanned;
+  not be the end of the answer (a TLS 1.3 session ticket arrives after the handshake; HTTP/2 control
+  frames arrive between answers), and the forwarder cannot tell an answer that pauses from a tunnel that
+  is idle after its answer. Such an **unsure** tunnel is not closed for another connection until it has
+  been quiet for **30 seconds** (`egress.UnsureSlotIdle`); until then a connection that waits for its slot
+  keeps waiting (past the 15 seconds below, at most 30 seconds longer), and the connections open to the
+  host still never exceed its slots. A tunnel whose client and host took turns (HTTP/1.1, a further
+  request after an answer) is **sure** and is closed at once once idle, with nothing reported. **Limit:**
+  an answer on an unsure tunnel that pauses longer than 30 seconds after other bytes from the host while a
+  connection waits for its slot is cut (the tool sees it cut short). Because the forwarder cannot tell such
+  a cut from an idle tunnel, closing an unsure tunnel makes its host a coverage gap `slots_full` (below),
+  so a cut answer is never read as a host fully scanned. Closing a sure tunnel never does, so ordinary
+  keep-alive reuse makes no gap;
 - a connection that finds no slot for 15 seconds (`Limits.DialTimeout`), every slot being held by a
-  connection with a request in flight, is refused, and **its host is a coverage gap** `slots_full` (detail
+  connection with a request in flight (and no unsure tunnel quiet, above), is refused, and **its host is a coverage gap** `slots_full` (detail
   "a connection was refused: every connection slot of the host's budget stayed in use"): the request
   never left, so the result must not read as "nothing found" for that host. The sensor's own bound
   caused it, not the host: the target keeps the outcome the tool gave it, and the gap alone makes the
@@ -436,8 +441,9 @@ read. That is deliberate: a limit a sensor cannot read must never be dropped sil
 - A connection the budget's slots refused is reported as a coverage gap of its host (`slots_full`), never
   as a host with nothing found and never as the host pushing back.
 - What is not held is stated above and is not hidden: the requests of a client that packs several into
-  one TLS record (bounded in bytes), the streams in flight on one HTTP/2 connection, a slow first answer
-  on a tunnel after other bytes from the host (counted as idle after five seconds), and every
-  bound but the tool's own flags when no forwarder is in the path.
+  one TLS record (bounded in bytes), the streams in flight on one HTTP/2 connection, an answer on an
+  unsure tunnel that pauses more than 30 seconds while a connection waits for its slot (cut, and its host
+  reported as a `slots_full` gap), and every bound but the tool's own flags when no forwarder is in the
+  path.
 - Nothing rotates addresses or changes the identification to get past a block. The only reactions are to
   slow down, to stop sending to a host whose breaker opened, and to report.

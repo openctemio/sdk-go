@@ -135,19 +135,25 @@ func (f *Forwarder) busyGap(host string) {
 // coming) keeps the connection.
 const DefaultSlotIdle = time.Second
 
-// slotIdleUnsure is how many times Limits.SlotIdle a tunnel is given
-// before it counts as idle while the forwarder cannot be sure that what
-// the host sent last was the answer: on the tunnel's first request (a TLS
-// 1.3 server sends its session tickets after the handshake, which can
-// arrive after the request left) and on a tunnel whose client offered
-// HTTP/2 (the host sends settings, window updates and pings between
-// answers). Still under Limits.DialTimeout with the defaults (5s of 15s).
-// An answer to such a request that pauses longer than this after other
-// bytes from the host counts as idle while it is still in flight: a
-// connection that waits for a slot may then close it, and the tool sees
-// that answer cut short; the host is then a coverage gap (busyGap), since
-// the forwarder cannot tell the cut from an idle tunnel.
-const slotIdleUnsure = 5
+// UnsureSlotIdle is how long a tunnel must be quiet before it counts as
+// idle while the forwarder cannot be sure that what the host sent last was
+// the end of the answer: on the tunnel's first request (a TLS 1.3 server
+// sends its session tickets after the handshake, which can arrive after
+// the request left) and on a tunnel whose client offered HTTP/2 (the host
+// sends settings, window updates and pings between answers). Such a
+// tunnel is unsure; one whose client and host took turns (HTTP/1.1, a
+// further request after the host's answer) is sure and counts as idle
+// after Limits.SlotIdle.
+//
+// An unsure tunnel is never closed for another connection before it has
+// been quiet this long: a connection that waits for its slot keeps waiting,
+// past Limits.DialTimeout if need be (Forwarder.hostSlot), rather than cut
+// an answer that may still be arriving, and the connections open to the
+// host still never exceed its slots. An unsure tunnel that is closed for
+// another connection after that time leaves a coverage gap of its host
+// (busyGap): its answer may still have been cut. Thirty seconds is far
+// longer than an answer ordinarily pauses once it has started.
+const UnsureSlotIdle = 30 * time.Second
 
 // slotIdleFor is how long the tunnel behind m may be quiet before it
 // counts as idle.
@@ -155,7 +161,7 @@ func (f *Forwarder) slotIdleFor(m *tunnelMeter) time.Duration {
 	if m.turned.Load() {
 		return f.limits.SlotIdle
 	}
-	return slotIdleUnsure * f.limits.SlotIdle
+	return f.unsureIdle
 }
 
 // errSlotEvicted ends a connection the forwarder closed while it was idle,
@@ -165,11 +171,15 @@ var errSlotEvicted = errors.New("egress: the idle connection was closed for anot
 // slotPool is the connection slots of one key (a host or an address): ch
 // holds one token per open connection. Under Forwarder.hostMu, waiters
 // counts the connections waiting for a slot and idle lists the open
-// connections that hold one and are idle, oldest first.
+// connections that hold one and are idle, oldest first. pending counts
+// the unsure tunnels that hold one and are quiet but do not count as idle
+// yet (UnsureSlotIdle): a connection that waits for a slot keeps waiting
+// past Limits.DialTimeout while one is pending.
 type slotPool struct {
 	ch      chan struct{}
 	waiters int
 	idle    []*connSlots
+	pending int
 }
 
 // release returns a func that frees one slot of the pool, once.
@@ -218,6 +228,9 @@ type connSlots struct {
 	up, client net.Conn
 
 	parked, evicted, done bool
+	// pending: an unsure tunnel quiet for Limits.SlotIdle that does not
+	// count as idle yet (slotPool.pending).
+	pending bool
 }
 
 // attach records the tool's side of the connection, closed with it when it
@@ -241,6 +254,36 @@ func (s *connSlots) unparkLocked() {
 	s.addrPool.remove(s)
 }
 
+// setPendingLocked sets whether the connection is a pending unsure tunnel
+// and keeps its pools' counts.
+func (s *connSlots) setPendingLocked(p bool) {
+	if s.pending == p {
+		return
+	}
+	s.pending = p
+	d := 1
+	if !p {
+		d = -1
+	}
+	if s.hostPool != nil {
+		s.hostPool.pending += d
+	}
+	if s.addrPool != nil {
+		s.addrPool.pending += d
+	}
+}
+
+// pend marks the connection a pending unsure tunnel while quiet (evaluated
+// with the lock held) says so and it is neither idle nor closed.
+func (s *connSlots) pend(quiet func() bool) {
+	if s == nil || (s.hostPool == nil && s.addrPool == nil) {
+		return
+	}
+	s.f.hostMu.Lock()
+	s.setPendingLocked(!s.parked && !s.evicted && !s.done && quiet())
+	s.f.hostMu.Unlock()
+}
+
 // park marks the connection idle when idle (evaluated with the lock held,
 // nil: always) says it is quiet. When a connection already waits for one
 // of its slots, it is closed at once and its slots go to that connection.
@@ -254,6 +297,7 @@ func (s *connSlots) park(idle func() bool) {
 		f.hostMu.Unlock()
 		return
 	}
+	s.setPendingLocked(false)
 	if (s.hostPool != nil && s.hostPool.waiters > 0) || (s.addrPool != nil && s.addrPool.waiters > 0) {
 		s.evicted = true
 		f.hostMu.Unlock()
@@ -284,6 +328,7 @@ func (s *connSlots) resume() error {
 	if s.evicted {
 		return errSlotEvicted
 	}
+	s.setPendingLocked(false)
 	s.unparkLocked()
 	return nil
 }
@@ -328,6 +373,7 @@ func (s *connSlots) drop() {
 		return
 	}
 	s.done = true
+	s.setPendingLocked(false)
 	s.unparkLocked()
 	s.f.hostMu.Unlock()
 	s.relAddr()
@@ -359,17 +405,22 @@ func (a *tunnelActivity) quiet(d time.Duration) bool {
 	return a.fromHost.Load() && time.Since(time.Unix(0, a.last.Load())) >= d
 }
 
-// watchIdle marks the tunnel idle whenever it has been quiet for idle(),
-// checked every tick, until stop is closed.
+// watchIdle marks the tunnel idle whenever it has been quiet for idle()
+// (Limits.SlotIdle for a sure tunnel, UnsureSlotIdle for an unsure one),
+// and an unsure tunnel that has been quiet for Limits.SlotIdle pending
+// until then, checked every tick, until stop is closed.
 func (s *connSlots) watchIdle(a *tunnelActivity, tick time.Duration, idle func() time.Duration, stop <-chan struct{}) {
 	t := time.NewTicker(max(tick, 10*time.Millisecond))
 	defer t.Stop()
+	short := s.f.limits.SlotIdle
 	for {
 		select {
 		case <-stop:
 			return
 		case <-t.C:
-			s.park(func() bool { return a.quiet(idle()) })
+			d := idle()
+			s.park(func() bool { return a.quiet(d) })
+			s.pend(func() bool { return d > short && a.quiet(short) })
 		}
 	}
 }

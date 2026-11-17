@@ -161,7 +161,9 @@ type Limits struct {
 	// SlotIdle is how long a kept-alive connection may be quiet after the
 	// host's answer before it counts as idle: a connection that waits for
 	// its slots may then close it (0: DefaultSlotIdle; negative: no
-	// connection is ever closed for another, it waits until one ends).
+	// connection is ever closed for another, it waits until one ends). A
+	// tunnel whose answer the forwarder cannot be sure ended counts as idle
+	// only after UnsureSlotIdle.
 	SlotIdle time.Duration
 	// MaxConns is how many connections may be open at once (0: 256).
 	MaxConns int
@@ -223,6 +225,8 @@ type Forwarder struct {
 	// name reaches.
 	pinned map[netip.Addr][]string
 	limits Limits
+	// unsureIdle is UnsureSlotIdle (shorter in tests).
+	unsureIdle time.Duration
 
 	// Dial opens an upstream connection (default: a net.Dialer). The
 	// address is always an IP and a port the scope allowed.
@@ -280,8 +284,11 @@ var ErrHostBusy = errors.New("egress: the host's connections in flight are at th
 // the oldest idle connection that holds one (slotPool.idle), at once and
 // whenever another one goes idle while it waits, so the connections open
 // to a host never exceed its slots and idle ones never keep a request
-// waiting. The returned func frees the slot (once). Without a per-host
-// bound it returns at once with no pool.
+// waiting. A tunnel that is quiet but unsure (UnsureSlotIdle) is not idle
+// yet: while one holds a slot of the pool when DialTimeout ends, the
+// connection keeps waiting, at most UnsureSlotIdle longer, for it to count
+// as idle and be closed. The returned func frees the slot (once). Without a
+// per-host bound it returns at once with no pool.
 func (f *Forwarder) hostSlot(ctx context.Context, host string) (func(), *slotPool, error) {
 	if f.limits.PerHostConns <= 0 {
 		return func() {}, nil, nil
@@ -319,13 +326,27 @@ func (f *Forwarder) hostSlot(ctx context.Context, host string) (func(), *slotPoo
 	victim.close()
 	t := time.NewTimer(f.limits.DialTimeout)
 	defer t.Stop()
-	select {
-	case pool.ch <- struct{}{}:
-		return pool.release(), pool, nil
-	case <-ctx.Done():
-		return nil, nil, ctx.Err()
-	case <-t.C:
-		return nil, nil, ErrHostBusy
+	last := time.Now().Add(f.limits.DialTimeout + f.unsureIdle)
+	for {
+		select {
+		case pool.ch <- struct{}{}:
+			return pool.release(), pool, nil
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-t.C:
+		}
+		f.hostMu.Lock()
+		pending := pool.pending > 0
+		f.hostMu.Unlock()
+		left := time.Until(last)
+		if !pending || left <= 0 {
+			return nil, nil, ErrHostBusy
+		}
+		// An unsure tunnel holds a slot and is quiet: it counts as idle
+		// within UnsureSlotIdle, and is then closed for this connection
+		// (connSlots.park). Look again soon in case it carries a request
+		// meanwhile instead.
+		t.Reset(min(left, max(f.limits.SlotIdle, 10*time.Millisecond)))
 	}
 }
 
@@ -364,7 +385,7 @@ func (f *Forwarder) Opaque(host string, port int) bool {
 // no trailing dot); their pinned addresses join the admitted prefixes.
 func New(scope Scope, limits Limits) *Forwarder {
 	limits = limits.withDefaults()
-	f := &Forwarder{scope: scope, limits: limits, names: map[string][]netip.Addr{}, pinned: map[netip.Addr][]string{},
+	f := &Forwarder{scope: scope, limits: limits, unsureIdle: UnsureSlotIdle, names: map[string][]netip.Addr{}, pinned: map[netip.Addr][]string{},
 		tally:    Tally{Targets: map[string]TargetTally{}},
 		rate:     rate.NewLimiter(rate.Limit(limits.Rate), max(1, int(limits.Rate))),
 		hostRate: adapt.NewHostRate(limits.PerHostRate),

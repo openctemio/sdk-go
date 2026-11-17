@@ -160,11 +160,13 @@ func fetchOK(c *http.Client, target string) error {
 
 // Idle kept-alive tunnels of one name do not starve the other names of
 // its address: a.example.com keeps as many HTTPS tunnels open and idle as
-// the address has slots, and b.example.com, reached at the same address,
-// still gets every request, with no coverage gap: its connection closes
-// the oldest idle tunnel of a and takes its slot. a's requests then still
-// succeed (on its tunnel left open, or a new one), and the target never
-// has more connections open than the address has slots.
+// the address has slots, each after a further request (ordinary keep-alive
+// reuse, so the forwarder is sure each answer ended), and b.example.com,
+// reached at the same address, still gets every request, at once and with
+// no coverage gap: its connection closes the oldest idle tunnel of a and
+// takes its slot. a's requests then still succeed (on its tunnel left
+// open, or a new one), no host is a gap, and the target never has more
+// connections open than the address has slots.
 func TestIdleTunnelsOfOneNameDoNotStarveAnother(t *testing.T) {
 	m := newMeter(t, true)
 	m.delay = 150 * time.Millisecond // two requests at once open two tunnels
@@ -185,12 +187,31 @@ func TestIdleTunnelsOfOneNameDoNotStarveAnother(t *testing.T) {
 	if _, total := pool.counts(); total != 2 {
 		t.Fatalf("a holds %d tunnels, want 2 (every slot of the address)", total)
 	}
+	// A further request on each kept-alive tunnel: client and host took
+	// turns, so the forwarder is sure where each answer ended.
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := fetchOK(a, m.url("a.example.com")); err != nil {
+				t.Errorf("a: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if _, total := pool.counts(); total != 2 {
+		t.Fatalf("a opened %d tunnels, want its 2 tunnels reused", total)
+	}
 	time.Sleep(300 * time.Millisecond) // a's tunnels are idle
 	b := keepAliveClient(proxy)
+	start := time.Now()
 	for i := range 3 {
 		if err := fetchOK(b, m.url("b.example.com")); err != nil {
 			t.Fatalf("request %d of b was refused behind a's idle tunnels: %v", i+1, err)
 		}
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("b waited %s behind a's idle tunnels", d)
 	}
 	b.CloseIdleConnections()
 	for i := range 2 {
@@ -198,14 +219,10 @@ func TestIdleTunnelsOfOneNameDoNotStarveAnother(t *testing.T) {
 			t.Fatalf("request %d of a after one of its tunnels was closed: %v", i+1, err)
 		}
 	}
-	// b is never a gap. a's tunnels were closed after their first answer,
-	// which the forwarder cannot tell from an answer cut short: a may be a
-	// gap of the sensor's own bound (slots_full), never of anything else.
-	g, _ := f.TargetRate().Gaps()
-	for _, x := range g {
-		if x.Host != "a.example.com" || x.Reason != adapt.GapSlotsFull {
-			t.Fatalf("gaps %+v", g)
-		}
+	// Closing a tunnel whose answer surely ended says nothing about the
+	// host: no gap, on a or on b.
+	if s := f.TargetRate().Summary(); s.GapsTotal != 0 {
+		t.Fatalf("ordinary keep-alive reuse made gaps %+v", s.Gaps)
 	}
 	if peak, _ := pool.counts(); peak > 2 {
 		t.Fatalf("%d connections open at once at an address with 2 slots", peak)
@@ -545,12 +562,23 @@ func (c *countedConn) Close() error {
 // it serves.
 func slotForwarderDial(t *testing.T, slots int, wait, idle time.Duration, dial func(context.Context, string, string) (net.Conn, error), names ...string) (*Forwarder, string) {
 	t.Helper()
+	return slotForwarderUnsure(t, slots, wait, idle, UnsureSlotIdle, dial, names...)
+}
+
+// slotForwarderUnsure is slotForwarderDial with the time an unsure tunnel
+// must be quiet before it counts as idle (UnsureSlotIdle) set to unsure; a
+// nil dial keeps the forwarder's own.
+func slotForwarderUnsure(t *testing.T, slots int, wait, idle, unsure time.Duration, dial func(context.Context, string, string) (net.Conn, error), names ...string) (*Forwarder, string) {
+	t.Helper()
 	scope := Scope{Names: map[string][]netip.Addr{}}
 	for _, n := range names {
 		scope.Names[n] = []netip.Addr{addr("127.0.0.1")}
 	}
 	f := New(scope, Limits{Rate: 1000, PerHostRate: 1000, PerHostConns: slots, DialTimeout: wait, SlotIdle: idle})
-	f.Dial = dial
+	if dial != nil {
+		f.Dial = dial
+	}
+	f.unsureIdle = unsure
 	return f, serve(t, f)
 }
 
@@ -599,11 +627,14 @@ func TestOpenConnectionsNeverExceedTheSlots(t *testing.T) {
 		t.Fatalf("gaps %+v", s.Gaps)
 	}
 	// A waiting request is served once an idle connection is closed: a's
-	// tunnel is idle, b's request takes its slot at once (well before the
-	// wait for a slot ends).
+	// tunnel carried two requests (its answers surely ended) and is idle,
+	// b's request takes its slot at once (well before the wait for a slot
+	// ends).
 	a, b := keepAliveClient(proxy), keepAliveClient(proxy)
-	if err := fetchOK(a, m.url("a.example.com")); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if err := fetchOK(a, m.url("a.example.com")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	time.Sleep(200 * time.Millisecond)
 	start := time.Now()
@@ -664,9 +695,11 @@ func TestSlowNameOnASharedAddressBlamesNoNeighbor(t *testing.T) {
 }
 
 // An answer that pauses after its first bytes, on a tunnel's first request,
-// looks idle to the forwarder, and a connection that waits for the slot
-// closes the tunnel: the tool sees the answer cut short. The forwarder could
-// not tell, so the host is a coverage gap of the sensor's own bound
+// longer than an unsure tunnel is given (UnsureSlotIdle) looks idle to the
+// forwarder, and a connection that waits for the slot then closes the
+// tunnel: the tool sees the answer cut short. The waiting connection waited
+// for that time (past its DialTimeout), not less. The forwarder could not
+// tell, so the host is a coverage gap of the sensor's own bound
 // (slots_full): the cut answer is never read as a host fully scanned.
 func TestCutAnswerOnAnUnsureTunnelLeavesAGap(t *testing.T) {
 	firstBytes := make(chan struct{})
@@ -681,7 +714,7 @@ func TestCutAnswerOnAnUnsureTunnelLeavesAGap(t *testing.T) {
 		w.(http.Flusher).Flush()
 		once.Do(func() { close(firstBytes) })
 		select {
-		case <-time.After(800 * time.Millisecond):
+		case <-time.After(3 * time.Second):
 		case <-r.Context().Done():
 			return
 		}
@@ -693,8 +726,10 @@ func TestCutAnswerOnAnUnsureTunnelLeavesAGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := func(path string) string { return "https://a.example.com:" + su.Port() + path }
-	// 1 slot; a tunnel quiet for 5 x 40ms on its first request counts as idle.
-	f, proxy := slotForwarder(t, 1, 3*time.Second, 40*time.Millisecond, "a.example.com")
+	// 1 slot, 200ms wait for a slot; a tunnel quiet for 40ms after a sure
+	// answer counts as idle, after 600ms on its first request.
+	const unsure = 600 * time.Millisecond
+	f, proxy := slotForwarderUnsure(t, 1, 200*time.Millisecond, 40*time.Millisecond, unsure, nil, "a.example.com")
 
 	cut := make(chan error, 1)
 	go func() {
@@ -713,8 +748,12 @@ func TestCutAnswerOnAnUnsureTunnelLeavesAGap(t *testing.T) {
 		t.Fatal("the slow request never reached the server")
 	}
 	time.Sleep(20 * time.Millisecond)
+	start := time.Now()
 	if err := fetchOK(keepAliveClient(proxy), target("/fast")); err != nil {
 		t.Fatalf("the waiting connection: %v", err)
+	}
+	if d := time.Since(start); d < unsure/2 {
+		t.Fatalf("the unsure tunnel was closed after %s, before it had been quiet for %s", d, unsure)
 	}
 	if err := <-cut; err == nil {
 		t.Fatal("the slow answer arrived whole: the tunnel was not closed for the waiting connection")
@@ -722,5 +761,106 @@ func TestCutAnswerOnAnUnsureTunnelLeavesAGap(t *testing.T) {
 	g, n := f.TargetRate().Gaps()
 	if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapSlotsFull || g[0].Detail != adapt.GapDetailSlotsFull {
 		t.Fatalf("a cut answer left gaps %+v (%d), want one slots_full gap on a.example.com", g, n)
+	}
+}
+
+// A connection that waits behind an unsure tunnel (one request carried, so
+// the forwarder cannot be sure its answer ended) is served once that tunnel
+// has been quiet for UnsureSlotIdle, though that is longer than the wait for
+// a slot (DialTimeout): it is neither refused nor served earlier by cutting
+// the tunnel, and the connections open to the host never exceed its one
+// slot meanwhile. The closed tunnel's host is a slots_full gap (its answer
+// may have been cut); nothing else is.
+func TestWaiterBehindAnUnsureTunnelIsServedAfterItsIdleTime(t *testing.T) {
+	m := newMeter(t, true)
+	pool := &dialCounter{}
+	const unsure = 800 * time.Millisecond
+	f, proxy := slotForwarderUnsure(t, 1, 200*time.Millisecond, 40*time.Millisecond, unsure, pool.dial, "a.example.com")
+	a := keepAliveClient(proxy)
+	defer a.CloseIdleConnections()
+	if err := fetchOK(a, m.url("a.example.com")); err != nil {
+		t.Fatal(err)
+	}
+	quietFrom := time.Now() // a's tunnel holds the slot, quiet and unsure
+	stop := make(chan struct{})
+	peakDuring := make(chan int, 1)
+	go func() { // the open connections, sampled while b waits
+		peak := 0
+		tk := time.NewTicker(5 * time.Millisecond)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				peakDuring <- peak
+				return
+			case <-tk.C:
+				pool.mu.Lock()
+				peak = max(peak, pool.open)
+				pool.mu.Unlock()
+			}
+		}
+	}()
+	b := keepAliveClient(proxy)
+	defer b.CloseIdleConnections()
+	err := fetchOK(b, m.url("a.example.com"))
+	waited := time.Since(quietFrom)
+	close(stop)
+	if err != nil {
+		t.Fatalf("the connection behind an unsure tunnel was refused: %v", err)
+	}
+	t.Logf("MEASURED served %s after the unsure tunnel went quiet (unsure idle %s, wait for a slot 200ms)", waited, unsure)
+	if waited < unsure-100*time.Millisecond {
+		t.Fatalf("served after %s: the unsure tunnel was closed before it had been quiet for %s", waited, unsure)
+	}
+	if waited > unsure+time.Second {
+		t.Fatalf("served after %s, want within %s and a small margin", waited, unsure)
+	}
+	if p := <-peakDuring; p > 1 {
+		t.Fatalf("%d connections open at once while b waited, 1 slot", p)
+	}
+	if peak, total := pool.counts(); peak > 1 || total != 2 {
+		t.Fatalf("peak %d, total %d connections; want at most 1 open, 2 opened", peak, total)
+	}
+	g, n := f.TargetRate().Gaps()
+	if n != 1 || g[0].Host != "a.example.com" || g[0].Reason != adapt.GapSlotsFull {
+		t.Fatalf("gaps %+v (%d), want one slots_full gap for the closed unsure tunnel", g, n)
+	}
+}
+
+// A connection that waits while the only slot is held by a tunnel with a
+// request in flight is still refused after DialTimeout: the longer wait is
+// only for a quiet unsure tunnel.
+func TestWaiterBehindABusyTunnelIsRefusedAtTheDialTimeout(t *testing.T) {
+	m := newMeter(t, true)
+	m.delay = 1500 * time.Millisecond
+	f, proxy := slotForwarderUnsure(t, 1, 200*time.Millisecond, 40*time.Millisecond, 5*time.Second, nil, "a.example.com")
+	done := make(chan error, 1)
+	go func() { done <- fetchOK(keepAliveClient(proxy), m.url("a.example.com")) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		m.mu.Lock()
+		in := m.inflight
+		m.mu.Unlock()
+		if in == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the request never reached the target")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	start := time.Now()
+	if err := fetchOK(keepAliveClient(proxy), m.url("a.example.com")); err == nil {
+		t.Fatal("a second connection got the slot of a tunnel whose request is in flight")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("refused after %s, want about the 200ms wait for a slot", d)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("the request in flight: %v", err)
+	}
+	g, n := f.TargetRate().Gaps()
+	if n != 1 || g[0].Reason != adapt.GapSlotsFull {
+		t.Fatalf("gaps %+v", g)
 	}
 }
