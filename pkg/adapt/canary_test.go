@@ -244,6 +244,15 @@ func TestCanaryWaitsWhileTheBreakerIsOpen(t *testing.T) {
 	if s.count() != 0 || sum.Canary.Held == 0 || sum.CircuitOpens != 1 {
 		t.Fatalf("the canary sent %d request(s) to a host whose breaker is open: %+v", s.count(), sum.Canary)
 	}
+	// When the open time is over the canary asks again, and an ordinary
+	// answer closes the breaker: the tool's connections go out again.
+	runCanary(t, rate, s, func() bool { return s.count() >= 2 })
+	if err := rate.Acquire(t.Context(), "a.example.com"); err != nil {
+		t.Fatalf("the breaker did not close after the canary was answered: %v", err)
+	}
+	if got := rate.Summary().CircuitOpens; got != 1 {
+		t.Fatalf("%d breaker openings", got)
+	}
 }
 
 // Resets and timeouts of the canary's request, from a host that served it

@@ -135,8 +135,8 @@ type CanarySummary struct {
 // stops a tool by itself: the breaker opens only when the tool's own
 // connections fail as well (HostRate, EvidenceCanaryAndConnection), because
 // a host can answer the canary differently from the tool. Any other answer
-// is health. A request waits while the host's breaker is not closed or the
-// host asked to wait, takes a token of the host's rate when one is free
+// is health, and closes a breaker whose open time is over. A request waits
+// while the host's breaker is open or the host asked to wait, takes a token of the host's rate when one is free
 // (HostRate.AcquireProbe) and never waits behind the tool's requests, so
 // it adds at most one request every FailInterval to the host's rate. It is
 // never retried and follows no redirect.

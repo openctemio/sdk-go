@@ -197,7 +197,8 @@ seconds (every 3 seconds after push-back).
   out with the tool there, so a request of its own would leave by another route than the tool's.
 - **One per address.** Names of the task that are reached at one address get one canary between them, and
   what it is answered is reported to the address, so it slows all of them.
-- It waits while the host's breaker is not closed or the host asked to wait, takes a token of the host's
+- It waits while the host's breaker is open or the host asked to wait (once the open time is over, an
+  ordinary answer to it closes the breaker), takes a token of the host's
   rate when one is free and never waits behind the tool's requests (so it adds at most one request every 3
   seconds, and holds none of the host's connection slots). It follows no redirect and is never retried.
 

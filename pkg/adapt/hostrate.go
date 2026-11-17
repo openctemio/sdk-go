@@ -532,10 +532,13 @@ func (c *HostRate) AcquireAddr(ctx context.Context, addr string) error {
 }
 
 // AcquireProbe asks whether the task's canary request to host may go now.
-// It never waits and never moves the breaker: it returns
-// ErrHostUnavailable while the host's breaker is not closed, while the host
-// asked to wait (Retry-After) and during a cooldown, and the canary then
-// tries again later. Otherwise it takes a token of the host's rate when
+// It never waits and never opens or half-opens the breaker: it returns
+// ErrHostUnavailable while the host's breaker is open (or the host was
+// given up), while the host asked to wait (Retry-After) and during a
+// cooldown, and the canary then tries again later. Once the breaker's open
+// time is over the canary's request goes out, and an ordinary answer to it
+// closes the breaker (probeSignal): health is evidence the canary may give,
+// only push-back needs the tool's own traffic to confirm it. Otherwise it takes a token of the host's rate when
 // one is free and lets the request go either way: a tool that keeps the
 // rate's queue full (when the host was slowed to a request a second, a
 // queue of eight is eight seconds) would otherwise silence the one request
@@ -547,7 +550,7 @@ func (c *HostRate) AcquireProbe(_ context.Context, host string) error {
 	h := c.state(host, now)
 	var ch []Change
 	c.advance(h, now, &ch)
-	held := h.brk != closed || now.Before(h.notBefore)
+	held := h.brk == down || (h.brk == open && now.Before(h.openUntil)) || now.Before(h.notBefore)
 	if !held && c.shared != nil {
 		cool, nb := c.shared.admit(c.tenant, host, c.ceiling)
 		held = !cool.until.IsZero() || now.Before(nb)
@@ -778,6 +781,12 @@ func (c *HostRate) probeSignal(h *hostState, now time.Time, e Event, ch *[]Chang
 	case Answered:
 		h.oks++
 		h.probeRun, h.probeServed = 0, true
+		if h.brk == halfOpen || (h.brk == open && !now.Before(h.openUntil)) {
+			// The open time is over and the host answers: the breaker
+			// closes, as it does on an answer to the tool's own probe.
+			h.brk, h.probing, h.fails = closed, false, 0
+			*ch = append(*ch, Change{Host: h.name, From: h.rate, To: h.rate, Reason: ReasonClosed})
+		}
 	case Congested:
 		h.count(e.Reason, min(e.RetryAfter, c.b.RetryAfterMax))
 		push(GapThrottled, e.Reason)
