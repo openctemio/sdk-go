@@ -65,6 +65,13 @@ type TargetRateBounds struct {
 	// than ThrottleSpacing count once.
 	ThrottleRun     int
 	ThrottleSpacing time.Duration
+	// CorroborateFailures failures of the tool's own connections to a host
+	// (resets, timeouts, refused connections, failed TLS handshakes), no
+	// further apart than CorroborateWindow and within CorroborateWindow of
+	// push-back on the task's canary request, open the host's breaker. The
+	// canary's push-back alone never does.
+	CorroborateFailures int
+	CorroborateWindow   time.Duration
 	// MaxHosts bounds the hosts one task tracks; further hosts share one
 	// conservative state.
 	MaxHosts int
@@ -107,34 +114,41 @@ type TargetRateBounds struct {
 //     "slow down" from a host, after its rate was halved at least twice,
 //     say that slowing further will not help within the task; the answers
 //     to one burst already in flight count once.
+//   - CorroborateFailures 3, CorroborateWindow 30s: three failed connections
+//     of the tool are more than one unlucky request and fewer than the five
+//     that open a breaker without the canary; half a minute covers ten of
+//     the canary's requests after push-back (one every three seconds), so
+//     the two kinds of evidence are about the same stretch of the scan.
 //   - ToolHostErrors 30: a tool's own breaker counts every failed request
 //     of every concurrent check (not consecutive failures), so it needs a
 //     larger budget than BreakerFailures × BreakerMaxTrips (15); 30 lets a
 //     few slow checks fail without dropping a live host.
 var TargetRate = TargetRateBounds{
-	Floor:            1,
-	DefaultCeiling:   100,
-	StartFraction:    0.25,
-	Window:           2 * time.Second,
-	IncreaseFraction: 0.10,
-	DecreaseFactor:   0.5,
-	BreakerFailures:  5,
-	BreakerOpen:      15 * time.Second,
-	BreakerOpenMax:   2 * time.Minute,
-	BreakerJitter:    0.2,
-	BreakerMaxTrips:  3,
-	ProbeTimeout:     30 * time.Second,
-	RetryAfterMax:    5 * time.Minute,
-	HoldMax:          10 * time.Second,
-	FloorStrikes:     3,
-	BlockRun:         20,
-	ThrottleRun:      5,
-	ThrottleSpacing:  time.Second,
-	MaxHosts:         65536,
-	MaxOpenPorts:     64,
-	MaxGaps:          100,
-	MaxChanges:       20,
-	ToolHostErrors:   30,
+	Floor:               1,
+	DefaultCeiling:      100,
+	StartFraction:       0.25,
+	Window:              2 * time.Second,
+	IncreaseFraction:    0.10,
+	DecreaseFactor:      0.5,
+	BreakerFailures:     5,
+	BreakerOpen:         15 * time.Second,
+	BreakerOpenMax:      2 * time.Minute,
+	BreakerJitter:       0.2,
+	BreakerMaxTrips:     3,
+	ProbeTimeout:        30 * time.Second,
+	RetryAfterMax:       5 * time.Minute,
+	HoldMax:             10 * time.Second,
+	FloorStrikes:        3,
+	BlockRun:            20,
+	ThrottleRun:         5,
+	ThrottleSpacing:     time.Second,
+	CorroborateFailures: 3,
+	CorroborateWindow:   30 * time.Second,
+	MaxHosts:            65536,
+	MaxOpenPorts:        64,
+	MaxGaps:             100,
+	MaxChanges:          20,
+	ToolHostErrors:      30,
 }
 
 // Ceiling is the lowest of the positive limits (a scan's rate_limit, a scan

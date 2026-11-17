@@ -252,7 +252,7 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 				reason = adapt.ReasonTLS
 			}
 			if reason != "" {
-				f.hostRate.Report(normName(rec.Host), adapt.Event{Signal: adapt.Failed, Reason: reason})
+				f.report(peerOfRecord(rec), adapt.Event{Signal: adapt.Failed, Reason: reason})
 			}
 			return
 		}
@@ -289,7 +289,7 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 		ulr.N = math.MaxInt64
 		return resp, nil
 	}
-	host := normName(rec.Host)
+	host := peerOfRecord(rec)
 	for n := 0; ; n++ {
 		lr.N = maxHeaderBytes
 		_ = c.SetReadDeadline(time.Now().Add(f.limits.HandshakeTimeout))
@@ -315,7 +315,7 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 		// The connection's first request was paced when it was dialed;
 		// each further one on it waits for the host's rate too.
 		if n > 0 {
-			if err := f.hostRate.Acquire(ctx, host); err != nil {
+			if err := f.acquire(ctx, host); err != nil {
 				writeHTTPStatus(cw, http.StatusServiceUnavailable, err)
 				return
 			}

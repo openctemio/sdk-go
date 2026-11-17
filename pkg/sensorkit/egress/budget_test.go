@@ -27,7 +27,18 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/adapt"
+	"github.com/openctemio/sdk-go/pkg/useragent"
 )
+
+// statOf is the pacing outcome of host in s (nil: it has none).
+func statOf(s adapt.Summary, host string) *adapt.HostStat {
+	for i := range s.HostStats {
+		if s.HostStats[i].Host == host {
+			return &s.HostStats[i]
+		}
+	}
+	return nil
+}
 
 // meter is a target that counts, on its own side, when each request
 // arrived and how many were in flight, and answers as its mode says.
@@ -42,8 +53,17 @@ type meter struct {
 	unavailable atomic.Bool
 	reset       atomic.Bool
 	delay       time.Duration
+	// canaryOnly: 429 to the canary's request (the sensor's own User-Agent)
+	// and an ordinary answer to everything else, as a host that recognizes
+	// the canary can do. resetTool resets the connection of every request
+	// that is not the canary's.
+	canaryOnly atomic.Bool
+	resetTool  atomic.Bool
 
 	mu       sync.Mutex
+	canaryN  int // requests of the canary (not in arrivals)
+	h2N      int // arrivals over HTTP/2
+	connsN   int // connections the target accepted
 	arrivals []time.Time
 	served   []time.Time // arrivals answered 200
 	refused  int         // 429 and 503 answers
@@ -51,12 +71,44 @@ type meter struct {
 	maxIn    int
 }
 
-func newMeter(t *testing.T, useTLS bool) *meter {
+func newMeter(t *testing.T, useTLS bool) *meter { return newMeterAt(t, useTLS, "127.0.0.1", false) }
+
+// newMeterAt is newMeter listening on the loopback address ip (two targets
+// on two addresses are two servers for the per-address budget), with
+// HTTP/2 offered when h2 is set.
+func newMeterAt(t *testing.T, useTLS bool, ip string, h2 bool) *meter {
 	t.Helper()
 	m := &meter{retryAfter: "1", delay: 5 * time.Millisecond}
-	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
+		if r.Header.Get("User-Agent") == useragent.String() {
+			// The canary's request: counted apart from the tool's.
+			m.mu.Lock()
+			m.canaryN++
+			m.mu.Unlock()
+			if m.canaryOnly.Load() {
+				w.Header().Set("Retry-After", "300")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+		} else if m.resetTool.Load() {
+			if hj, ok := w.(http.Hijacker); ok {
+				if c, _, err := hj.Hijack(); err == nil {
+					if tc, ok := c.(*tls.Conn); ok {
+						c = tc.NetConn()
+					}
+					if tc, ok := c.(*net.TCPConn); ok {
+						_ = tc.SetLinger(0)
+					}
+					_ = c.Close()
+				}
+			}
+			return
+		}
 		m.mu.Lock()
+		if r.ProtoMajor == 2 {
+			m.h2N++
+		}
 		m.arrivals = append(m.arrivals, now)
 		m.inflight++
 		m.maxIn = max(m.maxIn, m.inflight)
@@ -91,6 +143,21 @@ func newMeter(t *testing.T, useTLS bool) *meter {
 	})
 	m.srv = httptest.NewUnstartedServer(h)
 	inner := m.srv.Listener
+	if ip != "127.0.0.1" {
+		_ = inner.Close()
+		var err error
+		if inner, err = net.Listen("tcp", net.JoinHostPort(ip, "0")); err != nil {
+			t.Skipf("no listener on %s: %v", ip, err)
+		}
+	}
+	m.srv.EnableHTTP2 = h2
+	m.srv.Config.ConnState = func(_ net.Conn, st http.ConnState) {
+		if st == http.StateNew {
+			m.mu.Lock()
+			m.connsN++
+			m.mu.Unlock()
+		}
+	}
 	m.srv.Listener = &resetListener{Listener: inner, reset: &m.reset}
 	if useTLS {
 		m.srv.StartTLS()
@@ -186,9 +253,20 @@ func overTotal(total, rps int, d time.Duration) bool {
 // budget of every host at once, each host is held to the budget.
 func budgetForwarder(t *testing.T, b adapt.HostBudget, names ...string) (*Forwarder, string) {
 	t.Helper()
-	scope := Scope{Names: map[string][]netip.Addr{}}
+	at := map[string]string{}
 	for _, n := range names {
-		scope.Names[n] = []netip.Addr{addr("127.0.0.1")}
+		at[n] = "127.0.0.1"
+	}
+	return budgetForwarderAt(t, b, at)
+}
+
+// budgetForwarderAt is budgetForwarder with the address each name is
+// pinned to.
+func budgetForwarderAt(t *testing.T, b adapt.HostBudget, names map[string]string) (*Forwarder, string) {
+	t.Helper()
+	scope := Scope{Names: map[string][]netip.Addr{}}
+	for n, a := range names {
+		scope.Names[n] = []netip.Addr{addr(a)}
 	}
 	pace := b.ToolPace(len(names), true)
 	f := New(scope, Limits{Rate: float64(pace.Rate), PerHostRate: float64(b.RPS), PerHostConns: b.Inflight})
@@ -232,10 +310,15 @@ func canary(t *testing.T, f *Forwarder, roots *x509.CertPool, urls ...string) fu
 	t.Helper()
 	do, release := adapt.CanaryDo(f.DialTarget, roots)
 	targets, unwatched := adapt.CanaryTargets(urls)
+	for i := range targets {
+		if u, err := url.Parse(targets[i].URL); err == nil {
+			targets[i].Addrs = f.PinnedAddrs(u.Hostname())
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		adapt.NewCanary(f.TargetRate(), do, nil).Run(ctx, targets, unwatched)
+		adapt.NewCanary(f.TargetRate(), do).Run(ctx, targets, unwatched)
 		close(done)
 	}()
 	var once sync.Once
@@ -309,23 +392,29 @@ func TestBudgetHoldsOneHostUnderItsRateAndInflight(t *testing.T) {
 	}
 }
 
-// A lower signed budget holds the host lower; a signed budget above the
-// sensor's ceiling is clamped to it, and the host gets the ceiling.
-func TestLowerBudgetWinsAndHigherIsClamped(t *testing.T) {
+// The lowest limit wins, measured on the target's side: a lower signed
+// budget holds the host lower; a signed Fast on a Standard sensor leaves
+// the host at Standard; a signed budget far above an operator's ceiling
+// leaves the host at the ceiling.
+func TestLowestLimitWinsOnTheWire(t *testing.T) {
 	cases := []struct {
 		name    string
+		level   adapt.Pacing
 		job     adapt.JobBudget
 		ceiling adapt.BudgetCeiling
 		rps     int
 		in      int
+		wonBy   string
 	}{
-		{"signed Gentle", adapt.JobBudget{Level: "gentle"}, adapt.BudgetCeiling{}, 5, 2},
-		{"signed 5000/s under an operator ceiling of 10/s and 3 in flight", adapt.JobBudget{Level: "custom", RPS: 5000, Inflight: 500}, adapt.BudgetCeiling{RPS: 10, Inflight: 3}, 10, 3},
+		{"signed Gentle on a Standard sensor", adapt.PacingStandard, adapt.JobBudget{Level: "gentle"}, adapt.BudgetCeiling{}, 5, 2, adapt.LimitJob},
+		{"signed Fast on a Standard sensor", adapt.PacingStandard, adapt.JobBudget{Level: "fast"}, adapt.BudgetCeiling{}, 20, 8, adapt.LimitSensorLevel},
+		{"signed Gentle on a Fast sensor", adapt.PacingFast, adapt.JobBudget{Level: "gentle"}, adapt.BudgetCeiling{}, 5, 2, adapt.LimitJob},
+		{"signed 5000/s under an operator ceiling of 10/s and 3 in flight", adapt.PacingFast, adapt.JobBudget{Level: "custom", RPS: 5000, Inflight: 500}, adapt.BudgetCeiling{RPS: 10, Inflight: 3}, 10, 3, adapt.LimitOperatorCeiling},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := adapt.ResolveBudget(adapt.DefaultPacing, &tc.job, tc.ceiling)
-			if b.RPS != tc.rps || b.Inflight != tc.in {
+			b := adapt.ResolveBudget(tc.level, &tc.job, tc.ceiling)
+			if b.RPS != tc.rps || b.Inflight != tc.in || b.WonBy.RPS != tc.wonBy || b.WonBy.Inflight != tc.wonBy {
 				t.Fatalf("budget %+v", b)
 			}
 			m := newMeter(t, true)
@@ -335,11 +424,11 @@ func TestLowerBudgetWinsAndHigherIsClamped(t *testing.T) {
 				hammer(ctx, wg, proxy, m.url("a.example.com"), 32)
 			})
 			total, peak, _, _, maxIn := m.counts(time.Time{})
-			t.Logf("MEASURED %s: %d requests in 5 s, peak %d in any one second, %d in flight at most", tc.name, total, peak, maxIn)
+			t.Logf("MEASURED %s: %d requests in 5 s (budget %d/s), peak %d in any one second, %d in flight at most (budget %d)", tc.name, total, tc.rps, peak, maxIn, tc.in)
 			if overBudget(peak, tc.rps) || overTotal(total, tc.rps, 5*time.Second) || maxIn > tc.in {
 				t.Fatalf("peak %d/s and %d in flight, budget %d/s and %d", peak, maxIn, tc.rps, tc.in)
 			}
-			if got := f.TargetRate().Summary().Budget; got == nil || got.Source != adapt.BudgetFromJob {
+			if got := f.TargetRate().Summary().Budget; got == nil || got.WonBy.RPS != tc.wonBy {
 				t.Fatalf("summary budget %+v", got)
 			}
 		})
@@ -351,10 +440,12 @@ func TestLowerBudgetWinsAndHigherIsClamped(t *testing.T) {
 func TestTwoHostsDoNotStarveEachOther(t *testing.T) {
 	quick(t)
 	b := adapt.DefaultBudget()
-	bad, good := newMeter(t, false), newMeter(t, false)
+	// Two servers: two addresses. (Two names of one address share that
+	// address's budget, TestNamesOfOneAddressShareItsBudget.)
+	bad, good := newMeter(t, false), newMeterAt(t, false, "127.0.0.2", false)
 	bad.limit.Store(1)
 	bad.retryAfter = "1"
-	f, proxy := budgetForwarder(t, b, "bad.example.com", "good.example.com")
+	f, proxy := budgetForwarderAt(t, b, map[string]string{"bad.example.com": "127.0.0.1", "good.example.com": "127.0.0.2"})
 	start := time.Now()
 	run(t, 6*time.Second, func(ctx context.Context, wg *sync.WaitGroup) {
 		hammer(ctx, wg, proxy, bad.url("bad.example.com"), 32)
@@ -374,12 +465,7 @@ func TestTwoHostsDoNotStarveEachOther(t *testing.T) {
 		t.Fatalf("the throttling host still got %d requests in 3 s", badRecent)
 	}
 	s := f.TargetRate().Summary()
-	var badStat *adapt.HostStat
-	for i := range s.HostStats {
-		if s.HostStats[i].Host == "bad.example.com" {
-			badStat = &s.HostStats[i]
-		}
-	}
+	badStat := statOf(s, "bad.example.com")
 	if badStat == nil || badStat.Backoffs == 0 || badStat.HTTP429 == 0 || badStat.RetryAfterSeconds != 1 {
 		t.Fatalf("summary %+v", s)
 	}
@@ -430,40 +516,32 @@ func TestBackoffOn429AndRecovery(t *testing.T) {
 	if recent < b.RPS*2*6/10 {
 		t.Fatalf("only %d requests in the last 2 s: the rate did not recover", recent)
 	}
-	if hs := s.HostStats; len(hs) != 1 || hs[0].HTTP429 == 0 || hs[0].RetryAfterSeconds != 1 {
-		t.Fatalf("host stats %+v", hs)
+	if hs := statOf(s, "a.example.com"); hs == nil || hs.HTTP429 == 0 || hs.RetryAfterSeconds != 1 || hs.OpenedBy != "" && hs.OpenedBy != adapt.EvidenceToolHTTP {
+		t.Fatalf("host stats %+v", s.HostStats)
 	}
 }
 
-// HTTPS passed through, a target that answers nothing but 429: without a
-// canary the forwarder sees only bytes on tunnels it cannot read and keeps
-// sending at the budget; with the canary the rate is halved, the breaker
-// opens, the host is a throttled gap with the counts, and when the target
-// recovers the breaker closes and the rate comes back.
-func TestHTTPSWithoutInterceptionNeedsTheCanary(t *testing.T) {
+// HTTPS passed through, a target that answers nothing but 429 for three
+// seconds: the forwarder cannot read those answers, the canary can. Its
+// push-back halves the host's rate down to the floor; it does not open the
+// breaker (nothing of the tool's own connections failed), no connection is
+// refused, and when the target recovers the rate comes back.
+//
+// The bound is absolute and counted by the target: while it is limited the
+// host receives at most half the budget's rate times the time, plus two
+// requests (the token a bucket holds, and one in flight at the switch).
+func TestHTTPSPushbackThroughTheCanarySlowsTheHost(t *testing.T) {
 	quick(t)
 	b := adapt.DefaultBudget()
-
-	blind := newMeter(t, true)
-	blind.limit.Store(1)
-	blind.retryAfter = ""
-	fb, proxyB := budgetForwarder(t, b, "example.com")
-	run(t, 3*time.Second, func(ctx context.Context, wg *sync.WaitGroup) {
-		hammer(ctx, wg, proxyB, blind.url("example.com"), 32)
-	})
-	blindTotal, _, _, blindRefused, _ := blind.counts(time.Time{})
-	if s := fb.TargetRate().Summary(); s.Backoffs != 0 || s.CircuitOpens != 0 || len(s.Gaps) != 0 {
-		t.Fatalf("without a canary the forwarder is expected to be blind on HTTPS: %+v", s)
-	}
-
 	m := newMeter(t, true)
 	m.limit.Store(1)
 	m.retryAfter = ""
 	f, proxy := budgetForwarder(t, b, "example.com")
 	target := m.url("example.com")
 	stop := canary(t, f, m.roots(), target)
-	var lifted time.Time
+	var began, lifted time.Time
 	run(t, 12*time.Second, func(ctx context.Context, wg *sync.WaitGroup) {
+		began = time.Now()
 		hammer(ctx, wg, proxy, target, 32)
 		wg.Add(1)
 		go func() {
@@ -480,25 +558,28 @@ func TestHTTPSWithoutInterceptionNeedsTheCanary(t *testing.T) {
 	total, peak, recent, refused, _ := m.counts(lifted.Add(7 * time.Second))
 	_, _, after, _, _ := m.counts(lifted)
 	during := total - after
+	limited := lifted.Sub(began)
 	s := f.TargetRate().Summary()
-	t.Logf("MEASURED HTTPS passthrough, target answers 429 for 3 s: blind forwarder sent %d requests in 3 s (%d refused); with the canary %d requests in the limited 3 s (%d refused), %d back-off(s), %d breaker opening(s), %d in the last 2 s after recovery, peak %d/s",
-		blindTotal, blindRefused, during, refused, s.Backoffs, s.CircuitOpens, recent, peak)
-	if s.Backoffs < 2 || s.CircuitOpens < 1 {
+	bound := int(float64(b.RPS)/2*limited.Seconds()) + 2
+	t.Logf("MEASURED HTTPS passthrough, target answers 429 for %.1f s: %d requests while limited (absolute bound %d = half the budget x time + 2; %d refused by the target), %d back-off(s), %d breaker opening(s), lowest rate %.3g/s, %d in the last 2 s after recovery, peak %d/s",
+		limited.Seconds(), during, bound, refused, s.Backoffs, s.CircuitOpens, s.Min, recent, peak)
+	if during > bound {
+		t.Fatalf("the throttling host got %d requests in %s, more than %d", during, limited, bound)
+	}
+	if overBudget(peak, b.RPS) || overTotal(total, b.RPS, 12*time.Second) {
+		t.Fatalf("peak %d/s, %d in 12 s", peak, total)
+	}
+	if s.Backoffs < 2 || s.Min > float64(b.RPS)/4 {
 		t.Fatalf("no back-off through the canary: %+v", s)
 	}
-	// Clearly fewer than the blind forwarder sent (measured: 21 to 27
-	// against 50; the canary reacts later on a loaded machine).
-	if during*4 > blindTotal*3 {
-		t.Fatalf("with the canary the throttling host still got %d requests (blind: %d)", during, blindTotal)
+	// SECURITY: the canary alone opens no breaker and makes no gap.
+	if s.CircuitOpens != 0 || s.GapsTotal != 0 {
+		t.Fatalf("canary push-back alone opened a breaker or made a gap: %+v", s)
 	}
-	var gap *adapt.Gap
-	for i := range s.Gaps {
-		if s.Gaps[i].Host == "example.com" {
-			gap = &s.Gaps[i]
+	for _, r := range f.Refusals() {
+		if strings.HasPrefix(r.Reason, "rate:") {
+			t.Fatalf("a tool connection was refused: %+v", r)
 		}
-	}
-	if gap == nil || gap.Reason != adapt.GapThrottled || !strings.Contains(gap.Detail, "429=") || !strings.Contains(gap.Detail, "circuit_opens=") {
-		t.Fatalf("gaps %+v", s.Gaps)
 	}
 	if s.Canary == nil || s.Canary.Hosts != 1 || s.Canary.Pushback < adapt.TargetRate.ThrottleRun {
 		t.Fatalf("canary summary %+v", s.Canary)
@@ -544,7 +625,7 @@ func TestBackoffOn503Bursts(t *testing.T) {
 	if s.Backoffs < 1 || s.Min >= float64(b.RPS) {
 		t.Fatalf("summary %+v", s)
 	}
-	if len(s.HostStats) == 0 || s.HostStats[0].HTTP503 == 0 {
+	if hs := statOf(s, "example.com"); hs == nil || hs.HTTP503 == 0 {
 		t.Fatalf("host stats %+v", s.HostStats)
 	}
 	if overBudget(peak, b.RPS) || overTotal(total, b.RPS, 9*time.Second) {
@@ -556,10 +637,10 @@ func TestBackoffOn503Bursts(t *testing.T) {
 }
 
 // A target that served the scan and then resets every connection: the
-// canary's resets lower the rate and open the breaker. The host is a
-// coverage gap: blocked when the tool's own connections were reset twenty
-// times in a row first, else throttled; its counters hold the resets
-// either way. What the target served before the resets was delivered.
+// tool's own connections fail and so does the canary's request. Together
+// they open the breaker (or the tool's resets alone, after twenty in a
+// row), the host is a coverage gap, and the outcome records the evidence.
+// What the target served before the resets was delivered.
 func TestResetsOpenTheBreaker(t *testing.T) {
 	quick(t)
 	b := adapt.DefaultBudget()
@@ -579,14 +660,15 @@ func TestResetsOpenTheBreaker(t *testing.T) {
 	stop()
 	served, _, _, _, _ := m.counts(time.Time{})
 	s := f.TargetRate().Summary()
-	t.Logf("MEASURED resets after 1.5 s: %d requests served before, %d back-off(s), %d breaker opening(s), gaps %+v", served, s.Backoffs, s.CircuitOpens, s.Gaps)
+	hs := statOf(s, "example.com")
+	t.Logf("MEASURED resets after 1.5 s: %d requests served before, %d back-off(s), %d breaker opening(s), gaps %+v, host %+v", served, s.Backoffs, s.CircuitOpens, s.Gaps, hs)
 	if served == 0 || s.Backoffs == 0 || s.CircuitOpens == 0 {
 		t.Fatalf("summary %+v", s)
 	}
-	if len(s.Gaps) != 1 || (s.Gaps[0].Reason != adapt.GapThrottled && s.Gaps[0].Reason != adapt.GapBlocked) {
+	if len(s.Gaps) != 1 || (s.Gaps[0].Reason != adapt.GapThrottled && s.Gaps[0].Reason != adapt.GapBlocked && s.Gaps[0].Reason != adapt.GapBreakerOpen) {
 		t.Fatalf("gaps %+v", s.Gaps)
 	}
-	if len(s.HostStats) != 1 || s.HostStats[0].Resets == 0 || s.HostStats[0].Min >= float64(b.RPS) {
+	if hs == nil || hs.Resets == 0 || hs.Min >= float64(b.RPS) || (hs.OpenedBy != adapt.EvidenceCanaryAndConnection && hs.OpenedBy != adapt.EvidenceToolConnection) {
 		t.Fatalf("host stats %+v", s.HostStats)
 	}
 }
@@ -614,6 +696,66 @@ func TestCanaryDialStaysInScope(t *testing.T) {
 	// The canary's connections are not the tool's: the tally stays empty.
 	if tl := f.Tally(); tl.Allowed != 0 || tl.Refused != 0 {
 		t.Fatalf("tally %+v", tl)
+	}
+	// An address literal passes the same check: one outside the scope is
+	// refused, whatever the canary is asked to dial.
+	for _, literal := range []string{"127.0.0.2", "::ffff:127.0.0.2", "169.254.169.254", "192.0.2.77", "0x7f000002"} {
+		if c, err := f.DialTarget(t.Context(), literal, m.port()); err == nil {
+			_ = c.Close()
+			t.Fatalf("the canary reached the address %s, which is no target of the task", literal)
+		}
+	}
+}
+
+// The canary leaves by the tool's own way out: the forwarder's dial hook
+// (the job's proxy pool) carries it, to the address pinned at admission. It
+// never dials the target directly beside the pool, and never resolves the
+// name again.
+func TestCanaryGoesThroughTheTasksDialPath(t *testing.T) {
+	quick(t)
+	m := newMeter(t, false)
+	f, _ := budgetForwarder(t, adapt.DefaultBudget(), "a.example.com")
+	var mu sync.Mutex
+	var dialed []string
+	var names []string
+	f.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+		mu.Lock()
+		dialed = append(dialed, address)
+		names = append(names, TargetHost(ctx))
+		mu.Unlock()
+		// The "pool": this hook is the only way to the target.
+		var d net.Dialer
+		return d.DialContext(ctx, network, address)
+	}
+	// The name does not resolve anywhere: only the pinned address is used.
+	stop := canary(t, f, nil, "http://a.example.com:"+strconv.Itoa(m.port())+"/")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		m.mu.Lock()
+		n := m.canaryN
+		m.mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the canary's requests did not arrive through the dial hook: %+v", f.TargetRate().Summary().Canary)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	stop()
+	mu.Lock()
+	defer mu.Unlock()
+	m.mu.Lock()
+	arrived := m.canaryN
+	m.mu.Unlock()
+	if len(dialed) < arrived {
+		t.Fatalf("%d canary requests arrived, %d went through the dial hook: the canary dialed beside it", arrived, len(dialed))
+	}
+	want := "127.0.0.1:" + strconv.Itoa(m.port())
+	for i, a := range dialed {
+		if a != want || names[i] != "a.example.com" {
+			t.Fatalf("the hook was asked for %q (target host %q), want the pinned address %s of a.example.com", a, names[i], want)
+		}
 	}
 }
 
@@ -650,15 +792,20 @@ func TestPerHostConnectionSlots(t *testing.T) {
 // Scan time on a well-behaved host: the same 200 requests through a
 // forwarder as it was before the budget (the job's rate as the host's
 // ceiling, no bound on connections, no canary) and under the budget (with
-// its connection slots and a canary). Set PACING_SCAN_TIME=1 to run it; it
-// takes about half a minute.
+// its connection slots and a canary). Without connection reuse, a request
+// is a connection in both, and the budget must not slow a host that answers
+// within its in-flight share. With connections kept alive, the forwarder
+// without a budget paced nothing but the connections: the comparison there
+// shows what holding the budget on kept-alive tunnels costs (the requests
+// now take the budget's rate; before, they exceeded it). Set
+// PACING_SCAN_TIME=1 to run it; it takes about a minute.
 func TestScanTimeOnAWellBehavedHost(t *testing.T) {
 	if os.Getenv("PACING_SCAN_TIME") == "" {
 		t.Skip("set PACING_SCAN_TIME=1 to measure")
 	}
 	b := adapt.DefaultBudget()
 	const requests = 200
-	measure := func(withBudget bool, delay time.Duration) time.Duration {
+	measure := func(withBudget, keepAlive bool, delay time.Duration) (time.Duration, int) {
 		m := newMeter(t, true)
 		m.delay = delay
 		scope := Scope{Names: map[string][]netip.Addr{"example.com": {addr("127.0.0.1")}}}
@@ -676,11 +823,18 @@ func TestScanTimeOnAWellBehavedHost(t *testing.T) {
 		var next atomic.Int64
 		var wg sync.WaitGroup
 		start := time.Now()
-		for range 25 {
+		// A client that keeps its connections alive holds each one for the
+		// whole run: it has as many as the budget's connections (a worker
+		// beyond them would wait for a slot until the dial timeout).
+		workers := 25
+		if keepAlive {
+			workers = b.Inflight
+		}
+		for range workers {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				c := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(pu), DisableKeepAlives: true,
+				c := &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(pu), DisableKeepAlives: !keepAlive,
 					TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} //nolint:gosec // a test server's certificate
 				for next.Add(1) <= requests {
 					resp, err := c.Get(target)
@@ -695,20 +849,29 @@ func TestScanTimeOnAWellBehavedHost(t *testing.T) {
 		}
 		wg.Wait()
 		el := time.Since(start)
-		if total, _, _, _, _ := m.counts(time.Time{}); total < requests {
+		total, peak, _, _, _ := m.counts(time.Time{})
+		if total < requests {
 			t.Errorf("only %d of %d requests arrived", total, requests)
 		}
-		return el
+		return el, peak
 	}
-	for _, delay := range []time.Duration{20 * time.Millisecond, 300 * time.Millisecond, time.Second} {
-		before := measure(false, delay)
-		after := measure(true, delay)
-		factor := after.Seconds() / before.Seconds()
-		t.Logf("MEASURED scan time, %d requests, target answers in %s: before %.1f s, under the budget %.1f s, factor %.2f", requests, delay, before.Seconds(), after.Seconds(), factor)
-		// A target that answers within the budget's in-flight share
-		// (8 in flight / 20 per second = 0.4 s) is not slowed.
-		if delay <= 300*time.Millisecond && factor > 1.15 {
-			t.Errorf("a well-behaved host scans %.2f times slower under the budget", factor)
+	for _, keepAlive := range []bool{false, true} {
+		for _, delay := range []time.Duration{20 * time.Millisecond, 300 * time.Millisecond, time.Second} {
+			before, beforePeak := measure(false, keepAlive, delay)
+			after, afterPeak := measure(true, keepAlive, delay)
+			factor := after.Seconds() / before.Seconds()
+			t.Logf("MEASURED scan time, %d requests, keep-alive %t, target answers in %s: without the budget %.1f s (peak %d/s at the target), under the budget %.1f s (peak %d/s), factor %.2f",
+				requests, keepAlive, delay, before.Seconds(), beforePeak, after.Seconds(), afterPeak, factor)
+			// A target that answers within the budget's in-flight share
+			// (8 in flight / 20 per second = 0.4 s) is not slowed, when
+			// each request is a connection (the case the forwarder paced
+			// before the budget too).
+			if !keepAlive && delay <= 300*time.Millisecond && factor > 1.15 {
+				t.Errorf("a well-behaved host scans %.2f times slower under the budget", factor)
+			}
+			if overBudget(afterPeak, b.RPS) {
+				t.Errorf("under the budget the target got %d requests in one second", afterPeak)
+			}
 		}
 	}
 }

@@ -35,6 +35,18 @@ import (
 // the ceiling the caller gives (Ceiling of every limit) and never below
 // TargetRate.Floor (or the ceiling, when that is lower).
 //
+// Whose evidence opens a breaker: only what the task's tool itself met.
+// Push-back the forwarder read on the tool's own HTTP answers (429, 503, a
+// block page), or failures of the tool's own connections, open it as
+// before. A signal of the task's canary (Event.Probe) lowers the rate and
+// never opens a breaker by itself: a host that recognizes the canary could
+// otherwise end its own scan by answering only that one request. The
+// canary's push-back opens the breaker together with connection-level
+// evidence from the tool's traffic (CorroborateFailures failed or reset
+// connections of the tool within CorroborateWindow of it), which is what a
+// host that throttles HTTPS shows on tunnels nobody reads. HostStat.OpenedBy
+// records which evidence opened a breaker.
+//
 // A host the controller cannot cover (the breaker refused connections to
 // it, it kept pushing back at the floor, or it blocked the scan) is a
 // coverage gap: the task completes and reports it (Gaps), it is not read
@@ -61,8 +73,17 @@ type HostRate struct {
 	tenant string
 	// budget is the per-host budget the ceiling came from (SetBudget), for
 	// the summary; canary what the task's canary saw (SetCanary).
-	budget *HostBudget
-	canary *CanarySummary
+	budget  *HostBudget
+	canary  *CanarySummary
+	limited string
+}
+
+// SetLimited records why the task's pacing is limited (a PacingLimited
+// value), for the Summary.
+func (c *HostRate) SetLimited(why string) {
+	c.mu.Lock()
+	c.limited = why
+	c.mu.Unlock()
 }
 
 // SetBudget records the per-host budget the controller's ceiling came from,
@@ -125,9 +146,12 @@ type Event struct {
 	// push-back answers.
 	Opaque bool
 	// Probe marks a signal from the task's own canary request (Canary): a
-	// plain GET of the origin. A reset or a timeout of that request is
-	// push-back from a host that served it before, never the refusal of
-	// one tool request (resetRefusal).
+	// plain GET of the origin, which the host can tell from the tool's
+	// requests. Push-back on it lowers the host's rate; it opens the
+	// breaker only together with failures of the tool's own connections
+	// (corroborate), and its Retry-After is counted, never waited out by
+	// the tool's connections. An ordinary answer to it ends the canary's
+	// run of push-back and nothing else.
 	Probe bool
 }
 
@@ -167,6 +191,19 @@ const (
 	// credentials, or the proxy's rules refused the destination), so part
 	// of the host was never scanned. It says nothing about the host.
 	GapProxyUnavailable = "proxy_unavailable"
+)
+
+// Evidence that opened a host's breaker (HostStat.OpenedBy).
+const (
+	// EvidenceToolHTTP: push-back or a block the forwarder read on the
+	// tool's own HTTP answers (429, 503, a run of 403, a vendor's page).
+	EvidenceToolHTTP = "tool_http"
+	// EvidenceToolConnection: failures of the tool's own connections
+	// (timeouts, refused connections, failed TLS handshakes, resets).
+	EvidenceToolConnection = "tool_connection"
+	// EvidenceCanaryAndConnection: push-back on the canary's request
+	// together with failures of the tool's own connections.
+	EvidenceCanaryAndConnection = "canary_and_tool_connection"
 )
 
 // Gap is one host whose coverage is incomplete, and why.
@@ -258,7 +295,20 @@ type Summary struct {
 	HostStatsTotal int        `json:"host_stats_total,omitempty"`
 	// Canary is what the task's canary requests saw (nil: none ran).
 	Canary *CanarySummary `json:"canary,omitempty"`
+	// Limited says that the budget is enforced only in part for this task,
+	// and why ("": a forwarder was in the path): one of the PacingLimited
+	// values.
+	Limited string `json:"pacing_limited,omitempty"`
 }
+
+// Why a task's pacing is limited (Summary.Limited).
+const (
+	// PacingLimitedNoForwarder: the task's network is not confined, so
+	// nothing is in the path of the tool's connections. The tool's own
+	// flags, derived from the budget, are the only enforcement; nothing
+	// reads what the hosts answer, so there is no back-off and no canary.
+	PacingLimitedNoForwarder = "no_forwarder"
+)
 
 // HostStat is one host's pacing outcome: where its rate ended, how often it
 // was lowered and its breaker opened, and the push-back signals counted. It
@@ -279,6 +329,12 @@ type HostStat struct {
 	Resets            int `json:"resets,omitempty"`
 	Timeouts          int `json:"timeouts,omitempty"`
 	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
+	// OpenedBy is the evidence that last opened the host's breaker (an
+	// Evidence value; "": it never opened).
+	OpenedBy string `json:"opened_by,omitempty"`
+	// Address marks an entry that is the address several of the task's
+	// host names are reached at, not a host a target names.
+	Address bool `json:"address,omitempty"`
 }
 
 // ErrHostUnavailable is the error of a connection the breaker refused.
@@ -333,16 +389,30 @@ type hostState struct {
 	// tripReason is the failure reason of the breaker's last trip.
 	tripReason string
 
-	// answeredHTTP: an HTTP answer of the host was read in this task (not
-	// only bytes on an opaque tunnel).
-	answeredHTTP bool
 	// congRun counts push-back answers with no ordinary HTTP answer
 	// between them, at most one per TargetRate.ThrottleSpacing;
 	// lastCong is when the last one was counted.
 	congRun  int
 	lastCong time.Time
-	// probe403 counts 403 answers in a row to the canary request.
-	probe403 int
+	// alias: the state is the address some of the task's names are reached
+	// at, and no target names it as a host (AcquireAddr, ReportAddr). Its
+	// rate and breaker hold every name that is dialed there; its gaps are
+	// reported on those names.
+	alias bool
+	// probeRun counts the canary's push-back signals with no ordinary
+	// answer to the canary between them; lastProbePush is when the last one
+	// came and probeGap the gap it stands for. probeServed: the host
+	// answered the canary ordinarily before.
+	probeRun      int
+	lastProbePush time.Time
+	probeGap      string
+	probeServed   bool
+	// connFails counts failures of the tool's own connections no further
+	// apart than CorroborateWindow; lastConnFail is when the last one came.
+	connFails    int
+	lastConnFail time.Time
+	// openedBy is the evidence of the breaker's last trip.
+	openedBy string
 	// Counters of the host's pacing outcome (HostStat).
 	backoffs, circuitOpens int
 	n429, n503             int
@@ -381,6 +451,9 @@ func (h *hostState) throttleDetail() string {
 		parts = append(parts, "retry_after="+h.maxRetryAfter.Round(time.Second).String())
 	}
 	parts = append(parts, fmt.Sprintf("backoffs=%d", h.backoffs), fmt.Sprintf("circuit_opens=%d", h.circuitOpens))
+	if h.openedBy != "" {
+		parts = append(parts, "opened_by="+h.openedBy)
+	}
 	return strings.Join(parts, " ")
 }
 
@@ -405,9 +478,26 @@ func (c *HostRate) start() float64 {
 // state returns host's state (created on first use; past MaxHosts every
 // new host shares one state). Called with c.mu held.
 func (c *HostRate) state(host string, now time.Time) *hostState {
+	return c.stateOf(host, now, false)
+}
+
+// stateOf is state for a host a target names (alias false) or for the
+// address names are reached at (alias true). A state both use is a host.
+func (c *HostRate) stateOf(host string, now time.Time, alias bool) *hostState {
 	if h, ok := c.hosts[host]; ok {
+		if !alias {
+			h.alias = false
+		}
 		return h
 	}
+	h := c.newHost(host, now)
+	if h != c.overflow && alias {
+		h.alias = true
+	}
+	return h
+}
+
+func (c *HostRate) newHost(host string, now time.Time) *hostState {
 	if len(c.hosts) >= c.b.MaxHosts {
 		if c.overflow == nil {
 			c.overflow = c.newState("*", now)
@@ -432,22 +522,50 @@ func (c *HostRate) Acquire(ctx context.Context, host string) error {
 	return c.acquire(ctx, host, false)
 }
 
-// AcquireProbe is Acquire for the task's canary request: the breaker, the
-// host's Retry-After and its cooldowns apply as to any request, but it does
-// not queue for the host's rate behind the tool's requests. It takes a
-// token when one is free and goes out either way: a tool that keeps the
+// AcquireAddr is Acquire for the address a host is dialed at (addr: the
+// address in canonical form, CanonicalHost): every name of the task that is
+// reached at one address shares that address's rate and breaker, besides
+// its own. A caller acquires the name first, then the address; for a host
+// that is itself that address the two are one state and one call is enough.
+func (c *HostRate) AcquireAddr(ctx context.Context, addr string) error {
+	return c.acquire(ctx, addr, true)
+}
+
+// AcquireProbe asks whether the task's canary request to host may go now.
+// It never waits and never moves the breaker: it returns
+// ErrHostUnavailable while the host's breaker is not closed, while the host
+// asked to wait (Retry-After) and during a cooldown, and the canary then
+// tries again later. Otherwise it takes a token of the host's rate when
+// one is free and lets the request go either way: a tool that keeps the
 // rate's queue full (when the host was slowed to a request a second, a
 // queue of eight is eight seconds) would otherwise silence the one request
 // that reads what the host answers. The canary sends at most one request
 // every CanaryPace.FailInterval, so that is the most it adds to the rate.
-func (c *HostRate) AcquireProbe(ctx context.Context, host string) error {
-	return c.acquire(ctx, host, true)
-}
-
-func (c *HostRate) acquire(ctx context.Context, host string, probe bool) error {
+func (c *HostRate) AcquireProbe(_ context.Context, host string) error {
 	c.mu.Lock()
 	now := c.now()
 	h := c.state(host, now)
+	var ch []Change
+	c.advance(h, now, &ch)
+	held := h.brk != closed || now.Before(h.notBefore)
+	if !held && c.shared != nil {
+		cool, nb := c.shared.admit(c.tenant, host, c.ceiling)
+		held = !cool.until.IsZero() || now.Before(nb)
+	}
+	lim := h.lim
+	c.mu.Unlock()
+	c.emit(ch)
+	if held {
+		return fmt.Errorf("%w: %s is backed off; the canary waits", ErrHostUnavailable, host)
+	}
+	_ = lim.Allow()
+	return nil
+}
+
+func (c *HostRate) acquire(ctx context.Context, host string, alias bool) error {
+	c.mu.Lock()
+	now := c.now()
+	h := c.stateOf(host, now, alias)
 	var ch []Change
 	c.advance(h, now, &ch)
 	switch h.brk {
@@ -512,10 +630,6 @@ func (c *HostRate) acquire(ctx context.Context, host string, probe bool) error {
 		case <-t.C:
 		}
 	}
-	if probe {
-		_ = lim.Allow()
-		return nil
-	}
 	if err := lim.Wait(ctx); err != nil {
 		return err
 	}
@@ -526,12 +640,25 @@ func (c *HostRate) acquire(ctx context.Context, host string, probe bool) error {
 }
 
 // Report feeds one signal about host to the controller.
-func (c *HostRate) Report(host string, e Event) {
+func (c *HostRate) Report(host string, e Event) { c.report(host, e, false) }
+
+// ReportAddr feeds one signal to the state of the address a host was
+// dialed at (AcquireAddr): what a host answered on one of its names slows
+// every name of the task that is reached at the same address.
+func (c *HostRate) ReportAddr(addr string, e Event) { c.report(addr, e, true) }
+
+func (c *HostRate) report(host string, e Event, alias bool) {
 	c.mu.Lock()
 	now := c.now()
-	h := c.state(host, now)
+	h := c.stateOf(host, now, alias)
 	var ch []Change
 	c.advance(h, now, &ch)
+	if e.Probe {
+		c.probeSignal(h, now, e, &ch)
+		c.mu.Unlock()
+		c.emit(ch)
+		return
+	}
 	switch e.Signal {
 	case Connected:
 		// A connection after failures is evidence enough to close a
@@ -547,7 +674,7 @@ func (c *HostRate) Report(host string, e Event) {
 		if !e.Opaque {
 			// An ordinary HTTP answer ends a run of push-back; bytes on a
 			// tunnel nobody read may have been more push-back.
-			h.congRun, h.probe403, h.answeredHTTP = 0, 0, true
+			h.congRun = 0
 		}
 		c.close(h, &ch)
 		if c.shared != nil {
@@ -558,7 +685,6 @@ func (c *HostRate) Report(host string, e Event) {
 		// breaker, and the rate comes down.
 		h.bad++
 		h.fails = 0
-		h.answeredHTTP = true
 		h.count(e.Reason, min(e.RetryAfter, c.b.RetryAfterMax))
 		c.close(h, &ch)
 		if e.RetryAfter > 0 {
@@ -583,27 +709,9 @@ func (c *HostRate) Report(host string, e Event) {
 			h.bad++
 			c.setEdgeGap(h, e.Edge)
 			c.decrease(h, now, ReasonBlocked, &ch)
-			c.trip(h, now, ReasonBlocked, &ch)
+			c.trip(h, now, ReasonBlocked, EvidenceToolHTTP, &ch)
 			if c.shared != nil {
 				c.shared.block(c.tenant, host, e.Edge, "")
-			}
-			break
-		}
-		if e.Probe {
-			// The canary's request, which the host served before, is
-			// forbidden now: the host turned the scan away. ThrottleRun of
-			// them in a row are a block.
-			h.bad++
-			c.decrease(h, now, ReasonBlocked, &ch)
-			h.probe403++
-			if h.probe403 >= c.b.ThrottleRun {
-				h.probe403 = 0
-				detail := fmt.Sprintf("%d consecutive 403 answers to a request the host served before", c.b.ThrottleRun)
-				c.setGap(h, GapBlocked, detail)
-				c.trip(h, now, ReasonBlocked, &ch)
-				if c.shared != nil {
-					c.shared.block(c.tenant, host, edgeprotect.Verdict{}, detail)
-				}
 			}
 			break
 		}
@@ -617,32 +725,108 @@ func (c *HostRate) Report(host string, e Event) {
 			detail := fmt.Sprintf("%d consecutive 403 answers", c.b.BlockRun)
 			c.setGap(h, GapBlocked, detail)
 			c.decrease(h, now, ReasonBlocked, &ch)
-			c.trip(h, now, ReasonBlocked, &ch)
+			c.trip(h, now, ReasonBlocked, EvidenceToolHTTP, &ch)
 			if c.shared != nil {
 				c.shared.block(c.tenant, host, edgeprotect.Verdict{}, detail)
 			}
 		}
 	case Failed:
 		h.count(e.Reason, 0)
-		if e.Reason == ReasonReset && (h.answered || h.connected) && !e.Probe {
+		// A failure of one of the tool's own connections: connection-level
+		// evidence, which may confirm what the canary was answered.
+		if now.Sub(h.lastConnFail) > c.b.CorroborateWindow {
+			h.connFails = 0
+		}
+		h.connFails++
+		h.lastConnFail = now
+		if e.Reason == ReasonReset && (h.answered || h.connected) {
 			c.resetRefusal(h, now, &ch)
-			break
-		}
-		h.bad++
-		h.fails++
-		c.decrease(h, now, e.Reason, &ch)
-		if h.brk == halfOpen || (h.brk == closed && h.fails >= c.b.BreakerFailures) {
-			if e.Probe && h.answeredHTTP {
-				// The host served the canary before and now resets it or
-				// leaves it unanswered: it throttles the scan, it did not
-				// go away.
-				c.setGap(h, GapThrottled, "")
+		} else {
+			h.bad++
+			h.fails++
+			c.decrease(h, now, e.Reason, &ch)
+			if h.brk == halfOpen || (h.brk == closed && h.fails >= c.b.BreakerFailures) {
+				c.trip(h, now, e.Reason, EvidenceToolConnection, &ch)
 			}
-			c.trip(h, now, e.Reason, &ch)
 		}
+		c.corroborate(h, now, &ch)
 	}
 	c.mu.Unlock()
 	c.emit(ch)
+}
+
+// probeSignal handles a signal of the task's canary request. Push-back
+// lowers the host's rate (as push-back on the tool's requests does) and is
+// remembered; it opens the breaker only when the tool's own connections
+// fail too (corroborate). The canary's Retry-After is counted for the
+// outcome and is not waited out by the tool's connections, and nothing here
+// starts a cooldown of the host for the tenant's other tasks: one request
+// the host can recognize must not be enough to stop a scan.
+// Called with c.mu held.
+func (c *HostRate) probeSignal(h *hostState, now time.Time, e Event, ch *[]Change) {
+	push := func(gap, reason string) {
+		h.bad++
+		c.lower(h, now, reason, ch)
+		h.probeRun++
+		h.lastProbePush, h.probeGap = now, gap
+		if c.shared != nil {
+			c.shared.congested(c.tenant, h.name, 0)
+		}
+		c.corroborate(h, now, ch)
+	}
+	switch e.Signal {
+	case Answered:
+		h.oks++
+		h.probeRun, h.probeServed = 0, true
+	case Congested:
+		h.count(e.Reason, min(e.RetryAfter, c.b.RetryAfterMax))
+		push(GapThrottled, e.Reason)
+	case Forbidden:
+		// A vendor's challenge or block page, or a 403 to a request the
+		// host served before.
+		push(GapBlocked, ReasonBlocked)
+	case Failed:
+		h.count(e.Reason, 0)
+		if !h.probeServed {
+			// A host that never answered the canary: nothing was taken
+			// away, so it is no push-back; the rate comes down all the same.
+			h.bad++
+			c.lower(h, now, e.Reason, ch)
+			return
+		}
+		push(GapThrottled, e.Reason)
+	}
+}
+
+// corroborate opens the host's breaker when the canary's push-back and
+// failures of the tool's own connections came together: the canary's last
+// answer was push-back, no longer than CorroborateWindow ago, and
+// CorroborateFailures of the tool's connections failed within that window.
+// Either alone does not: the canary alone never opens a breaker, and the
+// tool's failures alone open it by their own rules (BreakerFailures,
+// resetRefusal). Called with c.mu held.
+func (c *HostRate) corroborate(h *hostState, now time.Time, ch *[]Change) {
+	if h.probeRun == 0 || now.Sub(h.lastProbePush) > c.b.CorroborateWindow {
+		return
+	}
+	if h.connFails < c.b.CorroborateFailures || now.Sub(h.lastConnFail) > c.b.CorroborateWindow {
+		return
+	}
+	if h.brk == open || h.brk == down {
+		return
+	}
+	n := h.connFails
+	h.connFails, h.probeRun = 0, 0
+	gap := h.probeGap
+	if gap == "" {
+		gap = GapThrottled
+	}
+	detail := ""
+	if gap == GapBlocked {
+		detail = fmt.Sprintf("the canary's request was refused and %d of the tool's connections failed", n)
+	}
+	c.setGap(h, gap, detail)
+	c.trip(h, now, ReasonThrottled, EvidenceCanaryAndConnection, ch)
 }
 
 // throttled counts one push-back answer toward the host's run of them (at
@@ -663,7 +847,7 @@ func (c *HostRate) throttled(h *hostState, now time.Time, ch *[]Change) {
 	}
 	h.congRun = 0
 	c.setGap(h, GapThrottled, "")
-	c.trip(h, now, ReasonThrottled, ch)
+	c.trip(h, now, ReasonThrottled, EvidenceToolHTTP, ch)
 	if h.brk == open && h.notBefore.After(h.openUntil) {
 		h.openUntil = h.notBefore
 	}
@@ -693,7 +877,7 @@ func (c *HostRate) throttled(h *hostState, now time.Time, ch *[]Change) {
 func (c *HostRate) resetRefusal(h *hostState, now time.Time, ch *[]Change) {
 	if h.brk == halfOpen {
 		h.bad++
-		c.trip(h, now, ReasonReset, ch)
+		c.trip(h, now, ReasonReset, EvidenceToolConnection, ch)
 		return
 	}
 	h.runReset++
@@ -705,7 +889,7 @@ func (c *HostRate) resetRefusal(h *hostState, now time.Time, ch *[]Change) {
 	detail := fmt.Sprintf("%d consecutive connection resets on connections the host accepted", c.b.BlockRun)
 	c.setGap(h, GapBlocked, detail)
 	c.decrease(h, now, ReasonBlocked, ch)
-	c.trip(h, now, ReasonBlocked, ch)
+	c.trip(h, now, ReasonBlocked, EvidenceToolConnection, ch)
 	if c.shared != nil {
 		c.shared.block(c.tenant, h.name, edgeprotect.Verdict{}, detail)
 	}
@@ -754,23 +938,39 @@ func (c *HostRate) ReportHTTP(host string, status int, retryAfter string) {
 	}
 }
 
+// ReportAddrResponse is ReportResponse for the state of the address a host
+// was dialed at (ReportAddr).
+func (c *HostRate) ReportAddrResponse(addr string, status int, retryAfter string, v edgeprotect.Verdict) {
+	c.reportResponse(addr, status, retryAfter, v, true)
+}
+
 // ReportResponse is ReportHTTP with the edge verdict of the answer: a
 // challenge or block page of a vendor's edge (verdict.State.Stops) is a block
 // whatever its status (a challenge is sometimes a 503), and from the first
 // answer; a vendor's rate-limit page is push-back whatever its status.
 // Without such a verdict it behaves as ReportHTTP.
 func (c *HostRate) ReportResponse(host string, status int, retryAfter string, v edgeprotect.Verdict) {
-	if v.State.Stops() {
-		c.Report(host, Event{Signal: Forbidden, Reason: ReasonBlocked, Edge: v})
-		return
-	}
-	if v.State == edgeprotect.RateLimited && status != http.StatusTooManyRequests && status != http.StatusServiceUnavailable {
+	c.reportResponse(host, status, retryAfter, v, false)
+}
+
+func (c *HostRate) reportResponse(host string, status int, retryAfter string, v edgeprotect.Verdict, alias bool) {
+	ra := ParseRetryAfter(retryAfter, c.now())
+	switch {
+	case v.State.Stops():
+		c.report(host, Event{Signal: Forbidden, Reason: ReasonBlocked, Edge: v}, alias)
+	case status == http.StatusTooManyRequests:
+		c.report(host, Event{Signal: Congested, Reason: ReasonHTTP429, RetryAfter: ra}, alias)
+	case status == http.StatusServiceUnavailable:
+		c.report(host, Event{Signal: Congested, Reason: ReasonHTTP503, RetryAfter: ra}, alias)
+	case v.State == edgeprotect.RateLimited:
 		// A vendor's rate-limit page under another status (a 403 or a 200)
 		// is push-back all the same, never an ordinary answer.
-		c.Report(host, Event{Signal: Congested, Reason: ReasonHTTP429, RetryAfter: ParseRetryAfter(retryAfter, c.now()), Edge: v})
-		return
+		c.report(host, Event{Signal: Congested, Reason: ReasonHTTP429, RetryAfter: ra, Edge: v}, alias)
+	case status == http.StatusForbidden:
+		c.report(host, Event{Signal: Forbidden}, alias)
+	default:
+		c.report(host, Event{Signal: Answered}, alias)
 	}
-	c.ReportHTTP(host, status, retryAfter)
 }
 
 // advance closes the windows that ended before now: a window with health
@@ -804,23 +1004,33 @@ func (c *HostRate) advance(h *hostState, now time.Time, ch *[]Change) {
 // decrease halves the rate, at most once per window. A push-back at the
 // floor is a strike; FloorStrikes of them make the host a gap.
 func (c *HostRate) decrease(h *hostState, now time.Time, reason string, ch *[]Change) {
-	if !h.lastDecrease.IsZero() && now.Sub(h.lastDecrease) < c.b.Window {
+	if !c.lower(h, now, reason, ch) {
 		return
+	}
+	h.floorStrike++
+	if h.floorStrike >= c.b.FloorStrikes {
+		c.setGap(h, GapRateFloor, fmt.Sprintf("pushed back %d times at %.3g/s (%s)", h.floorStrike, c.floor, reason))
+	}
+}
+
+// lower halves the rate, at most once per window, and reports whether the
+// rate was at the floor already. It makes no gap: the canary's push-back
+// lowers the rate through it and never makes a host a coverage gap alone
+// (nothing of the tool's was refused).
+func (c *HostRate) lower(h *hostState, now time.Time, reason string, ch *[]Change) (atFloor bool) {
+	if !h.lastDecrease.IsZero() && now.Sub(h.lastDecrease) < c.b.Window {
+		return false
 	}
 	h.lastDecrease = now
 	h.throttled = true
 	h.backoffs++
 	h.slowStart = false
-	if h.rate <= c.floor {
-		h.floorStrike++
-		if h.floorStrike >= c.b.FloorStrikes {
-			c.setGap(h, GapRateFloor, fmt.Sprintf("pushed back %d times at %.3g/s (%s)", h.floorStrike, c.floor, reason))
-		}
-	}
+	atFloor = h.rate <= c.floor
 	from := h.rate
 	h.rate *= c.b.DecreaseFactor
 	h.ssthresh = math.Max(c.floor, h.rate)
 	c.set(h, from, reason, ch)
+	return atFloor
 }
 
 // set clamps the rate to [floor, ceiling], applies it and records the
@@ -835,13 +1045,15 @@ func (c *HostRate) set(h *hostState, from float64, reason string, ch *[]Change) 
 	*ch = append(*ch, Change{Host: h.name, From: from, To: h.rate, Reason: reason})
 }
 
-// trip opens the host's breaker (or gives the host up).
-func (c *HostRate) trip(h *hostState, now time.Time, reason string, ch *[]Change) {
+// trip opens the host's breaker (or gives the host up). evidence is what
+// opened it (an Evidence value).
+func (c *HostRate) trip(h *hostState, now time.Time, reason, evidence string, ch *[]Change) {
 	if h.brk == down || h.brk == open {
 		// Answers of connections opened before the breaker opened do not
 		// trip it again.
 		return
 	}
+	h.openedBy = evidence
 	h.trips++
 	h.circuitOpens++
 	h.fails, h.probing = 0, false
@@ -964,7 +1176,7 @@ func (c *HostRate) Rate(host string) float64 {
 func (c *HostRate) Summary() Summary {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := Summary{Ceiling: c.ceiling, Floor: c.floor, Start: c.start(), Min: c.start(), Final: c.start(), Budget: c.budget, Canary: c.canary}
+	s := Summary{Ceiling: c.ceiling, Floor: c.floor, Start: c.start(), Min: c.start(), Final: c.start(), Budget: c.budget, Canary: c.canary, Limited: c.limited}
 	states := make([]*hostState, 0, len(c.hosts)+1)
 	for _, h := range c.hosts {
 		states = append(states, h)
@@ -975,7 +1187,9 @@ func (c *HostRate) Summary() Summary {
 	slices.SortFunc(states, func(a, b *hostState) int { return strings.Compare(a.name, b.name) })
 	first := true
 	for _, h := range states {
-		s.Hosts++
+		if !h.alias {
+			s.Hosts++
+		}
 		if first || h.min < s.Min {
 			s.Min = h.min
 		}
@@ -986,7 +1200,7 @@ func (c *HostRate) Summary() Summary {
 		if h.throttled {
 			s.Throttled++
 		}
-		if h.brk == down {
+		if h.brk == down && !h.alias {
 			s.Unreachable++
 		}
 		s.Backoffs += h.backoffs
@@ -996,10 +1210,11 @@ func (c *HostRate) Summary() Summary {
 			if len(s.HostStats) < c.b.MaxGaps {
 				s.HostStats = append(s.HostStats, HostStat{Host: h.name, Rate: h.rate, Min: h.min,
 					Backoffs: h.backoffs, CircuitOpens: h.circuitOpens, HTTP429: h.n429, HTTP503: h.n503,
-					Resets: h.nReset, Timeouts: h.nTimeout, RetryAfterSeconds: int(h.maxRetryAfter / time.Second)})
+					Resets: h.nReset, Timeouts: h.nTimeout, RetryAfterSeconds: int(h.maxRetryAfter / time.Second),
+					OpenedBy: h.openedBy, Address: h.alias})
 			}
 		}
-		if h.gap != "" {
+		if h.gap != "" && !h.alias {
 			s.GapsTotal++
 			if len(s.Gaps) < c.b.MaxGaps {
 				detail := h.gapDetail
@@ -1012,6 +1227,17 @@ func (c *HostRate) Summary() Summary {
 		}
 	}
 	return s
+}
+
+// LimitedSummary is the target-rate outcome of a task that ran under budget
+// b with nothing in the path of its connections: the budget (the limit that
+// set it, what it lowered) and why the pacing is limited (a PacingLimited
+// value). No host is listed: nothing observed one.
+func LimitedSummary(b HostBudget, why string) Summary {
+	c := NewHostRate(float64(b.RPS))
+	c.SetBudget(b)
+	c.SetLimited(why)
+	return c.Summary()
 }
 
 // Gaps are the hosts whose coverage is incomplete (at most

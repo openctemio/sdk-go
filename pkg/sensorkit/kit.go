@@ -200,14 +200,15 @@ type Options struct {
 	// Content is the sensor's scanner content, when it manages any (see
 	// Content).
 	Content Content
-	// PacingLevel is the pacing level a job without a signed budget runs at
-	// on this sensor: "gentle", "standard" or "fast" ("" reads
-	// SENSOR_PACING_LEVEL, then Standard). It is the sensor's own
-	// operator's choice, never the platform's; the local policy's
-	// rate.max_host_rps and rate.max_host_inflight cap it like any budget
-	// (core.DefaultCommandExecutor.HostBudget). An unknown name is reported
-	// at start and the sensor then runs at gentle: a mistyped level never
-	// runs faster than its operator meant.
+	// PacingLevel is the sensor's pacing level, the most one target host
+	// gets from a job on this sensor: "gentle", "standard" or "fast" (""
+	// reads SENSOR_PACING_LEVEL, then Standard). It is the sensor's own
+	// operator's choice, never the platform's: a job's signed budget and
+	// the local policy's rate.max_host_rps and rate.max_host_inflight can
+	// only lower it (core.DefaultCommandExecutor.HostBudget, the lowest
+	// limit wins). An unknown name is reported at start and the sensor
+	// then runs at gentle: a mistyped level never runs faster than its
+	// operator meant.
 	PacingLevel string
 	// ScanTargetPolicy restricts the targets of dispatched scans (nil: the
 	// SDK default, core.DefaultScanTargetPolicy). Its AllowedRoots are
@@ -1611,6 +1612,18 @@ func (a aliasScanner) SettingsSchema() *core.SettingsSchema {
 type commandRouter struct {
 	handlers map[string]core.CommandExecutor
 	fallback core.CommandExecutor
+}
+
+// HostBudget is the per-host budget of cmd as the SDK's executor resolves
+// it (core.DefaultCommandExecutor.HostBudget), for a command middleware
+// that runs a tool itself: it sees the router, not the executor behind it.
+func (r *commandRouter) HostBudget(cmd *core.Command) adapt.HostBudget {
+	if b, ok := r.fallback.(interface {
+		HostBudget(*core.Command) adapt.HostBudget
+	}); ok {
+		return b.HostBudget(cmd)
+	}
+	return adapt.ResolveBudget(adapt.PacingGentle, nil, adapt.BudgetCeiling{})
 }
 
 func (r *commandRouter) Execute(ctx context.Context, cmd *core.Command) (*core.CommandExecutionResult, error) {

@@ -32,9 +32,12 @@ func (e *errReader) Read(p []byte) (int, error) {
 // and is never waited for. A vendor's challenge, block or rate-limit page
 // that shows in the headers or in that start is a block (or a push-back)
 // from the first answer; a bare 403 stays an ordinary answer.
-func (f *Forwarder) observeResponse(host string, resp *http.Response, body []byte) {
+func (f *Forwarder) observeResponse(p peer, resp *http.Response, body []byte) {
 	v := edgeprotect.Classify(resp.StatusCode, resp.Header, "", body)
-	f.hostRate.ReportResponse(normName(host), resp.StatusCode, resp.Header.Get("Retry-After"), v)
+	f.hostRate.ReportResponse(p.host, resp.StatusCode, resp.Header.Get("Retry-After"), v)
+	if p.addr != "" {
+		f.hostRate.ReportAddrResponse(p.addr, resp.StatusCode, resp.Header.Get("Retry-After"), v)
+	}
 }
 
 // bufferedBody is the start of resp's body that br already holds (at most
@@ -61,8 +64,8 @@ func bufferedBody(br *bufio.Reader, resp *http.Response) []byte {
 
 // observeErr feeds a network error toward host to the rate controller
 // (errors that say nothing about the host are ignored).
-func (f *Forwarder) observeErr(host string, err error) {
+func (f *Forwarder) observeErr(p peer, err error) {
 	if reason := adapt.FailureReason(err); reason != "" {
-		f.hostRate.Report(normName(host), adapt.Event{Signal: adapt.Failed, Reason: reason})
+		f.report(p, adapt.Event{Signal: adapt.Failed, Reason: reason})
 	}
 }

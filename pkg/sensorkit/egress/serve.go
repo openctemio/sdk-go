@@ -114,7 +114,7 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 			f.serveGuarded(ctx, c, br, up, g, rec)
 			return
 		}
-		f.pipe(c, br, up, rec)
+		f.pipe(ctx, c, br, up, rec)
 		return
 	}
 	if req.URL == nil || req.URL.Host == "" || !strings.EqualFold(req.URL.Scheme, "http") {
@@ -155,8 +155,9 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 	f.scope.Identity.apply(req, req.URL.Host)
 	req.Close = true
 	out := &countWriter{w: up}
+	pr := peerOfRecord(rec)
 	if err := req.Write(out); err != nil {
-		f.observeErr(host, err)
+		f.observeErr(pr, err)
 		_ = up.Close()
 		rec.BytesOut = out.n.Load()
 		f.record(*rec)
@@ -178,10 +179,10 @@ func (f *Forwarder) serveHTTP(ctx context.Context, c net.Conn, br *bufio.Reader,
 		// What the reader already buffered is in head too, so it reaches
 		// the client unchanged. The body start is read from that buffer
 		// only: the bounded head read above is the sole read of the host.
-		f.observeResponse(host, resp, bufferedBody(hr, resp))
+		f.observeResponse(pr, resp, bufferedBody(hr, resp))
 		_ = up.SetReadDeadline(time.Time{})
 	} else {
-		f.observeErr(host, err)
+		f.observeErr(pr, err)
 		if !errors.Is(err, os.ErrDeadlineExceeded) {
 			_ = up.SetReadDeadline(time.Time{})
 		}
@@ -304,7 +305,7 @@ func (f *Forwarder) serveSOCKS5(ctx context.Context, c net.Conn, br *bufio.Reade
 		f.serveGuarded(ctx, c, br, up, g, rec)
 		return
 	}
-	f.pipe(c, br, up, rec)
+	f.pipe(ctx, c, br, up, rec)
 }
 
 func socksReply(c net.Conn, rep byte) {
@@ -321,17 +322,41 @@ func containsByte(b []byte, v byte) bool {
 }
 
 // pipe copies both ways until either side ends, then records the bytes.
-// br holds what the client sent after its request.
-func (f *Forwarder) pipe(c net.Conn, br *bufio.Reader, up net.Conn, rec *Record) {
+// br holds what the client sent after its request. What the client sends
+// goes through the tunnel's meter (tunnel.go): each further request it can
+// tell apart waits for the host's rate, and a request the rate refuses (the
+// host is backed off) or one past the tunnel's lifetime ends the tunnel.
+func (f *Forwarder) pipe(ctx context.Context, c net.Conn, br *bufio.Reader, up net.Conn, rec *Record) {
 	var out, in int64
+	pr := peerOfRecord(rec)
+	meter := newTunnelMeter(up, func(answered bool) error {
+		if answered {
+			// Bytes came back since the request before: the host is alive
+			// and answered it (what it answered is not known).
+			f.report(pr, adapt.Event{Signal: adapt.Answered, Opaque: true})
+		}
+		return f.acquire(ctx, pr)
+	})
 	done := make(chan struct{})
+	var meterErr error
 	go func() {
-		out, _ = io.Copy(up, br)
+		defer close(done)
+		out, meterErr = io.Copy(meter, br)
+		if meterErr == nil {
+			meterErr = meter.Flush()
+		}
+		if errors.Is(meterErr, errTunnelLifetime) || errors.Is(meterErr, adapt.ErrHostUnavailable) || errors.Is(meterErr, context.Canceled) || errors.Is(meterErr, context.DeadlineExceeded) {
+			// The tunnel carries no further request: both sides end, before
+			// a byte of that request reached the host.
+			_ = c.Close()
+			_ = up.Close()
+			return
+		}
+		meterErr = nil
 		closeWrite(up)
-		close(done)
 	}()
 	ur := &errReader{r: up}
-	in, _ = io.Copy(c, ur)
+	in, _ = io.Copy(c, spokeReader{r: ur, m: meter})
 	if ur.err != nil {
 		// The host side broke (reset, or cut on the idle bound): nothing
 		// the client sends can reach it any more, so the client side is
@@ -342,6 +367,17 @@ func (f *Forwarder) pipe(c net.Conn, br *bufio.Reader, up net.Conn, rec *Record)
 	}
 	<-done
 	_ = up.Close()
+	rec.BytesOut, rec.BytesIn = out, in
+	if meterErr != nil {
+		// The forwarder ended the tunnel itself: that says nothing about
+		// the host.
+		if in > 0 {
+			f.report(pr, adapt.Event{Signal: adapt.Answered, Opaque: true})
+		}
+		rec.Reason = "tunnel ended: " + meterErr.Error()
+		f.record(*rec)
+		return
+	}
 	// An opaque tunnel shows only how it ended: reset by the host, or
 	// closed after the host sent data. A tunnel cut on the idle bound after
 	// the host answered is not a host failure.
@@ -352,13 +388,12 @@ func (f *Forwarder) pipe(c net.Conn, br *bufio.Reader, up net.Conn, rec *Record)
 	// into a scan, and the tool then dropped the host on the refusals.
 	unused := out == 0 && idledConn(up)
 	if ur.err != nil && (in == 0 || !idledConn(up)) && !unused {
-		f.observeErr(rec.Host, ur.err)
+		f.observeErr(pr, ur.err)
 	} else if in > 0 {
 		// Bytes came back on a tunnel the forwarder did not read: the host
 		// is alive, what it answered is not known (Opaque).
-		f.hostRate.Report(normName(rec.Host), adapt.Event{Signal: adapt.Answered, Opaque: true})
+		f.report(pr, adapt.Event{Signal: adapt.Answered, Opaque: true})
 	}
-	rec.BytesOut, rec.BytesIn = out, in
 	f.record(*rec)
 }
 

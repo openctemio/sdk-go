@@ -140,12 +140,14 @@ type Statement struct {
 	Limits []scopelimit.Limit `json:"limits,omitempty"`
 	// Pacing is the job's per-host budget: a pacing level and, optionally,
 	// the requests per second and the requests in flight one target host
-	// may get (adapt.JobBudget). A sensor runs the job under it, never above
-	// its operator's own ceiling (adapt.ResolveBudget). Absent: the sensor's
-	// own level (Standard). Only this signed member can set a budget: no
-	// unsigned command field does. A verifier that predates the field
-	// refuses the statement (unknown field), so a signer sends it only to a
-	// sensor that reports the capability core.CapabilityHostBudget.
+	// may get (adapt.JobBudget). It can only LOWER what a host gets on the
+	// sensor: the sensor runs the job under the lowest of its own level,
+	// this budget and its operator's ceiling (adapt.ResolveBudget), and
+	// reports which limit won. Absent: the sensor's own level. Only this
+	// signed member carries a job's budget: no unsigned command field
+	// does. A verifier that predates the field refuses the statement
+	// (unknown field), so a signer sends it only to a sensor that reports
+	// the capability core.CapabilityHostBudget.
 	Pacing     *adapt.JobBudget `json:"pacing,omitempty"`
 	LeaseEpoch int              `json:"lease_epoch"`
 	IssuedAt   time.Time        `json:"issued_at"`

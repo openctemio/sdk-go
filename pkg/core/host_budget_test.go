@@ -13,6 +13,8 @@ const policyHead = "apiVersion: openctem.io/sensor-policy/v1\n"
 // job's verified statement and the operator's ceiling only. A lower signed
 // budget wins, a higher one is clamped at the ceiling, and nothing in an
 // unsigned command can set one.
+// The budget of a command: the lowest of the sensor's level, the job's
+// signed budget and the local policy's ceiling. A job can only lower.
 func TestHostBudgetOfACommand(t *testing.T) {
 	fast := &adapt.JobBudget{Level: "fast"}
 	gentle := &adapt.JobBudget{Level: "gentle"}
@@ -23,23 +25,24 @@ func TestHostBudgetOfACommand(t *testing.T) {
 		policy   string
 		level    string
 		rps, in  int
-		source   string
+		wonBy    string
 		clamped  int
 		wantName string
 	}{
-		{name: "no command: Standard", rps: 20, in: 8, source: adapt.BudgetFromSensor, wantName: "standard"},
-		{name: "a job without a budget (an older platform): Standard", cmd: &Command{jobVerified: true}, rps: 20, in: 8, source: adapt.BudgetFromSensor, wantName: "standard"},
-		{name: "a lower signed budget wins", cmd: &Command{jobVerified: true, signedPacing: gentle}, rps: 5, in: 2, source: adapt.BudgetFromJob, wantName: "gentle"},
-		{name: "a signed Fast under the built-in ceiling", cmd: &Command{jobVerified: true, signedPacing: fast}, rps: 100, in: 25, source: adapt.BudgetFromJob, wantName: "fast"},
-		{name: "a signed budget above the built-in ceiling is clamped", cmd: &Command{jobVerified: true, signedPacing: huge}, rps: 200, in: 50, source: adapt.BudgetFromJob, clamped: 2, wantName: "custom"},
-		{name: "the operator's ceiling clamps a signed Fast", cmd: &Command{jobVerified: true, signedPacing: fast},
-			policy: policyHead + "rate: {max_host_rps: 10, max_host_inflight: 4}\n", rps: 10, in: 4, source: adapt.BudgetFromJob, clamped: 2, wantName: "custom"},
-		{name: "the operator's ceiling clamps the default too", policy: policyHead + "rate: {max_host_rps: 5}\n", rps: 5, in: 8, source: adapt.BudgetFromSensor, clamped: 1, wantName: "custom"},
+		{name: "no command: Standard", rps: 20, in: 8, wonBy: adapt.LimitSensorLevel, wantName: "standard"},
+		{name: "a job without a budget (an older platform): Standard", cmd: &Command{jobVerified: true}, rps: 20, in: 8, wonBy: adapt.LimitSensorLevel, wantName: "standard"},
+		{name: "a lower signed budget wins", cmd: &Command{jobVerified: true, signedPacing: gentle}, rps: 5, in: 2, wonBy: adapt.LimitJob, clamped: 2, wantName: "gentle"},
+		{name: "a signed Fast on a Standard sensor stays Standard", cmd: &Command{jobVerified: true, signedPacing: fast}, rps: 20, in: 8, wonBy: adapt.LimitSensorLevel, clamped: 2, wantName: "standard"},
+		{name: "a signed budget far above everything stays Standard", cmd: &Command{jobVerified: true, signedPacing: huge}, rps: 20, in: 8, wonBy: adapt.LimitSensorLevel, clamped: 2, wantName: "standard"},
+		{name: "a signed Fast on a Fast sensor is Fast", level: "fast", cmd: &Command{jobVerified: true, signedPacing: fast}, rps: 100, in: 25, wonBy: adapt.LimitSensorLevel, wantName: "fast"},
+		{name: "the operator's ceiling beats a Fast sensor and a signed Fast", level: "fast", cmd: &Command{jobVerified: true, signedPacing: fast},
+			policy: policyHead + "rate: {max_host_rps: 10, max_host_inflight: 4}\n", rps: 10, in: 4, wonBy: adapt.LimitOperatorCeiling, clamped: 4, wantName: "custom"},
+		{name: "the operator's ceiling lowers the default too", policy: policyHead + "rate: {max_host_rps: 5, max_host_inflight: 2}\n", rps: 5, in: 2, wonBy: adapt.LimitOperatorCeiling, clamped: 2, wantName: "gentle"},
 		{name: "a lower signed budget under a ceiling stays", cmd: &Command{jobVerified: true, signedPacing: gentle},
-			policy: policyHead + "rate: {max_host_rps: 10}\n", rps: 5, in: 2, source: adapt.BudgetFromJob, wantName: "gentle"},
-		{name: "a budget on a command that was not verified is not read", cmd: &Command{signedPacing: fast}, rps: 20, in: 8, source: adapt.BudgetFromSensor, wantName: "standard"},
-		{name: "the operator's own level", level: "gentle", rps: 5, in: 2, source: adapt.BudgetFromSensor, wantName: "gentle"},
-		{name: "the operator's Fast, a signed Gentle still wins", level: "fast", cmd: &Command{jobVerified: true, signedPacing: gentle}, rps: 5, in: 2, source: adapt.BudgetFromJob, wantName: "gentle"},
+			policy: policyHead + "rate: {max_host_rps: 10, max_host_inflight: 4}\n", rps: 5, in: 2, wonBy: adapt.LimitJob, clamped: 2, wantName: "gentle"},
+		{name: "a budget on a command that was not verified is not read", cmd: &Command{signedPacing: gentle}, rps: 20, in: 8, wonBy: adapt.LimitSensorLevel, wantName: "standard"},
+		{name: "the operator's own level", level: "gentle", rps: 5, in: 2, wonBy: adapt.LimitSensorLevel, wantName: "gentle"},
+		{name: "the operator's Fast, a signed Gentle still wins", level: "fast", cmd: &Command{jobVerified: true, signedPacing: gentle}, rps: 5, in: 2, wonBy: adapt.LimitJob, clamped: 2, wantName: "gentle"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -53,7 +56,7 @@ func TestHostBudgetOfACommand(t *testing.T) {
 				}
 			}
 			b := e.HostBudget(tc.cmd)
-			if b.RPS != tc.rps || b.Inflight != tc.in || b.Source != tc.source || len(b.Clamped) != tc.clamped || b.Level != tc.wantName {
+			if b.RPS != tc.rps || b.Inflight != tc.in || b.WonBy.RPS != tc.wonBy || b.WonBy.Inflight != tc.wonBy || len(b.Clamped) != tc.clamped || b.Level != tc.wantName {
 				t.Fatalf("budget %+v", b)
 			}
 		})
@@ -68,6 +71,8 @@ func TestUnsignedCommandCannotSetABudget(t *testing.T) {
 		`{"id":"c","type":"scan","signedPacing":{"level":"fast"},"signed_pacing":{"level":"fast"},"pacing":{"level":"fast","target_rps":5000}}`,
 		`{"id":"c","type":"scan","jobVerified":true,"job_verified":true,"pacing":{"target_rps":5000,"target_inflight":500}}`,
 		`{"id":"c","type":"scan","payload":{"scanner":"nuclei","pacing":{"level":"fast"},"config":{"pacing":"fast","host_budget":{"rps":5000},"target_rps":5000}}}`,
+		// Nor a lower one: only the signed statement speaks for the job.
+		`{"id":"c","type":"scan","signedPacing":{"level":"gentle"},"pacing":{"level":"gentle","target_rps":1}}`,
 	} {
 		var cmd Command
 		if err := json.Unmarshal([]byte(doc), &cmd); err != nil {
@@ -76,7 +81,7 @@ func TestUnsignedCommandCannotSetABudget(t *testing.T) {
 		if cmd.signedPacing != nil || cmd.jobVerified {
 			t.Fatalf("a decoded command carries a budget: %+v", cmd.signedPacing)
 		}
-		if b := NewDefaultCommandExecutor(nil).HostBudget(&cmd); b.RPS != 20 || b.Inflight != 8 || b.Source != adapt.BudgetFromSensor {
+		if b := NewDefaultCommandExecutor(nil).HostBudget(&cmd); b.RPS != 20 || b.Inflight != 8 || b.WonBy.RPS != adapt.LimitSensorLevel || len(b.Clamped) != 0 {
 			t.Fatalf("budget %+v from %s", b, doc)
 		}
 	}

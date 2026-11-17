@@ -182,10 +182,15 @@ type RunOptions struct {
 	// HostBudget is the per-host budget of the task's job
 	// (adapt.ResolveBudget; nil: none, the task runs under TargetRate
 	// alone). For a tool that connects to its targets, a confined task's
-	// forwarder then holds each host to it (rate and connections in
-	// flight), a canary request per host reads what the host answers where
-	// the forwarder cannot, and the outcome's TargetRate states the budget
-	// with the back-off and breaker counts (budget.go).
+	// forwarder then holds each host and each address to it (rate and
+	// connections in flight; what it holds on a tunnel it passes through is
+	// in egress/tunnel.go), a canary request per host reads what the host
+	// answers where the forwarder cannot, and the outcome's TargetRate
+	// states the budget, the limit that set it, the values that were asked
+	// for and did not apply, and the back-off and breaker counts. Without
+	// a forwarder the tool's own flags are the enforcement and the outcome
+	// says the pacing is limited (budget.go). The tool host works on a
+	// copy: what it lowers itself is in the outcome's budget, not here.
 	HostBudget *adapt.HostBudget
 	// Watch bounds the run (watch.go): a zero field takes the job's
 	// (core.RunWatchFrom of the task's context), then the default; a
@@ -789,11 +794,6 @@ type session struct {
 	settledAt  time.Time
 	// watchStop is why the watch stopped the tool ("": it did not).
 	watchStop string
-	// throttle says the task's targets throttle the scan and the tool must
-	// stop (budget.go; nil: never); the run watch reads it (watch.go).
-	// throttleStop is why the tool was stopped ("": it was not).
-	throttle     <-chan string
-	throttleStop string
 	// handshake is the start handshake timeout of this task.
 	handshake time.Duration
 	// oom is set when the kernel killed the tool for memory: "oom_kill"
@@ -892,7 +892,7 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	_ = outW.Close()
 
 	s := &session{h: h, p: p, o: o, out: &Outcome{Sandbox: be.Status()}, ctx: ctx,
-		watch: watchFor(o.Watch, core.RunWatchFrom(ctx)), cpu: cpu, handshake: handshake, throttle: canary.stopC()}
+		watch: watchFor(o.Watch, core.RunWatchFrom(ctx)), cpu: cpu, handshake: handshake}
 	_, _, maxBytes, _ := m.Resources.Limits()
 	stopReason, stopClass := s.drive(runCtx, ctx, t, toolwire.NewWriter(inW), outR, idle, maxRecords, maxBytes)
 	_ = inW.Close()
@@ -916,7 +916,8 @@ func (h *Host) run(ctx context.Context, m tool.Manifest, task tool.Task, o RunOp
 	}
 	s.finish(res, stopReason, stopClass, stderr, start, execution)
 	// The canary ends first: its counts are part of the rate outcome.
-	lines := canary.finish(s.out)
+	canary.end()
+	lines := unconfinedBudget(p, eg, s.out)
 	for _, l := range append(lines, eg.finish(s.out, p.task.Targets)...) {
 		s.log(l.Level, l.Msg, l.Fields)
 	}
@@ -1326,13 +1327,8 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 	if !s.budgetStop && s.watchStop != "" && runErr != nil && runErr.Class == tool.Canceled {
 		runErr = s.watchOutcome()
 	}
-	// A tool stopped because its targets throttle the scan (watch.go).
-	throttleStopped := s.throttleStop != "" && runErr != nil && runErr.Class == tool.RateLimited && !p.task.IsRetest()
 	stoppedPartway := false
 	switch {
-	case throttleStopped:
-		out.Status = tool.StatusPartial
-		stoppedPartway = true
 	case runErr != nil && runErr.Class == tool.ResourceExhausted:
 		// Stopped at the output limit: what was accepted is delivered.
 		out.Status = tool.StatusPartial

@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/openctemio/contract/edgeprotect"
+
+	"github.com/openctemio/sdk-go/pkg/useragent"
 )
 
 // CanaryBounds bound a task's canary requests (Canary).
@@ -47,14 +49,21 @@ var CanaryPace = CanaryBounds{
 }
 
 // CanaryTarget is one host a canary watches: the host's key in the rate
-// controller and the URL the canary requests (the origin's root).
+// controller (HostKey, the key the task's forwarder counts the host's
+// connections under) and the URL the canary requests (the origin's root).
+// Addrs are the keys of the addresses the host is reached at
+// (CanonicalHost of each; may be empty): what the canary is answered is
+// reported to them too (HostRate.ReportAddr), so it slows every name of the
+// task that is reached at the same address.
 type CanaryTarget struct {
-	Host string
-	URL  string
+	Host  string
+	URL   string
+	Addrs []string
 }
 
 // CanaryTargets picks the hosts of a job's targets a canary can watch: one
-// per HostKey, for the first target of that host that is an http or https
+// per HostKey (the canonical host, so two spellings of one host get one
+// canary), for the first target of that host that is an http or https
 // URL, requested at the URL's origin ("/"). A target that is not such a URL
 // gets none (the scheme and port to ask on are not known, and a canary
 // never sends a request the job did not name an origin for). It returns at
@@ -104,42 +113,75 @@ type CanarySummary struct {
 
 // Canary watches the hosts of one task from outside the tool: a plain GET
 // of each origin every CanaryPace.Interval, through the same way out as the
-// tool's requests and with the job's identification, whose answer is fed to
-// the task's HostRate. It exists because the controller cannot read what a
-// host answers on an HTTPS connection the forwarder only passes through,
-// and sees nothing at all of a tool that runs unconfined: the canary's own
-// request is one it can read, without terminating the tool's TLS.
+// tool's connections (the task's forwarder: its scope check, the addresses
+// pinned at admission, the job's proxy pool), whose answer is fed to the
+// task's HostRate. It exists because the controller cannot read what a host
+// answers on an HTTPS connection the forwarder only passes through: the
+// canary's own request is one it can read, without terminating the tool's
+// TLS. A task without a forwarder gets no canary: there is no way out the
+// runtime shares with the tool there, and nothing a canary could slow.
+//
+// The request is fixed: GET of the origin's root, no query, no body, and
+// one header besides Host, the sensor's own User-Agent (useragent.String).
+// Nothing a job or a platform setting says changes it; only the origin
+// comes from the job's signed targets. A host that wants to recognize the
+// scanner by it can: that is what a published identification is for.
 //
 // What an answer means: 429 or 503 (with Retry-After) and a vendor's
-// rate-limit page are push-back (the host's rate is halved, a run of them
-// opens its breaker and makes it a GapThrottled gap); a vendor's challenge
-// or block page is a block; a 403 from a host that served the same request
-// before is a block after ThrottleRun of them in a row; a reset or a
-// timeout is a failure that also halves the rate. Any other answer is
-// health. A request respects the host's breaker and Retry-After and takes
-// a token of the host's rate when one is free (HostRate.AcquireProbe); it
-// never waits behind the tool's requests, so it adds at most one request
-// every FailInterval to the host's rate. It is never retried and follows
-// no redirect.
+// rate-limit page are push-back, a vendor's challenge or block page and a
+// 403 from a host that served the same request before are a refusal, a
+// reset or a timeout from a host that served it before is push-back too.
+// Each halves the host's rate. None of them opens the host's breaker or
+// stops a tool by itself: the breaker opens only when the tool's own
+// connections fail as well (HostRate, EvidenceCanaryAndConnection), because
+// a host can answer the canary differently from the tool. Any other answer
+// is health. A request waits while the host's breaker is not closed or the
+// host asked to wait, takes a token of the host's rate when one is free
+// (HostRate.AcquireProbe) and never waits behind the tool's requests, so
+// it adds at most one request every FailInterval to the host's rate. It is
+// never retried and follows no redirect.
 //
 // What it does not see: a limit that applies to the tool's requests only
 // (a path, a payload or a session the canary does not use), a host no
 // target names by URL, and a host whose certificate does not verify.
 type Canary struct {
-	rate   *HostRate
-	do     func(*http.Request) (*http.Response, error)
-	header http.Header
-	b      CanaryBounds
+	rate *HostRate
+	do   func(*http.Request) (*http.Response, error)
+	b    CanaryBounds
 
 	mu    sync.Mutex
 	stats CanarySummary
 }
 
 // NewCanary returns the canary of one task. do sends one request through
-// the task's way out and must not follow redirects; header is the job's
-// identification (may be nil).
-func NewCanary(rate *HostRate, do func(*http.Request) (*http.Response, error), header http.Header) *Canary {
-	return &Canary{rate: rate, do: do, header: header, b: CanaryPace}
+// the task's way out, as it is, and must not follow redirects (CanaryDo).
+func NewCanary(rate *HostRate, do func(*http.Request) (*http.Response, error)) *Canary {
+	return &Canary{rate: rate, do: do, b: CanaryPace}
+}
+
+// canaryRequest is the canary's request for origin: the same for every
+// job. The transport adds the Host header and nothing else (CanaryDo turns
+// its own compression header off).
+func canaryRequest(ctx context.Context, origin string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.URL.Path, req.URL.RawPath, req.URL.RawQuery, req.URL.Fragment, req.URL.User = "/", "", "", "", nil
+	req.Header = http.Header{"User-Agent": {useragent.String()}}
+	return req, nil
+}
+
+// report feeds one signal of the canary to the host's state and to the
+// states of the addresses the host is reached at.
+func (c *Canary) report(t CanaryTarget, e Event) {
+	e.Probe = true
+	c.rate.Report(t.Host, e)
+	for _, a := range t.Addrs {
+		if a != t.Host {
+			c.rate.ReportAddr(a, e)
+		}
+	}
 }
 
 // Run watches targets until ctx ends, then records its summary on the
@@ -198,12 +240,9 @@ func (c *Canary) probe(ctx context.Context, t CanaryTarget, base *int) time.Dura
 	}
 	rctx, cancel := context.WithTimeout(ctx, c.b.Timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(rctx, http.MethodGet, t.URL, nil)
+	req, err := canaryRequest(rctx, t.URL)
 	if err != nil {
 		return c.b.Interval
-	}
-	for k, v := range c.header {
-		req.Header[k] = append([]string(nil), v...)
 	}
 	c.add(func(s *CanarySummary) { s.Probes++ })
 	resp, err := c.do(req)
@@ -222,7 +261,7 @@ func (c *Canary) probe(ctx context.Context, t CanaryTarget, base *int) time.Dura
 		}
 		if reason != "" {
 			c.add(func(s *CanarySummary) { s.Failed++ })
-			c.rate.Report(t.Host, Event{Signal: Failed, Reason: reason, Probe: true})
+			c.report(t, Event{Signal: Failed, Reason: reason})
 			return c.b.FailInterval
 		}
 		return c.b.Interval
@@ -235,27 +274,40 @@ func (c *Canary) probe(ctx context.Context, t CanaryTarget, base *int) time.Dura
 		*base = status
 	}
 	switch {
-	case v.State.Stops(), v.State == edgeprotect.RateLimited, IsThrottle(status):
+	case v.State.Stops():
 		c.add(func(s *CanarySummary) { s.Pushback++ })
-		c.rate.ReportResponse(t.Host, status, resp.Header.Get("Retry-After"), v)
+		c.report(t, Event{Signal: Forbidden, Reason: ReasonBlocked, Edge: v})
+		return c.b.FailInterval
+	case v.State == edgeprotect.RateLimited, IsThrottle(status):
+		c.add(func(s *CanarySummary) { s.Pushback++ })
+		reason := ReasonHTTP429
+		if status == http.StatusServiceUnavailable {
+			reason = ReasonHTTP503
+		}
+		c.report(t, Event{Signal: Congested, Reason: reason, Edge: v,
+			RetryAfter: ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())})
 		return c.b.FailInterval
 	case status == http.StatusForbidden && *base != http.StatusForbidden:
 		// The origin served this request before and forbids it now.
 		c.add(func(s *CanarySummary) { s.Pushback++ })
-		c.rate.Report(t.Host, Event{Signal: Forbidden, Probe: true})
+		c.report(t, Event{Signal: Forbidden})
 		return c.b.FailInterval
 	}
 	// Any other answer, a 403 from the first request on included (an
 	// origin whose root needs a login), says the host answers.
-	c.rate.Report(t.Host, Event{Signal: Answered})
+	c.report(t, Event{Signal: Answered})
 	return c.b.Interval
 }
 
 // CanaryDo returns the request function of a canary whose connections are
-// opened by dial (the task's way out: its forwarder, or a dialer bound to
-// the addresses the task's targets were admitted at), and a function that
-// releases it. A request uses one connection and closes it, follows no
-// redirect and goes through no proxy of the environment.
+// opened by dial (the task's way out: its forwarder's DialTarget, which
+// checks the scope, dials the addresses pinned at admission and goes
+// through the job's proxy pool as the tool's connections do), and a
+// function that releases it. A request uses one connection, which is closed
+// when its answer was read, follows no redirect, goes through no proxy of
+// the environment, and is sent as the canary built it: the transport adds
+// no header of its own besides Host (no Accept-Encoding, and no Connection
+// header: the connection is closed by the canary, not announced).
 //
 // The target's certificate is verified against roots (nil: the system's).
 // A host whose certificate does not verify (self-signed, expired, another
@@ -266,7 +318,9 @@ func (c *Canary) probe(ctx context.Context, t CanaryTarget, base *int) time.Dura
 func CanaryDo(dial func(ctx context.Context, host string, port int) (net.Conn, error), roots *x509.CertPool) (do func(*http.Request) (*http.Response, error), release func()) {
 	tr := &http.Transport{
 		Proxy:                 nil,
-		DisableKeepAlives:     true,
+		DisableCompression:    true,
+		MaxIdleConns:          1,
+		IdleConnTimeout:       time.Second,
 		ForceAttemptHTTP2:     false,
 		TLSClientConfig:       &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout:   CanaryPace.Timeout,
@@ -285,7 +339,28 @@ func CanaryDo(dial func(ctx context.Context, host string, port int) (net.Conn, e
 	}
 	client := &http.Client{Transport: tr, Timeout: CanaryPace.Timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	return client.Do, tr.CloseIdleConnections
+	do = func(req *http.Request) (*http.Response, error) {
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		resp.Body = &closingBody{ReadCloser: resp.Body, done: tr.CloseIdleConnections}
+		return resp, nil
+	}
+	return do, tr.CloseIdleConnections
+}
+
+// closingBody closes the canary's connection when its answer was read: the
+// next request dials again, through the same checks.
+type closingBody struct {
+	io.ReadCloser
+	done func()
+}
+
+func (b *closingBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.done()
+	return err
 }
 
 // certUnverified reports whether err is a certificate that did not verify.

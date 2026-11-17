@@ -26,9 +26,6 @@ import (
 const (
 	watchFinished = "finished"
 	watchInactive = "inactive"
-	// watchThrottled: every host of the task has its breaker open
-	// (budget.go); the tool is stopped and what it delivered is kept.
-	watchThrottled = "throttled"
 )
 
 // inactiveCPU is the least CPU a tool's processes use over the inactivity
@@ -53,13 +50,6 @@ func (s *session) watchInterval() time.Duration {
 	if s.watch.Inactivity > 0 && (d == 0 || s.watch.Inactivity < d) {
 		d = s.watch.Inactivity
 	}
-	if s.throttle != nil {
-		// A task that may be stopped for throttling is checked every second.
-		if d <= 0 {
-			return time.Second
-		}
-		return min(max(d/10, 50*time.Millisecond), time.Second)
-	}
 	if d <= 0 {
 		return 0
 	}
@@ -68,12 +58,6 @@ func (s *session) watchInterval() time.Duration {
 
 // watchdog reports why the tool should be stopped now ("": it should not).
 func (s *session) watchdog(now time.Time) string {
-	select {
-	case why := <-s.throttle:
-		s.throttleStop = why
-		return watchThrottled
-	default:
-	}
 	if g := s.watch.FinishGrace; g > 0 && len(s.p.task.Targets) > 0 && !s.p.task.IsRetest() {
 		if s.settledAt.IsZero() && len(s.p.asm.Unfinished()) == 0 {
 			s.settledAt = now
@@ -106,13 +90,6 @@ func (s *session) watchdog(now time.Time) string {
 // and it logs what happened to the task's command log.
 func (s *session) watchOutcome() *tool.Error {
 	switch s.watchStop {
-	case watchThrottled:
-		// Stopped because its targets throttle the scan: nothing the tool
-		// obtained is discarded, the rest is unfinished (finish).
-		detail := "stopped by the sensor: " + s.throttleStop
-		s.log("warn", detail, map[string]any{"host_budget": "throttle_stop"})
-		pacingTotals.stops.Add(1)
-		return &tool.Error{Class: tool.RateLimited, Retryable: true, Detail: detail}
 	case watchFinished:
 		s.log("warn", fmt.Sprintf("the tool settled every target but did not finish within %s; the sensor stopped it and delivered every target's results", s.watch.FinishGrace),
 			map[string]any{"watchdog": watchFinished, "finish_grace": s.watch.FinishGrace.String()})

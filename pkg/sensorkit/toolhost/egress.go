@@ -101,8 +101,9 @@ func (h *Host) startEgress(ctx context.Context, be executor.Backend, p *prepared
 	ceiling := h.rateCeiling(p)
 	limits := egress.Limits{Rate: ceiling, PerHostRate: ceiling}
 	if p.budget != nil {
-		// One host never gets more than the job's budget, whatever the
-		// task's rate over all its hosts is and whatever the tool sends.
+		// The host's ceiling is the job's budget, not the task's rate over
+		// all its hosts. What the forwarder holds to it, and what only the
+		// tool's own flags hold, is in docs/host-budget.md.
 		limits.PerHostRate = math.Min(ceiling, float64(p.budget.RPS))
 		limits.PerHostConns = p.budget.Inflight
 	}

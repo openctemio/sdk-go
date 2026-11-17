@@ -1782,10 +1782,11 @@ func (e *DefaultCommandExecutor) SetLocalPolicy(lp *LocalPolicy) {
 	e.local.Store(lp)
 }
 
-// SetPacingLevel sets the pacing level a job without a signed budget runs
-// at on this sensor (adapt.PacingFor; the sensor's own operator chooses it,
-// never the platform). Without it the level is adapt.DefaultPacing
-// (Standard). A name that is not a level is refused.
+// SetPacingLevel sets the sensor's pacing level (adapt.PacingFor): what one
+// target host gets from a job on this sensor, unless the job's signed
+// budget or the operator's ceiling is lower. The sensor's own operator
+// chooses it, never the platform. Without it the level is
+// adapt.DefaultPacing (Standard). A name that is not a level is refused.
 func (e *DefaultCommandExecutor) SetPacingLevel(name string) error {
 	p, ok := adapt.PacingFor(name)
 	if !ok {
@@ -1796,10 +1797,11 @@ func (e *DefaultCommandExecutor) SetPacingLevel(name string) error {
 }
 
 // HostBudget is the per-host budget cmd runs under (adapt.ResolveBudget):
-// the sensor's pacing level, replaced by the budget of the job's verified
-// statement when it carries one, and never above the local policy's
-// rate.max_host_rps and rate.max_host_inflight (or the built-in hard
-// ceiling). cmd may be nil (the sensor's own budget).
+// for each number the lowest of the sensor's pacing level, the budget of
+// the job's verified statement when it carries one, the local policy's
+// rate.max_host_rps and rate.max_host_inflight, and the built-in hard
+// ceiling. A job can only lower what a host gets. cmd may be nil (the
+// sensor's own budget).
 func (e *DefaultCommandExecutor) HostBudget(cmd *Command) adapt.HostBudget {
 	level := adapt.DefaultPacing
 	if p := e.pacing.Load(); p != nil {
@@ -2155,9 +2157,9 @@ func (e *DefaultCommandExecutor) executeScan(ctx context.Context, cmd *Command) 
 	if err := applyJobConfig(opts, payload.Config, local); err != nil {
 		return nil, err
 	}
-	// The per-host budget: the sensor's level, the job's signed budget
-	// when it carries one, never above the operator's ceiling. Nothing in
-	// the unsigned payload reaches it.
+	// The per-host budget: the lowest of the sensor's level, the job's
+	// signed budget when it carries one and the operator's ceiling. Nothing
+	// in the unsigned payload reaches it.
 	opts.HostBudget = e.HostBudget(cmd)
 
 	// The rest of the config reaches the scanner only as typed settings its

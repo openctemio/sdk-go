@@ -30,8 +30,9 @@ const (
 	EnvAPIKey   = "SENSOR_API_KEY"
 	EnvRegion   = "SENSOR_REGION"
 	EnvSensorID = "SENSOR_ID"
-	// EnvPacingLevel is the pacing level of jobs that carry no signed
-	// budget: gentle, standard (the default) or fast (Options.PacingLevel).
+	// EnvPacingLevel is the sensor's pacing level: gentle, standard (the
+	// default) or fast (Options.PacingLevel). A job's signed budget can
+	// only lower it.
 	EnvPacingLevel = "SENSOR_PACING_LEVEL"
 	EnvSensorName  = "SENSOR_NAME"
 	EnvProtocol    = "SENSOR_PROTOCOL" // auto (default) | v1 | v2

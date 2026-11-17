@@ -562,14 +562,14 @@ func parsePolicy(data []byte, lookup func(string) (string, bool)) (*LocalPolicy,
 			lp.maxJobSeconds = *r.MaxJobSeconds
 		}
 		if r.MaxHostRPS != nil {
-			if *r.MaxHostRPS < 1 || *r.MaxHostRPS > adapt.HardBudgetCeiling.RPS {
-				return nil, fmt.Errorf("rate.max_host_rps must be from 1 to %d", adapt.HardBudgetCeiling.RPS)
+			if *r.MaxHostRPS < 1 || *r.MaxHostRPS > adapt.HardCeilingRPS {
+				return nil, fmt.Errorf("rate.max_host_rps must be from 1 to %d", adapt.HardCeilingRPS)
 			}
 			lp.maxHostRPS = *r.MaxHostRPS
 		}
 		if r.MaxHostInflight != nil {
-			if *r.MaxHostInflight < 1 || *r.MaxHostInflight > adapt.HardBudgetCeiling.Inflight {
-				return nil, fmt.Errorf("rate.max_host_inflight must be from 1 to %d", adapt.HardBudgetCeiling.Inflight)
+			if *r.MaxHostInflight < 1 || *r.MaxHostInflight > adapt.HardCeilingInflight {
+				return nil, fmt.Errorf("rate.max_host_inflight must be from 1 to %d", adapt.HardCeilingInflight)
 			}
 			lp.maxHostInflight = *r.MaxHostInflight
 		}
@@ -1067,7 +1067,9 @@ func (lp *LocalPolicy) CapRate(requested int) int {
 
 // HostCeiling is the operator's per-host ceiling: rate.max_host_rps and
 // rate.max_host_inflight (a zero field: not set, the built-in hard ceiling
-// applies, adapt.HardBudgetCeiling). No job's budget passes it.
+// applies, adapt.HardCeilingRPS and adapt.HardCeilingInflight). It is one
+// of the limits of a job's budget, of which the lowest wins
+// (adapt.ResolveBudget): no job and no sensor level passes it.
 func (lp *LocalPolicy) HostCeiling() adapt.BudgetCeiling {
 	if !lp.Present() {
 		return adapt.BudgetCeiling{}

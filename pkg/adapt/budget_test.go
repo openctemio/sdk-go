@@ -1,15 +1,23 @@
 package adapt
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/openctemio/contract/edgeprotect"
 )
 
+// The LOWEST limit wins, for each number on its own: the sensor's level,
+// the job's signed budget, the operator's ceiling, the built-in hard
+// ceiling. A job can only lower what a host gets.
 func TestResolveBudget(t *testing.T) {
 	gentle := &JobBudget{Level: "gentle"}
+	won := func(rps, inflight string) BudgetWon { return BudgetWon{RPS: rps, Inflight: inflight} }
 	cases := []struct {
 		name    string
 		level   Pacing
@@ -18,37 +26,58 @@ func TestResolveBudget(t *testing.T) {
 		want    HostBudget
 	}{
 		{"no job, no ceiling: Standard", DefaultPacing, nil, BudgetCeiling{},
-			HostBudget{Level: "standard", RPS: 20, Inflight: 8, Source: BudgetFromSensor}},
-		{"a zero level reads as the default", Pacing{}, nil, BudgetCeiling{},
-			HostBudget{Level: "standard", RPS: 20, Inflight: 8, Source: BudgetFromSensor}},
-		{"a lower signed level wins", DefaultPacing, gentle, BudgetCeiling{},
-			HostBudget{Level: "gentle", RPS: 5, Inflight: 2, Source: BudgetFromJob}},
+			HostBudget{Level: "standard", RPS: 20, Inflight: 8, WonBy: won(LimitSensorLevel, LimitSensorLevel)}},
+		{"a signed Fast on a Standard sensor stays Standard", DefaultPacing, &JobBudget{Level: "fast"}, BudgetCeiling{},
+			HostBudget{Level: "standard", RPS: 20, Inflight: 8, WonBy: won(LimitSensorLevel, LimitSensorLevel), Clamped: []BudgetClamp{
+				{Key: "rps", Asked: 100, To: 20, By: LimitSensorLevel, Source: LimitJob},
+				{Key: "inflight", Asked: 25, To: 8, By: LimitSensorLevel, Source: LimitJob}}}},
+		{"a signed Gentle on a Fast sensor is Gentle", PacingFast, gentle, BudgetCeiling{},
+			HostBudget{Level: "gentle", RPS: 5, Inflight: 2, WonBy: won(LimitJob, LimitJob), Clamped: []BudgetClamp{
+				{Key: "rps", Asked: 100, To: 5, By: LimitJob, Source: LimitSensorLevel},
+				{Key: "inflight", Asked: 25, To: 2, By: LimitJob, Source: LimitSensorLevel}}}},
+		{"a ceiling below the level wins", DefaultPacing, nil, BudgetCeiling{RPS: 5, Inflight: 2},
+			HostBudget{Level: "gentle", RPS: 5, Inflight: 2, WonBy: won(LimitOperatorCeiling, LimitOperatorCeiling), Clamped: []BudgetClamp{
+				{Key: "rps", Asked: 20, To: 5, By: LimitOperatorCeiling, Source: LimitSensorLevel},
+				{Key: "inflight", Asked: 8, To: 2, By: LimitOperatorCeiling, Source: LimitSensorLevel}}}},
+		{"an unknown level (a zero Pacing) runs Gentle", Pacing{}, nil, BudgetCeiling{},
+			HostBudget{Level: "gentle", RPS: 5, Inflight: 2, WonBy: won(LimitSensorLevel, LimitSensorLevel)}},
+		{"an unknown level in a job's budget runs Gentle", PacingFast, &JobBudget{Level: "ludicrous", RPS: 9000}, BudgetCeiling{},
+			HostBudget{Level: "gentle", RPS: 5, Inflight: 2, WonBy: won(LimitJob, LimitJob), Clamped: []BudgetClamp{
+				{Key: "rps", Asked: 100, To: 5, By: LimitJob, Source: LimitSensorLevel},
+				{Key: "inflight", Asked: 25, To: 2, By: LimitJob, Source: LimitSensorLevel}}}},
+		{"negative numbers in a job's budget run Gentle", DefaultPacing, &JobBudget{RPS: -1, Inflight: 4}, BudgetCeiling{},
+			HostBudget{Level: "gentle", RPS: 5, Inflight: 2, WonBy: won(LimitJob, LimitJob), Clamped: []BudgetClamp{
+				{Key: "rps", Asked: 20, To: 5, By: LimitJob, Source: LimitSensorLevel},
+				{Key: "inflight", Asked: 8, To: 2, By: LimitJob, Source: LimitSensorLevel}}}},
 		{"lower signed numbers win", DefaultPacing, &JobBudget{RPS: 3, Inflight: 1}, BudgetCeiling{},
-			HostBudget{Level: LevelCustom, RPS: 3, Inflight: 1, Source: BudgetFromJob}},
-		{"one signed number keeps the level's other", DefaultPacing, &JobBudget{RPS: 10}, BudgetCeiling{},
-			HostBudget{Level: LevelCustom, RPS: 10, Inflight: 8, Source: BudgetFromJob}},
-		{"a signed Fast applies under the hard ceiling", DefaultPacing, &JobBudget{Level: "fast"}, BudgetCeiling{},
-			HostBudget{Level: "fast", RPS: 100, Inflight: 25, Source: BudgetFromJob}},
-		{"a signed budget above the hard ceiling is clamped", DefaultPacing, &JobBudget{Level: "custom", RPS: 5000, Inflight: 900}, BudgetCeiling{},
-			HostBudget{Level: LevelCustom, RPS: 200, Inflight: 50, Source: BudgetFromJob, Clamped: []BudgetClamp{
-				{Key: "rps", Asked: 5000, To: 200, By: ClampByCeiling}, {Key: "inflight", Asked: 900, To: 50, By: ClampByCeiling}}}},
-		{"the operator's ceiling clamps a signed Fast", DefaultPacing, &JobBudget{Level: "fast"}, BudgetCeiling{RPS: 30, Inflight: 10},
-			HostBudget{Level: LevelCustom, RPS: 30, Inflight: 10, Source: BudgetFromJob, Clamped: []BudgetClamp{
-				{Key: "rps", Asked: 100, To: 30, By: ClampByCeiling}, {Key: "inflight", Asked: 25, To: 10, By: ClampByCeiling}}}},
-		{"the operator's ceiling clamps the sensor's own level", DefaultPacing, nil, BudgetCeiling{RPS: 5, Inflight: 2},
-			HostBudget{Level: "gentle", RPS: 5, Inflight: 2, Source: BudgetFromSensor, Clamped: []BudgetClamp{
-				{Key: "rps", Asked: 20, To: 5, By: ClampByCeiling}, {Key: "inflight", Asked: 8, To: 2, By: ClampByCeiling}}}},
-		{"an operator's ceiling above the hard one is the hard one", PacingFast, &JobBudget{Level: "custom", RPS: 900, Inflight: 60}, BudgetCeiling{RPS: 100000, Inflight: 100000},
-			HostBudget{Level: LevelCustom, RPS: 200, Inflight: 50, Source: BudgetFromJob, Clamped: []BudgetClamp{
-				{Key: "rps", Asked: 900, To: 200, By: ClampByCeiling}, {Key: "inflight", Asked: 60, To: 50, By: ClampByCeiling}}}},
+			HostBudget{Level: LevelCustom, RPS: 3, Inflight: 1, WonBy: won(LimitJob, LimitJob), Clamped: []BudgetClamp{
+				{Key: "rps", Asked: 20, To: 3, By: LimitJob, Source: LimitSensorLevel},
+				{Key: "inflight", Asked: 8, To: 1, By: LimitJob, Source: LimitSensorLevel}}}},
+		{"each number has its own winner", DefaultPacing, &JobBudget{RPS: 10}, BudgetCeiling{Inflight: 4},
+			HostBudget{Level: LevelCustom, RPS: 10, Inflight: 4, WonBy: won(LimitJob, LimitOperatorCeiling), Clamped: []BudgetClamp{
+				{Key: "rps", Asked: 20, To: 10, By: LimitJob, Source: LimitSensorLevel},
+				{Key: "inflight", Asked: 8, To: 4, By: LimitOperatorCeiling, Source: LimitSensorLevel}}}},
+		{"a signed number above the level changes nothing", DefaultPacing, &JobBudget{RPS: 5000}, BudgetCeiling{},
+			HostBudget{Level: "standard", RPS: 20, Inflight: 8, WonBy: won(LimitSensorLevel, LimitSensorLevel), Clamped: []BudgetClamp{
+				{Key: "rps", Asked: 5000, To: 20, By: LimitSensorLevel, Source: LimitJob}}}},
+		{"the operator's ceiling beats a Fast sensor and a signed Fast", PacingFast, &JobBudget{Level: "fast"}, BudgetCeiling{RPS: 30, Inflight: 10},
+			HostBudget{Level: LevelCustom, RPS: 30, Inflight: 10, WonBy: won(LimitOperatorCeiling, LimitOperatorCeiling), Clamped: []BudgetClamp{
+				{Key: "rps", Asked: 100, To: 30, By: LimitOperatorCeiling, Source: LimitSensorLevel},
+				{Key: "inflight", Asked: 25, To: 10, By: LimitOperatorCeiling, Source: LimitSensorLevel},
+				{Key: "rps", Asked: 100, To: 30, By: LimitOperatorCeiling, Source: LimitJob},
+				{Key: "inflight", Asked: 25, To: 10, By: LimitOperatorCeiling, Source: LimitJob}}}},
+		{"an operator's ceiling above the hard one is the hard one", Pacing{Name: "lab", TargetRPS: 900, TargetInflight: 60}, nil, BudgetCeiling{RPS: 100000, Inflight: 100000},
+			HostBudget{Level: LevelCustom, RPS: 200, Inflight: 50, WonBy: won(LimitHardCeiling, LimitHardCeiling), Clamped: []BudgetClamp{
+				{Key: "rps", Asked: 900, To: 200, By: LimitHardCeiling, Source: LimitSensorLevel},
+				{Key: "inflight", Asked: 60, To: 50, By: LimitHardCeiling, Source: LimitSensorLevel}}}},
 		{"a lower signed budget under a ceiling stays", DefaultPacing, gentle, BudgetCeiling{RPS: 10, Inflight: 4},
-			HostBudget{Level: "gentle", RPS: 5, Inflight: 2, Source: BudgetFromJob}},
-		{"an invalid job budget is not read", DefaultPacing, &JobBudget{Level: "ludicrous", RPS: 9000}, BudgetCeiling{},
-			HostBudget{Level: "standard", RPS: 20, Inflight: 8, Source: BudgetFromSensor}},
-		{"negative numbers are not read", DefaultPacing, &JobBudget{RPS: -1, Inflight: 4}, BudgetCeiling{},
-			HostBudget{Level: "standard", RPS: 20, Inflight: 8, Source: BudgetFromSensor}},
-		{"the operator's own level is the default", PacingFast, nil, BudgetCeiling{},
-			HostBudget{Level: "fast", RPS: 100, Inflight: 25, Source: BudgetFromSensor}},
+			HostBudget{Level: "gentle", RPS: 5, Inflight: 2, WonBy: won(LimitJob, LimitJob), Clamped: []BudgetClamp{
+				{Key: "rps", Asked: 20, To: 5, By: LimitJob, Source: LimitSensorLevel},
+				{Key: "inflight", Asked: 8, To: 2, By: LimitJob, Source: LimitSensorLevel}}}},
+		{"the operator's own level applies when nothing is lower", PacingFast, nil, BudgetCeiling{},
+			HostBudget{Level: "fast", RPS: 100, Inflight: 25, WonBy: won(LimitSensorLevel, LimitSensorLevel)}},
+		{"a tie goes to the sensor's level", DefaultPacing, &JobBudget{Level: "standard"}, BudgetCeiling{RPS: 20, Inflight: 8},
+			HostBudget{Level: "standard", RPS: 20, Inflight: 8, WonBy: won(LimitSensorLevel, LimitSensorLevel)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,13 +85,62 @@ func TestResolveBudget(t *testing.T) {
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("got %+v\nwant %+v", got, tc.want)
 			}
-			// SECURITY: whatever a job says, nothing passes the ceiling.
-			c := tc.ceiling.effective()
-			if got.RPS > c.RPS || got.Inflight > c.Inflight || got.RPS > HardBudgetCeiling.RPS || got.Inflight > HardBudgetCeiling.Inflight {
-				t.Fatalf("budget %+v is above the ceiling %+v", got, c)
-			}
 		})
 	}
+}
+
+// SECURITY: whatever the level, the job and the ceiling say, the budget is
+// never above any of them: no job raises what a host gets above the
+// sensor's level, and nothing passes the operator's or the hard ceiling.
+func TestResolveBudgetNeverExceedsAnyLimit(t *testing.T) {
+	levels := []Pacing{PacingGentle, PacingStandard, PacingFast, {}, {Name: "lab", TargetRPS: 5000, TargetInflight: 500}}
+	jobs := []*JobBudget{nil, {Level: "gentle"}, {Level: "standard"}, {Level: "fast"}, {RPS: 1}, {Inflight: 1}, {RPS: 99999, Inflight: 99999},
+		{Level: "custom", RPS: 150, Inflight: 40}, {Level: "nope"}, {RPS: -5}, {}}
+	ceilings := []BudgetCeiling{{}, {RPS: 1, Inflight: 1}, {RPS: 30}, {Inflight: 3}, {RPS: 100000, Inflight: 100000}, {RPS: -1, Inflight: -1}}
+	for _, l := range levels {
+		for _, j := range jobs {
+			for _, c := range ceilings {
+				b := ResolveBudget(l, j, c)
+				if !b.Valid() || b.WonBy.RPS == "" || b.WonBy.Inflight == "" {
+					t.Fatalf("level %+v job %+v ceiling %+v: %+v", l, j, c, b)
+				}
+				lr, li := l.TargetRPS, l.TargetInflight
+				if lr <= 0 || li <= 0 {
+					lr, li = PacingGentle.TargetRPS, PacingGentle.TargetInflight
+				}
+				if b.RPS > lr || b.Inflight > li {
+					t.Fatalf("job %+v raised the budget above the sensor's level %+v: %+v", j, l, b)
+				}
+				if b.RPS > HardCeilingRPS || b.Inflight > HardCeilingInflight {
+					t.Fatalf("above the hard ceiling: %+v", b)
+				}
+				if (c.RPS > 0 && b.RPS > c.RPS) || (c.Inflight > 0 && b.Inflight > c.Inflight) {
+					t.Fatalf("above the operator's ceiling %+v: %+v", c, b)
+				}
+				if j != nil && j.Validate() == nil {
+					jr, ji := j.numbers()
+					if (jr > 0 && b.RPS > jr) || (ji > 0 && b.Inflight > ji) {
+						t.Fatalf("above the job's own budget %+v: %+v", j, b)
+					}
+				}
+			}
+		}
+	}
+}
+
+// A setting of the scan above the budget is recorded with what was asked
+// and what applies; the same key is recorded once.
+func TestBudgetClampRecordsAskedAndApplied(t *testing.T) {
+	b := DefaultBudget()
+	b.Clamp("rate_limit", 150, 20)
+	b.Clamp("concurrency", 8, 8) // not above: nothing to record
+	b.Clamp("rate_limit", 150, 20)
+	want := []BudgetClamp{{Key: "rate_limit", Asked: 150, To: 20, By: LimitHostBudget}}
+	if !reflect.DeepEqual(b.Clamped, want) {
+		t.Fatalf("clamped %+v", b.Clamped)
+	}
+	var none *HostBudget
+	none.Clamp("rate_limit", 150, 20) // a nil budget records nothing and does not panic
 }
 
 func TestJobBudgetValidate(t *testing.T) {
@@ -109,19 +187,21 @@ func TestToolPace(t *testing.T) {
 func TestSweepPace(t *testing.T) {
 	std := DefaultBudget()
 	cases := []struct {
-		name              string
-		hosts, maxPerHost int
-		enforced          bool
-		rate, inflight    int
+		name           string
+		hosts          int
+		enforced       bool
+		rate, inflight int
 	}{
-		{"one host with 500 URLs runs at that host's budget", 1, 500, true, 20, 8},
-		{"two hosts: their budgets in all", 2, 1, true, 40, 16},
-		{"many hosts: the sweep rate", 1000, 1, true, 50, 25},
-		{"many hosts, not enforced, no host dominates: the sweep rate", 1000, 3, false, 50, 25},
-		{"not enforced and one host dominates: one host's budget", 1000, 400, false, 20, 8},
+		{"one host with 500 URLs runs at that host's budget", 1, true, 20, 8},
+		{"two hosts: their budgets in all", 2, true, 40, 16},
+		{"many hosts: the sweep rate", 1000, true, 50, 25},
+		// Without a forwarder nothing counts per address, and the names of
+		// a list may all be one server: one host's budget, whatever the list.
+		{"many hosts, not enforced: one host's budget", 1000, false, 20, 8},
+		{"two hosts, not enforced: one host's budget", 2, false, 20, 8},
 	}
 	for _, tc := range cases {
-		got := std.SweepPace(tc.hosts, tc.maxPerHost, tc.enforced)
+		got := std.SweepPace(tc.hosts, tc.enforced)
 		if got.Rate != tc.rate || got.Inflight != tc.inflight {
 			t.Errorf("%s: got %d/s and %d in flight, want %d and %d", tc.name, got.Rate, got.Inflight, tc.rate, tc.inflight)
 		}
@@ -129,11 +209,12 @@ func TestSweepPace(t *testing.T) {
 }
 
 func TestBudgetPacingKeepsEveryRateUnderTheBudget(t *testing.T) {
+	lab := Pacing{Name: "lab", TargetRPS: 150, TargetInflight: 40}
 	for _, b := range []HostBudget{DefaultBudget(),
 		ResolveBudget(DefaultPacing, &JobBudget{Level: "gentle"}, BudgetCeiling{}),
-		ResolveBudget(DefaultPacing, &JobBudget{Level: "fast"}, BudgetCeiling{}),
+		ResolveBudget(PacingFast, nil, BudgetCeiling{}),
 		ResolveBudget(DefaultPacing, &JobBudget{RPS: 1, Inflight: 1}, BudgetCeiling{}),
-		ResolveBudget(DefaultPacing, &JobBudget{Level: "custom", RPS: 150, Inflight: 40}, BudgetCeiling{})} {
+		ResolveBudget(lab, nil, BudgetCeiling{})} {
 		p := b.Pacing()
 		if p.TargetRPS != b.RPS || p.TargetInflight != b.Inflight || p.StartRPS > b.RPS || p.StartRPS < 1 || p.Name != b.Level {
 			t.Errorf("budget %+v maps to pacing %+v", b, p)
@@ -279,58 +360,197 @@ func TestThrottleBreakerHonorsRetryAfterAndRecovers(t *testing.T) {
 	}
 }
 
-// A reset or a timeout of the canary's request is a failure that lowers the
-// rate (unlike the reset of one tool request), and from a host that served
-// the canary before it is throttling, not an unreachable host.
-func TestProbeFailuresLowerTheRateAndAreThrottling(t *testing.T) {
-	c, clk := testCtl(t, 20)
-	host := "a.example.com"
-	c.Report(host, Event{Signal: Connected})
-	c.Report(host, Event{Signal: Answered})
-	before := c.Rate(host)
-	// A tool request reset by the host does not lower the rate.
-	c.Report(host, Event{Signal: Failed, Reason: ReasonReset})
-	if c.Rate(host) != before {
-		t.Fatal("a refused tool request lowered the rate")
+// SECURITY: a host that answers only the canary with push-back is slowed
+// and never stopped: whatever the canary is answered (429 with a long
+// Retry-After, 503, a refusal, resets), the breaker stays closed, the
+// tool's connections are never refused or held, the host is no coverage
+// gap and no cooldown starts.
+func TestCanaryPushbackAloneNeverOpensTheBreaker(t *testing.T) {
+	signals := map[string]Event{
+		"429 with a long Retry-After": {Signal: Congested, Reason: ReasonHTTP429, RetryAfter: 5 * time.Minute, Probe: true},
+		"503":                         {Signal: Congested, Reason: ReasonHTTP503, Probe: true},
+		"403 after it was served":     {Signal: Forbidden, Probe: true},
+		"reset":                       {Signal: Failed, Reason: ReasonReset, Probe: true},
+		"timeout":                     {Signal: Failed, Reason: ReasonTimeout, Probe: true},
 	}
-	for i := range TargetRate.BreakerFailures {
-		*clk = clk.Add(TargetRate.Window)
-		reason := ReasonReset
-		if i%2 == 1 {
-			reason = ReasonTimeout
-		}
-		c.Report(host, Event{Signal: Failed, Reason: reason, Probe: true})
-	}
-	s := c.Summary()
-	if s.CircuitOpens != 1 || len(s.Gaps) != 1 || s.Gaps[0].Reason != GapThrottled {
-		t.Fatalf("summary %+v", s)
-	}
-	if hs := s.HostStats[0]; hs.Resets != 4 || hs.Timeouts != 2 || hs.Backoffs < 3 {
-		t.Fatalf("host stat %+v", hs)
-	}
-	// A host that never answered stays unreachable (breaker_open).
-	c2, clk2 := testCtl(t, 20)
-	for range TargetRate.BreakerFailures {
-		*clk2 = clk2.Add(TargetRate.Window)
-		c2.Report("dead.example.com", Event{Signal: Failed, Reason: ReasonTimeout, Probe: true})
-	}
-	_ = c2.Acquire(t.Context(), "dead.example.com")
-	if s := c2.Summary(); len(s.Gaps) != 1 || s.Gaps[0].Reason != GapBreakerOpen {
-		t.Fatalf("a host that never answered: %+v", s.Gaps)
+	for name, e := range signals {
+		t.Run(name, func(t *testing.T) {
+			c, clk := testCtl(t, 20)
+			shared := NewSensorRate()
+			c.Share(shared, "tenant-a")
+			host := "a.example.com"
+			c.Report(host, Event{Signal: Connected})
+			c.Report(host, Event{Signal: Answered, Probe: true})
+			before := c.Rate(host)
+			for range 50 {
+				*clk = clk.Add(TargetRate.Window)
+				c.Report(host, e)
+			}
+			s := c.Summary()
+			if s.CircuitOpens != 0 || s.GapsTotal != 0 || s.Unreachable != 0 {
+				t.Fatalf("canary push-back alone opened the breaker or made a gap: %+v", s)
+			}
+			if s.Backoffs == 0 || c.Rate(host) >= before || c.Rate(host) != s.Floor {
+				t.Fatalf("the rate was not lowered to the floor: before %.3g, now %.3g, %+v", before, c.Rate(host), s)
+			}
+			// The tool's next connection goes out, without waiting for the
+			// canary's Retry-After.
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			if err := c.Acquire(ctx, host); err != nil {
+				t.Fatalf("a tool connection was refused or held: %v", err)
+			}
+			if until := shared.Cooldown("tenant-a", host); !until.IsZero() {
+				t.Fatalf("the canary alone started a cooldown until %v", until)
+			}
+		})
 	}
 }
 
-// The canary's request forbidden by a host that served it before is a block
-// after ThrottleRun of them; a host whose root is forbidden from the first
-// request on is not (the canary reports that as an ordinary answer).
-func TestProbeForbiddenIsABlock(t *testing.T) {
-	c, clk := testCtl(t, 20)
-	c.Report("h", Event{Signal: Answered})
-	for range TargetRate.ThrottleRun {
-		*clk = clk.Add(TargetRate.Window)
-		c.Report("h", Event{Signal: Forbidden, Probe: true})
+// The canary's push-back together with failures of the tool's own
+// connections opens the breaker, and the outcome records that evidence.
+// The tool's failures alone (fewer than BreakerFailures of them) do not.
+func TestCanaryPushbackWithConnectionFailuresOpensTheBreaker(t *testing.T) {
+	host := "a.example.com"
+	t.Run("the tool's resets alone do not", func(t *testing.T) {
+		c, _ := testCtl(t, 20)
+		c.Report(host, Event{Signal: Connected})
+		for range TargetRate.CorroborateFailures + 1 {
+			c.Report(host, Event{Signal: Failed, Reason: ReasonReset})
+		}
+		if s := c.Summary(); s.CircuitOpens != 0 {
+			t.Fatalf("resets alone opened the breaker: %+v", s)
+		}
+	})
+	for _, order := range []string{"canary first", "resets first"} {
+		t.Run(order, func(t *testing.T) {
+			c, clk := testCtl(t, 20)
+			c.Report(host, Event{Signal: Connected})
+			c.Report(host, Event{Signal: Answered, Probe: true})
+			push := func() {
+				c.Report(host, Event{Signal: Congested, Reason: ReasonHTTP429, Probe: true})
+			}
+			resets := func() {
+				for range TargetRate.CorroborateFailures {
+					*clk = clk.Add(time.Second)
+					c.Report(host, Event{Signal: Failed, Reason: ReasonReset})
+				}
+			}
+			if order == "canary first" {
+				push()
+				resets()
+			} else {
+				resets()
+				push()
+			}
+			s := c.Summary()
+			if s.CircuitOpens != 1 || len(s.Gaps) != 1 || s.Gaps[0].Reason != GapThrottled {
+				t.Fatalf("summary %+v", s)
+			}
+			if hs := s.HostStats[0]; hs.OpenedBy != EvidenceCanaryAndConnection || hs.HTTP429 != 1 || hs.Resets != TargetRate.CorroborateFailures {
+				t.Fatalf("host stat %+v", hs)
+			}
+			if !strings.Contains(s.Gaps[0].Detail, "opened_by="+EvidenceCanaryAndConnection) {
+				t.Fatalf("gap detail %q", s.Gaps[0].Detail)
+			}
+			if err := c.Acquire(t.Context(), host); !errors.Is(err, ErrHostUnavailable) {
+				t.Fatalf("the breaker is not open: %v", err)
+			}
+		})
 	}
-	if s := c.Summary(); len(s.Gaps) != 1 || s.Gaps[0].Reason != GapBlocked || s.CircuitOpens != 1 {
+	t.Run("evidence further apart than the window does not", func(t *testing.T) {
+		c, clk := testCtl(t, 20)
+		c.Report(host, Event{Signal: Connected})
+		c.Report(host, Event{Signal: Answered, Probe: true})
+		c.Report(host, Event{Signal: Congested, Reason: ReasonHTTP429, Probe: true})
+		*clk = clk.Add(TargetRate.CorroborateWindow + time.Second)
+		for range TargetRate.CorroborateFailures {
+			c.Report(host, Event{Signal: Failed, Reason: ReasonReset})
+		}
+		if s := c.Summary(); s.CircuitOpens != 0 {
+			t.Fatalf("stale canary push-back opened the breaker: %+v", s)
+		}
+	})
+	t.Run("an ordinary answer to the canary ends its push-back", func(t *testing.T) {
+		c, _ := testCtl(t, 20)
+		c.Report(host, Event{Signal: Connected})
+		c.Report(host, Event{Signal: Congested, Reason: ReasonHTTP429, Probe: true})
+		c.Report(host, Event{Signal: Answered, Probe: true})
+		for range TargetRate.CorroborateFailures {
+			c.Report(host, Event{Signal: Failed, Reason: ReasonReset})
+		}
+		if s := c.Summary(); s.CircuitOpens != 0 {
+			t.Fatalf("summary %+v", s)
+		}
+	})
+}
+
+// Push-back read on the tool's own HTTP answers opens the breaker as
+// before, and the outcome says so.
+func TestToolEvidenceIsRecorded(t *testing.T) {
+	c, clk := testCtl(t, 20)
+	for range TargetRate.ThrottleRun {
+		*clk = clk.Add(TargetRate.ThrottleSpacing)
+		c.ReportHTTP("h", 429, "")
+	}
+	if s := c.Summary(); s.CircuitOpens != 1 || s.HostStats[0].OpenedBy != EvidenceToolHTTP {
 		t.Fatalf("summary %+v", s)
+	}
+	c2, clk2 := testCtl(t, 20)
+	c2.ReportDial("h", 443, nil)
+	for range TargetRate.BreakerFailures {
+		*clk2 = clk2.Add(TargetRate.Window)
+		c2.Report("h", Event{Signal: Failed, Reason: ReasonTimeout})
+	}
+	if s := c2.Summary(); s.CircuitOpens != 1 || s.HostStats[0].OpenedBy != EvidenceToolConnection {
+		t.Fatalf("summary %+v", s)
+	}
+}
+
+// Names that are reached at one address share that address's state: what
+// one name is answered slows the other, an open breaker of the address
+// refuses both, and the address is not listed as a host or a gap of its
+// own.
+func TestAddressStateIsSharedByItsNames(t *testing.T) {
+	c, clk := testCtl(t, 20)
+	addr := "192.0.2.10"
+	for _, n := range []string{"a.example.com", "b.example.com"} {
+		if err := c.Acquire(t.Context(), n); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.AcquireAddr(t.Context(), addr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range TargetRate.ThrottleRun {
+		*clk = clk.Add(TargetRate.ThrottleSpacing)
+		c.ReportHTTP("a.example.com", 429, "")
+		c.ReportAddrResponse(addr, 429, "", edgeprotect.Verdict{})
+	}
+	if err := c.AcquireAddr(t.Context(), addr); !errors.Is(err, ErrHostUnavailable) {
+		t.Fatalf("the address's breaker is not open: %v", err)
+	}
+	if err := c.Acquire(t.Context(), "b.example.com"); err != nil {
+		t.Fatalf("b's own state should be healthy: %v", err)
+	}
+	s := c.Summary()
+	if s.Hosts != 2 || s.GapsTotal != 1 || s.Gaps[0].Host != "a.example.com" {
+		t.Fatalf("the address shows as a host or a gap: %+v", s)
+	}
+	var stat *HostStat
+	for i := range s.HostStats {
+		if s.HostStats[i].Host == addr {
+			stat = &s.HostStats[i]
+		}
+	}
+	if stat == nil || !stat.Address || stat.CircuitOpens != 1 {
+		t.Fatalf("host stats %+v", s.HostStats)
+	}
+	// A target that names the address is a host.
+	if err := c.Acquire(t.Context(), addr); !errors.Is(err, ErrHostUnavailable) {
+		t.Fatal(err)
+	}
+	if s := c.Summary(); s.Hosts != 3 {
+		t.Fatalf("hosts %d", s.Hosts)
 	}
 }
