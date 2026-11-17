@@ -1,10 +1,13 @@
 package egress
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -16,6 +19,7 @@ import (
 	"time"
 
 	"github.com/openctemio/sdk-go/pkg/adapt"
+	"github.com/openctemio/sdk-go/pkg/scopelimit"
 )
 
 // vhosts is one server that serves several names at one address, as a CDN
@@ -359,5 +363,90 @@ func TestConnSlotsParkAndResume(t *testing.T) {
 	nilSlots.drop()
 	if err := nilSlots.resume(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// On a kept-alive connection the forwarder reads (a guarded destination),
+// the slots are held from a request to its answer and given back between
+// requests: an idle guarded connection of one name leaves the address's
+// slot to another name, and takes it again for its own next request.
+func TestGuardedKeepAliveConnectionGivesItsSlotBackBetweenRequests(t *testing.T) {
+	s := &site{}
+	srv := httptest.NewServer(s.handler())
+	defer srv.Close()
+	port := portOf(t, srv.URL)
+	f := New(Scope{Names: map[string][]netip.Addr{"app.test": {addr("127.0.0.1")}, "free.test": {addr("127.0.0.1")}},
+		Limits: []scopelimit.Limit{{Host: "app.test", Ports: strconv.Itoa(port), PathPrefix: "/api/"}}},
+		Limits{Rate: 1000, PerHostRate: 1000, PerHostConns: 1, DialTimeout: 300 * time.Millisecond})
+	pa := serve(t, f)
+	c, err := net.Dial("tcp", pa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	br := bufio.NewReader(c)
+	status := func() string {
+		t.Helper()
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		return resp.Status
+	}
+	// connect opens the tunnel: the answer is a status line and a blank line.
+	connect := func() {
+		t.Helper()
+		fmt.Fprintf(c, "CONNECT app.test:%d HTTP/1.1\r\nHost: app.test\r\n\r\n", port)
+		line, err := br.ReadString('\n')
+		if err != nil || !strings.Contains(line, " 200 ") {
+			t.Fatalf("CONNECT: %q %v", line, err)
+		}
+		for line != "\r\n" {
+			if line, err = br.ReadString('\n'); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	request := func() string {
+		t.Helper()
+		fmt.Fprintf(c, "GET /api/a HTTP/1.1\r\nHost: app.test:%d\r\n\r\n", port)
+		return status()
+	}
+	connect()
+	if got := request(); !strings.HasPrefix(got, "200") {
+		t.Fatalf("first request: %s", got)
+	}
+	// The guarded connection is open and idle: the address's one slot is
+	// free for another name.
+	other, _, err := f.dial(t.Context(), "connect", "free.test", port)
+	if err != nil {
+		t.Fatalf("another name behind an idle guarded connection: %v", err)
+	}
+	// While the other name holds it, the guarded connection's next request
+	// finds no slot: it is answered 503 and its host is a coverage gap.
+	if got := request(); !strings.HasPrefix(got, "503") {
+		t.Fatalf("a request without a slot: %s", got)
+	}
+	g, n := f.TargetRate().Gaps()
+	if n != 1 || g[0].Host != "app.test" || g[0].Reason != adapt.GapRateFloor || g[0].Detail != adapt.GapDetailHostBusy {
+		t.Fatalf("gaps %+v", g)
+	}
+	_ = other.Close()
+	// A new guarded connection works again, request after request.
+	c2, err := net.Dial("tcp", pa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c2.Close() }()
+	c, br = c2, bufio.NewReader(c2)
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	connect()
+	for i := range 3 {
+		if got := request(); !strings.HasPrefix(got, "200") {
+			t.Fatalf("request %d on a kept-alive guarded connection: %s", i+1, got)
+		}
 	}
 }
