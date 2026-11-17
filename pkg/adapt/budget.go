@@ -3,6 +3,7 @@ package adapt
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 )
 
 // HostBudget is what one target host may get from one job, whatever tool
@@ -247,6 +248,27 @@ func levelOf(rps, inflight int) string {
 // DefaultBudget is the budget of a job that carries none on a sensor whose
 // operator set nothing: Standard.
 func DefaultBudget() HostBudget { return ResolveBudget(DefaultPacing, nil, BudgetCeiling{}) }
+
+// sensorPacing is the sensor's pacing level in this process
+// (SetSensorPacing; nil: DefaultPacing).
+var sensorPacing atomic.Pointer[Pacing]
+
+// SetSensorPacing records the sensor's pacing level for FallbackBudget. The
+// command executor records its own (core.DefaultCommandExecutor.SetPacingLevel).
+func SetSensorPacing(p Pacing) { sensorPacing.Store(&p) }
+
+// FallbackBudget is the budget a scan or retest runs under when its caller
+// handed it none: for each number the lowest of the sensor's pacing level
+// (SetSensorPacing) and Standard. It is never above the sensor's level, nor
+// above Standard on a sensor whose operator raised it.
+func FallbackBudget() HostBudget {
+	level := DefaultPacing
+	if p := sensorPacing.Load(); p != nil {
+		level = *p
+	}
+	std := DefaultBudget()
+	return ResolveBudget(level, nil, BudgetCeiling{RPS: std.RPS, Inflight: std.Inflight})
+}
 
 type budgetCtxKey struct{}
 

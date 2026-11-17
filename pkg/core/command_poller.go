@@ -1793,6 +1793,9 @@ func (e *DefaultCommandExecutor) SetPacingLevel(name string) error {
 		return fmt.Errorf("unknown pacing level %q (gentle, standard or fast)", name)
 	}
 	e.pacing.Store(&p)
+	// A scan or retest a caller starts without a budget runs no higher
+	// (adapt.FallbackBudget).
+	adapt.SetSensorPacing(p)
 	return nil
 }
 

@@ -86,7 +86,13 @@ and nothing else:
   and the names reached at the address take only its rate.
 
 The cost of sharing the rate is that one name's push-back slows the other names of its address for a
-while. That is the limit of what one name can do to another: slower, never stopped.
+while. That is the limit of what one name can do to another: slower, never stopped. Quantified: an
+address's rate is halved at most once per two-second window down to the floor of one request a second,
+and raised by a tenth of its ceiling per clean window, so from the floor back to Standard (20 a second)
+takes about 20 seconds of clean windows. A name that keeps pushing back, for example one 429 per window
+between ordinary answers, keeps its address at the floor for as long as it does so, for every name of
+that address; the sensor-wide entry of the address is then at the floor too (shared between the
+organizations that scan there). Its own breaker need not open.
 
 In a result, `host_stats` entries with `"address": true` are such addresses (`circuit_opens` is always 0
 there); coverage gaps are reported on names. Without a forwarder nothing knows the address; see the
@@ -101,30 +107,40 @@ The default: tools run in the sandbox and reach the network only through the tas
 
 | traffic | what the forwarder holds |
 |---|---|
-| a new connection to a host (any protocol) | one token of the host's rate and of its address's rate (`adapt.HostRate`: slow start at a quarter of the rate, a tenth more per clean window, halved on push-back), and one of the host's and of the address's connection slots (the budget's in-flight number); a connection over the slots waits for one, and is refused after 15 seconds (below) |
+| a new connection to a host (any protocol) | one token of the host's rate and of its address's rate (`adapt.HostRate`: slow start at a quarter of the rate, a tenth more per clean window, halved on push-back), and one of the host's and of the address's connection slots (the budget's in-flight number) for as long as it is open; a connection over the slots closes an idle one and takes its slot, or waits for one and is refused after 15 seconds (below) |
 | plain HTTP, and HTTPS the forwarder terminates anyway (a web scope, path limits, an identification it adds) | every request waits for the rate; every answer is read (429, 503, `Retry-After`, block pages) |
 | HTTPS passed through (the ordinary case), HTTP/1.1 | the tunnel's first request is covered by the connection's token; **every further request on a kept-alive tunnel waits for the rate too** (below). Requests in flight are within the connection slots, since HTTP/1.1 carries one request at a time per connection |
 | HTTPS passed through, HTTP/2 | the rate is held for a client that writes each request in a TLS record of its own (Go's HTTP/2 client, which the scan tools are built on): every record of a client that offers HTTP/2 waits for the rate. **Not held:** the requests of a client that packs several into one record (bytes only), and the streams in flight (one connection carries many). There the tool's own flags are the enforcement (below) |
 | HTTPS passed through, HTTP/1.1 pipelining without an HTTP/2 offer | **not held as requests**: bytes and connections only |
 | a tunnel that is not TLS | counted like HTTP/1.1: client data after the host spoke is a request |
 
-**Connection slots** (`egress/hostbudget.go`). A slot counts a request in flight, not an open connection:
+**Connection slots** (`egress/hostbudget.go`). A slot counts an open connection: the connections open to
+a host, and to an address, never exceed the budget's in-flight number, and so neither do the requests in
+flight over HTTP/1.1.
 
-- a kept-alive connection gives its slots back while it is idle and takes them again for its next
-  request. On a connection the forwarder reads this is exact (between an answer and the next request).
-  On a tunnel it passes through, the tunnel is idle when the host sent the last bytes and nothing has
-  moved for one second (`Limits.SlotIdle`); a tunnel that waits for an answer keeps its slot however
-  long the host takes. Idle kept-alive connections of one name therefore do not keep the other names
-  of its address waiting;
+- a kept-alive connection keeps its slots while it is open, and is **idle** between requests. On a
+  connection the forwarder reads this is exact (between an answer and the next request). On a tunnel it
+  passes through, the tunnel is idle when the host sent the last bytes and nothing has moved for one
+  second (`Limits.SlotIdle`); a tunnel that waits for an answer is never idle, however long the host
+  takes;
+- a new connection that finds every slot taken **closes the oldest idle connection** of that host (or
+  address) and takes its slot, at once or as soon as one goes idle while it waits. Idle kept-alive
+  connections of one name therefore never keep the other names of its address, or the name's own next
+  connection, waiting. The tool sees its idle connection closed, as when a server closes an idle
+  kept-alive connection, and opens a new one for its next request; nothing is reported about the host;
 - on a tunnel's first request, and on a tunnel whose client offered HTTP/2, the host's last bytes need
   not be the answer (a TLS 1.3 session ticket arrives after the handshake; HTTP/2 control frames arrive
-  between answers), so such a tunnel is given five seconds. **Not held:** an answer to such a request
-  that takes longer than five seconds after other bytes from the host is counted out of the slots while
-  it is still in flight; the rate still holds;
-- a connection (or a kept-alive connection's next request) that finds no slot for 15 seconds
-  (`Limits.DialTimeout`) is refused, and **its host is a coverage gap** (`rate_floor`, detail
+  between answers), so such a tunnel is given five seconds before it counts as idle. **Limit:** an answer
+  to such a request that pauses longer than five seconds after other bytes from the host counts as idle
+  while it is still in flight, and a connection that waits for its slot may then close it (the tool
+  sees that answer cut short);
+- a connection that finds no slot for 15 seconds (`Limits.DialTimeout`), every slot being held by a
+  connection with a request in flight, is refused, and **its host is a coverage gap** `host_busy` (detail
   "a connection was refused: every connection slot of the host's budget stayed in use"): the request
-  never left, so the result must not read as "nothing found" for that host.
+  never left, so the result must not read as "nothing found" for that host. The sensor's own bound
+  caused it, not the host: the target's outcome is `unfinished` (no class, no cause on the target), the
+  gap is never reported as the host pushing back, and it is not a reason to hold the host's findings.
+  It is the weakest gap reason: anything the host did itself (`rate_floor`, `blocked`, ...) replaces it.
 
 **Requests on a tunnel the forwarder does not read** (`egress/tunnel.go`). The forwarder does not
 terminate TLS for ordinary HTTPS: that would break every check that inspects the certificate and put the
@@ -200,18 +216,23 @@ what was asked and what applies) and in the run's log.
 
 ### Which tools
 
-**Every tool whose manifest says it connects to its targets** (`permissions.network: targets`). The tool
-host refuses to start such a tool without a valid budget (`toolhost.ErrNoHostBudget`, a refusal before
+**Every tool whose manifest says it can connect to its targets**: `permissions.network: targets`;
+`egress-proxy`, which reaches any public host and so its targets too (its forwarder holds every host it
+admits to the budget, with the same slots, rate and canary); and a `vendor` tool whose vendor hosts, as
+read from the task's configuration, name one of the task's targets (a host a target names, or an address
+in a target's range), so a configuration cannot name a target as a vendor host to reach it outside the
+budget. The tool host refuses to start such a tool without a valid budget (`toolhost.ErrNoHostBudget`, a refusal before
 any process starts), whatever started it: a tool compiled into the sensor, an adapter the operator
 installed in an adapter directory, a tool given to `Kit.AddTool`, a retest. A caller cannot forget it.
 
 - Call `toolhost.RunOptions{HostBudget: &budget}`.
 - Tools that run through the compat scanner (`toolcompat.AsScanner`: adapter directories and
-  `Kit.AddTool`) get the scan's budget (`core.ScanOptions.HostBudget`), or the default one when the scan
-  carries none. A tool described only by its manifest is held by the forwarder like any other and has
+  `Kit.AddTool`) get the scan's budget (`core.ScanOptions.HostBudget`); when the scan carries none, the
+  lowest of the sensor's pacing level and Standard (`adapt.FallbackBudget`), never above the sensor's
+  level. A tool described only by its manifest is held by the forwarder like any other and has
   its rate key (`safety.rate_param`) lowered to the budget.
 - A retest runs under its command's budget (`adapt.WithHostBudget` on the context the kit's retest
-  command passes), resolved like a scan's: the lowest limit wins.
+  command passes), resolved like a scan's: the lowest limit wins. Without one it falls back like a scan.
 - A port scan is paced in packets per second by the level of the budget (`Pacing.ProbePPS`), through the
   tool's own rate setting. Its caller still passes the budget and sets `RunOptions.PortProbes`: the
   forwarder then does not hold the task to the budget's requests per second (a port probe is not a
@@ -327,8 +348,8 @@ What the canary covers, and what it does not:
 ```
 
 - A gap with `"observed": true` is the canary's observation of rate limits on a host whose breaker never
-  opened: the host was scanned to the end, at a lowered rate. A gap `rate_floor` whose detail starts
-  "a connection was refused" is a host one of whose connections found no connection slot.
+  opened: the host was scanned to the end, at a lowered rate. A gap `host_busy` is a host one of whose
+  connections found no connection slot (the sensor's own bound, above).
 
 - `budget.won_by` names the limit that set each number. `budget.clamped` lists what was asked for and did
   not apply: the sensor's level or the job's budget where a lower limit won (`source` says which of them
@@ -387,12 +408,15 @@ read. That is deliberate: a limit a sensor cannot read must never be dropped sil
   giving one server many names does not multiply it.
 - One name cannot deny another: the address names share has a rate and connection slots, and no breaker,
   hold or cooldown. What one name answers slows the other names of its address and never stops them.
-- No tool that connects to its targets starts without a budget: the tool host refuses it, on every path.
-- A connection the budget's slots refused is reported as a coverage gap of its host, never as a host
-  with nothing found.
+- No tool that can connect to its targets (network `targets`, `egress-proxy`, or `vendor` with a target
+  among its vendor hosts) starts without a budget: the tool host refuses it, on every path.
+- The connections open to a host never exceed its slots; an idle one is closed for a connection that
+  needs its slot.
+- A connection the budget's slots refused is reported as a coverage gap of its host (`host_busy`), never
+  as a host with nothing found and never as the host pushing back.
 - What is not held is stated above and is not hidden: the requests of a client that packs several into
   one TLS record (bounded in bytes), the streams in flight on one HTTP/2 connection, a slow first answer
-  on a tunnel after other bytes from the host (counted out of the slots after five seconds), and every
+  on a tunnel after other bytes from the host (counted as idle after five seconds), and every
   bound but the tool's own flags when no forwarder is in the path.
 - Nothing rotates addresses or changes the identification to get past a block. The only reactions are to
   slow down, to stop sending to a host whose breaker opened, and to report.

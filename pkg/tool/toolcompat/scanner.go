@@ -137,26 +137,28 @@ func (s *toolScanner) Retests() bool { return s.m.RetestFeature() }
 
 // RunRetest runs one retest task (tool.Task.Retest set) out of process,
 // under the per-host budget of the retest's command (adapt.WithHostBudget
-// on ctx, which the kit's retest command sets), else the default one.
+// on ctx, which the kit's retest command sets), else adapt.FallbackBudget
+// (never above the sensor's pacing level).
 func (s *toolScanner) RunRetest(ctx context.Context, task tool.Task) (*toolhost.Outcome, error) {
 	if !s.m.RetestFeature() || !task.IsRetest() {
 		return nil, fmt.Errorf("%s: not a retest", s.m.Name)
 	}
 	b, ok := adapt.HostBudgetFrom(ctx)
 	if !ok {
-		b = adapt.DefaultBudget()
+		b = adapt.FallbackBudget()
 	}
 	return s.run(ctx, task, b)
 }
 
 // scanBudget is the per-host budget of a scan: the one its options carry
-// (the command's, core.DefaultCommandExecutor.HostBudget), else the
-// default one. A scan never runs without one.
+// (the command's, core.DefaultCommandExecutor.HostBudget), else
+// adapt.FallbackBudget (never above the sensor's pacing level). A scan
+// never runs without one.
 func scanBudget(opts *core.ScanOptions) adapt.HostBudget {
 	if opts != nil && opts.HostBudget.Valid() {
 		return opts.HostBudget
 	}
-	return adapt.DefaultBudget()
+	return adapt.FallbackBudget()
 }
 
 // run runs one task through the host: a tool with a run section as its own

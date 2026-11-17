@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,13 +34,18 @@ import (
 // reached there (adapt.HostRate.ReportAddr). Breakers, cooldowns and
 // Retry-After holds are per host name.
 //
-// A slot counts a request in flight. A connection the tool keeps open
-// between requests gives its slots back while it is quiet (connSlots) and
-// takes them again for its next request, so the idle connections of one
-// name do not keep the other names of its address waiting. A connection
-// that finds no slot within Limits.DialTimeout is refused, and its host is
-// reported as a coverage gap: the request never left, and the result must
-// not read as "nothing found" for that host.
+// A slot counts an open connection: the connections open to a host, and
+// to an address, never exceed its slots. A connection the tool keeps open
+// between requests is idle while it is quiet after the host's answer
+// (connSlots); a new connection that finds every slot taken closes the
+// oldest idle connection whose slot it needs and takes it, so the idle
+// connections of one name do not keep the other names of its address (or
+// the name's own next connection) waiting. A connection that finds no slot
+// within Limits.DialTimeout, every slot being held by a connection that is
+// not idle, is refused, and its host is reported as a coverage gap
+// (adapt.GapHostBusy): the request never left, and the result must not
+// read as "nothing found" for that host. The forwarder's own bound caused
+// it, not the host: it is never reported as the host pushing back.
 
 // hostKey is the key host is counted under.
 func hostKey(host string) string { return adapt.CanonicalHost(host) }
@@ -92,22 +98,19 @@ func (f *Forwarder) acquire(ctx context.Context, p peer) error {
 }
 
 // nextRequest lets one more request start on a kept-alive connection the
-// forwarder reads: the connection takes its slots again (it gave them
-// back when the answer before was passed on) and waits for the rate of
-// its host and of its address. A request that finds no slot is a coverage
-// gap of the host.
+// forwarder reads: the connection stops being idle (it keeps its slots)
+// and waits for the rate of its host and of its address. A connection that
+// was closed for another one while it was idle carries no further request
+// (errSlotEvicted).
 func (f *Forwarder) nextRequest(ctx context.Context, sl *connSlots, p peer) error {
-	if err := sl.resume(ctx); err != nil {
-		if errors.Is(err, ErrHostBusy) {
-			f.busyGap(p.host)
-		}
+	if err := sl.resume(); err != nil {
 		return err
 	}
 	return f.acquire(ctx, p)
 }
 
-// answered gives the slots of a kept-alive connection the forwarder reads
-// back once an answer was passed on: no request is in flight on it.
+// answered marks a kept-alive connection the forwarder reads idle once an
+// answer was passed on: no request is in flight on it.
 func (f *Forwarder) answered(sl *connSlots) {
 	if f.limits.SlotIdle > 0 {
 		sl.park(nil)
@@ -116,33 +119,35 @@ func (f *Forwarder) answered(sl *connSlots) {
 
 // busyGap records on host that one of its connections was refused for lack
 // of a connection slot (ErrHostBusy): part of the host was not scanned.
+// The forwarder's own bound refused it, so the gap is GapHostBusy, never a
+// reason that says the host pushed back.
 func (f *Forwarder) busyGap(host string) {
-	f.hostRate.MarkGap(host, adapt.GapRateFloor, adapt.GapDetailHostBusy)
+	f.hostRate.MarkGap(host, adapt.GapHostBusy, adapt.GapDetailHostBusy)
 }
 
 // DefaultSlotIdle is how long a kept-alive connection may be quiet after
-// the host's answer before it stops counting toward the host's connection
-// slots, when Limits.SlotIdle is 0. It is well under Limits.DialTimeout,
-// the time a new connection waits for a slot, and long enough that an
-// answer still arriving (its bytes keep coming) keeps its slot.
+// the host's answer before it counts as idle, and may be closed for a
+// connection that waits for its slot, when Limits.SlotIdle is 0. It is
+// well under Limits.DialTimeout, the time a new connection waits for a
+// slot, and long enough that an answer still arriving (its bytes keep
+// coming) keeps the connection.
 const DefaultSlotIdle = time.Second
 
 // slotIdleUnsure is how many times Limits.SlotIdle a tunnel is given
-// before its slots are given back while the forwarder cannot be sure that
-// what the host sent last was the answer: on the tunnel's first request
-// (a TLS 1.3 server sends its session tickets after the handshake, which
-// can arrive after the request left) and on a tunnel whose client offered
+// before it counts as idle while the forwarder cannot be sure that what
+// the host sent last was the answer: on the tunnel's first request (a TLS
+// 1.3 server sends its session tickets after the handshake, which can
+// arrive after the request left) and on a tunnel whose client offered
 // HTTP/2 (the host sends settings, window updates and pings between
-// answers). Still under Limits.DialTimeout with the defaults (5s of 15s),
-// so an idle tunnel frees its slots before a waiting connection is
-// refused. An answer to such a request that takes longer than this, after
-// other bytes from the host, is counted out of the slots while it is still
-// in flight: there the slots bound less than the requests in flight, and
-// the rate still holds.
+// answers). Still under Limits.DialTimeout with the defaults (5s of 15s).
+// An answer to such a request that pauses longer than this after other
+// bytes from the host counts as idle while it is still in flight: a
+// connection that waits for a slot may then close it, and the tool sees
+// that answer cut short.
 const slotIdleUnsure = 5
 
-// slotIdleFor is how long the tunnel behind m may be quiet before its
-// slots are given back.
+// slotIdleFor is how long the tunnel behind m may be quiet before it
+// counts as idle.
 func (f *Forwarder) slotIdleFor(m *tunnelMeter) time.Duration {
 	if m.turned.Load() {
 		return f.limits.SlotIdle
@@ -150,88 +155,180 @@ func (f *Forwarder) slotIdleFor(m *tunnelMeter) time.Duration {
 	return slotIdleUnsure * f.limits.SlotIdle
 }
 
+// errSlotEvicted ends a connection the forwarder closed while it was idle,
+// to give its slots to a connection that waited for them.
+var errSlotEvicted = errors.New("egress: the idle connection was closed for another connection to the host")
+
+// slotPool is the connection slots of one key (a host or an address): ch
+// holds one token per open connection. Under Forwarder.hostMu, waiters
+// counts the connections waiting for a slot and idle lists the open
+// connections that hold one and are idle, oldest first.
+type slotPool struct {
+	ch      chan struct{}
+	waiters int
+	idle    []*connSlots
+}
+
+// release returns a func that frees one slot of the pool, once.
+func (p *slotPool) release() func() {
+	var once sync.Once
+	return func() { once.Do(func() { <-p.ch }) }
+}
+
+// remove takes s out of the pool's idle list.
+func (p *slotPool) remove(s *connSlots) {
+	if p == nil {
+		return
+	}
+	if i := slices.Index(p.idle, s); i >= 0 {
+		p.idle = slices.Delete(p.idle, i, i+1)
+	}
+}
+
+// evictLocked picks the oldest idle connection of pool to close for a
+// connection that waits for one of its slots (nil: none is idle). The
+// caller holds f.hostMu and closes it after unlocking (connSlots.close).
+func (f *Forwarder) evictLocked(pool *slotPool) *connSlots {
+	if pool == nil || len(pool.idle) == 0 {
+		return nil
+	}
+	v := pool.idle[0]
+	v.unparkLocked()
+	v.evicted = true
+	return v
+}
+
 // connSlots are the connection slots one upstream connection holds: one of
 // its host's and, when the address is counted apart, one of its address's.
-// They are held from the dial, given back while the connection is idle
-// between requests (park) and taken again for its next request (resume),
-// and given back for good when the connection ends (drop). A nil value
-// holds nothing.
+// They are held from the dial until the connection ends (drop). While the
+// connection is idle between requests (park) it is listed in its pools'
+// idle lists, and a connection that waits for one of its slots closes it
+// (evictLocked, close); its next request takes it off the lists again
+// (resume). The state is guarded by Forwarder.hostMu. A nil value holds
+// nothing.
 type connSlots struct {
-	f          *Forwarder
-	host, addr string
+	f                  *Forwarder
+	hostPool, addrPool *slotPool
+	relHost, relAddr   func()
+	// up is the upstream connection; client, when set, the tool's side of
+	// it (attach): closing for another connection closes both.
+	up, client net.Conn
 
-	mu               sync.Mutex
-	held, done       bool
-	relHost, relAddr func()
+	parked, evicted, done bool
 }
 
-// park gives the slots back when idle (evaluated with the lock held, nil:
-// always) says the connection is quiet.
+// attach records the tool's side of the connection, closed with it when it
+// is closed for another connection.
+func (s *connSlots) attach(client net.Conn) {
+	if s == nil {
+		return
+	}
+	s.f.hostMu.Lock()
+	s.client = client
+	s.f.hostMu.Unlock()
+}
+
+// unparkLocked takes the connection off its pools' idle lists.
+func (s *connSlots) unparkLocked() {
+	if !s.parked {
+		return
+	}
+	s.parked = false
+	s.hostPool.remove(s)
+	s.addrPool.remove(s)
+}
+
+// park marks the connection idle when idle (evaluated with the lock held,
+// nil: always) says it is quiet. When a connection already waits for one
+// of its slots, it is closed at once and its slots go to that connection.
 func (s *connSlots) park(idle func() bool) {
-	if s == nil {
+	if s == nil || (s.hostPool == nil && s.addrPool == nil) {
 		return
 	}
-	s.mu.Lock()
-	if !s.held || s.done || (idle != nil && !idle()) {
-		s.mu.Unlock()
+	f := s.f
+	f.hostMu.Lock()
+	if s.parked || s.evicted || s.done || (idle != nil && !idle()) {
+		f.hostMu.Unlock()
 		return
 	}
-	s.held = false
-	rh, ra := s.relHost, s.relAddr
-	s.mu.Unlock()
-	ra()
-	rh()
+	if (s.hostPool != nil && s.hostPool.waiters > 0) || (s.addrPool != nil && s.addrPool.waiters > 0) {
+		s.evicted = true
+		f.hostMu.Unlock()
+		s.close()
+		return
+	}
+	s.parked = true
+	if s.hostPool != nil {
+		s.hostPool.idle = append(s.hostPool.idle, s)
+	}
+	if s.addrPool != nil {
+		s.addrPool.idle = append(s.addrPool.idle, s)
+	}
+	f.hostMu.Unlock()
 }
 
-// resume takes the slots again for a connection that was parked, waiting
-// as a new connection does (ErrHostBusy after Limits.DialTimeout).
-func (s *connSlots) resume(ctx context.Context) error {
+// resume ends the connection's idle time for its next request: it keeps
+// the slots it holds. A connection that was closed for another one
+// returns errSlotEvicted; one that ended, nil (its own error ends it).
+// Calls at once (from two goroutines) are safe: the connection holds its
+// slots once whatever the order.
+func (s *connSlots) resume() error {
 	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
-	if s.held || s.done {
-		s.mu.Unlock()
-		return nil
+	s.f.hostMu.Lock()
+	defer s.f.hostMu.Unlock()
+	if s.evicted {
+		return errSlotEvicted
 	}
-	s.mu.Unlock()
-	rh, err := s.f.hostSlot(ctx, s.host)
-	if err != nil {
-		return err
-	}
-	ra := func() {}
-	if s.addr != "" {
-		if ra, err = s.f.hostSlot(ctx, s.addr); err != nil {
-			rh()
-			return err
-		}
-	}
-	s.mu.Lock()
-	if s.done {
-		s.mu.Unlock()
-		ra()
-		rh()
-		return nil
-	}
-	s.held, s.relHost, s.relAddr = true, rh, ra
-	s.mu.Unlock()
+	s.unparkLocked()
 	return nil
 }
 
-// drop gives the slots back for good.
+// wasEvicted reports whether the forwarder closed the connection for
+// another one: how it ended says nothing about the host.
+func (s *connSlots) wasEvicted() bool {
+	if s == nil {
+		return false
+	}
+	s.f.hostMu.Lock()
+	defer s.f.hostMu.Unlock()
+	return s.evicted
+}
+
+// close closes a connection picked for another one (evicted is set): both
+// sides of it, then its slots are freed.
+func (s *connSlots) close() {
+	if s == nil {
+		return
+	}
+	s.f.hostMu.Lock()
+	up, client := s.up, s.client
+	s.f.hostMu.Unlock()
+	if client != nil {
+		_ = client.Close()
+	}
+	if up != nil {
+		_ = up.Close()
+	}
+	s.drop()
+}
+
+// drop gives the slots back for good (once).
 func (s *connSlots) drop() {
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	held := s.held
-	s.held, s.done = false, true
-	rh, ra := s.relHost, s.relAddr
-	s.mu.Unlock()
-	if held {
-		ra()
-		rh()
+	s.f.hostMu.Lock()
+	if s.done {
+		s.f.hostMu.Unlock()
+		return
 	}
+	s.done = true
+	s.unparkLocked()
+	s.f.hostMu.Unlock()
+	s.relAddr()
+	s.relHost()
 }
 
 // slotsOf are the slots the upstream connection c holds (nil: none).
@@ -259,8 +356,8 @@ func (a *tunnelActivity) quiet(d time.Duration) bool {
 	return a.fromHost.Load() && time.Since(time.Unix(0, a.last.Load())) >= d
 }
 
-// watchIdle parks the tunnel's slots whenever the tunnel has been quiet
-// for idle(), checked every tick, until stop is closed.
+// watchIdle marks the tunnel idle whenever it has been quiet for idle(),
+// checked every tick, until stop is closed.
 func (s *connSlots) watchIdle(a *tunnelActivity, tick time.Duration, idle func() time.Duration, stop <-chan struct{}) {
 	t := time.NewTicker(max(tick, 10*time.Millisecond))
 	defer t.Stop()

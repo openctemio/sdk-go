@@ -205,6 +205,9 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 		rec.BytesOut, rec.BytesIn = out, in
 		f.record(*rec)
 	}()
+	// Closed with the upstream connection when another connection to the
+	// host takes the slots of this one while it is idle (hostbudget.go).
+	slotsOf(up).attach(c)
 	_ = c.SetReadDeadline(time.Now().Add(f.limits.HandshakeTimeout))
 	first, err := br.Peek(1)
 	if err != nil {
@@ -290,9 +293,9 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 		return resp, nil
 	}
 	host := peerOfRecord(rec)
-	// The connection's slots count its requests in flight: they are given
-	// back when an answer was passed on and taken again for the next
-	// request (hostbudget.go).
+	// The connection is idle once an answer was passed on, and busy again
+	// with its next request; while idle, another connection to the host
+	// may close it for its slots (hostbudget.go).
 	sl := slotsOf(up)
 	for n := 0; ; n++ {
 		lr.N = maxHeaderBytes
@@ -320,7 +323,9 @@ func (f *Forwarder) serveGuarded(ctx context.Context, c net.Conn, br *bufio.Read
 		// each further one on it waits for the host's rate too.
 		if n > 0 {
 			if err := f.nextRequest(ctx, sl, host); err != nil {
-				writeHTTPStatus(cw, http.StatusServiceUnavailable, err)
+				if !errors.Is(err, errSlotEvicted) {
+					writeHTTPStatus(cw, http.StatusServiceUnavailable, err)
+				}
 				return
 			}
 		}

@@ -145,6 +145,12 @@ func gapOutcome(target string, g adapt.Gap) (outcome.Target, bool) {
 		// The job's proxy pool did not carry the connections: the sensor's
 		// path failed, nothing is known about the target.
 		return outcome.Target{Target: target, State: outcome.Failed, Class: outcome.SensorNetworkFault, Cause: outcome.CauseSensor, Reason: adapt.GapProxyUnavailable}, true
+	case adapt.GapHostBusy:
+		// The sensor's own per-host bound refused a connection: part of the
+		// target was not scanned, and nothing about the target caused it.
+		// Unfinished (no class, no cause on the target): not covered, never
+		// read as the target failing or pushing back.
+		return outcome.Target{Target: target, State: outcome.Unfinished}, true
 	}
 	return outcome.Target{}, false
 }
