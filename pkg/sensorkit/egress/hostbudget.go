@@ -143,8 +143,10 @@ const DefaultSlotIdle = time.Second
 // unsure. Once a further request followed the host's bytes, the host has
 // answered on it: a tunnel whose client and host took turns (HTTP/1.1) is
 // sure and counts as idle after Limits.SlotIdle; one whose client offered
-// HTTP/2 (the host sends settings, window updates and pings between
-// answers) after answeredSlotIdle times that.
+// HTTP/2 (the host sends settings, window updates and pings of its own,
+// also while an answer has not started) stays unsure and counts as idle
+// after the unsure time, as before the host answered. Having answered
+// only decides the gap: closing such a tunnel records none.
 //
 // An unsure tunnel is never closed for another connection before it has
 // been quiet this long: a connection that waits for its slot keeps waiting,
@@ -167,19 +169,9 @@ func (f *Forwarder) slotIdleFor(m *tunnelMeter) time.Duration {
 	switch {
 	case m.turned.Load():
 		return f.limits.SlotIdle
-	case m.replied.Load():
-		return answeredSlotIdle * f.limits.SlotIdle
 	}
 	return f.unsureIdle
 }
-
-// answeredSlotIdle is how many times Limits.SlotIdle a tunnel whose client
-// offered HTTP/2 must be quiet before it counts as idle once the host has
-// answered on it (a further request followed the host's bytes): its TLS
-// handshake has ended, so its quiet after the host's bytes is not a session
-// ticket ahead of an answer, but the host may still send control frames
-// between answers (HTTP/2), so it is not idle after one SlotIdle.
-const answeredSlotIdle = 5
 
 // errSlotEvicted ends a connection the forwarder closed while it was idle,
 // to give its slots to a connection that waited for them.

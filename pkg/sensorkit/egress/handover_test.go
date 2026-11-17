@@ -162,8 +162,8 @@ func TestSOCKSWaiterWhoseClientLeftStopsWaiting(t *testing.T) {
 // Ordinary keep-alive reuse by a client that offers HTTP/2 to a server
 // that answers over HTTP/1.1 (Go's default transport, Chrome and most scan
 // tools offer it) makes no coverage gap: three requests on one tunnel, the
-// host answered each, and the tunnel is closed, once quiet for
-// answeredSlotIdle times SlotIdle (well before the unsure time), for a
+// host answered each, and the tunnel is closed, once quiet for the unsure
+// time (the host's own HTTP/2 frames cannot be told from an answer), for a
 // connection to another name of its address. The waiting connection is
 // served, the connections open never exceed the one slot.
 func TestHTTP2OfferingClientReuseLeavesNoGap(t *testing.T) {
@@ -188,9 +188,9 @@ func TestHTTP2OfferingClientReuseLeavesNoGap(t *testing.T) {
 		t.Fatalf("b behind a's quiet tunnel: %v", err)
 	}
 	waited := time.Since(quietFrom)
-	t.Logf("MEASURED b served %s after a's tunnel went quiet (unsure idle %s, answered %s)", waited, unsure, answeredSlotIdle*40*time.Millisecond)
-	if waited >= unsure {
-		t.Fatalf("b waited %s: a tunnel the host had answered on was held as long as an unanswered one (%s)", waited, unsure)
+	t.Logf("MEASURED b served %s after a's tunnel went quiet (unsure idle %s)", waited, unsure)
+	if waited < unsure/2 {
+		t.Fatalf("b waited %s: a tunnel that offered HTTP/2 was closed before the unsure time (%s)", waited, unsure)
 	}
 	if peak, total := pool.counts(); peak != 1 || total != 2 {
 		t.Fatalf("peak %d, total %d; want at most 1 open, 2 opened", peak, total)
@@ -324,8 +324,8 @@ func TestEvictionForAWaiterIsNeverWasted(t *testing.T) {
 // then be quiet to count as idle: on a TLS tunnel's first request it
 // cannot (a TLS 1.3 session ticket may follow it), so the tunnel stays
 // unsure; once a further request followed the host's bytes it can, also
-// for a client that offered HTTP/2 (which then counts as idle after
-// answeredSlotIdle times SlotIdle, not after the unsure time); a tunnel
+// for a client that offered HTTP/2 (which still counts as idle only after
+// the unsure time, its host's control frames being host bytes); a tunnel
 // that is not TLS has no tickets.
 func TestTunnelMeterAnswerSeen(t *testing.T) {
 	f := New(Scope{}, Limits{SlotIdle: 40 * time.Millisecond})
@@ -337,7 +337,7 @@ func TestTunnelMeterAnswerSeen(t *testing.T) {
 		hello []byte
 		turn  time.Duration // idle time once the host answered and the client asked again
 	}{
-		{"offers HTTP/2", h2hello, answeredSlotIdle * 40 * time.Millisecond},
+		{"offers HTTP/2", h2hello, time.Second},
 		{"HTTP/1.1 only", record(recHandshake, 200), 40 * time.Millisecond},
 	} {
 		m, _, _ := meterFor(t)
@@ -364,4 +364,58 @@ func TestTunnelMeterAnswerSeen(t *testing.T) {
 	if !raw.answerSeen() {
 		t.Fatal("a tunnel that is not TLS: its host's bytes after the request are its answer")
 	}
+}
+
+// On a warm HTTP/2-offering tunnel the host sends frames of its own (a
+// window update as it reads a request body) that are not an answer. A
+// request whose answer has not started is not cut for a waiting connection
+// before the unsure time: a POST of 16 KiB whose handler reads the body and
+// answers after a pause shorter than the unsure time (but longer than a
+// short idle time would allow) arrives whole.
+func TestHTTP2RequestAfterHostControlFrameIsNotCutEarly(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if r.Method == http.MethodPost {
+			time.Sleep(600 * time.Millisecond)
+		}
+		_, _ = w.Write([]byte("answered"))
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	su, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := func(name string) string { return "https://" + name + ":" + su.Port() + "/" }
+	const unsure = 1500 * time.Millisecond
+	_, proxy := slotForwarderUnsure(t, 1, 200*time.Millisecond, 40*time.Millisecond, unsure, nil, "a.example.com", "b.example.com")
+	a := h2OfferingClient(proxy)
+	defer a.CloseIdleConnections()
+	for i := range 2 {
+		if err := fetchOK(a, target("a.example.com")); err != nil {
+			t.Fatalf("warm-up request %d: %v", i+1, err)
+		}
+	}
+	done := make(chan error, 1)
+	go func() {
+		resp, err := a.Post(target("a.example.com"), "application/octet-stream", bytes.NewReader(make([]byte, 16<<10)))
+		if err != nil {
+			done <- err
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		if err == nil && string(body) != "answered" {
+			err = errors.New("short answer " + string(body))
+		}
+		done <- err
+	}()
+	time.Sleep(60 * time.Millisecond) // the POST is in flight: the host has read its body
+	waiter := make(chan error, 1)
+	go func() { waiter <- fetchOK(keepAliveClient(proxy), target("b.example.com")) }()
+	if err := <-done; err != nil {
+		t.Fatalf("the POST was cut while its answer was due: %v", err)
+	}
+	<-waiter // served or refused with its own gap: only the POST is checked here
 }

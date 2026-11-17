@@ -136,9 +136,10 @@ flight over HTTP/1.1.
   (past the 15 seconds below, at most 30 seconds longer), and the connections open to the host still
   never exceed its slots. Once a further request followed the host's bytes, the host has answered on the
   tunnel: a tunnel whose client and host take turns (HTTP/1.1) is idle one second after the host's
-  answer; one whose client offered HTTP/2 (the host may send control frames between answers) after five
-  seconds. **Limit:** an answer that pauses longer than that while a connection waits for its slot is
-  cut (the tool sees it cut short). Closing an unsure TLS tunnel, whose request may still have been
+  answer; one whose client offered HTTP/2 only after the same 30 seconds, because the host's own
+  control frames (window updates, pings) are host bytes that cannot be told from an answer.
+  **Limit:** an answer, also one that has not started, that pauses longer than that while a connection
+  waits for its slot is cut (the tool sees it cut short). Closing an unsure TLS tunnel, whose request may still have been
   outstanding, makes its host a coverage gap `slots_full` (below), so an answer that may never have
   arrived is never read as a host fully scanned. Closing a tunnel whose last traffic was the host's
   answer never makes a gap, whatever its client offered, so ordinary keep-alive reuse makes no gap;
@@ -451,7 +452,7 @@ read. That is deliberate: a limit a sensor cannot read must never be dropped sil
   one TLS record (bounded in bytes), the streams in flight on one HTTP/2 connection, an answer that
   pauses while a connection waits for its slot (on a tunnel's first request after 30 seconds, cut and
   its host reported as a `slots_full` gap; on a tunnel the host has already answered on after one
-  second, or five when its client offered HTTP/2, cut with no gap), a target that keeps a connection
+  second, or 30 seconds when its client offered HTTP/2, cut with no gap), a target that keeps a connection
   busy by sending a byte now and then (below), and every bound but the tool's own flags when no
   forwarder is in the path.
 - A target that sends a byte at least every second (or every 30 seconds on an unsure tunnel) is never
