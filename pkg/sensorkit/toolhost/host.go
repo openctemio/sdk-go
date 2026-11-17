@@ -790,8 +790,8 @@ type session struct {
 	// watchStop is why the watch stopped the tool ("": it did not).
 	watchStop string
 	// throttle says the task's targets throttle the scan and the tool must
-	// stop (budget.go; nil: never); throttleStop is why it was stopped
-	// ("": it was not).
+	// stop (budget.go; nil: never); the run watch reads it (watch.go).
+	// throttleStop is why the tool was stopped ("": it was not).
 	throttle     <-chan string
 	throttleStop string
 	// handshake is the start handshake timeout of this task.
@@ -999,12 +999,6 @@ func (s *session) drive(runCtx, parent context.Context, t executor.Task, w *tool
 		watchTick = tk.C
 	}
 	for {
-		// The stop for throttling is read only while the tool runs, so it
-		// is never consumed before the run started.
-		var throttle <-chan string
-		if state == stRunning && !canceled {
-			throttle = s.throttle
-		}
 		select {
 		case now := <-watchTick:
 			if state != stRunning || canceled {
@@ -1018,13 +1012,6 @@ func (s *session) drive(runCtx, parent context.Context, t executor.Task, w *tool
 				_ = w.Write(toolwire.Cancel{Envelope: toolwire.Env(toolwire.TypeCancel), Reason: "stopped by the sensor: " + why})
 				cancelAt = time.After(cancelGrace)
 			}
-		case why := <-throttle:
-			// Every host of the task has its breaker open: a protocol
-			// cancel (the tool keeps what it settled), then a kill.
-			s.throttleStop = why
-			canceled = true
-			_ = w.Write(toolwire.Cancel{Envelope: toolwire.Env(toolwire.TypeCancel), Reason: "stopped by the sensor: " + why})
-			cancelAt = time.After(cancelGrace)
 		case <-runCtx.Done():
 			if parent.Err() != nil {
 				if !canceled && (errors.Is(parent.Err(), context.DeadlineExceeded) || errors.Is(context.Cause(parent), core.ErrStoppedByPlatform)) {
@@ -1339,15 +1326,8 @@ func (s *session) finish(res *executor.Result, stopReason string, stopClass tool
 	if !s.budgetStop && s.watchStop != "" && runErr != nil && runErr.Class == tool.Canceled {
 		runErr = s.watchOutcome()
 	}
-	throttleStopped := false
-	if !s.budgetStop && s.throttleStop != "" && runErr != nil && runErr.Class == tool.Canceled {
-		// Stopped because its targets throttle the scan: nothing the tool
-		// obtained is discarded, the rest is unfinished.
-		runErr = &tool.Error{Class: tool.RateLimited, Retryable: true, Detail: "stopped by the sensor: " + s.throttleStop}
-		s.log("warn", runErr.Detail, map[string]any{"host_budget": "throttle_stop"})
-		pacingTotals.stops.Add(1)
-		throttleStopped = !p.task.IsRetest()
-	}
+	// A tool stopped because its targets throttle the scan (watch.go).
+	throttleStopped := s.throttleStop != "" && runErr != nil && runErr.Class == tool.RateLimited && !p.task.IsRetest()
 	stoppedPartway := false
 	switch {
 	case throttleStopped:

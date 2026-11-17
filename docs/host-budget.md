@@ -25,7 +25,8 @@ packets per second of a port scan (`adapt.Pacing`).
 `adapt.ResolveBudget` (called by `core.DefaultCommandExecutor.HostBudget`), in this order:
 
 1. **The sensor's level.** Standard, unless the sensor's own operator set `SENSOR_PACING_LEVEL`
-   (`sensorkit.Options.PacingLevel`) to `gentle` or `fast`. A sensor that talks to a platform which sends
+   (`sensorkit.Options.PacingLevel`) to `gentle` or `fast` (an unknown value is reported at start and the
+   sensor runs at `gentle`). A sensor that talks to a platform which sends
    no budget runs every job at this level.
 2. **The job's signed budget**, when the job carries one: the `pacing` member of the signed job statement
    (`jobsig.Statement.Pacing`), `{"level": "gentle"}` or explicit numbers
@@ -111,7 +112,7 @@ What the canary covers, and what it does not:
 | up to 64 hosts per task | further hosts of the task (they still run under the budget) |
 | a 403 from an origin that answered the same request before (a block after five in a row) | an origin whose root is forbidden from the first request on (read as an ordinary answer) |
 | unconfined: stopping the tool when all of its hosts are open | unconfined: slowing one host of a run over several (the gap is recorded; the tool goes on) |
-| | a tool described only by a manifest (the exec profile) is observed and reported, not stopped |
+| | a tool described only by a manifest (the exec profile) is held by the forwarder and has its rate key lowered, but gets no canary |
 | | latency growth as a congestion signal (not implemented) |
 
 ## What the result says

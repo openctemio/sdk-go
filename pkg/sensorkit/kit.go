@@ -205,7 +205,9 @@ type Options struct {
 	// SENSOR_PACING_LEVEL, then Standard). It is the sensor's own
 	// operator's choice, never the platform's; the local policy's
 	// rate.max_host_rps and rate.max_host_inflight cap it like any budget
-	// (core.DefaultCommandExecutor.HostBudget). New refuses an unknown name.
+	// (core.DefaultCommandExecutor.HostBudget). An unknown name is reported
+	// at start and the sensor then runs at gentle: a mistyped level never
+	// runs faster than its operator meant.
 	PacingLevel string
 	// ScanTargetPolicy restricts the targets of dispatched scans (nil: the
 	// SDK default, core.DefaultScanTargetPolicy). Its AllowedRoots are
@@ -311,9 +313,6 @@ type settings struct {
 	name, apiURL, apiKey, sensorID, protocol string
 	commands                                 bool
 	shared                                   bool
-	// pacingLevel is the pacing level of jobs without a signed budget
-	// (Options.PacingLevel; "": Standard).
-	pacingLevel string
 	// serveOnly are the only command types accepted (Options.CommandTypes);
 	// nil: the served types.
 	serveOnly []string
@@ -475,10 +474,6 @@ func New(opts Options) (*Kit, error) {
 	s.apiURL = envOr(opts.APIURL, EnvAPIURL)
 	s.apiKey = envOr(opts.APIKey, EnvAPIKey)
 	s.sensorID = envOr(opts.SensorID, EnvSensorID)
-	s.pacingLevel = strings.ToLower(strings.TrimSpace(envOr(opts.PacingLevel, EnvPacingLevel)))
-	if _, ok := adapt.PacingFor(s.pacingLevel); !ok {
-		return nil, fmt.Errorf("%s=%q: want gentle, standard or fast", EnvPacingLevel, s.pacingLevel)
-	}
 	s.commands = !opts.DisableCommands
 	s.verbose = opts.Verbose
 
@@ -1389,8 +1384,7 @@ func (k *Kit) newPoller(scanners []scannerEntry, doorbell *core.Doorbell) *core.
 	// (through the scan target policy), templates, callbacks, rate and
 	// run time.
 	executor.SetLocalPolicy(k.LocalPolicy())
-	// The operator's pacing level (checked in New).
-	_ = executor.SetPacingLevel(k.s.pacingLevel)
+	k.applyPacingLevel(executor)
 	// Code-scan jobs ask the platform for their source's credential.
 	if sc, ok := any(k.client).(core.SourceCredentials); ok {
 		executor.SetSourceCredentials(sc)
@@ -1673,5 +1667,17 @@ func (k *Kit) startTransport(ctx context.Context, doorbell *core.Doorbell) {
 	if k.s.signer != nil {
 		st := k.client.TransportStatus()
 		_, _ = fmt.Fprintf(k.out, "  Transport: %s%s\n", st.Binding, reasonSuffix(st.FallbackReason))
+	}
+}
+
+// applyPacingLevel sets the operator's pacing level on the executor
+// (Options.PacingLevel, else SENSOR_PACING_LEVEL, else Standard). A name
+// that is not a level is reported and the sensor runs at gentle, the lowest
+// level: a mistyped level never runs faster than its operator meant.
+func (k *Kit) applyPacingLevel(executor *core.DefaultCommandExecutor) {
+	level := strings.ToLower(strings.TrimSpace(envOr(k.opts.PacingLevel, EnvPacingLevel)))
+	if err := executor.SetPacingLevel(level); err != nil {
+		_, _ = fmt.Fprintf(k.errw, "Warning: %s=%q: %v; running at %s\n", EnvPacingLevel, level, err, adapt.PacingGentle.Name)
+		_ = executor.SetPacingLevel(adapt.PacingGentle.Name)
 	}
 }
