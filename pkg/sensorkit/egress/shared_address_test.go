@@ -613,12 +613,12 @@ func TestOpenConnectionsNeverExceedTheSlots(t *testing.T) {
 }
 
 // SECURITY: a name that answers slowly on a shared address cannot make
-// coverage gaps that blame its neighbours. slow.example.com holds the
+// coverage gaps that blame its neighbors. slow.example.com holds the
 // address's one slot with a request in flight; the connection of
 // other.example.com that finds no slot is refused with a gap of the
 // sensor's own bound (host_busy), never one that says the host pushed back
 // (rate_floor), and the slow name gets none.
-func TestSlowNameOnASharedAddressBlamesNoNeighbour(t *testing.T) {
+func TestSlowNameOnASharedAddressBlamesNoNeighbor(t *testing.T) {
 	inflight := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.Host, "slow.example.com") {
